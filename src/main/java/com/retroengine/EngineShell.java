@@ -2,8 +2,14 @@ package com.retroengine;
 
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWErrorCallback;
+import org.lwjgl.glfw.GLFWImage;
 import org.lwjgl.glfw.GLFWVulkan;
+import org.lwjgl.stb.STBImage;
+import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.IntBuffer;
 
 public class EngineShell {
 
@@ -18,7 +24,7 @@ public class EngineShell {
             throw new IllegalStateException("Failed to initialize system GLFW drivers.");
         }
 
-        // Force a raw window layout with zero underlying legacy OpenGL context
+        // Force raw window layout clear of old OpenGL configurations
         GLFW.glfwWindowHint(GLFW.GLFW_CLIENT_API, GLFW.GLFW_NO_API);
         GLFW.glfwWindowHint(GLFW.GLFW_RESIZABLE, GLFW.GLFW_FALSE);
 
@@ -27,26 +33,63 @@ public class EngineShell {
             throw new RuntimeException("Failed to allocate OS native window container.");
         }
 
+        // Apply our custom cross-platform image assets to the window framework
+        applyApplicationIcon();
+
         System.out.println("System Base Activated Successfully.");
 
         if (!GLFWVulkan.glfwVulkanSupported()) {
             throw new IllegalStateException("Vulkan Core Driver Layer missing from host system hardware.");
         }
 
-        // Fire up our validated Vulkan Instance pipeline
         vulkanGraphics.initialize();
 
-        // Crawl and discover our physical hardware processors
         VulkanDeviceSelector selector = new VulkanDeviceSelector();
         selector.pickPhysicalDevice(vulkanGraphics.getHandle());
 
-        // Pure, whisper-quiet Vulkan Window Execution Loop
+        // Pure Vulkan presentation listener loop
         while (!GLFW.glfwWindowShouldClose(windowHandle)) {
-            // Poll OS interrupts, mouse clicks, keys, and gamepad vectors smoothly
             GLFW.glfwPollEvents();
         }
 
         cleanup();
+    }
+
+    private void applyApplicationIcon() {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            // FIX: Uses ClassLoader to find icon.png inside the embedded JAR
+            // instead of relying on local OS file path strings which break inside bundles.
+            InputStream is = EngineShell.class.getClassLoader().getResourceAsStream("icon.png");
+            if (is == null) {
+                System.out.println("Note: icon.png not found in resources archive. Skipping step.");
+                return;
+            }
+
+            byte[] streamBytes = is.readAllBytes();
+            ByteBuffer nativeBuffer = MemoryUtil.memAlloc(streamBytes.length);
+            nativeBuffer.put(streamBytes).flip();
+
+            IntBuffer width = stack.mallocInt(1);
+            IntBuffer height = stack.mallocInt(1);
+            IntBuffer channels = stack.mallocInt(1);
+
+            ByteBuffer decodedPixels = STBImage.stbi_load_from_memory(nativeBuffer, width, height, channels, 4);
+            MemoryUtil.memFree(nativeBuffer);
+
+            if (decodedPixels != null) {
+                GLFWImage.Buffer iconBuffer = GLFWImage.malloc(1, stack);
+                iconBuffer.get(0)
+                        .width(width.get(0))
+                        .height(height.get(0))
+                        .pixels(decodedPixels);
+
+                GLFW.glfwSetWindowIcon(windowHandle, iconBuffer);
+                STBImage.stbi_image_free(decodedPixels);
+                System.out.println("Custom window asset successfully mapped onto screen registries.");
+            }
+        } catch (Exception e) {
+            System.err.println("Warning: Custom icon loader skipped due to allocation error: " + e.getMessage());
+        }
     }
 
     private void cleanup() {

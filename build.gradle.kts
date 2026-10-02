@@ -24,7 +24,7 @@ val lwjglClassifier = run {
 }
 
 dependencies {
-    // 2. Stable version alignment bill-of-materials
+    // 2. Stable version alignment bill-of-materials (LWJGL 3.3.5 for macOS 15+)
     implementation(platform("org.lwjgl:lwjgl-bom:3.3.5"))
 
     // 3. Core engine abstraction modules
@@ -39,14 +39,14 @@ dependencies {
     implementation("org.joml:joml:1.10.5")
     implementation("io.github.spair:imgui-java-app:1.87.3")
 
-    // 5. Dynamic environment native loading
+    // 5. Dynamic environment native loading based on host machine OS
     runtimeOnly("org.lwjgl:lwjgl::$lwjglClassifier")
     runtimeOnly("org.lwjgl:lwjgl-glfw::$lwjglClassifier")
     runtimeOnly("org.lwjgl:lwjgl-openal::$lwjglClassifier")
     runtimeOnly("org.lwjgl:lwjgl-assimp::$lwjglClassifier")
     runtimeOnly("org.lwjgl:lwjgl-stb::$lwjglClassifier")
 
-    // 6. FIXED: Hardcoded architectural fallback targets for the Vulkan module
+    // Hardcoded architectural fallback targets for the Vulkan module
     if (System.getProperty("os.name").lowercase().contains("mac")) {
         runtimeOnly("org.lwjgl:lwjgl-vulkan:3.3.5:natives-macos-arm64") // Explicitly forces Apple Silicon ARM64 binaries
     } else {
@@ -56,6 +56,20 @@ dependencies {
 
 application {
     mainClass.set("com.retroengine.Main")
+
+    val macArgs = listOf(
+        "-XstartOnFirstThread",
+        "-Xdock:name=Neon Miami 1980",
+        "-Xdock:icon=src/main/resources/icon.icns",
+        "-Dorg.lwjgl.vulkan.libname=libMoltenVK.dylib",
+        "-Dorg.lwjgl.util.NoChecks=true"
+    )
+
+    applicationDefaultJvmArgs = if (System.getProperty("os.name").lowercase().contains("mac")) {
+        macArgs
+    } else {
+        emptyList()
+    }
 }
 
 configure<JavaApplication> {
@@ -66,7 +80,7 @@ tasks.withType<JavaCompile> {
     options.encoding = "UTF-8"
 }
 
-// 7. ENFORCE SYSTEM ENTITLEMENTS PERMISSION AT THE RUNTIME LEVEL
+// 6. ENFORCE SYSTEM ENTITLEMENTS PERMISSION AT THE RUNTIME LEVEL
 tasks.withType<JavaExec> {
     jvmArgs(
         "--enable-native-access=ALL-UNNAMED",
@@ -76,5 +90,24 @@ tasks.withType<JavaExec> {
 
     if (System.getProperty("os.name").lowercase().contains("mac")) {
         jvmArgs("-XstartOnFirstThread")
+        jvmArgs("-Xdock:name=Neon Miami 1980")
+        jvmArgs("-Xdock:icon=${project.projectDir}/src/main/resources/icon.icns")
+        jvmArgs(
+            "-Dorg.lwjgl.vulkan.libname=libMoltenVK.dylib",
+            "-Dorg.lwjgl.util.NoChecks=true"
+        )
     }
+}
+
+// 7. FIX: COPIES EVERY SINGLE PLATFORM-NATIVE DEPENDENCY DIRECTLY
+// INTO build/libs SO THE BUNDLER INTEGRATES THEM INTO THE RETAIL APP
+val copyNativeLibs = tasks.register<Copy>("copyNativeLibs") {
+    from(configurations.runtimeClasspath)
+    include("**/*.jar")
+    into(layout.buildDirectory.dir("libs"))
+}
+
+// Automatically execute the copy phase right after building your target jar
+tasks.named("jar") {
+    finalizedBy(copyNativeLibs)
 }
