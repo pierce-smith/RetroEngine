@@ -26,10 +26,12 @@ dependencies {
     implementation("org.lwjgl", "lwjgl")
     implementation("org.lwjgl", "lwjgl-glfw")
     implementation("org.lwjgl", "lwjgl-vulkan")
+    implementation("org.lwjgl", "lwjgl-assimp")
 
     for (platformNative in lwjglNatives) {
         runtimeOnly("org.lwjgl", "lwjgl", classifier = platformNative)
         runtimeOnly("org.lwjgl", "lwjgl-glfw", classifier = platformNative)
+        runtimeOnly("org.lwjgl", "lwjgl-assimp", classifier = platformNative)
     }
 }
 
@@ -39,18 +41,21 @@ java {
     }
 }
 
-val isMac = System.getProperty("os.name").lowercase().let { it.contains("mac") || it.contains("darwin") }
+val isMac = System.getProperty("os.name").lowercase().contains("mac")
 
 application {
     mainClass.set("com.retro.engine.Main")
-    
-    val jvmArgsList = mutableListOf(
-        "--enable-native-access=ALL-UNNAMED"
-    )
+    val defaultArgs = mutableListOf("--enable-native-access=ALL-UNNAMED")
     if (isMac) {
-        jvmArgsList.add("-XstartOnFirstThread")
+        defaultArgs.add("-XstartOnFirstThread")
     }
-    applicationDefaultJvmArgs = jvmArgsList
+    applicationDefaultJvmArgs = defaultArgs
+}
+
+tasks.named<JavaExec>("run") {
+    if (isMac) {
+        jvmArgs("-XstartOnFirstThread", "--enable-native-access=ALL-UNNAMED")
+    }
 }
 
 tasks.withType<JavaCompile> {

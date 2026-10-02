@@ -1,11 +1,18 @@
 package com.retro.engine.host;
 
 import com.retro.engine.rhi.WindowInfo;
+import org.lwjgl.PointerBuffer;
+import org.lwjgl.glfw.GLFWDropCallback;
 import org.lwjgl.glfw.GLFWErrorCallback;
+import org.lwjgl.glfw.GLFWFramebufferSizeCallback;
+import org.lwjgl.glfw.GLFWKeyCallback;
 import org.lwjgl.glfw.GLFWVidMode;
 import org.lwjgl.system.MemoryStack;
 
 import java.nio.IntBuffer;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Consumer;
 
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.system.MemoryUtil.NULL;
@@ -23,12 +30,22 @@ public class GlfwWindow {
     private int windowedWidth;
     private int windowedHeight;
 
+    private Consumer<List<String>> fileDropListener;
+
+    private GLFWKeyCallback keyCallback;
+    private GLFWFramebufferSizeCallback framebufferSizeCallback;
+    private GLFWDropCallback dropCallback;
+
     public GlfwWindow(int width, int height, String title) {
         this.width = width;
         this.height = height;
         this.title = title;
         this.windowedWidth = width;
         this.windowedHeight = height;
+    }
+
+    public void setOnFileDropListener(Consumer<List<String>> listener) {
+        this.fileDropListener = listener;
     }
 
     public boolean create() {
@@ -47,20 +64,38 @@ public class GlfwWindow {
             return false;
         }
 
-        glfwSetKeyCallback(windowHandle, (window, key, scancode, action, mods) -> {
+        // Key Callback: Option+Enter / F11 for Fullscreen, ESC to close
+        keyCallback = GLFWKeyCallback.create((win, key, scancode, action, mods) -> {
             if (action == GLFW_PRESS) {
                 if (key == GLFW_KEY_ESCAPE) {
-                    glfwSetWindowShouldClose(window, true);
+                    glfwSetWindowShouldClose(win, true);
                 } else if (key == GLFW_KEY_F11 || (key == GLFW_KEY_ENTER && (mods & GLFW_MOD_ALT) != 0)) {
                     toggleFullscreen();
                 }
             }
         });
+        glfwSetKeyCallback(windowHandle, keyCallback);
 
-        glfwSetFramebufferSizeCallback(windowHandle, (window, w, h) -> {
+        // Framebuffer size callback
+        framebufferSizeCallback = GLFWFramebufferSizeCallback.create((win, w, h) -> {
             this.width = w;
             this.height = h;
         });
+        glfwSetFramebufferSizeCallback(windowHandle, framebufferSizeCallback);
+
+        // Native Mouse Drag-and-Drop Callback
+        dropCallback = GLFWDropCallback.create((win, count, names) -> {
+            PointerBuffer nameBuffer = PointerBuffer.create(names, count);
+            List<String> droppedFiles = new ArrayList<>();
+            for (int i = 0; i < count; i++) {
+                droppedFiles.add(nameBuffer.getStringUTF8(i));
+            }
+            System.out.println("[GLFW] Files dropped into window: " + droppedFiles);
+            if (fileDropListener != null) {
+                fileDropListener.accept(droppedFiles);
+            }
+        });
+        glfwSetDropCallback(windowHandle, dropCallback);
 
         System.out.println("[GLFW] Native window initialized successfully (" + width + "x" + height + ").");
         return true;
@@ -112,15 +147,28 @@ public class GlfwWindow {
     }
 
     public void destroy() {
+        if (keyCallback != null) {
+            keyCallback.free();
+            keyCallback = null;
+        }
+        if (framebufferSizeCallback != null) {
+            framebufferSizeCallback.free();
+            framebufferSizeCallback = null;
+        }
+        if (dropCallback != null) {
+            dropCallback.free();
+            dropCallback = null;
+        }
+
         if (windowHandle != NULL) {
             glfwDestroyWindow(windowHandle);
             windowHandle = NULL;
         }
         glfwTerminate();
 
-        GLFWErrorCallback callback = glfwSetErrorCallback(null);
-        if (callback != null) {
-            callback.free();
+        GLFWErrorCallback errCb = glfwSetErrorCallback(null);
+        if (errCb != null) {
+            errCb.free();
         }
         System.out.println("[GLFW] Window resources released.");
     }
