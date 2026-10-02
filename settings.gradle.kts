@@ -1,1 +1,1 @@
-rootProject.name = "RetroEngineShell"
+rootProject.name = "retro-engine"
