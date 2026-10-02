@@ -80,10 +80,6 @@ public class EditorPanelManager {
         sceneEntities.add(light);
     }
 
-    /**
-     * Frame-by-frame update logic for editor panels and active scene entities.
-     * @param deltaTime Time elapsed since last frame in seconds.
-     */
     public void update(float deltaTime) {
         // Frame tick processing for scene hierarchy and inspector updates
     }

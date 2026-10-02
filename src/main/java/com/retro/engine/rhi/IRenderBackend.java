@@ -10,6 +10,8 @@ public interface IRenderBackend {
     void endFrame();
     void present();
 
+    default void updateUiMesh(float[] vertices, int count) {}
+
     long createBuffer(BufferCreateInfo createInfo);
     void destroyBuffer(long handle);
 
