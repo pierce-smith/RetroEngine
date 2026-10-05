@@ -9,6 +9,7 @@ import org.lwjgl.system.MemoryStack;
 import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import static org.lwjgl.glfw.GLFW.*;
@@ -17,8 +18,13 @@ import static org.lwjgl.system.MemoryUtil.NULL;
 public class GlfwWindow {
 
     @FunctionalInterface
-    public interface MouseButtonListener {
-        void onMouseButton(int button, int action, double x, double y);
+    public interface MouseClickListener {
+        void onClick(double mouseX, double mouseY, int button, int action);
+    }
+
+    @FunctionalInterface
+    public interface MouseClick3ArgListener {
+        void onClick(double mouseX, double mouseY, int button);
     }
 
     @FunctionalInterface
@@ -27,8 +33,28 @@ public class GlfwWindow {
     }
 
     @FunctionalInterface
+    public interface CursorPos2ArgListener {
+        void onCursorPos(double x, double y);
+    }
+
+    @FunctionalInterface
     public interface ScrollListener {
         void onScroll(double xoffset, double yoffset);
+    }
+
+    @FunctionalInterface
+    public interface SingleScrollListener {
+        void onScroll(double yoffset);
+    }
+
+    @FunctionalInterface
+    public interface KeyListener {
+        void onKey(int key, int action, int mods);
+    }
+
+    @FunctionalInterface
+    public interface KeyPressListener {
+        void onKeyPress(int key, int action);
     }
 
     private long windowHandle = NULL;
@@ -43,9 +69,18 @@ public class GlfwWindow {
     private int windowedHeight;
 
     private Consumer<List<String>> fileDropListener;
-    private MouseButtonListener mouseButtonListener;
+    private MouseClickListener mouseClickListener;
+    private MouseClick3ArgListener mouseClick3ArgListener;
+    private BiConsumer<Double, Double> mouseClickBiConsumer;
+
     private CursorPosListener cursorPosListener;
+    private CursorPos2ArgListener cursorPos2ArgListener;
+
     private ScrollListener scrollListener;
+    private SingleScrollListener singleScrollListener;
+
+    private KeyListener keyListener;
+    private KeyPressListener keyPressListener;
 
     public GlfwWindow(int width, int height, String title) {
         this.width = width;
@@ -59,21 +94,59 @@ public class GlfwWindow {
         this.fileDropListener = listener;
     }
 
-    public void setOnMouseButtonListener(MouseButtonListener listener) {
-        this.mouseButtonListener = listener;
+    public void setOnMouseClickListener(MouseClickListener listener) {
+        this.mouseClickListener = listener;
+    }
+    public void setMouseButtonListener(MouseClickListener listener) {
+        this.mouseClickListener = listener;
+    }
+    public void setOnMouseClickListener(MouseClick3ArgListener listener) {
+        this.mouseClick3ArgListener = listener;
+    }
+    public void setMouseButtonListener(MouseClick3ArgListener listener) {
+        this.mouseClick3ArgListener = listener;
+    }
+    public void setOnMouseClickListener(BiConsumer<Double, Double> listener) {
+        this.mouseClickBiConsumer = listener;
     }
 
     public void setOnCursorPosListener(CursorPosListener listener) {
         this.cursorPosListener = listener;
     }
+    public void setCursorPosListener(CursorPosListener listener) {
+        this.cursorPosListener = listener;
+    }
+    public void setOnCursorPosListener(CursorPos2ArgListener listener) {
+        this.cursorPos2ArgListener = listener;
+    }
+    public void setCursorPosListener(CursorPos2ArgListener listener) {
+        this.cursorPos2ArgListener = listener;
+    }
 
     public void setOnScrollListener(ScrollListener listener) {
         this.scrollListener = listener;
     }
+    public void setScrollListener(ScrollListener listener) {
+        this.scrollListener = listener;
+    }
+    public void setOnScrollListener(SingleScrollListener listener) {
+        this.singleScrollListener = listener;
+    }
+    public void setScrollListener(SingleScrollListener listener) {
+        this.singleScrollListener = listener;
+    }
 
-    public boolean isKeyDown(int keyCode) {
-        if (windowHandle == NULL) return false;
-        return glfwGetKey(windowHandle, keyCode) == GLFW_PRESS;
+    public void setOnKeyListener(KeyListener listener) {
+        this.keyListener = listener;
+    }
+    public void setKeyListener(KeyListener listener) {
+        this.keyListener = listener;
+    }
+    public void setOnKeyListener(KeyPressListener listener) {
+        this.keyPressListener = listener;
+    }
+    public void setKeyPressListener(KeyPressListener listener) {
+        this.keyPressListener = listener;
     }
 
     public boolean create() {
@@ -92,6 +165,7 @@ public class GlfwWindow {
             return false;
         }
 
+        // Key Callback
         glfwSetKeyCallback(windowHandle, (window, key, scancode, action, mods) -> {
             if (action == GLFW_PRESS) {
                 if (key == GLFW_KEY_ESCAPE) {
@@ -100,36 +174,21 @@ public class GlfwWindow {
                     toggleFullscreen();
                 }
             }
-        });
-
-        glfwSetMouseButtonCallback(windowHandle, (window, button, action, mods) -> {
-            if (mouseButtonListener != null) {
-                double[] x = new double[1];
-                double[] y = new double[1];
-                glfwGetCursorPos(window, x, y);
-                mouseButtonListener.onMouseButton(button, action, x[0], y[0]);
+            if (keyListener != null) {
+                keyListener.onKey(key, action, mods);
+            }
+            if (keyPressListener != null) {
+                keyPressListener.onKeyPress(key, action);
             }
         });
 
-        glfwSetCursorPosCallback(windowHandle, (window, xpos, ypos) -> {
-            if (cursorPosListener != null) {
-                boolean isShift = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) || (glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS);
-                boolean isAlt = (glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS) || (glfwGetKey(window, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS);
-                cursorPosListener.onCursorPos(xpos, ypos, isShift, isAlt);
-            }
-        });
-
-        glfwSetScrollCallback(windowHandle, (window, xoffset, yoffset) -> {
-            if (scrollListener != null) {
-                scrollListener.onScroll(xoffset, yoffset);
-            }
-        });
-
+        // Window resize callback
         glfwSetFramebufferSizeCallback(windowHandle, (window, w, h) -> {
             this.width = w;
             this.height = h;
         });
 
+        // Drag-and-Drop Callback
         glfwSetDropCallback(windowHandle, (window, count, names) -> {
             PointerBuffer nameBuffer = PointerBuffer.create(names, count);
             List<String> droppedFiles = new ArrayList<>();
@@ -139,6 +198,46 @@ public class GlfwWindow {
             System.out.println("[GLFW] Files dropped into window: " + droppedFiles);
             if (fileDropListener != null) {
                 fileDropListener.accept(droppedFiles);
+            }
+        });
+
+        // Mouse Button Callback
+        glfwSetMouseButtonCallback(windowHandle, (window, button, action, mods) -> {
+            double[] x = new double[1];
+            double[] y = new double[1];
+            glfwGetCursorPos(windowHandle, x, y);
+
+            if (mouseClickListener != null) {
+                mouseClickListener.onClick(x[0], y[0], button, action);
+            }
+            if (mouseClick3ArgListener != null) {
+                mouseClick3ArgListener.onClick(x[0], y[0], button);
+            }
+            if (mouseClickBiConsumer != null) {
+                mouseClickBiConsumer.accept(x[0], y[0]);
+            }
+        });
+
+        // Cursor Position Callback
+        glfwSetCursorPosCallback(windowHandle, (window, xpos, ypos) -> {
+            boolean isShiftDown = isKeyDown(GLFW_KEY_LEFT_SHIFT) || isKeyDown(GLFW_KEY_RIGHT_SHIFT);
+            boolean isAltDown = isKeyDown(GLFW_KEY_LEFT_ALT) || isKeyDown(GLFW_KEY_RIGHT_ALT);
+
+            if (cursorPosListener != null) {
+                cursorPosListener.onCursorPos(xpos, ypos, isShiftDown, isAltDown);
+            }
+            if (cursorPos2ArgListener != null) {
+                cursorPos2ArgListener.onCursorPos(xpos, ypos);
+            }
+        });
+
+        // Scroll Callback
+        glfwSetScrollCallback(windowHandle, (window, xoffset, yoffset) -> {
+            if (scrollListener != null) {
+                scrollListener.onScroll(xoffset, yoffset);
+            }
+            if (singleScrollListener != null) {
+                singleScrollListener.onScroll(yoffset);
             }
         });
 
@@ -154,13 +253,13 @@ public class GlfwWindow {
         return glfwWindowShouldClose(windowHandle);
     }
 
-    public long getNativeHandle() {
-        return windowHandle;
+    public boolean isKeyDown(int key) {
+        if (windowHandle == NULL) return false;
+        return glfwGetKey(windowHandle, key) == GLFW_PRESS;
     }
 
-    public long getWindowHandle() {
-        return windowHandle;
-    }
+    public long getNativeHandle() { return windowHandle; }
+    public long getWindowHandle() { return windowHandle; }
 
     public WindowInfo getWindowInfo() {
         return new WindowInfo(windowHandle, width, height, true);

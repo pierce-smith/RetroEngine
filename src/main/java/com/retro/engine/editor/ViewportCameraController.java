@@ -3,14 +3,15 @@ package com.retro.engine.editor;
 /**
  * ViewportCameraController provides Unity-style camera navigation in the 3D Viewport:
  * - Orbit / Rotate (Yaw & Pitch): Right Mouse Drag OR Alt + Left Mouse Drag
- * - Pan (X / Y): Middle Mouse Drag OR Shift + Right Mouse Drag OR WASD / Arrow keys
+ * - Pan (X / Y): Middle Mouse Drag OR Shift + Right Mouse Drag
  * - Zoom (In / Out): Mouse Scroll Wheel OR Q / E Keys
  * - Focus / Reset: 'F' Key
+ * - WASD / Arrow Keys: Camera panning and navigation
  */
 public class ViewportCameraController {
 
     private float panX = 0.0f;
-    private float panY = 0.0f;
+    private float panY = 0.25f; // Centered in 3D viewport height
     private float zoom = -5.0f;
     private float pitch = 0.0f;
     private float yaw = 0.0f;
@@ -76,9 +77,14 @@ public class ViewportCameraController {
         clamp();
     }
 
+    public void onScroll(double xoffset, double yoffset) {
+        zoom += (float) yoffset * 0.5f;
+        clamp();
+    }
+
     public void reset() {
         panX = 0.0f;
-        panY = 0.0f;
+        panY = 0.25f;
         zoom = -5.0f;
         pitch = 0.0f;
         yaw = 0.0f;

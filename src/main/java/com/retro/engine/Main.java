@@ -11,29 +11,25 @@ import com.retro.engine.host.GlfwWindow;
 import com.retro.engine.host.HostBackendLoader;
 import com.retro.engine.rhi.IRenderBackend;
 
-import static org.lwjgl.glfw.GLFW.*;
-
-import java.util.List;
-
 public class Main {
+
+    private static String lastLoadedTexturePath = null;
+
     public static void main(String[] args) {
         System.out.println("===========================================");
-        System.out.println("  Retro Engine Shell - Visual Editor IDE   ");
+        System.out.println("  Retro Engine Shell - Editor & Runtime    ");
         System.out.println("===========================================");
 
-        // 1. Create GLFW Window
         GlfwWindow window = new GlfwWindow(1280, 720, "Retro Engine Editor & Runtime");
         if (!window.create()) {
             System.err.println("[Fatal] Could not create GLFW window. Halting.");
             System.exit(1);
         }
 
-        // 2. Initialize Controllers
         EditorPanelManager editorManager = new EditorPanelManager();
-        EditorSelectionController selectionController = new EditorSelectionController();
+        EditorSelectionController selectionController = new EditorSelectionController(editorManager);
         ViewportCameraController cameraController = new ViewportCameraController();
 
-        // 3. Load Platform Graphics Backend (Metal on macOS)
         HostBackendLoader loader = new HostBackendLoader();
         if (!loader.loadTargetBackend()) {
             System.err.println("[Fatal] Target backend failed to load. Halting execution.");
@@ -43,50 +39,48 @@ public class Main {
 
         IRenderBackend rhi = loader.getBackend();
 
-        // 4. Wire Input Listeners
-        window.setOnMouseButtonListener((button, action, x, y) -> {
-            selectionController.handleMouseClick(x, y, button, editorManager);
-            cameraController.onMouseButton(button, action, x, y);
-        });
-
-        window.setOnCursorPosListener((x, y, isShift, isAlt) -> {
-            cameraController.onCursorPos(x, y, isShift, isAlt);
-        });
-
-        window.setOnScrollListener((xoff, yoff) -> {
-            cameraController.onScroll(yoff);
-        });
-
-        // Wire native Finder drag-and-drop listener
-        window.setOnFileDropListener((List<String> paths) -> {
-            editorManager.onFilesDropped(paths);
-            for (String path : paths) {
+        // Native drag-and-drop listener
+        window.setOnFileDropListener(filePaths -> {
+            editorManager.onFilesDropped(filePaths);
+            for (String path : filePaths) {
                 String lower = path.toLowerCase();
-                if (lower.endsWith(".obj") || lower.endsWith(".gltf") || lower.endsWith(".glb") || lower.endsWith(".fbx") || lower.endsWith(".dae")) {
+                if (lower.endsWith(".obj") || lower.endsWith(".gltf") || lower.endsWith(".glb") || lower.endsWith(".fbx")) {
                     ModelData model = ModelLoader.loadModel(path);
-                    if (model != null && model.vertices != null) {
-                        int vertCount = model.vertices.length / 7;
-                        rhi.updateMesh(model.vertices, vertCount);
-
-                        // Update live vertex count in Inspector
-                        EditorPanelManager.SceneEntity selected = editorManager.getSelectedEntity();
-                        if (selected != null) {
-                            selected.vertexCount = vertCount;
-                        }
+                    if (model != null && model.vertices != null && model.vertices.length > 0) {
+                        rhi.updateMesh(model.vertices, model.vertexCount);
+                        System.out.println("[Engine] Uploaded 3D mesh (" + model.vertexCount + " vertices) to Metal VRAM: " + path);
                     }
                 } else if (lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".bmp")) {
                     TextureData tex = TextureLoader.loadTexture(path);
-                    if (tex != null) {
-                        System.out.println("[Engine] Registered texture asset: " + tex.width + "x" + tex.height);
+                    if (tex != null && tex.pixels != null) {
+                        rhi.updateTexture(tex.pixels, tex.width, tex.height);
+                        lastLoadedTexturePath = path;
+                        System.out.println("[Engine] Uploaded texture (" + tex.width + "x" + tex.height + ") to Metal VRAM: " + path);
                     }
                 }
             }
         });
 
-        // 5. Initialize RHI Loop
-        if (rhi.initialize(window.getWindowInfo())) {
+        // Mouse click listener
+        window.setOnMouseClickListener((mouseX, mouseY, button, action) -> {
+            cameraController.onMouseButton(button, action, mouseX, mouseY);
+            if (action == 1) { // GLFW_PRESS = 1
+                selectionController.handleMouseClick(mouseX, mouseY, button, action, editorManager);
+            }
+        });
 
-            System.out.println("[Engine] Running. WASD/RMB/Scroll: Nav Camera | F: Focus | Drag & Drop .fbx/.gltf/.obj from Finder.");
+        // Cursor pos listener for 3D Viewport orbit and panning
+        window.setOnCursorPosListener((xpos, ypos, isShiftDown, isAltDown) -> {
+            cameraController.onCursorPos(xpos, ypos, isShiftDown, isAltDown);
+        });
+
+        // Scroll listener for 3D Viewport zooming
+        window.setOnScrollListener((xoffset, yoffset) -> {
+            cameraController.onScroll(xoffset, yoffset);
+        });
+
+        if (rhi.initialize(window.getWindowInfo())) {
+            System.out.println("[Engine] Running. Drag .fbx / .obj / .jpg into window | ESC: Quit");
 
             long lastTime = System.nanoTime();
 
@@ -97,40 +91,39 @@ public class Main {
                 float deltaTime = (currentTime - lastTime) / 1_000_000_000.0f;
                 lastTime = currentTime;
 
-                // Handle Camera Key Inputs
-                boolean isW = window.isKeyDown(GLFW_KEY_W) || window.isKeyDown(GLFW_KEY_UP);
-                boolean isS = window.isKeyDown(GLFW_KEY_S) || window.isKeyDown(GLFW_KEY_DOWN);
-                boolean isA = window.isKeyDown(GLFW_KEY_A) || window.isKeyDown(GLFW_KEY_LEFT);
-                boolean isD = window.isKeyDown(GLFW_KEY_D) || window.isKeyDown(GLFW_KEY_RIGHT);
-                boolean isQ = window.isKeyDown(GLFW_KEY_Q);
-                boolean isE = window.isKeyDown(GLFW_KEY_E);
+                // Update Camera Controls
+                boolean w = window.isKeyDown(87) || window.isKeyDown(265); // W / Up
+                boolean s = window.isKeyDown(83) || window.isKeyDown(264); // S / Down
+                boolean a = window.isKeyDown(65) || window.isKeyDown(263); // A / Left
+                boolean d = window.isKeyDown(68) || window.isKeyDown(262); // D / Right
+                boolean q = window.isKeyDown(81); // Q
+                boolean e = window.isKeyDown(69); // E
+                cameraController.update(deltaTime, w, s, a, d, q, e);
 
-                if (window.isKeyDown(GLFW_KEY_F)) {
-                    cameraController.reset();
-                }
-
-                cameraController.update(deltaTime, isW, isS, isA, isD, isQ, isE);
-
-                // Send camera transform to Metal backend
                 rhi.setCameraTransform(
-                        cameraController.getPanX(),
-                        cameraController.getPanY(),
-                        cameraController.getZoom(),
-                        cameraController.getPitch(),
-                        cameraController.getYaw()
+                    cameraController.getPanX(),
+                    cameraController.getPanY(),
+                    cameraController.getZoom(),
+                    cameraController.getPitch(),
+                    cameraController.getYaw()
                 );
 
-                // Update Editor State
                 editorManager.update(deltaTime);
 
-                // Stream 2D UI Overlay Mesh
-                float[] uiVerts = editorManager.getUiVertices();
-                int uiCount = editorManager.getUiVertexCount();
-                if (uiVerts != null && uiCount > 0) {
-                    rhi.updateUiMesh(uiVerts, uiCount);
+                // Check if Inspector texture assignment changed
+                EditorPanelManager.SceneEntity selected = editorManager.getSelectedEntity();
+                if (selected != null && selected.textureAssetPath != null && !selected.textureAssetPath.equals(lastLoadedTexturePath)) {
+                    TextureData tex = TextureLoader.loadTexture(selected.textureAssetPath);
+                    if (tex != null && tex.pixels != null) {
+                        rhi.updateTexture(tex.pixels, tex.width, tex.height);
+                        lastLoadedTexturePath = selected.textureAssetPath;
+                        System.out.println("[Engine] Dynamic Texture Link Synced: " + tex.name);
+                    }
                 }
 
-                // Render Frame
+                // Stream 2D UI overlay geometry to RHI each frame
+                rhi.updateUiMesh(editorManager.getUiVertices(), editorManager.getUiVertexCount());
+
                 rhi.beginFrame();
                 rhi.endFrame();
                 rhi.present();
