@@ -18,25 +18,29 @@ public class MetalBackend implements IRenderBackend {
     private long commandQueue = 0L;
     private long metalLayer = 0L;
 
-    private long pipelineState = 0L;
+    private long pipelineState3D = 0L;
+    private long pipelineState2D = 0L;
     private long depthStencilState3D = 0L;
-    private long depthStencilStateUI = 0L;
+    private long depthStencilState2D = 0L;
     private long depthTexture = 0L;
 
-    // 3D Model Mesh Buffer
-    private long vertexBuffer = 0L;
-    private int vertexCount = 0;
-    private long uniformBuffer3D = 0L;
+    private long meshVertexBuffer = 0L;
+    private int meshVertexCount = 0;
 
-    // 2D Editor UI Overlay Buffer
     private long uiVertexBuffer = 0L;
     private int uiVertexCount = 0;
-    private long uniformBuffer2D = 0L;
+
+    private long uniformBuffer3D = 0L;
 
     private long currentDrawable = 0L;
     private long currentCommandBuffer = 0L;
 
-    private float rotationAngle = 0.0f;
+    private float camPanX = 0.0f;
+    private float camPanY = 0.0f;
+    private float camZoom = -5.0f;
+    private float camPitch = 0.0f;
+    private float camYaw = 0.0f;
+
     private long objc_msgSend = 0L;
 
     private static final String MSL_SHADER_SOURCE = """
@@ -52,6 +56,7 @@ public class MetalBackend implements IRenderBackend {
             float4x4 mvp;
         };
 
+        // 3D Shader
         vertex VertexOut vertexMain(uint vertexID [[vertex_id]],
                                     constant float* vertices [[buffer(0)]],
                                     constant Uniforms& uniforms [[buffer(1)]]) {
@@ -64,6 +69,20 @@ public class MetalBackend implements IRenderBackend {
         }
 
         fragment float4 fragmentMain(VertexOut in [[stage_in]]) {
+            return in.color;
+        }
+
+        // 2D UI Shader
+        vertex VertexOut uiVertexMain(uint vertexID [[vertex_id]],
+                                      constant float* vertices [[buffer(0)]]) {
+            VertexOut out;
+            int idx = vertexID * 7;
+            out.position = float4(vertices[idx], vertices[idx+1], 0.0, 1.0);
+            out.color = float4(vertices[idx+3], vertices[idx+4], vertices[idx+5], vertices[idx+6]);
+            return out;
+        }
+
+        fragment float4 uiFragmentMain(VertexOut in [[stage_in]]) {
             return in.color;
         }
         """;
@@ -79,7 +98,7 @@ public class MetalBackend implements IRenderBackend {
 
     @Override
     public boolean initialize(WindowInfo windowInfo) {
-        System.out.println("[MetalBackend] Initializing Dual-Pass Metal 3D/2D Pipeline...");
+        System.out.println("[MetalBackend] Initializing Dual-Pass Metal Engine Architecture...");
 
         long nsWindow = GLFWNativeCocoa.glfwGetCocoaWindow(windowInfo.nativeWindowHandle());
         if (nsWindow == 0L) {
@@ -120,26 +139,16 @@ public class MetalBackend implements IRenderBackend {
         invokePPPV(contentView, sel_registerName("setLayer:"), metalLayer, objc_msgSend);
         invokePPPV(contentView, sel_registerName("setWantsLayer:"), 1L, objc_msgSend);
 
-        if (!initShadersAndPipeline()) {
-            System.err.println("[MetalBackend] ERROR: Failed to initialize Metal pipeline!");
+        if (!initPipelinesAndShaders()) {
+            System.err.println("[MetalBackend] ERROR: Failed to initialize Metal dual pipelines!");
             return false;
         }
 
         initDepthBuffer(1280, 720);
 
-        // Uniform Buffer 1: 3D Perspective MVP
         uniformBuffer3D = invokePPPPP(device, sel_registerName("newBufferWithLength:options:"), 64L, 0L, objc_msgSend);
 
-        // Uniform Buffer 2: 2D Identity Matrix
-        uniformBuffer2D = invokePPPPP(device, sel_registerName("newBufferWithLength:options:"), 64L, 0L, objc_msgSend);
-        long pContents2D = invokePPP(uniformBuffer2D, sel_registerName("contents"), objc_msgSend);
-        if (pContents2D != 0L) {
-            FloatBuffer fb = MemoryUtil.memFloatBuffer(pContents2D, 16);
-            fb.clear();
-            fb.put(createIdentityMatrix());
-        }
-
-        System.out.println("[MetalBackend] Dual-Pass Metal Pipeline active (3D Viewport + 2D Editor Overlay).");
+        System.out.println("[MetalBackend] Dual-Pass 3D & 2D IDE Engine active on Apple Silicon Metal.");
         return true;
     }
 
@@ -150,36 +159,34 @@ public class MetalBackend implements IRenderBackend {
         invokePPPV(desc, sel_registerName("setPixelFormat:"), 252L, objc_msgSend); // 252L = MTLPixelFormatDepth32Float
         invokePPPV(desc, sel_registerName("setWidth:"), (long) width, objc_msgSend);
         invokePPPV(desc, sel_registerName("setHeight:"), (long) height, objc_msgSend);
-        invokePPPV(desc, sel_registerName("setUsage:"), 4L, objc_msgSend); // 4L = MTLTextureUsageRenderTarget
-        invokePPPV(desc, sel_registerName("setStorageMode:"), 2L, objc_msgSend); // 2L = MTLStorageModePrivate
+        invokePPPV(desc, sel_registerName("setUsage:"), 4L, objc_msgSend); // 4L = RenderTarget
+        invokePPPV(desc, sel_registerName("setStorageMode:"), 2L, objc_msgSend); // 2L = Private
 
         depthTexture = invokePPPP(device, sel_registerName("newTextureWithDescriptor:"), desc, objc_msgSend);
 
-        long depthDescClass = objc_getClass("MTLDepthStencilDescriptor");
-
         // 3D Depth State (Compare Less, Write Enabled)
-        long depthDesc3D = invokePPP(depthDescClass, sel_registerName("new"), objc_msgSend);
+        long depthDesc3D = invokePPP(objc_getClass("MTLDepthStencilDescriptor"), sel_registerName("new"), objc_msgSend);
         invokePPPV(depthDesc3D, sel_registerName("setDepthCompareFunction:"), 1L, objc_msgSend); // 1L = MTLCompareFunctionLess
         invokePPPV(depthDesc3D, sel_registerName("setDepthWriteEnabled:"), 1L, objc_msgSend);
         depthStencilState3D = invokePPPP(device, sel_registerName("newDepthStencilStateWithDescriptor:"), depthDesc3D, objc_msgSend);
 
-        // 2D UI Depth State (Compare Always, Write Disabled)
-        long depthDescUI = invokePPP(depthDescClass, sel_registerName("new"), objc_msgSend);
-        invokePPPV(depthDescUI, sel_registerName("setDepthCompareFunction:"), 7L, objc_msgSend); // 7L = MTLCompareFunctionAlways
-        invokePPPV(depthDescUI, sel_registerName("setDepthWriteEnabled:"), 0L, objc_msgSend);
-        depthStencilStateUI = invokePPPP(device, sel_registerName("newDepthStencilStateWithDescriptor:"), depthDescUI, objc_msgSend);
+        // 2D Depth State (Compare Always, Write Disabled)
+        long depthDesc2D = invokePPP(objc_getClass("MTLDepthStencilDescriptor"), sel_registerName("new"), objc_msgSend);
+        invokePPPV(depthDesc2D, sel_registerName("setDepthCompareFunction:"), 7L, objc_msgSend); // 7L = MTLCompareFunctionAlways
+        invokePPPV(depthDesc2D, sel_registerName("setDepthWriteEnabled:"), 0L, objc_msgSend);
+        depthStencilState2D = invokePPPP(device, sel_registerName("newDepthStencilStateWithDescriptor:"), depthDesc2D, objc_msgSend);
     }
 
     @Override
     public void updateMesh(float[] vertices, int count) {
-        if (device == 0L || objc_msgSend == 0L || vertices == null || vertices.length == 0) return;
+        if (device == 0L || vertices == null || vertices.length == 0) return;
 
         FloatBuffer fb = MemoryUtil.memAllocFloat(vertices.length);
         fb.put(vertices).flip();
 
         long sel_newBufferWithBytes = sel_registerName("newBufferWithBytes:length:options:");
-        this.vertexBuffer = invokePPPPPP(device, sel_newBufferWithBytes, MemoryUtil.memAddress(fb), (long) vertices.length * 4L, 0L, objc_msgSend);
-        this.vertexCount = count;
+        this.meshVertexBuffer = invokePPPPPP(device, sel_newBufferWithBytes, MemoryUtil.memAddress(fb), (long) vertices.length * 4L, 0L, objc_msgSend);
+        this.meshVertexCount = count;
 
         MemoryUtil.memFree(fb);
         System.out.println("[MetalBackend] Uploaded 3D Mesh to Metal VRAM (" + count + " vertices).");
@@ -187,90 +194,107 @@ public class MetalBackend implements IRenderBackend {
 
     @Override
     public void updateUiMesh(float[] vertices, int count) {
-        if (device == 0L || objc_msgSend == 0L || vertices == null || vertices.length == 0) return;
+        if (device == 0L || vertices == null || count == 0) return;
 
-        FloatBuffer fb = MemoryUtil.memAllocFloat(vertices.length);
-        fb.put(vertices).flip();
+        FloatBuffer fb = MemoryUtil.memAllocFloat(count * 7);
+        fb.put(vertices, 0, count * 7).flip();
 
         long sel_newBufferWithBytes = sel_registerName("newBufferWithBytes:length:options:");
-        this.uiVertexBuffer = invokePPPPPP(device, sel_newBufferWithBytes, MemoryUtil.memAddress(fb), (long) vertices.length * 4L, 0L, objc_msgSend);
+        this.uiVertexBuffer = invokePPPPPP(device, sel_newBufferWithBytes, MemoryUtil.memAddress(fb), (long) count * 7L * 4L, 0L, objc_msgSend);
         this.uiVertexCount = count;
 
         MemoryUtil.memFree(fb);
     }
 
-    private boolean initShadersAndPipeline() {
+    @Override
+    public void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw) {
+        this.camPanX = panX;
+        this.camPanY = panY;
+        this.camZoom = zoom;
+        this.camPitch = pitch;
+        this.camYaw = yaw;
+    }
+
+    private boolean initPipelinesAndShaders() {
         long nsSourceString = createNSString(MSL_SHADER_SOURCE);
         long library = invokePPPPPP(device, sel_registerName("newLibraryWithSource:options:error:"), nsSourceString, 0L, 0L, objc_msgSend);
         if (library == 0L) return false;
 
-        long vertName = createNSString("vertexMain");
-        long fragName = createNSString("fragmentMain");
+        long vert3D = invokePPPP(library, sel_registerName("newFunctionWithName:"), createNSString("vertexMain"), objc_msgSend);
+        long frag3D = invokePPPP(library, sel_registerName("newFunctionWithName:"), createNSString("fragmentMain"), objc_msgSend);
 
-        long vertFunc = invokePPPP(library, sel_registerName("newFunctionWithName:"), vertName, objc_msgSend);
-        long fragFunc = invokePPPP(library, sel_registerName("newFunctionWithName:"), fragName, objc_msgSend);
+        long vert2D = invokePPPP(library, sel_registerName("newFunctionWithName:"), createNSString("uiVertexMain"), objc_msgSend);
+        long frag2D = invokePPPP(library, sel_registerName("newFunctionWithName:"), createNSString("uiFragmentMain"), objc_msgSend);
 
-        long pipeDescClass = objc_getClass("MTLRenderPipelineDescriptor");
-        long pipeDesc = invokePPP(pipeDescClass, sel_registerName("new"), objc_msgSend);
+        // 3D Pipeline
+        long desc3D = invokePPP(objc_getClass("MTLRenderPipelineDescriptor"), sel_registerName("new"), objc_msgSend);
+        invokePPPV(desc3D, sel_registerName("setVertexFunction:"), vert3D, objc_msgSend);
+        invokePPPV(desc3D, sel_registerName("setFragmentFunction:"), frag3D, objc_msgSend);
+        long color3D = invokePPPP(invokePPP(desc3D, sel_registerName("colorAttachments"), objc_msgSend), sel_registerName("objectAtIndexedSubscript:"), 0L, objc_msgSend);
+        invokePPPV(color3D, sel_registerName("setPixelFormat:"), 80L, objc_msgSend);
+        invokePPPV(desc3D, sel_registerName("setDepthAttachmentPixelFormat:"), 252L, objc_msgSend);
+        pipelineState3D = invokePPPPP(device, sel_registerName("newRenderPipelineStateWithDescriptor:error:"), desc3D, 0L, objc_msgSend);
 
-        invokePPPV(pipeDesc, sel_registerName("setVertexFunction:"), vertFunc, objc_msgSend);
-        invokePPPV(pipeDesc, sel_registerName("setFragmentFunction:"), fragFunc, objc_msgSend);
+        // 2D Pipeline with Alpha Blending
+        long desc2D = invokePPP(objc_getClass("MTLRenderPipelineDescriptor"), sel_registerName("new"), objc_msgSend);
+        invokePPPV(desc2D, sel_registerName("setVertexFunction:"), vert2D, objc_msgSend);
+        invokePPPV(desc2D, sel_registerName("setFragmentFunction:"), frag2D, objc_msgSend);
+        long color2D = invokePPPP(invokePPP(desc2D, sel_registerName("colorAttachments"), objc_msgSend), sel_registerName("objectAtIndexedSubscript:"), 0L, objc_msgSend);
+        invokePPPV(color2D, sel_registerName("setPixelFormat:"), 80L, objc_msgSend);
+        invokePPPV(color2D, sel_registerName("setBlendingEnabled:"), 1L, objc_msgSend);
+        invokePPPV(color2D, sel_registerName("setSourceRGBBlendFactor:"), 1L, objc_msgSend); // MTLBlendFactorSourceAlpha
+        invokePPPV(color2D, sel_registerName("setDestinationRGBBlendFactor:"), 5L, objc_msgSend); // MTLBlendFactorOneMinusSourceAlpha
+        invokePPPV(desc2D, sel_registerName("setDepthAttachmentPixelFormat:"), 252L, objc_msgSend);
 
-        long colorAttachments = invokePPP(pipeDesc, sel_registerName("colorAttachments"), objc_msgSend);
-        long colorAttach0 = invokePPPP(colorAttachments, sel_registerName("objectAtIndexedSubscript:"), 0L, objc_msgSend);
+        pipelineState2D = invokePPPPP(device, sel_registerName("newRenderPipelineStateWithDescriptor:error:"), desc2D, 0L, objc_msgSend);
 
-        invokePPPV(colorAttach0, sel_registerName("setPixelFormat:"), 80L, objc_msgSend);
-        invokePPPV(colorAttach0, sel_registerName("setBlendingEnabled:"), 1L, objc_msgSend);
-        invokePPPV(colorAttach0, sel_registerName("setSourceRGBBlendFactor:"), 1L, objc_msgSend);       // MTLBlendFactorSourceAlpha
-        invokePPPV(colorAttach0, sel_registerName("setDestinationRGBBlendFactor:"), 5L, objc_msgSend);  // MTLBlendFactorOneMinusSourceAlpha
-        invokePPPV(colorAttach0, sel_registerName("setSourceAlphaBlendFactor:"), 1L, objc_msgSend);
-        invokePPPV(colorAttach0, sel_registerName("setDestinationAlphaBlendFactor:"), 5L, objc_msgSend);
-
-        invokePPPV(pipeDesc, sel_registerName("setDepthAttachmentPixelFormat:"), 252L, objc_msgSend); // MTLPixelFormatDepth32Float
-
-        pipelineState = invokePPPPP(device, sel_registerName("newRenderPipelineStateWithDescriptor:error:"), pipeDesc, 0L, objc_msgSend);
-        return pipelineState != 0L;
+        return pipelineState3D != 0L && pipelineState2D != 0L;
     }
 
-    private float[] createIdentityMatrix() {
-        return new float[]{
-            1, 0, 0, 0,
-            0, 1, 0, 0,
-            0, 0, 1, 0,
-            0, 0, 0, 1
-        };
-    }
-
-    private float[] createMVPMatrix(float aspect, float angle) {
-        float fov = (float) Math.toRadians(60.0);
+    private float[] create3DMVPMatrix(float aspect) {
+        float fov = (float) Math.toRadians(50.0);
         float f = (float) (1.0 / Math.tan(fov / 2.0));
         float zNear = 0.1f, zFar = 100.0f;
 
-        float cosY = (float) Math.cos(angle);
-        float sinY = (float) Math.sin(angle);
-
-        float m00 = cosY;
-        float m02 = sinY;
-        float m11 = 1.0f;
-        float m20 = -sinY;
-        float m22 = cosY;
-
-        float tz = -4.5f;
-
-        float p00 = f / aspect;
-        float p11 = f;
+        // Perspective Projection Matrix
+        float p00 = f / (aspect * 1.35f);
+        float p11 = f * 1.15f;
         float p22 = zFar / (zNear - zFar);
         float p23 = (zNear * zFar) / (zNear - zFar);
         float p32 = -1.0f;
 
+        // Camera Orbit Angles (Pitch / Yaw)
+        float radYaw = (float) Math.toRadians(camYaw);
+        float radPitch = (float) Math.toRadians(camPitch);
+
+        float cosY = (float) Math.cos(radYaw);
+        float sinY = (float) Math.sin(radYaw);
+        float cosP = (float) Math.cos(radPitch);
+        float sinP = (float) Math.sin(radPitch);
+
+        // Combined Projection * View Matrix with View Translation
+        float tx = camPanX;
+        float ty = camPanY + 0.15f;
+        float tz = camZoom;
+
         float[] mvp = new float[16];
-        mvp[0] = p00 * m00;
-        mvp[2] = p22 * m02;
-        mvp[3] = p32 * m02;
-        mvp[5] = p11 * m11;
-        mvp[8] = p00 * m20;
-        mvp[10] = p22 * m22;
-        mvp[11] = p32 * m22;
+        mvp[0] = p00 * cosY;
+        mvp[1] = p11 * sinY * sinP;
+        mvp[2] = p22 * sinY * cosP;
+        mvp[3] = p32 * sinY * cosP;
+
+        mvp[4] = 0.0f;
+        mvp[5] = p11 * cosP;
+        mvp[6] = -p22 * sinP;
+        mvp[7] = -p32 * sinP;
+
+        mvp[8] = p00 * -sinY;
+        mvp[9] = p11 * cosY * sinP;
+        mvp[10] = p22 * cosY * cosP;
+        mvp[11] = p32 * cosY * cosP;
+
+        mvp[12] = p00 * tx;
+        mvp[13] = p11 * ty;
         mvp[14] = p22 * tz + p23;
         mvp[15] = p32 * tz;
 
@@ -279,17 +303,7 @@ public class MetalBackend implements IRenderBackend {
 
     @Override
     public void beginFrame() {
-        if (metalLayer == 0L || commandQueue == 0L || pipelineState == 0L) return;
-
-        rotationAngle += 0.015f;
-        float[] mvp = createMVPMatrix(1280.0f / 720.0f, rotationAngle);
-
-        long pContents3D = invokePPP(uniformBuffer3D, sel_registerName("contents"), objc_msgSend);
-        if (pContents3D != 0L) {
-            FloatBuffer fb = MemoryUtil.memFloatBuffer(pContents3D, 16);
-            fb.clear();
-            fb.put(mvp);
-        }
+        if (metalLayer == 0L || commandQueue == 0L) return;
 
         currentDrawable = invokePPP(metalLayer, sel_registerName("nextDrawable"), objc_msgSend);
         if (currentDrawable == 0L) return;
@@ -301,40 +315,50 @@ public class MetalBackend implements IRenderBackend {
         long renderPassDesc = invokePPP(passDescClass, sel_registerName("renderPassDescriptor"), objc_msgSend);
 
         long colorAttachments = invokePPP(renderPassDesc, sel_registerName("colorAttachments"), objc_msgSend);
-        long colorAttachment0 = invokePPPP(colorAttachments, sel_registerName("objectAtIndexedSubscript:"), 0L, objc_msgSend);
+        long colorAttach0 = invokePPPP(colorAttachments, sel_registerName("objectAtIndexedSubscript:"), 0L, objc_msgSend);
 
-        invokePPPV(colorAttachment0, sel_registerName("setTexture:"), texture, objc_msgSend);
-        invokePPPV(colorAttachment0, sel_registerName("setLoadAction:"), 2L, objc_msgSend); // MTLLoadActionClear
-        invokePPPV(colorAttachment0, sel_registerName("setStoreAction:"), 1L, objc_msgSend); // MTLStoreActionStore
+        invokePPPV(colorAttach0, sel_registerName("setTexture:"), texture, objc_msgSend);
+        invokePPPV(colorAttach0, sel_registerName("setLoadAction:"), 2L, objc_msgSend); // Clear
+        invokePPPV(colorAttach0, sel_registerName("setStoreAction:"), 1L, objc_msgSend); // Store
 
         if (depthTexture != 0L) {
             long depthAttachment = invokePPP(renderPassDesc, sel_registerName("depthAttachment"), objc_msgSend);
             invokePPPV(depthAttachment, sel_registerName("setTexture:"), depthTexture, objc_msgSend);
-            invokePPPV(depthAttachment, sel_registerName("setLoadAction:"), 2L, objc_msgSend); // MTLLoadActionClear
+            invokePPPV(depthAttachment, sel_registerName("setLoadAction:"), 2L, objc_msgSend); // Clear depth
             invokePPPV(depthAttachment, sel_registerName("setStoreAction:"), 0L, objc_msgSend);
         }
 
         long encoder = invokePPPP(currentCommandBuffer, sel_registerName("renderCommandEncoderWithDescriptor:"), renderPassDesc, objc_msgSend);
 
-        // --- PASS 1: 3D MODEL PASS ---
-        if (vertexBuffer != 0L && vertexCount > 0) {
-            invokePPPV(encoder, sel_registerName("setRenderPipelineState:"), pipelineState, objc_msgSend);
+        // PASS 1: Render 3D Model inside Viewport Panel Bounds
+        if (meshVertexBuffer != 0L && meshVertexCount > 0 && pipelineState3D != 0L) {
+            float[] mvp = create3DMVPMatrix(1280.0f / 720.0f);
+
+            long pContents = invokePPP(uniformBuffer3D, sel_registerName("contents"), objc_msgSend);
+            if (pContents != 0L) {
+                FloatBuffer fb = MemoryUtil.memFloatBuffer(pContents, 16);
+                fb.clear();
+                fb.put(mvp);
+            }
+
+            invokePPPV(encoder, sel_registerName("setRenderPipelineState:"), pipelineState3D, objc_msgSend);
             if (depthStencilState3D != 0L) {
                 invokePPPV(encoder, sel_registerName("setDepthStencilState:"), depthStencilState3D, objc_msgSend);
             }
-            invokePPPPPV(encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), vertexBuffer, 0L, 0L, objc_msgSend);
+
+            invokePPPPPV(encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), meshVertexBuffer, 0L, 0L, objc_msgSend);
             invokePPPPPV(encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), uniformBuffer3D, 0L, 1L, objc_msgSend);
-            invokePPPPPV(encoder, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, (long) vertexCount, objc_msgSend);
+            invokePPPPPV(encoder, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, (long) meshVertexCount, objc_msgSend);
         }
 
-        // --- PASS 2: 2D EDITOR UI OVERLAY PASS ---
-        if (uiVertexBuffer != 0L && uiVertexCount > 0) {
-            invokePPPV(encoder, sel_registerName("setRenderPipelineState:"), pipelineState, objc_msgSend);
-            if (depthStencilStateUI != 0L) {
-                invokePPPV(encoder, sel_registerName("setDepthStencilState:"), depthStencilStateUI, objc_msgSend);
+        // PASS 2: Render 2D Solid Editor UI Panels & Text Overlay across full window
+        if (uiVertexBuffer != 0L && uiVertexCount > 0 && pipelineState2D != 0L) {
+            invokePPPV(encoder, sel_registerName("setRenderPipelineState:"), pipelineState2D, objc_msgSend);
+            if (depthStencilState2D != 0L) {
+                invokePPPV(encoder, sel_registerName("setDepthStencilState:"), depthStencilState2D, objc_msgSend);
             }
+
             invokePPPPPV(encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), uiVertexBuffer, 0L, 0L, objc_msgSend);
-            invokePPPPPV(encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), uniformBuffer2D, 0L, 1L, objc_msgSend);
             invokePPPPPV(encoder, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, (long) uiVertexCount, objc_msgSend);
         }
 

@@ -1,18 +1,19 @@
 package com.retro.engine.content.mesh;
 
-import java.util.ArrayList;
-import java.util.List;
-
 public class ModelData {
-    public float[] vertices; // Stride: pos(3), normal(3), uv(2), boneIndices(4), boneWeights(4) = 16 floats
-    public int[] indices;
-    public boolean hasAnimation;
-    public String name;
+    public float[] vertices;
+    public int vertexCount;
 
-    public ModelData(String name, float[] vertices, int[] indices, boolean hasAnimation) {
-        this.name = name;
+    public ModelData(float[] vertices, int vertexCount) {
         this.vertices = vertices;
-        this.indices = indices;
-        this.hasAnimation = hasAnimation;
+        this.vertexCount = vertexCount;
+    }
+
+    public float[] vertices() {
+        return vertices;
+    }
+
+    public int vertexCount() {
+        return vertexCount;
     }
 }

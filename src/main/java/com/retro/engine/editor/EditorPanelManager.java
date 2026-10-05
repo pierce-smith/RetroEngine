@@ -6,13 +6,12 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * EditorPanelManager handles the 4-panel layout state and 2D UI vertex generation
- * for the Retro Engine Editor:
- * 1. Top Menu Bar (Header & Status)
+ * EditorPanelManager handles the 4-panel layout state for the Retro Engine Editor:
+ * 1. Top Navigation Bar
  * 2. Scene Manager (Hierarchy) - Left Panel
- * 3. 3D Viewport (Render Target Frame) - Center Panel
- * 4. Inspector (Entity Properties & Transform Readouts) - Right Panel
- * 5. Asset Directory (Project Resource Files) - Bottom Panel
+ * 3. 3D Viewport Frame - Center Panel
+ * 4. Inspector (Entity Properties & Transform) - Right Panel
+ * 5. Asset Directory - Bottom Panel
  */
 public class EditorPanelManager {
 
@@ -31,7 +30,7 @@ public class EditorPanelManager {
 
         @Override
         public String toString() {
-            return "[" + type + "] " + name + " (" + absolutePath + ")";
+            return "[" + type + "] " + name;
         }
     }
 
@@ -42,7 +41,7 @@ public class EditorPanelManager {
 
         @Override
         public String toString() {
-            return String.format("Pos(%.2f, %.2f, %.2f) Rot(%.2f, %.2f, %.2f) Scale(%.2f, %.2f, %.2f)",
+            return String.format("Pos(%.2f, %.2f, %.2f) Rot(%.2f, %.2f, %.2f) Scl(%.2f, %.2f, %.2f)",
                     posX, posY, posZ, rotX, rotY, rotZ, scaleX, scaleY, scaleZ);
         }
     }
@@ -52,6 +51,7 @@ public class EditorPanelManager {
         public String name;
         public final Transform transform = new Transform();
         public String meshAssetPath;
+        public int vertexCount = 0;
         public boolean selected = false;
 
         public SceneEntity(String id, String name, String meshAssetPath) {
@@ -61,39 +61,254 @@ public class EditorPanelManager {
         }
     }
 
-    // Panel States
     private final List<SceneEntity> sceneEntities = new ArrayList<>();
     private final List<AssetEntry> assetDirectory = new ArrayList<>();
     private SceneEntity selectedEntity = null;
 
-    private int windowWidth = 1280;
-    private int windowHeight = 720;
-
-    // Generated 2D UI Vertex Buffer for Metal RHI (Stride: 7 floats -> x, y, z, r, g, b, a)
-    private float[] uiVertices = new float[0];
+    private float[] uiVertexBuffer = new float[100000];
     private int uiVertexCount = 0;
 
+    // 5x7 Retro Font Bitmaps (ASCII 0..127)
+    private static final byte[][] FONT_5X7 = new byte[128][7];
+
+    static {
+        // A..Z
+        FONT_5X7['A'] = new byte[]{0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001};
+        FONT_5X7['B'] = new byte[]{0b11110, 0b10001, 0b11110, 0b10001, 0b10001, 0b10001, 0b11110};
+        FONT_5X7['C'] = new byte[]{0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111};
+        FONT_5X7['D'] = new byte[]{0b11100, 0b10010, 0b10001, 0b10001, 0b10001, 0b10010, 0b11100};
+        FONT_5X7['E'] = new byte[]{0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111};
+        FONT_5X7['F'] = new byte[]{0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000};
+        FONT_5X7['G'] = new byte[]{0b01111, 0b10000, 0b10000, 0b10011, 0b10001, 0b10001, 0b01110};
+        FONT_5X7['H'] = new byte[]{0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001};
+        FONT_5X7['I'] = new byte[]{0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110};
+        FONT_5X7['J'] = new byte[]{0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100};
+        FONT_5X7['K'] = new byte[]{0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001};
+        FONT_5X7['L'] = new byte[]{0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111};
+        FONT_5X7['M'] = new byte[]{0b10001, 0b11011, 0b10101, 0b10001, 0b10001, 0b10001, 0b10001};
+        FONT_5X7['N'] = new byte[]{0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001};
+        FONT_5X7['O'] = new byte[]{0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110};
+        FONT_5X7['P'] = new byte[]{0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000};
+        FONT_5X7['Q'] = new byte[]{0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101};
+        FONT_5X7['R'] = new byte[]{0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001};
+        FONT_5X7['S'] = new byte[]{0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110};
+        FONT_5X7['T'] = new byte[]{0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100};
+        FONT_5X7['U'] = new byte[]{0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110};
+        FONT_5X7['V'] = new byte[]{0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100};
+        FONT_5X7['W'] = new byte[]{0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001};
+        FONT_5X7['X'] = new byte[]{0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001};
+        FONT_5X7['Y'] = new byte[]{0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100};
+        FONT_5X7['Z'] = new byte[]{0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111};
+
+        // 0..9
+        FONT_5X7['0'] = new byte[]{0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110};
+        FONT_5X7['1'] = new byte[]{0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110};
+        FONT_5X7['2'] = new byte[]{0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111};
+        FONT_5X7['3'] = new byte[]{0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110};
+        FONT_5X7['4'] = new byte[]{0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010};
+        FONT_5X7['5'] = new byte[]{0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110};
+        FONT_5X7['6'] = new byte[]{0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110};
+        FONT_5X7['7'] = new byte[]{0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000};
+        FONT_5X7['8'] = new byte[]{0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110};
+        FONT_5X7['9'] = new byte[]{0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110};
+
+        // Symbols
+        FONT_5X7[':'] = new byte[]{0b00000, 0b01100, 0b01100, 0b00000, 0b01100, 0b01100, 0b00000};
+        FONT_5X7['-'] = new byte[]{0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000};
+        FONT_5X7['.'] = new byte[]{0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100};
+        FONT_5X7['_'] = new byte[]{0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b11111};
+        FONT_5X7['('] = new byte[]{0b00010, 0b00100, 0b01000, 0b01000, 0b01000, 0b00100, 0b00010};
+        FONT_5X7[')'] = new byte[]{0b01000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b01000};
+        FONT_5X7['['] = new byte[]{0b01110, 0b01000, 0b01000, 0b01000, 0b01000, 0b01000, 0b01110};
+        FONT_5X7[']'] = new byte[]{0b01110, 0b00010, 0b00010, 0b00010, 0b00010, 0b00010, 0b01110};
+        FONT_5X7['/'] = new byte[]{0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b00000, 0b00000};
+        FONT_5X7['>'] = new byte[]{0b10000, 0b01000, 0b00100, 0b00010, 0b00100, 0b01000, 0b10000};
+        FONT_5X7['<'] = new byte[]{0b00010, 0b00100, 0b01000, 0b10000, 0b01000, 0b00100, 0b00010};
+        FONT_5X7['|'] = new byte[]{0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100};
+    }
+
     public EditorPanelManager() {
-        // Default scene setup
-        SceneEntity camera = new SceneEntity("env_cam_01", "Main Camera", null);
-        camera.transform.posZ = 5.0f;
-        sceneEntities.add(camera);
-
-        SceneEntity light = new SceneEntity("env_light_01", "Directional Light", null);
-        light.transform.posY = 10.0f;
-        sceneEntities.add(light);
-
-        // Pre-populate asset directory with core project files
-        assetDirectory.add(new AssetEntry("PottedPlant.obj", "/assets/models/PottedPlant.obj", AssetType.MESH_3D));
-        assetDirectory.add(new AssetEntry("DefaultShader.metal", "/assets/shaders/DefaultShader.metal", AssetType.SHADER));
-        assetDirectory.add(new AssetEntry("GridTexture.png", "/assets/textures/GridTexture.png", AssetType.TEXTURE));
-
-        rebuildUiMesh();
+        rebuildUiGeometry();
     }
 
     public void update(float deltaTime) {
-        // Periodically rebuild 2D UI vertex geometry to reflect selection & transform updates
-        rebuildUiMesh();
+        rebuildUiGeometry();
+    }
+
+    public float[] generateUiVertices() {
+        return getUiVertices();
+    }
+
+    public float[] getUiVertices() {
+        return uiVertexBuffer;
+    }
+
+    public int getUiVertexCount() {
+        return uiVertexCount;
+    }
+
+    public void renderImGuiLayout() {
+        renderImGuiLayout(0L);
+    }
+
+    public void renderImGuiLayout(long viewportTextureHandle) {}
+
+    private void rebuildUiGeometry() {
+        uiVertexCount = 0;
+
+        // 1. Top Navigation Bar (0, 0 to 1280, 32)
+        addQuad(0, 0, 1280, 32, 0.12f, 0.12f, 0.14f, 1.0f);
+        addQuad(0, 30, 1280, 2, 0.22f, 0.22f, 0.25f, 1.0f);
+        addTextClipped("RETRO ENGINE STUDIO  |  WASD: NAV  |  RMB: ORBIT  |  F: FOCUS", 12, 10, 1260, 1.0f, 0.85f, 0.3f, 1.0f, 2);
+
+        // 2. Left Panel - Scene Hierarchy (0, 32 to 280, 520)
+        addQuad(0, 32, 280, 488, 0.09f, 0.09f, 0.11f, 1.0f);
+        addQuad(0, 32, 280, 28, 0.15f, 0.15f, 0.18f, 1.0f);
+        addQuad(278, 32, 2, 488, 0.20f, 0.20f, 0.24f, 1.0f);
+        addTextClipped("SCENE HIERARCHY", 12, 40, 270, 0.9f, 0.9f, 0.95f, 1.0f, 2);
+
+        if (sceneEntities.isEmpty()) {
+            addTextClipped("NO ENTITIES IN SCENE", 12, 75, 270, 0.5f, 0.5f, 0.55f, 1.0f, 2);
+            addTextClipped("DROP 3D MODEL TO SPAWN", 12, 95, 270, 0.4f, 0.4f, 0.45f, 1.0f, 2);
+        } else {
+            int yPos = 70;
+            for (SceneEntity e : sceneEntities) {
+                if (e.selected) {
+                    addQuad(4, yPos - 2, 270, 22, 0.20f, 0.35f, 0.65f, 1.0f);
+                    addTextClipped("> " + e.name.toUpperCase(), 10, yPos + 2, 270, 1.0f, 1.0f, 1.0f, 1.0f, 2);
+                } else {
+                    addTextClipped("  " + e.name.toUpperCase(), 10, yPos + 2, 270, 0.8f, 0.8f, 0.85f, 1.0f, 2);
+                }
+                yPos += 26;
+            }
+        }
+
+        // 3. Center Panel - 3D Viewport Header Frame (280, 32 to 1000, 60)
+        addQuad(280, 32, 720, 28, 0.13f, 0.13f, 0.16f, 1.0f);
+        addQuad(280, 60, 2, 460, 0.20f, 0.20f, 0.24f, 1.0f);
+        addQuad(998, 60, 2, 460, 0.20f, 0.20f, 0.24f, 1.0f);
+        addQuad(280, 518, 720, 2, 0.20f, 0.20f, 0.24f, 1.0f);
+        addTextClipped("3D VIEWPORT CANVAS", 292, 40, 990, 0.9f, 0.9f, 0.95f, 1.0f, 2);
+
+        // 4. Right Panel - Inspector (1000, 32 to 1280, 520)
+        addQuad(1000, 32, 280, 488, 0.09f, 0.09f, 0.11f, 1.0f);
+        addQuad(1000, 32, 280, 28, 0.15f, 0.15f, 0.18f, 1.0f);
+        addQuad(1000, 32, 2, 488, 0.20f, 0.20f, 0.24f, 1.0f);
+        addTextClipped("INSPECTOR", 1012, 40, 1270, 0.9f, 0.9f, 0.95f, 1.0f, 2);
+
+        if (selectedEntity == null) {
+            addTextClipped("NO SELECTION", 1012, 75, 1270, 0.5f, 0.5f, 0.55f, 1.0f, 2);
+        } else {
+            addTextClipped("ENTITY: " + selectedEntity.name.toUpperCase(), 1012, 75, 1270, 0.3f, 0.8f, 1.0f, 1.0f, 2);
+            addTextClipped("ID: " + selectedEntity.id.toUpperCase(), 1012, 95, 1270, 0.7f, 0.7f, 0.75f, 1.0f, 2);
+
+            addQuad(1010, 118, 260, 1, 0.25f, 0.25f, 0.28f, 1.0f);
+
+            addTextClipped("TRANSFORM READOUT:", 1012, 130, 1270, 0.9f, 0.7f, 0.2f, 1.0f, 2);
+
+            String posStr = String.format("POS: [%.1f, %.1f, %.1f]", selectedEntity.transform.posX, selectedEntity.transform.posY, selectedEntity.transform.posZ);
+            String rotStr = String.format("ROT: [%.1f, %.1f, %.1f]", selectedEntity.transform.rotX, selectedEntity.transform.rotY, selectedEntity.transform.rotZ);
+            String sclStr = String.format("SCL: [%.1f, %.1f, %.1f]", selectedEntity.transform.scaleX, selectedEntity.transform.scaleY, selectedEntity.transform.scaleZ);
+
+            addTextClipped(posStr, 1012, 155, 1270, 0.85f, 0.85f, 0.9f, 1.0f, 2);
+            addTextClipped(rotStr, 1012, 175, 1270, 0.85f, 0.85f, 0.9f, 1.0f, 2);
+            addTextClipped(sclStr, 1012, 195, 1270, 0.85f, 0.85f, 0.9f, 1.0f, 2);
+
+            if (selectedEntity.meshAssetPath != null) {
+                addQuad(1010, 220, 260, 1, 0.25f, 0.25f, 0.28f, 1.0f);
+                addTextClipped("MESH RESOURCE:", 1012, 232, 1270, 0.9f, 0.7f, 0.2f, 1.0f, 2);
+                String fileName = new File(selectedEntity.meshAssetPath).getName().toUpperCase();
+                addTextClipped(fileName, 1012, 252, 1270, 0.4f, 0.9f, 0.5f, 1.0f, 2);
+            }
+        }
+
+        // 5. Bottom Panel - Asset Directory (0, 520 to 1280, 720)
+        addQuad(0, 520, 1280, 200, 0.08f, 0.08f, 0.10f, 1.0f);
+        addQuad(0, 520, 1280, 28, 0.13f, 0.13f, 0.16f, 1.0f);
+        addQuad(0, 520, 1280, 2, 0.20f, 0.20f, 0.24f, 1.0f);
+        addTextClipped("ASSET DIRECTORY (PROJECT RESOURCES)", 12, 528, 1260, 0.9f, 0.9f, 0.95f, 1.0f, 2);
+
+        if (assetDirectory.isEmpty()) {
+            addTextClipped("NO RESOURCE ASSETS REGISTERED YET", 12, 560, 1260, 0.5f, 0.5f, 0.55f, 1.0f, 2);
+        } else {
+            int xPos = 12;
+            int yPos = 558;
+            for (AssetEntry a : assetDirectory) {
+                addQuad(xPos, yPos, 140, 48, 0.15f, 0.15f, 0.19f, 1.0f);
+                addQuad(xPos, yPos, 140, 2, 0.30f, 0.50f, 0.80f, 1.0f);
+                addTextClipped(a.type.name(), xPos + 6, yPos + 6, xPos + 134, 0.4f, 0.8f, 1.0f, 1.0f, 2);
+                String shortName = a.name.length() > 10 ? a.name.substring(0, 10).toUpperCase() : a.name.toUpperCase();
+                addTextClipped(shortName, xPos + 6, yPos + 26, xPos + 134, 0.9f, 0.9f, 0.9f, 1.0f, 2);
+
+                xPos += 150;
+                if (xPos + 140 > 1260) {
+                    xPos = 12;
+                    yPos += 54;
+                }
+            }
+        }
+    }
+
+    private void addTextClipped(String text, int screenX, int screenY, int maxScreenX, float r, float g, float b, float a, int scale) {
+        if (text == null) return;
+        text = text.toUpperCase();
+        int curX = screenX;
+        for (int i = 0; i < text.length(); i++) {
+            if (curX + (5 * scale) > maxScreenX) break; // Clip text at panel boundary
+            char c = text.charAt(i);
+            if (c >= 0 && c < 128 && FONT_5X7[c] != null && FONT_5X7[c].length == 7) {
+                byte[] bitmap = FONT_5X7[c];
+                for (int row = 0; row < 7; row++) {
+                    byte bRow = bitmap[row];
+                    for (int col = 0; col < 5; col++) {
+                        if ((bRow & (1 << (4 - col))) != 0) {
+                            addQuad(curX + col * scale, screenY + row * scale, scale, scale, r, g, b, a);
+                        }
+                    }
+                }
+            }
+            curX += (5 + 1) * scale;
+        }
+    }
+
+    private void addQuad(int screenX, int screenY, int width, int height, float r, float g, float b, float a) {
+        float x0 = (screenX / 1280.0f) * 2.0f - 1.0f;
+        float y0 = 1.0f - (screenY / 720.0f) * 2.0f;
+        float x1 = ((screenX + width) / 1280.0f) * 2.0f - 1.0f;
+        float y1 = 1.0f - ((screenY + height) / 720.0f) * 2.0f;
+
+        ensureCapacity(6 * 7);
+
+        // Triangle 1
+        putVertex(x0, y0, r, g, b, a);
+        putVertex(x0, y1, r, g, b, a);
+        putVertex(x1, y0, r, g, b, a);
+
+        // Triangle 2
+        putVertex(x1, y0, r, g, b, a);
+        putVertex(x0, y1, r, g, b, a);
+        putVertex(x1, y1, r, g, b, a);
+    }
+
+    private void putVertex(float x, float y, float r, float g, float b, float a) {
+        int idx = uiVertexCount * 7;
+        uiVertexBuffer[idx]     = x;
+        uiVertexBuffer[idx + 1] = y;
+        uiVertexBuffer[idx + 2] = 0.0f; // Metal NDC depth 0.0
+        uiVertexBuffer[idx + 3] = r;
+        uiVertexBuffer[idx + 4] = g;
+        uiVertexBuffer[idx + 5] = b;
+        uiVertexBuffer[idx + 6] = a;
+        uiVertexCount++;
+    }
+
+    private void ensureCapacity(int additionalFloats) {
+        int needed = uiVertexCount * 7 + additionalFloats;
+        if (needed > uiVertexBuffer.length) {
+            float[] newBuf = new float[uiVertexBuffer.length * 2];
+            System.arraycopy(uiVertexBuffer, 0, newBuf, 0, uiVertexBuffer.length);
+            uiVertexBuffer = newBuf;
+        }
     }
 
     public void onFilesDropped(List<String> filePaths) {
@@ -118,7 +333,7 @@ public class EditorPanelManager {
                 System.out.println("[Scene Manager] Spawning new 3D Entity into Scene: " + entityName + " (" + entityId + ")");
             }
         }
-        rebuildUiMesh();
+        rebuildUiGeometry();
     }
 
     public void selectEntity(SceneEntity entity) {
@@ -126,227 +341,21 @@ public class EditorPanelManager {
             e.selected = (e == entity);
         }
         this.selectedEntity = entity;
-        rebuildUiMesh();
+        if (entity != null) {
+            System.out.println("[Inspector] Selected Entity: " + entity.name + " -> " + entity.transform);
+        }
     }
-
-    public float[] getUiVertices() { return uiVertices; }
-    public int getUiVertexCount() { return uiVertexCount; }
 
     public List<SceneEntity> getSceneEntities() { return Collections.unmodifiableList(sceneEntities); }
     public List<AssetEntry> getAssetDirectory() { return Collections.unmodifiableList(assetDirectory); }
     public SceneEntity getSelectedEntity() { return selectedEntity; }
 
-    // =========================================================================
-    // 2D UI Mesh Generation (Solid Panels, Borders, Headers & Retro Font)
-    // =========================================================================
-
-    private void rebuildUiMesh() {
-        List<Float> verts = new ArrayList<>();
-
-        float w = (float) windowWidth;
-        float h = (float) windowHeight;
-
-        // 1. Top Menu Bar (y: 0 -> 30)
-        addRect(verts, 0, 0, w, 30, 0.10f, 0.11f, 0.13f, 1.0f);
-        addRect(verts, 0, 28, w, 2, 0.28f, 0.32f, 0.40f, 1.0f); // Bottom border
-        drawText(verts, "RETRO ENGINE EDIT v1.0 | RHI: APPLE METAL", 12, 8, 1.8f, 0.9f, 0.9f, 0.95f, 1.0f);
-
-        // 2. Left Panel: Scene Hierarchy (x: 0 -> 270, y: 30 -> 480)
-        addRect(verts, 0, 30, 270, 450, 0.15f, 0.17f, 0.20f, 1.0f); // Panel Body
-        addRect(verts, 0, 30, 270, 26, 0.22f, 0.25f, 0.32f, 1.0f);  // Header
-        addRect(verts, 268, 30, 2, 450, 0.30f, 0.34f, 0.42f, 1.0f); // Right Border
-        drawText(verts, "SCENE HIERARCHY", 12, 36, 1.6f, 0.7f, 0.85f, 1.0f, 1.0f);
-
-        // Render Scene Entities
-        float itemY = 65;
-        for (SceneEntity entity : sceneEntities) {
-            if (entity.selected) {
-                addRect(verts, 8, itemY - 2, 252, 22, 0.25f, 0.40f, 0.65f, 1.0f); // Highlight selection
-                drawText(verts, "> " + entity.name, 14, itemY + 2, 1.5f, 1.0f, 1.0f, 1.0f, 1.0f);
-            } else {
-                drawText(verts, "  " + entity.name, 14, itemY + 2, 1.5f, 0.75f, 0.78f, 0.82f, 1.0f);
-            }
-            itemY += 26;
-        }
-
-        // 3. Center Panel: 3D Viewport Frame (x: 270 -> 1000, y: 30 -> 480)
-        // Viewport Header Bar
-        addRect(verts, 270, 30, 730, 26, 0.20f, 0.22f, 0.28f, 1.0f);
-        drawText(verts, "3D VIEWPORT [ACTIVE RENDER TARGET]", 282, 36, 1.6f, 0.65f, 0.90f, 0.70f, 1.0f);
-
-        // Viewport Outer Frame / Borders surrounding the center 3D viewport
-        addRect(verts, 270, 56, 730, 2, 0.30f, 0.34f, 0.42f, 1.0f);   // Top inner border
-        addRect(verts, 270, 478, 730, 2, 0.30f, 0.34f, 0.42f, 1.0f);  // Bottom inner border
-
-        // 4. Right Panel: Inspector (x: 1000 -> 1280, y: 30 -> 480)
-        addRect(verts, 1000, 30, 280, 450, 0.15f, 0.17f, 0.20f, 1.0f); // Panel Body
-        addRect(verts, 1000, 30, 280, 26, 0.22f, 0.25f, 0.32f, 1.0f);  // Header
-        addRect(verts, 1000, 30, 2, 450, 0.30f, 0.34f, 0.42f, 1.0f);   // Left Border
-        drawText(verts, "INSPECTOR", 1012, 36, 1.6f, 0.7f, 0.85f, 1.0f, 1.0f);
-
-        if (selectedEntity != null) {
-            drawText(verts, "NAME: " + selectedEntity.name, 1012, 70, 1.5f, 0.9f, 0.9f, 0.9f, 1.0f);
-            drawText(verts, "ID: " + selectedEntity.id, 1012, 92, 1.4f, 0.6f, 0.65f, 0.7f, 1.0f);
-
-            // Transform Property Boxes
-            drawText(verts, "TRANSFORM", 1012, 125, 1.5f, 0.95f, 0.80f, 0.40f, 1.0f);
-
-            // Position
-            addRect(verts, 1012, 148, 256, 24, 0.10f, 0.12f, 0.15f, 1.0f);
-            drawText(verts, String.format("POS  X:%.1f Y:%.1f Z:%.1f",
-                    selectedEntity.transform.posX, selectedEntity.transform.posY, selectedEntity.transform.posZ),
-                    1018, 154, 1.4f, 0.85f, 0.88f, 0.92f, 1.0f);
-
-            // Rotation
-            addRect(verts, 1012, 180, 256, 24, 0.10f, 0.12f, 0.15f, 1.0f);
-            drawText(verts, String.format("ROT  X:%.1f Y:%.1f Z:%.1f",
-                    selectedEntity.transform.rotX, selectedEntity.transform.rotY, selectedEntity.transform.rotZ),
-                    1018, 186, 1.4f, 0.85f, 0.88f, 0.92f, 1.0f);
-
-            // Scale
-            addRect(verts, 1012, 212, 256, 24, 0.10f, 0.12f, 0.15f, 1.0f);
-            drawText(verts, String.format("SCALE X:%.1f Y:%.1f Z:%.1f",
-                    selectedEntity.transform.scaleX, selectedEntity.transform.scaleY, selectedEntity.transform.scaleZ),
-                    1018, 218, 1.4f, 0.85f, 0.88f, 0.92f, 1.0f);
-        } else {
-            drawText(verts, "NO ENTITY SELECTED", 1012, 80, 1.4f, 0.5f, 0.55f, 0.6f, 1.0f);
-        }
-
-        // 5. Bottom Panel: Asset Directory (x: 0 -> 1280, y: 480 -> 720)
-        addRect(verts, 0, 480, w, 240, 0.12f, 0.14f, 0.17f, 1.0f); // Panel Body
-        addRect(verts, 0, 480, w, 26, 0.18f, 0.21f, 0.26f, 1.0f);  // Header
-        addRect(verts, 0, 480, w, 2, 0.30f, 0.34f, 0.42f, 1.0f);   // Top Border
-        drawText(verts, "ASSET DIRECTORY [PROJECT FILES]", 12, 486, 1.6f, 0.7f, 0.85f, 1.0f, 1.0f);
-
-        float assetX = 16;
-        float assetY = 518;
-        for (AssetEntry asset : assetDirectory) {
-            addRect(verts, assetX, assetY, 190, 42, 0.18f, 0.22f, 0.28f, 1.0f); // Asset card
-            addRect(verts, assetX, assetY, 4, 42, 0.35f, 0.60f, 0.90f, 1.0f);   // Type indicator badge
-            drawText(verts, asset.name, assetX + 10, assetY + 8, 1.3f, 0.9f, 0.92f, 0.95f, 1.0f);
-            drawText(verts, "[" + asset.type + "]", assetX + 10, assetY + 24, 1.1f, 0.55f, 0.60f, 0.70f, 1.0f);
-
-            assetX += 202;
-            if (assetX + 190 > w - 16) {
-                assetX = 16;
-                assetY += 48;
-            }
-        }
-
-        // Convert list to primitive array
-        this.uiVertices = new float[verts.size()];
-        for (int i = 0; i < verts.size(); i++) {
-            this.uiVertices[i] = verts.get(i);
-        }
-        this.uiVertexCount = this.uiVertices.length / 7;
-    }
-
-    // Helper: Converts 2D Pixel Coordinates to Normalized Device Coordinates (-1.0 to +1.0)
-    private void addRect(List<Float> verts, float px, float py, float pw, float ph, float r, float g, float b, float a) {
-        float x1 = (px / (float) windowWidth) * 2.0f - 1.0f;
-        float y1 = 1.0f - (py / (float) windowHeight) * 2.0f;
-        float x2 = ((px + pw) / (float) windowWidth) * 2.0f - 1.0f;
-        float y2 = 1.0f - ((py + ph) / (float) windowHeight) * 2.0f;
-
-        // Triangle 1
-        addVertex(verts, x1, y1, r, g, b, a);
-        addVertex(verts, x2, y1, r, g, b, a);
-        addVertex(verts, x1, y2, r, g, b, a);
-
-        // Triangle 2
-        addVertex(verts, x2, y1, r, g, b, a);
-        addVertex(verts, x2, y2, r, g, b, a);
-        addVertex(verts, x1, y2, r, g, b, a);
-    }
-
-    private void addVertex(List<Float> verts, float x, float y, float r, float g, float b, float a) {
-        verts.add(x);
-        verts.add(y);
-        verts.add(0.0f); // z = 0 for 2D UI
-        verts.add(r);
-        verts.add(g);
-        verts.add(b);
-        verts.add(a);
-    }
-
-    // Helper: Retro Vector Text Drawer
-    private void drawText(List<Float> verts, String text, float x, float y, float scale, float r, float g, float b, float a) {
-        if (text == null) return;
-        text = text.toUpperCase();
-        float curX = x;
-        float charW = 5.0f * scale;
-        float charH = 7.0f * scale;
-
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            drawGlyph(verts, c, curX, y, scale, r, g, b, a);
-            curX += charW + (2.0f * scale);
-        }
-    }
-
-    private void drawGlyph(List<Float> verts, char c, float x, float y, float scale, float r, float g, float b, float a) {
-        // Draw character representation using compact pixel quads
-        byte[] glyphData = getGlyphBitmap(c);
-        if (glyphData == null) return;
-
-        float pSize = scale;
-        for (int row = 0; row < 7; row++) {
-            byte bRow = glyphData[row];
-            for (int col = 0; col < 5; col++) {
-                if ((bRow & (1 << (4 - col))) != 0) {
-                    addRect(verts, x + col * pSize, y + row * pSize, pSize, pSize, r, g, b, a);
-                }
-            }
-        }
-    }
-
-    private byte[] getGlyphBitmap(char c) {
-        return switch (c) {
-            case 'A' -> new byte[]{0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11};
-            case 'B' -> new byte[]{0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E};
-            case 'C' -> new byte[]{0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E};
-            case 'D' -> new byte[]{0x1C, 0x12, 0x11, 0x11, 0x11, 0x12, 0x1C};
-            case 'E' -> new byte[]{0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F};
-            case 'F' -> new byte[]{0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10};
-            case 'G' -> new byte[]{0x0E, 0x11, 0x10, 0x13, 0x11, 0x11, 0x0F};
-            case 'H' -> new byte[]{0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11};
-            case 'I' -> new byte[]{0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E};
-            case 'J' -> new byte[]{0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C};
-            case 'K' -> new byte[]{0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11};
-            case 'L' -> new byte[]{0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F};
-            case 'M' -> new byte[]{0x11, 0x1B, 0x15, 0x11, 0x11, 0x11, 0x11};
-            case 'N' -> new byte[]{0x11, 0x11, 0x19, 0x15, 0x13, 0x11, 0x11};
-            case 'O' -> new byte[]{0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E};
-            case 'P' -> new byte[]{0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10};
-            case 'Q' -> new byte[]{0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D};
-            case 'R' -> new byte[]{0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11};
-            case 'S' -> new byte[]{0x0E, 0x11, 0x10, 0x0E, 0x01, 0x11, 0x0E};
-            case 'T' -> new byte[]{0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04};
-            case 'U' -> new byte[]{0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E};
-            case 'V' -> new byte[]{0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04};
-            case 'W' -> new byte[]{0x11, 0x11, 0x11, 0x11, 0x15, 0x15, 0x0A};
-            case 'X' -> new byte[]{0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11};
-            case 'Y' -> new byte[]{0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04};
-            case 'Z' -> new byte[]{0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F};
-            case '0' -> new byte[]{0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E};
-            case '1' -> new byte[]{0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E};
-            case '2' -> new byte[]{0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F};
-            case '3' -> new byte[]{0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E};
-            case '4' -> new byte[]{0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02};
-            case '5' -> new byte[]{0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E};
-            case '6' -> new byte[]{0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E};
-            case '7' -> new byte[]{0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08};
-            case '8' -> new byte[]{0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E};
-            case '9' -> new byte[]{0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C};
-            case ':' -> new byte[]{0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x00};
-            case '.' -> new byte[]{0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C};
-            case '-' -> new byte[]{0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00};
-            case '/' -> new byte[]{0x01, 0x02, 0x04, 0x08, 0x10, 0x00, 0x00};
-            case '[' -> new byte[]{0x0E, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0E};
-            case ']' -> new byte[]{0x0E, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0E};
-            case '>' -> new byte[]{0x10, 0x08, 0x04, 0x02, 0x04, 0x08, 0x10};
-            case '|' -> new byte[]{0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04};
-            default -> new byte[]{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    private AssetType resolveAssetType(String extension) {
+        return switch (extension) {
+            case "obj", "gltf", "glb", "fbx", "dae" -> AssetType.MESH_3D;
+            case "png", "jpg", "jpeg", "tga", "bmp" -> AssetType.TEXTURE;
+            case "metal", "glsl", "hlsl", "spv" -> AssetType.SHADER;
+            default -> AssetType.UNKNOWN;
         };
     }
 
@@ -358,14 +367,5 @@ public class EditorPanelManager {
     private String removeExtension(String name) {
         int lastDot = name.lastIndexOf('.');
         return (lastDot == -1) ? name : name.substring(0, lastDot);
-    }
-
-    private AssetType resolveAssetType(String extension) {
-        return switch (extension) {
-            case "obj", "gltf", "glb", "fbx" -> AssetType.MESH_3D;
-            case "png", "jpg", "jpeg", "tga", "bmp" -> AssetType.TEXTURE;
-            case "metal", "glsl", "hlsl", "spv" -> AssetType.SHADER;
-            default -> AssetType.UNKNOWN;
-        };
     }
 }

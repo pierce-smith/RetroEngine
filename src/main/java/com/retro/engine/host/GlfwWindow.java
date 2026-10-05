@@ -16,6 +16,21 @@ import static org.lwjgl.system.MemoryUtil.NULL;
 
 public class GlfwWindow {
 
+    @FunctionalInterface
+    public interface MouseButtonListener {
+        void onMouseButton(int button, int action, double x, double y);
+    }
+
+    @FunctionalInterface
+    public interface CursorPosListener {
+        void onCursorPos(double x, double y, boolean isShiftDown, boolean isAltDown);
+    }
+
+    @FunctionalInterface
+    public interface ScrollListener {
+        void onScroll(double xoffset, double yoffset);
+    }
+
     private long windowHandle = NULL;
     private int width;
     private int height;
@@ -28,6 +43,9 @@ public class GlfwWindow {
     private int windowedHeight;
 
     private Consumer<List<String>> fileDropListener;
+    private MouseButtonListener mouseButtonListener;
+    private CursorPosListener cursorPosListener;
+    private ScrollListener scrollListener;
 
     public GlfwWindow(int width, int height, String title) {
         this.width = width;
@@ -39,6 +57,23 @@ public class GlfwWindow {
 
     public void setOnFileDropListener(Consumer<List<String>> listener) {
         this.fileDropListener = listener;
+    }
+
+    public void setOnMouseButtonListener(MouseButtonListener listener) {
+        this.mouseButtonListener = listener;
+    }
+
+    public void setOnCursorPosListener(CursorPosListener listener) {
+        this.cursorPosListener = listener;
+    }
+
+    public void setOnScrollListener(ScrollListener listener) {
+        this.scrollListener = listener;
+    }
+
+    public boolean isKeyDown(int keyCode) {
+        if (windowHandle == NULL) return false;
+        return glfwGetKey(windowHandle, keyCode) == GLFW_PRESS;
     }
 
     public boolean create() {
@@ -57,7 +92,6 @@ public class GlfwWindow {
             return false;
         }
 
-        // Key Callback: Option+Enter / F11 for Fullscreen, ESC to close
         glfwSetKeyCallback(windowHandle, (window, key, scancode, action, mods) -> {
             if (action == GLFW_PRESS) {
                 if (key == GLFW_KEY_ESCAPE) {
@@ -68,13 +102,34 @@ public class GlfwWindow {
             }
         });
 
-        // Framebuffer size (in pixels) for Metal rendering
+        glfwSetMouseButtonCallback(windowHandle, (window, button, action, mods) -> {
+            if (mouseButtonListener != null) {
+                double[] x = new double[1];
+                double[] y = new double[1];
+                glfwGetCursorPos(window, x, y);
+                mouseButtonListener.onMouseButton(button, action, x[0], y[0]);
+            }
+        });
+
+        glfwSetCursorPosCallback(windowHandle, (window, xpos, ypos) -> {
+            if (cursorPosListener != null) {
+                boolean isShift = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) || (glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS);
+                boolean isAlt = (glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS) || (glfwGetKey(window, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS);
+                cursorPosListener.onCursorPos(xpos, ypos, isShift, isAlt);
+            }
+        });
+
+        glfwSetScrollCallback(windowHandle, (window, xoffset, yoffset) -> {
+            if (scrollListener != null) {
+                scrollListener.onScroll(xoffset, yoffset);
+            }
+        });
+
         glfwSetFramebufferSizeCallback(windowHandle, (window, w, h) -> {
             this.width = w;
             this.height = h;
         });
 
-        // Native Mouse Drag-and-Drop Callback (macOS Finder -> Engine Window)
         glfwSetDropCallback(windowHandle, (window, count, names) -> {
             PointerBuffer nameBuffer = PointerBuffer.create(names, count);
             List<String> droppedFiles = new ArrayList<>();
@@ -97,6 +152,18 @@ public class GlfwWindow {
 
     public boolean shouldClose() {
         return glfwWindowShouldClose(windowHandle);
+    }
+
+    public long getNativeHandle() {
+        return windowHandle;
+    }
+
+    public long getWindowHandle() {
+        return windowHandle;
+    }
+
+    public WindowInfo getWindowInfo() {
+        return new WindowInfo(windowHandle, width, height, true);
     }
 
     public void toggleFullscreen() {
@@ -130,18 +197,6 @@ public class GlfwWindow {
             isFullscreen = false;
             System.out.println("[GLFW] Mode: Windowed (" + windowedWidth + "x" + windowedHeight + ")");
         }
-    }
-
-    public WindowInfo getWindowInfo() {
-        return new WindowInfo(windowHandle, width, height, true);
-    }
-
-    public long getNativeHandle() {
-        return windowHandle;
-    }
-
-    public long getWindowHandle() {
-        return windowHandle;
     }
 
     public void destroy() {
