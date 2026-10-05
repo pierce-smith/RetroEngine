@@ -41,21 +41,12 @@ java {
     }
 }
 
-val isMac = System.getProperty("os.name").lowercase().contains("mac")
-
 application {
     mainClass.set("com.retro.engine.Main")
-    val defaultArgs = mutableListOf("--enable-native-access=ALL-UNNAMED")
-    if (isMac) {
-        defaultArgs.add("-XstartOnFirstThread")
-    }
-    applicationDefaultJvmArgs = defaultArgs
-}
-
-tasks.named<JavaExec>("run") {
-    if (isMac) {
-        jvmArgs("-XstartOnFirstThread", "--enable-native-access=ALL-UNNAMED")
-    }
+    applicationDefaultJvmArgs = listOf(
+        "-XstartOnFirstThread",
+        "--enable-native-access=ALL-UNNAMED"
+    )
 }
 
 tasks.withType<JavaCompile> {

@@ -2,10 +2,7 @@ package com.retro.engine.host;
 
 import com.retro.engine.rhi.WindowInfo;
 import org.lwjgl.PointerBuffer;
-import org.lwjgl.glfw.GLFWDropCallback;
 import org.lwjgl.glfw.GLFWErrorCallback;
-import org.lwjgl.glfw.GLFWFramebufferSizeCallback;
-import org.lwjgl.glfw.GLFWKeyCallback;
 import org.lwjgl.glfw.GLFWVidMode;
 import org.lwjgl.system.MemoryStack;
 
@@ -31,10 +28,6 @@ public class GlfwWindow {
     private int windowedHeight;
 
     private Consumer<List<String>> fileDropListener;
-
-    private GLFWKeyCallback keyCallback;
-    private GLFWFramebufferSizeCallback framebufferSizeCallback;
-    private GLFWDropCallback dropCallback;
 
     public GlfwWindow(int width, int height, String title) {
         this.width = width;
@@ -65,26 +58,24 @@ public class GlfwWindow {
         }
 
         // Key Callback: Option+Enter / F11 for Fullscreen, ESC to close
-        keyCallback = GLFWKeyCallback.create((win, key, scancode, action, mods) -> {
+        glfwSetKeyCallback(windowHandle, (window, key, scancode, action, mods) -> {
             if (action == GLFW_PRESS) {
                 if (key == GLFW_KEY_ESCAPE) {
-                    glfwSetWindowShouldClose(win, true);
+                    glfwSetWindowShouldClose(window, true);
                 } else if (key == GLFW_KEY_F11 || (key == GLFW_KEY_ENTER && (mods & GLFW_MOD_ALT) != 0)) {
                     toggleFullscreen();
                 }
             }
         });
-        glfwSetKeyCallback(windowHandle, keyCallback);
 
-        // Framebuffer size callback
-        framebufferSizeCallback = GLFWFramebufferSizeCallback.create((win, w, h) -> {
+        // Framebuffer size (in pixels) for Metal rendering
+        glfwSetFramebufferSizeCallback(windowHandle, (window, w, h) -> {
             this.width = w;
             this.height = h;
         });
-        glfwSetFramebufferSizeCallback(windowHandle, framebufferSizeCallback);
 
-        // Native Mouse Drag-and-Drop Callback
-        dropCallback = GLFWDropCallback.create((win, count, names) -> {
+        // Native Mouse Drag-and-Drop Callback (macOS Finder -> Engine Window)
+        glfwSetDropCallback(windowHandle, (window, count, names) -> {
             PointerBuffer nameBuffer = PointerBuffer.create(names, count);
             List<String> droppedFiles = new ArrayList<>();
             for (int i = 0; i < count; i++) {
@@ -95,7 +86,6 @@ public class GlfwWindow {
                 fileDropListener.accept(droppedFiles);
             }
         });
-        glfwSetDropCallback(windowHandle, dropCallback);
 
         System.out.println("[GLFW] Native window initialized successfully (" + width + "x" + height + ").");
         return true;
@@ -146,29 +136,24 @@ public class GlfwWindow {
         return new WindowInfo(windowHandle, width, height, true);
     }
 
-    public void destroy() {
-        if (keyCallback != null) {
-            keyCallback.free();
-            keyCallback = null;
-        }
-        if (framebufferSizeCallback != null) {
-            framebufferSizeCallback.free();
-            framebufferSizeCallback = null;
-        }
-        if (dropCallback != null) {
-            dropCallback.free();
-            dropCallback = null;
-        }
+    public long getNativeHandle() {
+        return windowHandle;
+    }
 
+    public long getWindowHandle() {
+        return windowHandle;
+    }
+
+    public void destroy() {
         if (windowHandle != NULL) {
             glfwDestroyWindow(windowHandle);
             windowHandle = NULL;
         }
         glfwTerminate();
 
-        GLFWErrorCallback errCb = glfwSetErrorCallback(null);
-        if (errCb != null) {
-            errCb.free();
+        GLFWErrorCallback old = glfwSetErrorCallback(null);
+        if (old != null) {
+            old.free();
         }
         System.out.println("[GLFW] Window resources released.");
     }
