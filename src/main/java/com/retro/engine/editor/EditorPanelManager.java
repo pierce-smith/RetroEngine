@@ -6,11 +6,9 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * EditorPanelManager handles the 4-panel layout state for the Retro Engine Editor:
- * 1. Scene Manager (Hierarchy) - Left Panel (X: -1.0 to -0.55, Y: -0.5 to 1.0)
- * 2. 3D Viewport (Render Target) - Center Panel (X: -0.55 to 0.55, Y: -0.5 to 1.0)
- * 3. Inspector (Entity Properties) - Right Panel (X: 0.55 to 1.0, Y: -0.5 to 1.0)
- * 4. Asset Directory (Resource Files) - Bottom Panel (X: -1.0 to 1.0, Y: -1.0 to -0.5)
+ * EditorPanelManager handles the 4-panel layout state for the Retro Engine Editor.
+ * Ingested files go into the Asset Directory; spawning assets into the Scene Hierarchy
+ * and linking textures to materials are handled via explicit user interaction.
  */
 public class EditorPanelManager {
 
@@ -29,7 +27,7 @@ public class EditorPanelManager {
 
         @Override
         public String toString() {
-            return "[" + type + "] " + name + " (" + absolutePath + ")";
+            return "[" + type + "] " + name;
         }
     }
 
@@ -37,12 +35,6 @@ public class EditorPanelManager {
         public float posX = 0.0f, posY = 0.0f, posZ = 0.0f;
         public float rotX = 0.0f, rotY = 0.0f, rotZ = 0.0f;
         public float scaleX = 1.0f, scaleY = 1.0f, scaleZ = 1.0f;
-
-        @Override
-        public String toString() {
-            return String.format("Pos(%.2f, %.2f, %.2f) Rot(%.2f, %.2f, %.2f) Scale(%.2f, %.2f, %.2f)",
-                    posX, posY, posZ, rotX, rotY, rotZ, scaleX, scaleY, scaleZ);
-        }
     }
 
     public static class SceneEntity {
@@ -50,7 +42,8 @@ public class EditorPanelManager {
         public String name;
         public final Transform transform = new Transform();
         public String meshAssetPath;
-        public String textureAssetPath;
+        public String textureAssetPath = null;
+        public String textureName = "NONE";
         public int vertexCount = 0;
         public boolean selected = false;
 
@@ -61,16 +54,12 @@ public class EditorPanelManager {
         }
     }
 
-    // Panel States
     private final List<SceneEntity> sceneEntities = new ArrayList<>();
     private final List<AssetEntry> assetDirectory = new ArrayList<>();
     private SceneEntity selectedEntity = null;
 
-    private int viewportWidth = 1280;
-    private int viewportHeight = 720;
     private float[] cachedUiVertices = new float[0];
 
-    // Compact 5x7 Font Bitmaps for ASCII UI Rendering
     private static final long[] FONT = new long[128];
     static {
         FONT['A'] = 0x1c223e2222L; FONT['B'] = 0x3c223c223cL; FONT['C'] = 0x1c2220221cL;
@@ -92,13 +81,9 @@ public class EditorPanelManager {
         FONT['>'] = 0x2010081020L; FONT['<'] = 0x0810201008L; FONT['='] = 0x003e003e00L;
     }
 
-    public EditorPanelManager() {
-        // Scene Hierarchy starts completely empty on launch per user requirement
-    }
+    public EditorPanelManager() {}
 
-    public void update(float deltaTime) {
-        // Stationary, controlled transform execution.
-    }
+    public void update(float deltaTime) {}
 
     public void onFilesDropped(List<String> filePaths) {
         for (String path : filePaths) {
@@ -109,24 +94,29 @@ public class EditorPanelManager {
             AssetType type = resolveAssetType(ext);
             AssetEntry asset = new AssetEntry(name, path, type);
             assetDirectory.add(asset);
-            System.out.println("[Asset Directory] Registered asset: " + asset);
-
-            if (type == AssetType.MESH_3D) {
-                String entityId = "mesh_entity_" + (sceneEntities.size() + 1);
-                String entityName = removeExtension(name);
-                SceneEntity newEntity = new SceneEntity(entityId, entityName, path);
-
-                sceneEntities.add(newEntity);
-                selectEntity(newEntity);
-
-                System.out.println("[Scene Manager] Spawned 3D Entity: " + entityName + " (" + entityId + ")");
-            } else if (type == AssetType.TEXTURE) {
-                if (selectedEntity != null) {
-                    selectedEntity.textureAssetPath = path;
-                    System.out.println("[Inspector] Assigned texture asset to " + selectedEntity.name + ": " + name);
-                }
-            }
+            System.out.println("[Asset Directory] Ingested file into Asset Directory: " + asset);
         }
+    }
+
+    public SceneEntity spawnEntityFromAsset(AssetEntry asset) {
+        if (asset == null || asset.type != AssetType.MESH_3D) return null;
+
+        String entityId = "mesh_entity_" + (sceneEntities.size() + 1);
+        String entityName = removeExtension(asset.name);
+        SceneEntity newEntity = new SceneEntity(entityId, entityName, asset.absolutePath);
+
+        sceneEntities.add(newEntity);
+        selectEntity(newEntity);
+
+        System.out.println("[Scene Hierarchy] Spawned Entity in Scene: " + entityName);
+        return newEntity;
+    }
+
+    public void assignTextureToSelectedEntity(AssetEntry textureAsset) {
+        if (selectedEntity == null || textureAsset == null || textureAsset.type != AssetType.TEXTURE) return;
+        selectedEntity.textureAssetPath = textureAsset.absolutePath;
+        selectedEntity.textureName = textureAsset.name;
+        System.out.println("[Inspector] Linked Texture '" + textureAsset.name + "' to Scene Entity '" + selectedEntity.name + "'");
     }
 
     public void selectEntity(SceneEntity entity) {
@@ -146,24 +136,23 @@ public class EditorPanelManager {
     }
 
     public int getUiVertexCount() {
-        if (cachedUiVertices == null || cachedUiVertices.length == 0) {
-            getUiVertices();
-        }
-        return cachedUiVertices.length / 6; // 6 floats per 2D vertex: x, y, r, g, b, a
+        if (cachedUiVertices == null || cachedUiVertices.length == 0) getUiVertices();
+        return cachedUiVertices.length / 6;
     }
 
     public float[] generateUiVertices() {
         List<Float> verts = new ArrayList<>();
 
-        // 1. SCENE MANAGER (Left Panel: X -1.0 to -0.55, Y -0.5 to 1.0)
+        // 1. SCENE MANAGER (Left Panel)
         addQuad(verts, -1.0f, -0.5f, -0.55f, 1.0f, 0.08f, 0.08f, 0.10f, 1.0f);
-        addQuad(verts, -1.0f, 0.88f, -0.55f, 1.0f, 0.14f, 0.14f, 0.18f, 1.0f); // Top Header
+        addQuad(verts, -1.0f, 0.88f, -0.55f, 1.0f, 0.14f, 0.14f, 0.18f, 1.0f);
         addFrameBorder(verts, -1.0f, -0.5f, -0.55f, 1.0f, 0.003f, 0.25f, 0.25f, 0.32f, 1.0f);
         addBoundedText(verts, "SCENE MANAGER", -0.96f, 0.95f, -0.57f, 1.6f, 1.0f, 1.0f, 1.0f, 1.0f);
 
         if (sceneEntities.isEmpty()) {
-            addBoundedText(verts, "EMPTY SCENE", -0.95f, 0.80f, -0.58f, 1.3f, 0.5f, 0.5f, 0.55f, 1.0f);
-            addBoundedText(verts, "DROP 3D FILE TO SPAWN", -0.95f, 0.72f, -0.58f, 1.1f, 0.4f, 0.4f, 0.45f, 1.0f);
+            addBoundedText(verts, "NO ENTITIES IN SCENE", -0.95f, 0.80f, -0.58f, 1.2f, 0.5f, 0.5f, 0.5f, 1.0f);
+            addBoundedText(verts, "CLICK 3D ASSET CARD", -0.95f, 0.72f, -0.58f, 1.1f, 0.3f, 0.7f, 0.9f, 1.0f);
+            addBoundedText(verts, "BELOW TO SPAWN", -0.95f, 0.65f, -0.58f, 1.1f, 0.3f, 0.7f, 0.9f, 1.0f);
         } else {
             float itemY = 0.80f;
             for (SceneEntity entity : sceneEntities) {
@@ -177,84 +166,72 @@ public class EditorPanelManager {
             }
         }
 
-        // 2. INSPECTOR (Right Panel: X 0.55 to 1.0, Y -0.5 to 1.0)
+        // 2. INSPECTOR (Right Panel)
         addQuad(verts, 0.55f, -0.5f, 1.0f, 1.0f, 0.08f, 0.08f, 0.10f, 1.0f);
-        addQuad(verts, 0.55f, 0.88f, 1.0f, 1.0f, 0.14f, 0.14f, 0.18f, 1.0f); // Top Header
+        addQuad(verts, 0.55f, 0.88f, 1.0f, 1.0f, 0.14f, 0.14f, 0.18f, 1.0f);
         addFrameBorder(verts, 0.55f, -0.5f, 1.0f, 1.0f, 0.003f, 0.25f, 0.25f, 0.32f, 1.0f);
         addBoundedText(verts, "INSPECTOR", 0.58f, 0.95f, 0.98f, 1.6f, 1.0f, 1.0f, 1.0f, 1.0f);
 
         if (selectedEntity != null) {
-            addBoundedText(verts, "SELECTED: " + selectedEntity.name, 0.58f, 0.80f, 0.98f, 1.2f, 1.0f, 0.8f, 0.2f, 1.0f);
+            addBoundedText(verts, "ENTITY: " + selectedEntity.name, 0.58f, 0.80f, 0.98f, 1.3f, 1.0f, 0.8f, 0.2f, 1.0f);
             addBoundedText(verts, "--- TRANSFORM ---", 0.58f, 0.70f, 0.98f, 1.1f, 0.5f, 0.5f, 0.6f, 1.0f);
             addBoundedText(verts, String.format("POS: X %.1f Y %.1f Z %.1f", selectedEntity.transform.posX, selectedEntity.transform.posY, selectedEntity.transform.posZ), 0.58f, 0.62f, 0.98f, 1.0f, 0.9f, 0.9f, 0.9f, 1.0f);
             addBoundedText(verts, String.format("ROT: X %.1f Y %.1f Z %.1f", selectedEntity.transform.rotX, selectedEntity.transform.rotY, selectedEntity.transform.rotZ), 0.58f, 0.54f, 0.98f, 1.0f, 0.9f, 0.9f, 0.9f, 1.0f);
-            addBoundedText(verts, String.format("SCL: X %.1f Y %.1f Z %.1f", selectedEntity.transform.scaleX, selectedEntity.transform.scaleY, selectedEntity.transform.scaleZ), 0.58f, 0.46f, 0.98f, 1.0f, 0.9f, 0.9f, 0.9f, 1.0f);
 
-            addBoundedText(verts, "--- MATERIAL ---", 0.58f, 0.36f, 0.98f, 1.1f, 0.5f, 0.5f, 0.6f, 1.0f);
-            addBoundedText(verts, "SHADER: RETRO_MSL_3D", 0.58f, 0.28f, 0.98f, 1.0f, 0.4f, 0.8f, 1.0f, 1.0f);
-            
-            String texName = "NONE";
-            if (selectedEntity.textureAssetPath != null) {
-                texName = new File(selectedEntity.textureAssetPath).getName().toUpperCase();
-            }
-            addBoundedText(verts, "TEX: " + texName, 0.58f, 0.20f, 0.98f, 1.0f, 0.8f, 0.8f, 0.8f, 1.0f);
+            addBoundedText(verts, "--- MATERIAL & TEXTURE ---", 0.58f, 0.42f, 0.98f, 1.1f, 0.5f, 0.5f, 0.6f, 1.0f);
+            addBoundedText(verts, "SHADER: RETRO_MSL_3D", 0.58f, 0.34f, 0.98f, 1.0f, 0.4f, 0.8f, 1.0f, 1.0f);
 
-            if (selectedEntity.meshAssetPath != null) {
-                File f = new File(selectedEntity.meshAssetPath);
-                addBoundedText(verts, "SRC: " + f.getName(), 0.58f, 0.12f, 0.98f, 1.0f, 0.7f, 0.7f, 0.7f, 1.0f);
-            }
+            addQuad(verts, 0.58f, 0.20f, 0.95f, 0.28f, 0.12f, 0.16f, 0.22f, 1.0f);
+            addFrameBorder(verts, 0.58f, 0.20f, 0.95f, 0.28f, 0.002f, 0.0f, 0.45f, 0.70f, 1.0f);
+            addBoundedText(verts, "TEX: " + selectedEntity.textureName, 0.60f, 0.25f, 0.93f, 1.1f, 1.0f, 1.0f, 1.0f, 1.0f);
         } else {
             addBoundedText(verts, "NO ENTITY SELECTED", 0.58f, 0.80f, 0.98f, 1.2f, 0.5f, 0.5f, 0.5f, 1.0f);
         }
 
-        // 3. ASSET DIRECTORY (Bottom Panel: X -1.0 to 1.0, Y -1.0 to -0.5)
+        // 3. ASSET DIRECTORY (Bottom Panel)
         addQuad(verts, -1.0f, -1.0f, 1.0f, -0.5f, 0.06f, 0.06f, 0.08f, 1.0f);
-        addQuad(verts, -1.0f, -0.5f, 1.0f, -0.42f, 0.14f, 0.14f, 0.18f, 1.0f); // Top Header
+        addQuad(verts, -1.0f, -0.5f, 1.0f, -0.42f, 0.14f, 0.14f, 0.18f, 1.0f);
         addFrameBorder(verts, -1.0f, -1.0f, 1.0f, -0.5f, 0.003f, 0.25f, 0.25f, 0.32f, 1.0f);
-        addBoundedText(verts, "ASSET DIRECTORY (DROP .OBJ / .GLTF / .PNG)", -0.96f, -0.45f, 0.95f, 1.4f, 1.0f, 1.0f, 1.0f, 1.0f);
+        addBoundedText(verts, "ASSET DIRECTORY (DROP FILES TO INGEST)", -0.96f, -0.45f, 0.95f, 1.4f, 1.0f, 1.0f, 1.0f, 1.0f);
 
-        float cardX = -0.95f;
-        for (AssetEntry asset : assetDirectory) {
-            if (cardX + 0.35f > 0.95f) break;
-            addQuad(verts, cardX, -0.92f, cardX + 0.32f, -0.55f, 0.10f, 0.10f, 0.13f, 1.0f);
-            addFrameBorder(verts, cardX, -0.92f, cardX + 0.32f, -0.55f, 0.002f, 0.2f, 0.2f, 0.25f, 1.0f);
+        if (assetDirectory.isEmpty()) {
+            addBoundedText(verts, "NO ASSETS LOADED - DRAG & DROP .OBJ / .FBX / .PNG FILES FROM FINDER", -0.80f, -0.70f, 0.90f, 1.2f, 0.4f, 0.4f, 0.4f, 1.0f);
+        } else {
+            float cardX = -0.95f;
+            for (AssetEntry asset : assetDirectory) {
+                if (cardX + 0.35f > 0.95f) break;
+                addQuad(verts, cardX, -0.92f, cardX + 0.32f, -0.55f, 0.10f, 0.10f, 0.13f, 1.0f);
+                addFrameBorder(verts, cardX, -0.92f, cardX + 0.32f, -0.55f, 0.002f, 0.2f, 0.2f, 0.25f, 1.0f);
 
-            // Badge Box
-            addQuad(verts, cardX + 0.02f, -0.66f, cardX + 0.16f, -0.58f, 0.0f, 0.45f, 0.65f, 1.0f);
-            addBoundedText(verts, "." + asset.type.name(), cardX + 0.03f, -0.60f, cardX + 0.15f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f);
+                addQuad(verts, cardX + 0.02f, -0.66f, cardX + 0.18f, -0.58f, 0.0f, 0.45f, 0.65f, 1.0f);
+                addBoundedText(verts, "." + asset.type.name(), cardX + 0.03f, -0.60f, cardX + 0.17f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f);
 
-            addBoundedText(verts, asset.name, cardX + 0.02f, -0.75f, cardX + 0.30f, 1.0f, 0.9f, 0.9f, 0.9f, 1.0f);
-            cardX += 0.36f;
+                addBoundedText(verts, asset.name, cardX + 0.02f, -0.75f, cardX + 0.30f, 1.0f, 0.9f, 0.9f, 0.9f, 1.0f);
+                addBoundedText(verts, asset.type == AssetType.MESH_3D ? "[CLICK: SPAWN]" : "[CLICK: LINK]", cardX + 0.02f, -0.85f, cardX + 0.30f, 0.9f, 0.2f, 0.8f, 1.0f, 1.0f);
+                cardX += 0.36f;
+            }
         }
 
-        // 4. CENTER VIEWPORT FRAMING (X -0.55 to 0.55, Y -0.50 to 1.00)
+        // 4. CENTER VIEWPORT FRAMING
         addQuad(verts, -0.55f, 0.88f, 0.55f, 1.0f, 0.14f, 0.14f, 0.18f, 1.0f);
         addFrameBorder(verts, -0.55f, -0.5f, 0.55f, 0.88f, 0.003f, 0.25f, 0.25f, 0.32f, 1.0f);
         addBoundedText(verts, "3D VIEWPORT [METAL RHI CANVAS]", -0.42f, 0.95f, 0.52f, 1.4f, 0.3f, 0.8f, 1.0f, 1.0f);
 
-        // Convert list to float array
         float[] array = new float[verts.size()];
-        for (int i = 0; i < verts.size(); i++) {
-            array[i] = verts.get(i);
-        }
+        for (int i = 0; i < verts.size(); i++) array[i] = verts.get(i);
         return array;
     }
 
     private void addQuad(List<Float> verts, float x1, float y1, float x2, float y2, float r, float g, float b, float a) {
-        addVert(verts, x1, y1, r, g, b, a);
-        addVert(verts, x2, y1, r, g, b, a);
-        addVert(verts, x1, y2, r, g, b, a);
-
-        addVert(verts, x2, y1, r, g, b, a);
-        addVert(verts, x2, y2, r, g, b, a);
-        addVert(verts, x1, y2, r, g, b, a);
+        addVert(verts, x1, y1, r, g, b, a); addVert(verts, x2, y1, r, g, b, a); addVert(verts, x1, y2, r, g, b, a);
+        addVert(verts, x2, y1, r, g, b, a); addVert(verts, x2, y2, r, g, b, a); addVert(verts, x1, y2, r, g, b, a);
     }
 
     private void addFrameBorder(List<Float> verts, float x1, float y1, float x2, float y2, float t, float r, float g, float b, float a) {
-        addQuad(verts, x1, y2 - t, x2, y2, r, g, b, a); // Top
-        addQuad(verts, x1, y1, x2, y1 + t, r, g, b, a); // Bottom
-        addQuad(verts, x1, y1, x1 + t, y2, r, g, b, a); // Left
-        addQuad(verts, x2 - t, y1, x2, y2, r, g, b, a); // Right
+        addQuad(verts, x1, y2 - t, x2, y2, r, g, b, a);
+        addQuad(verts, x1, y1, x2, y1 + t, r, g, b, a);
+        addQuad(verts, x1, y1, x1 + t, y2, r, g, b, a);
+        addQuad(verts, x2 - t, y1, x2, y2, r, g, b, a);
     }
 
     private void addVert(List<Float> verts, float x, float y, float r, float g, float b, float a) {
@@ -271,7 +248,7 @@ public class EditorPanelManager {
         String upper = text.toUpperCase();
         for (int i = 0; i < upper.length(); i++) {
             float cx = startX + i * (charW + pixelW * 1.2f);
-            if (cx + charW > maxX) break; // Hard right boundary clip!
+            if (cx + charW > maxX) break;
 
             char c = upper.charAt(i);
             if (c >= 0 && c < FONT.length) {

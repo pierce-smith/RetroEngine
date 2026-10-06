@@ -5,15 +5,15 @@ import com.retro.engine.editor.EditorPanelManager.SceneEntity;
 
 import java.util.List;
 
+/**
+ * EditorSelectionController handles panel region hit-testing and input routing:
+ * - Clicking 3D asset cards in Asset Directory spawns entities in Scene Hierarchy.
+ * - Clicking texture asset cards links textures to the active selected entity.
+ */
 public class EditorSelectionController {
 
     public enum PanelType {
-        TOP_BAR,
-        SCENE_HIERARCHY,
-        VIEWPORT_3D,
-        INSPECTOR,
-        ASSET_DIRECTORY,
-        NONE
+        TOP_BAR, SCENE_HIERARCHY, VIEWPORT_3D, INSPECTOR, ASSET_DIRECTORY, NONE
     }
 
     public static final float TOP_BAR_HEIGHT = 30.0f;
@@ -22,9 +22,7 @@ public class EditorSelectionController {
 
     private EditorPanelManager panelManager;
 
-    public EditorSelectionController() {
-        this(null);
-    }
+    public EditorSelectionController() { this(null); }
 
     public EditorSelectionController(EditorPanelManager panelManager) {
         this.panelManager = panelManager;
@@ -40,10 +38,6 @@ public class EditorSelectionController {
         if (mouseX < SIDE_PANEL_WIDTH) return PanelType.SCENE_HIERARCHY;
         if (mouseX >= windowWidth - SIDE_PANEL_WIDTH) return PanelType.INSPECTOR;
         return PanelType.VIEWPORT_3D;
-    }
-
-    public void handleMouseClick(double mouseX, double mouseY) {
-        handleMouseClick(mouseX, mouseY, 0, 1, this.panelManager);
     }
 
     public void handleMouseClick(double mouseX, double mouseY, int button) {
@@ -77,9 +71,8 @@ public class EditorSelectionController {
 
         int index = (int) ((mouseY - startY) / itemHeight);
         if (index >= 0 && index < entities.size()) {
-            SceneEntity target = entities.get(index);
-            manager.selectEntity(target);
-            System.out.println("[Scene Hierarchy] Selected Entity: " + target.name);
+            manager.selectEntity(entities.get(index));
+            System.out.println("[Scene Hierarchy] Selected Entity: " + entities.get(index).name);
         }
     }
 
@@ -87,18 +80,14 @@ public class EditorSelectionController {
         SceneEntity active = manager.getSelectedEntity();
         if (active == null) return;
 
-        if (mouseY >= 140 && mouseY <= 165) {
-            active.transform.posX += 0.5f;
-            if (active.transform.posX > 5.0f) active.transform.posX = -5.0f;
-            System.out.println("[Inspector] Mutated " + active.name + " PosX -> " + active.transform.posX);
-        } else if (mouseY >= 166 && mouseY <= 190) {
-            active.transform.posY += 0.5f;
-            if (active.transform.posY > 5.0f) active.transform.posY = -5.0f;
-            System.out.println("[Inspector] Mutated " + active.name + " PosY -> " + active.transform.posY);
-        } else if (mouseY >= 191 && mouseY <= 215) {
-            active.transform.rotY += 15.0f;
-            if (active.transform.rotY >= 360.0f) active.transform.rotY = 0.0f;
-            System.out.println("[Inspector] Mutated " + active.name + " RotY -> " + active.transform.rotY);
+        // Click texture selector box to cycle through available loaded textures
+        if (mouseY >= 260.0 && mouseY <= 290.0) {
+            List<AssetEntry> assets = manager.getAssetDirectory();
+            List<AssetEntry> textures = assets.stream().filter(a -> a.type == EditorPanelManager.AssetType.TEXTURE).toList();
+            if (!textures.isEmpty()) {
+                AssetEntry nextTex = textures.get(0);
+                manager.assignTextureToSelectedEntity(nextTex);
+            }
         }
     }
 
@@ -107,17 +96,15 @@ public class EditorSelectionController {
         if (assets.isEmpty()) return;
 
         double startX = 20.0;
-        double cardWidth = 140.0;
+        double cardWidth = 230.0;
 
         int index = (int) ((mouseX - startX) / cardWidth);
         if (index >= 0 && index < assets.size()) {
-            AssetEntry asset = assets.get(index);
-            SceneEntity active = manager.getSelectedEntity();
-            if (asset.type == EditorPanelManager.AssetType.TEXTURE && active != null) {
-                active.textureAssetPath = asset.absolutePath;
-                System.out.println("[Asset Directory] Explicitly assigned texture '" + asset.name + "' to entity '" + active.name + "'");
-            } else {
-                System.out.println("[Asset Directory] Focused Asset: " + asset.name);
+            AssetEntry clickedAsset = assets.get(index);
+            if (clickedAsset.type == EditorPanelManager.AssetType.MESH_3D) {
+                manager.spawnEntityFromAsset(clickedAsset);
+            } else if (clickedAsset.type == EditorPanelManager.AssetType.TEXTURE) {
+                manager.assignTextureToSelectedEntity(clickedAsset);
             }
         }
     }

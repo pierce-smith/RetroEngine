@@ -11,13 +11,16 @@ import com.retro.engine.host.GlfwWindow;
 import com.retro.engine.host.HostBackendLoader;
 import com.retro.engine.rhi.IRenderBackend;
 
+import static org.lwjgl.glfw.GLFW.*;
+
 public class Main {
 
+    private static String lastLoadedMeshPath = null;
     private static String lastLoadedTexturePath = null;
 
     public static void main(String[] args) {
         System.out.println("===========================================");
-        System.out.println("  Retro Engine Shell - Editor & Runtime    ");
+        System.out.println("  Retro Engine Shell - Visual Editor IDE   ");
         System.out.println("===========================================");
 
         GlfwWindow window = new GlfwWindow(1280, 720, "Retro Engine Editor & Runtime");
@@ -39,48 +42,31 @@ public class Main {
 
         IRenderBackend rhi = loader.getBackend();
 
-        // Native drag-and-drop listener
+        // Drag and Drop ONLY ingests files into Asset Directory
         window.setOnFileDropListener(filePaths -> {
             editorManager.onFilesDropped(filePaths);
-            for (String path : filePaths) {
-                String lower = path.toLowerCase();
-                if (lower.endsWith(".obj") || lower.endsWith(".gltf") || lower.endsWith(".glb") || lower.endsWith(".fbx")) {
-                    ModelData model = ModelLoader.loadModel(path);
-                    if (model != null && model.vertices != null && model.vertices.length > 0) {
-                        rhi.updateMesh(model.vertices, model.vertexCount);
-                        System.out.println("[Engine] Uploaded 3D mesh (" + model.vertexCount + " vertices) to Metal VRAM: " + path);
-                    }
-                } else if (lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".bmp")) {
-                    TextureData tex = TextureLoader.loadTexture(path);
-                    if (tex != null && tex.pixels != null) {
-                        rhi.updateTexture(tex.pixels, tex.width, tex.height);
-                        lastLoadedTexturePath = path;
-                        System.out.println("[Engine] Uploaded texture (" + tex.width + "x" + tex.height + ") to Metal VRAM: " + path);
-                    }
-                }
-            }
+            System.out.println("[Asset Directory] Ingested " + filePaths.size() + " asset(s). Click assets to spawn or link.");
         });
 
-        // Mouse click listener
+        // Mouse click listener: Process click selection on PRESS, but ALWAYS pass button events (PRESS and RELEASE) to camera controller
         window.setOnMouseClickListener((mouseX, mouseY, button, action) -> {
-            cameraController.onMouseButton(button, action, mouseX, mouseY);
             if (action == 1) { // GLFW_PRESS = 1
                 selectionController.handleMouseClick(mouseX, mouseY, button, action, editorManager);
             }
+            // Crucial: Pass BOTH press (1) and release (0) actions so camera releases drag state on button release!
+            cameraController.onMouseButton(button, action, mouseX, mouseY);
         });
 
-        // Cursor pos listener for 3D Viewport orbit and panning
-        window.setOnCursorPosListener((xpos, ypos, isShiftDown, isAltDown) -> {
-            cameraController.onCursorPos(xpos, ypos, isShiftDown, isAltDown);
+        window.setOnCursorPosListener((x, y) -> {
+            boolean isShiftDown = window.isKeyDown(GLFW_KEY_LEFT_SHIFT) || window.isKeyDown(GLFW_KEY_RIGHT_SHIFT);
+            boolean isAltDown = window.isKeyDown(GLFW_KEY_LEFT_ALT) || window.isKeyDown(GLFW_KEY_RIGHT_ALT);
+            cameraController.onCursorPos(x, y, isShiftDown, isAltDown);
         });
 
-        // Scroll listener for 3D Viewport zooming
-        window.setOnScrollListener((xoffset, yoffset) -> {
-            cameraController.onScroll(xoffset, yoffset);
-        });
+        window.setOnScrollListener((xoffset, yoffset) -> cameraController.onScroll(yoffset));
 
         if (rhi.initialize(window.getWindowInfo())) {
-            System.out.println("[Engine] Running. Drag .fbx / .obj / .jpg into window | ESC: Quit");
+            System.out.println("[Engine] Running. Drag files to Ingest -> Click Asset Cards to Spawn or Link Texture.");
 
             long lastTime = System.nanoTime();
 
@@ -91,37 +77,48 @@ public class Main {
                 float deltaTime = (currentTime - lastTime) / 1_000_000_000.0f;
                 lastTime = currentTime;
 
-                // Update Camera Controls
-                boolean w = window.isKeyDown(87) || window.isKeyDown(265); // W / Up
-                boolean s = window.isKeyDown(83) || window.isKeyDown(264); // S / Down
-                boolean a = window.isKeyDown(65) || window.isKeyDown(263); // A / Left
-                boolean d = window.isKeyDown(68) || window.isKeyDown(262); // D / Right
-                boolean q = window.isKeyDown(81); // Q
-                boolean e = window.isKeyDown(69); // E
-                cameraController.update(deltaTime, w, s, a, d, q, e);
+                boolean isW = window.isKeyDown(GLFW_KEY_W);
+                boolean isS = window.isKeyDown(GLFW_KEY_S);
+                boolean isA = window.isKeyDown(GLFW_KEY_A);
+                boolean isD = window.isKeyDown(GLFW_KEY_D);
+                boolean isQ = window.isKeyDown(GLFW_KEY_Q);
+                boolean isE = window.isKeyDown(GLFW_KEY_E);
+                if (window.isKeyDown(GLFW_KEY_F)) cameraController.reset();
+
+                cameraController.update(deltaTime, isW, isS, isA, isD, isQ, isE);
 
                 rhi.setCameraTransform(
-                    cameraController.getPanX(),
-                    cameraController.getPanY(),
-                    cameraController.getZoom(),
-                    cameraController.getPitch(),
-                    cameraController.getYaw()
+                        cameraController.getPanX(),
+                        cameraController.getPanY(),
+                        cameraController.getZoom(),
+                        cameraController.getPitch(),
+                        cameraController.getYaw()
                 );
 
                 editorManager.update(deltaTime);
 
-                // Check if Inspector texture assignment changed
+                // Sync 3D Mesh in Viewport if selected entity mesh changed
                 EditorPanelManager.SceneEntity selected = editorManager.getSelectedEntity();
+                if (selected != null && selected.meshAssetPath != null && !selected.meshAssetPath.equals(lastLoadedMeshPath)) {
+                    ModelData model = ModelLoader.loadModel(selected.meshAssetPath);
+                    if (model != null && model.vertices != null && model.vertices.length > 0) {
+                        rhi.updateMesh(model.vertices, model.vertexCount);
+                        selected.vertexCount = model.vertexCount;
+                        lastLoadedMeshPath = selected.meshAssetPath;
+                        System.out.println("[Engine] Loaded 3D Mesh in Viewport: " + selected.name);
+                    }
+                }
+
+                // Sync Texture in Metal VRAM if selected entity texture changed
                 if (selected != null && selected.textureAssetPath != null && !selected.textureAssetPath.equals(lastLoadedTexturePath)) {
                     TextureData tex = TextureLoader.loadTexture(selected.textureAssetPath);
                     if (tex != null && tex.pixels != null) {
                         rhi.updateTexture(tex.pixels, tex.width, tex.height);
                         lastLoadedTexturePath = selected.textureAssetPath;
-                        System.out.println("[Engine] Dynamic Texture Link Synced: " + tex.name);
+                        System.out.println("[Engine] Linked Texture in Metal VRAM: " + tex.name);
                     }
                 }
 
-                // Stream 2D UI overlay geometry to RHI each frame
                 rhi.updateUiMesh(editorManager.getUiVertices(), editorManager.getUiVertexCount());
 
                 rhi.beginFrame();
