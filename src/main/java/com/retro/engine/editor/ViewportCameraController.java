@@ -1,17 +1,13 @@
 package com.retro.engine.editor;
 
 /**
- * ViewportCameraController provides Unity-style camera navigation in the 3D Viewport:
- * - Orbit / Rotate (Yaw & Pitch): Right Mouse Drag OR Alt + Left Mouse Drag
- * - Pan (X / Y): Middle Mouse Drag OR Shift + Right Mouse Drag
- * - Zoom (In / Out): Mouse Scroll Wheel OR Q / E Keys
- * - Focus / Reset: 'F' Key
- * - WASD / Arrow Keys: Camera panning and navigation
+ * ViewportCameraController handles camera orbit, pan, and zoom in the 3D Viewport.
+ * Keyboard WASDQE camera movement is active when holding Right Mouse Button (RMB) or Middle Mouse Button (MMB).
  */
 public class ViewportCameraController {
 
     private float panX = 0.0f;
-    private float panY = 0.25f; // Centered in 3D viewport height
+    private float panY = 0.25f;
     private float zoom = -5.0f;
     private float pitch = 0.0f;
     private float yaw = 0.0f;
@@ -23,48 +19,45 @@ public class ViewportCameraController {
     private boolean isDraggingLmb = false;
 
     public void update(float deltaTime, boolean isWDown, boolean isSDown, boolean isADown, boolean isDDown, boolean isQDown, boolean isEDown) {
-        float speed = 2.5f * deltaTime;
-
-        if (isWDown) panY += speed;
-        if (isSDown) panY -= speed;
-        if (isADown) panX -= speed;
-        if (isDDown) panX += speed;
-        if (isQDown) zoom += speed * 3.0f;
-        if (isEDown) zoom -= speed * 3.0f;
+        // Camera WASDQE navigation is gated to RMB / MMB flight mode
+        if (isDraggingRmb || isDraggingMmb) {
+            float speed = 2.5f * deltaTime;
+            if (isWDown) panY += speed;
+            if (isSDown) panY -= speed;
+            if (isADown) panX -= speed;
+            if (isDDown) panX += speed;
+            if (isQDown) zoom += speed * 3.0f;
+            if (isEDown) zoom -= speed * 3.0f;
+        }
 
         clamp();
     }
 
-    public void onMouseButton(int button, int action, double x, double y) {
-        if (action == 1) { // PRESS
-            lastMouseX = x;
-            lastMouseY = y;
-            if (button == 1) isDraggingRmb = true;
-            if (button == 2) isDraggingMmb = true;
-            if (button == 0) isDraggingLmb = true;
-        } else if (action == 0) { // RELEASE
-            if (button == 1) isDraggingRmb = false;
-            if (button == 2) isDraggingMmb = false;
-            if (button == 0) isDraggingLmb = false;
+    public void onMouseButton(int button, int action, double mouseX, double mouseY) {
+        lastMouseX = mouseX;
+        lastMouseY = mouseY;
+
+        if (button == 1) { // RMB
+            isDraggingRmb = (action == 1);
+        } else if (button == 2) { // MMB
+            isDraggingMmb = (action == 1);
+        } else if (button == 0) { // LMB
+            isDraggingLmb = (action == 1);
         }
     }
 
-    public void onCursorPos(double x, double y, boolean isShiftDown, boolean isAltDown) {
-        double dx = x - lastMouseX;
-        double dy = y - lastMouseY;
-        lastMouseX = x;
-        lastMouseY = y;
+    public void onCursorPos(double mouseX, double mouseY, boolean isShiftDown, boolean isAltDown) {
+        double dx = mouseX - lastMouseX;
+        double dy = mouseY - lastMouseY;
+        lastMouseX = mouseX;
+        lastMouseY = mouseY;
 
-        // Orbit / Rotate (RMB Drag OR Alt + LMB Drag)
-        if (isDraggingRmb && !isShiftDown) {
+        if ((isDraggingRmb && !isShiftDown) || (isDraggingLmb && isAltDown)) {
+            // Orbit Yaw & Pitch
             yaw += (float) dx * 0.35f;
             pitch -= (float) dy * 0.35f;
-        } else if (isDraggingLmb && isAltDown) {
-            yaw += (float) dx * 0.35f;
-            pitch -= (float) dy * 0.35f;
-        }
-        // Pan X/Y (MMB Drag OR Shift + RMB Drag)
-        else if (isDraggingMmb || (isDraggingRmb && isShiftDown)) {
+        } else if (isDraggingMmb || (isDraggingRmb && isShiftDown)) {
+            // Pan Horizontal & Vertical
             panX += (float) dx * 0.005f;
             panY -= (float) dy * 0.005f;
         }
@@ -77,25 +70,17 @@ public class ViewportCameraController {
         clamp();
     }
 
-    public void onScroll(double xoffset, double yoffset) {
-        zoom += (float) yoffset * 0.5f;
-        clamp();
-    }
-
     public void reset() {
         panX = 0.0f;
         panY = 0.25f;
         zoom = -5.0f;
         pitch = 0.0f;
         yaw = 0.0f;
-        System.out.println("[Camera] Reset Viewport Camera to Default Position.");
     }
 
     private void clamp() {
-        if (zoom > -0.8f) zoom = -0.8f;
-        if (zoom < -60.0f) zoom = -60.0f;
-        if (pitch > 89.0f) pitch = 89.0f;
-        if (pitch < -89.0f) pitch = -89.0f;
+        pitch = Math.max(-89.0f, Math.min(89.0f, pitch));
+        zoom = Math.max(-60.0f, Math.min(-0.8f, zoom));
     }
 
     public float getPanX() { return panX; }
@@ -103,4 +88,6 @@ public class ViewportCameraController {
     public float getZoom() { return zoom; }
     public float getPitch() { return pitch; }
     public float getYaw() { return yaw; }
+    public boolean isDraggingRmb() { return isDraggingRmb; }
+    public boolean isDraggingMmb() { return isDraggingMmb; }
 }

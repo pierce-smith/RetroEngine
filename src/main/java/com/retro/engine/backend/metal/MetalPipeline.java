@@ -4,9 +4,6 @@ import static org.lwjgl.system.JNI.*;
 import static org.lwjgl.system.macosx.ObjCRuntime.objc_getClass;
 import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 
-/**
- * MetalPipeline manages MSL shader library compilation, MTLRenderPipelineState instances, and depth-stencil states.
- */
 public class MetalPipeline {
 
     private long pipelineState3D = 0L;
@@ -16,66 +13,66 @@ public class MetalPipeline {
     private long depthStencilStateUI = 0L;
 
     private static final String MSL_3D_SHADER = """
-        #include <metal_stdlib>
-        using namespace metal;
+            #include <metal_stdlib>
+            using namespace metal;
 
-        struct VertexOut {
-            float4 position [[position]];
-            float4 color;
-            float2 uv;
-        };
+            struct VertexOut {
+                float4 position [[position]];
+                float4 color;
+                float2 uv;
+            };
 
-        struct Uniforms {
-            float4x4 mvp;
-            uint hasTexture;
-        };
+            struct Uniforms {
+                float4x4 mvp;
+                uint hasTexture;
+            };
 
-        vertex VertexOut vertexMain(uint vertexID [[vertex_id]],
-                                    constant float* vertices [[buffer(0)]],
-                                    constant Uniforms& uniforms [[buffer(1)]]) {
-            VertexOut out;
-            int idx = vertexID * 9;
-            float4 pos = float4(vertices[idx], vertices[idx+1], vertices[idx+2], 1.0);
-            out.position = uniforms.mvp * pos;
-            out.color = float4(vertices[idx+3], vertices[idx+4], vertices[idx+5], vertices[idx+6]);
-            out.uv = float2(vertices[idx+7], vertices[idx+8]);
-            return out;
-        }
-
-        fragment float4 fragmentMain(VertexOut in [[stage_in]],
-                                      texture2d<float> tex [[texture(0)]],
-                                      sampler smp [[sampler(0)]],
-                                      constant Uniforms& uniforms [[buffer(1)]]) {
-            if (uniforms.hasTexture == 1) {
-                float4 texColor = tex.sample(smp, in.uv);
-                return texColor * in.color;
+            vertex VertexOut vertexMain(uint vertexID [[vertex_id]],
+                                        constant float* vertices [[buffer(0)]],
+                                        constant Uniforms& uniforms [[buffer(1)]]) {
+                VertexOut out;
+                int idx = vertexID * 9;
+                float4 pos = float4(vertices[idx], vertices[idx+1], vertices[idx+2], 1.0);
+                out.position = uniforms.mvp * pos;
+                out.color = float4(vertices[idx+3], vertices[idx+4], vertices[idx+5], vertices[idx+6]);
+                out.uv = float2(vertices[idx+7], vertices[idx+8]);
+                return out;
             }
-            return in.color;
-        }
-        """;
+
+            fragment float4 fragmentMain(VertexOut in [[stage_in]],
+                                          texture2d<float> tex [[texture(0)]],
+                                          sampler smp [[sampler(0)]],
+                                          constant Uniforms& uniforms [[buffer(1)]]) {
+                if (uniforms.hasTexture == 1) {
+                    float4 texColor = tex.sample(smp, in.uv);
+                    return texColor * in.color;
+                }
+                return in.color;
+            }
+            """;
 
     private static final String MSL_UI_SHADER = """
-        #include <metal_stdlib>
-        using namespace metal;
+            #include <metal_stdlib>
+            using namespace metal;
 
-        struct VertexOut {
-            float4 position [[position]];
-            float4 color;
-        };
+            struct VertexOut {
+                float4 position [[position]];
+                float4 color;
+            };
 
-        vertex VertexOut uiVertexMain(uint vertexID [[vertex_id]],
-                                      constant float* vertices [[buffer(0)]]) {
-            VertexOut out;
-            int idx = vertexID * 6;
-            out.position = float4(vertices[idx], vertices[idx+1], 0.0, 1.0);
-            out.color = float4(vertices[idx+2], vertices[idx+3], vertices[idx+4], vertices[idx+5]);
-            return out;
-        }
+            vertex VertexOut uiVertexMain(uint vertexID [[vertex_id]],
+                                          constant float* vertices [[buffer(0)]]) {
+                VertexOut out;
+                int idx = vertexID * 6;
+                out.position = float4(vertices[idx], vertices[idx+1], 0.0, 1.0);
+                out.color = float4(vertices[idx+2], vertices[idx+3], vertices[idx+4], vertices[idx+5]);
+                return out;
+            }
 
-        fragment float4 uiFragmentMain(VertexOut in [[stage_in]]) {
-            return in.color;
-        }
-        """;
+            fragment float4 uiFragmentMain(VertexOut in [[stage_in]]) {
+                return in.color;
+            }
+            """;
 
     public boolean initialize(MetalDevice device) {
         long d = device.getDevice();

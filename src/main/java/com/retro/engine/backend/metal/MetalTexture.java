@@ -8,9 +8,6 @@ import java.nio.ByteBuffer;
 import static org.lwjgl.system.JNI.*;
 import static org.lwjgl.system.macosx.ObjCRuntime.*;
 
-/**
- * MetalTexture manages MTLTexture descriptors, region pixel updates, samplers, and white default texture fallback.
- */
 public class MetalTexture {
 
     private long activeTextureHandle = 0L;

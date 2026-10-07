@@ -42,31 +42,30 @@ public class Main {
 
         IRenderBackend rhi = loader.getBackend();
 
-        // Drag and Drop ONLY ingests files into Asset Directory
         window.setOnFileDropListener(filePaths -> {
             editorManager.onFilesDropped(filePaths);
             System.out.println("[Asset Directory] Ingested " + filePaths.size() + " asset(s). Click assets to spawn or link.");
         });
 
-        // Mouse click listener: Process click selection on PRESS, but ALWAYS pass button events (PRESS and RELEASE) to camera controller
         window.setOnMouseClickListener((mouseX, mouseY, button, action) -> {
-            if (action == 1) { // GLFW_PRESS = 1
-                selectionController.handleMouseClick(mouseX, mouseY, button, action, editorManager);
-            }
-            // Crucial: Pass BOTH press (1) and release (0) actions so camera releases drag state on button release!
+            selectionController.handleMouseClick(mouseX, mouseY, button, action, editorManager);
             cameraController.onMouseButton(button, action, mouseX, mouseY);
         });
 
         window.setOnCursorPosListener((x, y) -> {
-            boolean isShiftDown = window.isKeyDown(GLFW_KEY_LEFT_SHIFT) || window.isKeyDown(GLFW_KEY_RIGHT_SHIFT);
-            boolean isAltDown = window.isKeyDown(GLFW_KEY_LEFT_ALT) || window.isKeyDown(GLFW_KEY_RIGHT_ALT);
-            cameraController.onCursorPos(x, y, isShiftDown, isAltDown);
+            boolean handledByGizmo = selectionController.onCursorPos(x, y, editorManager);
+            if (!handledByGizmo) {
+                boolean isShiftDown = window.isKeyDown(GLFW_KEY_LEFT_SHIFT) || window.isKeyDown(GLFW_KEY_RIGHT_SHIFT);
+                boolean isAltDown = window.isKeyDown(GLFW_KEY_LEFT_ALT) || window.isKeyDown(GLFW_KEY_RIGHT_ALT);
+                cameraController.onCursorPos(x, y, isShiftDown, isAltDown);
+            }
         });
 
         window.setOnScrollListener((xoffset, yoffset) -> cameraController.onScroll(yoffset));
 
         if (rhi.initialize(window.getWindowInfo())) {
             System.out.println("[Engine] Running. Drag files to Ingest -> Click Asset Cards to Spawn or Link Texture.");
+            System.out.println("[Gizmo] Press 1(Move) / 2(Rotate) / 3(Scale) or W/E/R to switch modes in Viewport.");
 
             long lastTime = System.nanoTime();
 
@@ -77,17 +76,37 @@ public class Main {
                 float deltaTime = (currentTime - lastTime) / 1_000_000_000.0f;
                 lastTime = currentTime;
 
+                boolean isCtrlDown = window.isKeyDown(GLFW_KEY_LEFT_CONTROL) || window.isKeyDown(GLFW_KEY_RIGHT_CONTROL);
+                boolean is1 = window.isKeyDown(GLFW_KEY_1);
+                boolean is2 = window.isKeyDown(GLFW_KEY_2);
+                boolean is3 = window.isKeyDown(GLFW_KEY_3);
                 boolean isW = window.isKeyDown(GLFW_KEY_W);
                 boolean isS = window.isKeyDown(GLFW_KEY_S);
                 boolean isA = window.isKeyDown(GLFW_KEY_A);
                 boolean isD = window.isKeyDown(GLFW_KEY_D);
                 boolean isQ = window.isKeyDown(GLFW_KEY_Q);
                 boolean isE = window.isKeyDown(GLFW_KEY_E);
+                boolean isR = window.isKeyDown(GLFW_KEY_R);
                 if (window.isKeyDown(GLFW_KEY_F)) cameraController.reset();
+
+                // Quick Gizmo Mode Shortcuts: 1/W -> Move, 2/E -> Rotate, 3/R -> Scale
+                if (!isCtrlDown && !cameraController.isDraggingRmb() && !cameraController.isDraggingMmb()) {
+                    if (is1 || isW) editorManager.setCurrentGizmoMode(EditorPanelManager.GizmoMode.TRANSLATE);
+                    if (is2 || isE) editorManager.setCurrentGizmoMode(EditorPanelManager.GizmoMode.ROTATE);
+                    if (is3 || isR) editorManager.setCurrentGizmoMode(EditorPanelManager.GizmoMode.SCALE);
+                }
 
                 cameraController.update(deltaTime, isW, isS, isA, isD, isQ, isE);
 
+                // Pass Camera Transform State to RHI & Editor Manager for 3D Projection
                 rhi.setCameraTransform(
+                        cameraController.getPanX(),
+                        cameraController.getPanY(),
+                        cameraController.getZoom(),
+                        cameraController.getPitch(),
+                        cameraController.getYaw()
+                );
+                editorManager.setCameraState(
                         cameraController.getPanX(),
                         cameraController.getPanY(),
                         cameraController.getZoom(),
@@ -97,25 +116,41 @@ public class Main {
 
                 editorManager.update(deltaTime);
 
+                // Stream 3D Ground Grid lines to Metal VRAM
+                rhi.updateGridMesh(editorManager.get3DGridVertices(), editorManager.get3DGridVertexCount());
+
                 // Sync 3D Mesh in Viewport if selected entity mesh changed
                 EditorPanelManager.SceneEntity selected = editorManager.getSelectedEntity();
-                if (selected != null && selected.meshAssetPath != null && !selected.meshAssetPath.equals(lastLoadedMeshPath)) {
-                    ModelData model = ModelLoader.loadModel(selected.meshAssetPath);
-                    if (model != null && model.vertices != null && model.vertices.length > 0) {
-                        rhi.updateMesh(model.vertices, model.vertexCount);
-                        selected.vertexCount = model.vertexCount;
-                        lastLoadedMeshPath = selected.meshAssetPath;
-                        System.out.println("[Engine] Loaded 3D Mesh in Viewport: " + selected.name);
-                    }
-                }
+                if (selected != null) {
+                    rhi.setModelTransform(
+                            selected.transform.posX,
+                            selected.transform.posY,
+                            selected.transform.posZ,
+                            selected.transform.rotX,
+                            selected.transform.rotY,
+                            selected.transform.rotZ,
+                            selected.transform.scaleX,
+                            selected.transform.scaleY,
+                            selected.transform.scaleZ
+                    );
 
-                // Sync Texture in Metal VRAM if selected entity texture changed
-                if (selected != null && selected.textureAssetPath != null && !selected.textureAssetPath.equals(lastLoadedTexturePath)) {
-                    TextureData tex = TextureLoader.loadTexture(selected.textureAssetPath);
-                    if (tex != null && tex.pixels != null) {
-                        rhi.updateTexture(tex.pixels, tex.width, tex.height);
-                        lastLoadedTexturePath = selected.textureAssetPath;
-                        System.out.println("[Engine] Linked Texture in Metal VRAM: " + tex.name);
+                    if (selected.meshAssetPath != null && !selected.meshAssetPath.equals(lastLoadedMeshPath)) {
+                        ModelData model = ModelLoader.loadModel(selected.meshAssetPath);
+                        if (model != null && model.vertices != null && model.vertices.length > 0) {
+                            rhi.updateMesh(model.vertices, model.vertexCount);
+                            selected.vertexCount = model.vertexCount;
+                            lastLoadedMeshPath = selected.meshAssetPath;
+                            System.out.println("[Engine] Loaded 3D Mesh in Viewport: " + selected.name);
+                        }
+                    }
+
+                    if (selected.textureAssetPath != null && !selected.textureAssetPath.equals(lastLoadedTexturePath)) {
+                        TextureData tex = TextureLoader.loadTexture(selected.textureAssetPath);
+                        if (tex != null && tex.pixels != null) {
+                            rhi.updateTexture(tex.pixels, tex.width, tex.height);
+                            lastLoadedTexturePath = selected.textureAssetPath;
+                            System.out.println("[Engine] Linked Texture in Metal VRAM: " + tex.name);
+                        }
                     }
                 }
 

@@ -11,9 +11,11 @@ public interface IRenderBackend {
     void present();
 
     default void updateMesh(float[] vertices, int count) {}
+    default void updateGridMesh(float[] vertices, int count) {}
     default void updateUiMesh(float[] vertices, int count) {}
     default void updateTexture(byte[] pixels, int width, int height) {}
     default void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw) {}
+    default void setModelTransform(float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {}
 
     long createBuffer(BufferCreateInfo createInfo);
     void destroyBuffer(long handle);

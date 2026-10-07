@@ -11,10 +11,6 @@ import java.nio.ByteBuffer;
 import static org.lwjgl.system.JNI.*;
 import static org.lwjgl.system.macosx.ObjCRuntime.*;
 
-/**
- * MetalDevice encapsulates the low-level Objective-C runtime initialization,
- * MTLDevice creation, MTLCommandQueue, CAMetalLayer, and JNI function pointer dispatch.
- */
 public class MetalDevice {
 
     private long device = 0L;
