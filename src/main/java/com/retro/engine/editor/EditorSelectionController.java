@@ -109,14 +109,14 @@ public class EditorSelectionController {
         SceneEntity selected = manager.getSelectedEntity();
         if (selected == null) return;
 
-        // Convert mouse pixel coordinates to NDC
+        // Convert mouse pixel coordinates to NDC (-1.0 to +1.0)
         float ndcX = (float) (mouseX / 1280.0 * 2.0 - 1.0);
         float ndcY = (float) (1.0 - mouseY / 720.0 * 2.0);
 
-        // Project Entity World Base Position to Viewport NDC space
+        // Project Entity World Base Position directly to Viewport NDC space
         float[] anchorNdc = manager.projectWorldToNdc(selected.transform.posX, selected.transform.posY, selected.transform.posZ);
-        float cx = Math.max(-0.50f, Math.min(0.50f, anchorNdc[0]));
-        float cy = Math.max(-0.40f, Math.min(0.75f, anchorNdc[1]));
+        float cx = anchorNdc[0];
+        float cy = anchorNdc[1];
 
         float len = 0.16f;
 
@@ -129,18 +129,24 @@ public class EditorSelectionController {
         float distY = (ndcX - yX) * (ndcX - yX) + (ndcY - yY) * (ndcY - yY);
         float distZ = (ndcX - zX) * (ndcX - zX) + (ndcY - zY) * (ndcY - zY);
 
-        float threshold = 0.012f; // Generous grab radius
+        float threshold = 0.05f; // Generous 0.05 NDC hit radius (~32px) for Translate and Scale
 
         if (manager.getCurrentGizmoMode() == GizmoMode.ROTATE) {
+            // Very generous rotate zone: anywhere within 0.35 NDC distance of model anchor
             float distCenter = (float) Math.sqrt((ndcX - cx) * (ndcX - cx) + (ndcY - cy) * (ndcY - cy));
-            if (Math.abs(distCenter - 0.15f) < 0.05f) {
-                if (Math.abs(ndcX - cx) < 0.06f) {
+            if (distCenter >= 0.02f && distCenter <= 0.35f) {
+                // If near vertical axis line -> Pitch (X Axis)
+                if (Math.abs(ndcX - cx) < 0.10f) {
                     manager.setActiveGizmoAxis(GizmoAxis.X);
                     System.out.println("[Gizmo] Grabbed RED X Pitch Arc.");
-                } else if (Math.abs(ndcY - cy) < 0.06f) {
+                }
+                // If near horizontal axis line -> Yaw (Y Axis)
+                else if (Math.abs(ndcY - cy) < 0.10f) {
                     manager.setActiveGizmoAxis(GizmoAxis.Y);
                     System.out.println("[Gizmo] Grabbed GREEN Y Yaw Arc.");
-                } else {
+                }
+                // Otherwise -> Roll (Z Axis outer ring)
+                else {
                     manager.setActiveGizmoAxis(GizmoAxis.Z);
                     System.out.println("[Gizmo] Grabbed BLUE Z Roll Outer Ring.");
                 }
@@ -177,8 +183,8 @@ public class EditorSelectionController {
                 float ndcY = (float) (1.0 - mouseY / 720.0 * 2.0);
 
                 float[] anchorNdc = activeManager.projectWorldToNdc(selected.transform.posX, selected.transform.posY, selected.transform.posZ);
-                float cx = Math.max(-0.50f, Math.min(0.50f, anchorNdc[0]));
-                float cy = Math.max(-0.40f, Math.min(0.75f, anchorNdc[1]));
+                float cx = anchorNdc[0];
+                float cy = anchorNdc[1];
 
                 if (mode == GizmoMode.TRANSLATE) {
                     float speed = 0.02f;

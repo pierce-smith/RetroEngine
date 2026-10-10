@@ -25,6 +25,27 @@ public class VulkanBackend implements IRenderBackend {
     public void present() {}
 
     @Override
+    public void updateMesh(float[] vertices, int count) {}
+
+    @Override
+    public void updateGridMesh(float[] vertices, int count) {}
+
+    @Override
+    public void updateUiMesh(float[] vertices, int count) {}
+
+    @Override
+    public void updateUiBackgroundMesh(float[] vertices, int count) {}
+
+    @Override
+    public void updateTexture(byte[] pixels, int width, int height) {}
+
+    @Override
+    public void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw) {}
+
+    @Override
+    public void setModelTransform(float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {}
+
+    @Override
     public long createBuffer(BufferCreateInfo createInfo) {
         return 101L;
     }

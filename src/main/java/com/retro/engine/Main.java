@@ -119,7 +119,7 @@ public class Main {
                 // Stream 3D Ground Grid lines to Metal VRAM
                 rhi.updateGridMesh(editorManager.get3DGridVertices(), editorManager.get3DGridVertexCount());
 
-                // Sync 3D Mesh in Viewport if selected entity mesh changed
+                // Sync 3D Mesh & Model Matrix in Viewport if selected entity mesh changed
                 EditorPanelManager.SceneEntity selected = editorManager.getSelectedEntity();
                 if (selected != null) {
                     rhi.setModelTransform(

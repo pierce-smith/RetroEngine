@@ -11,9 +11,9 @@ import static org.lwjgl.system.macosx.ObjCRuntime.*;
 /**
  * MetalBackend implements IRenderBackend by coordinating MetalDevice, MetalBuffer, MetalTexture, and MetalPipeline.
  * Features 3 rendering passes:
- *   Pass 1: 3D Perspective Ground Grid (Lines)
- *   Pass 2: 3D Perspective Model Mesh (Triangles)
- *   Pass 3: 2D Editor UI Overlay & Viewport Transform Gizmos
+ * Pass 1: 3D Perspective Ground Grid (Lines = 1L)
+ * Pass 2: 3D Perspective Model Mesh (Triangles = 3L)
+ * Pass 3: 2D Editor UI Overlay & Viewport Transform Gizmos
  */
 public class MetalBackend implements IRenderBackend {
 
@@ -142,7 +142,6 @@ public class MetalBackend implements IRenderBackend {
         float cy = (float) Math.cos(radYaw), sy = (float) Math.sin(radYaw);
         float cp = (float) Math.cos(radPitch), sp = (float) Math.sin(radPitch);
 
-        // V Column-major: Rotation * Translation
         return new float[] {
             cy, sy * sp, sy * cp, 0.0f,
             0.0f, cp, -sp, 0.0f,
