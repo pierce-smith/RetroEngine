@@ -11,12 +11,15 @@ import com.retro.engine.host.GlfwWindow;
 import com.retro.engine.host.HostBackendLoader;
 import com.retro.engine.rhi.IRenderBackend;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import static org.lwjgl.glfw.GLFW.*;
 
 public class Main {
 
-    private static String lastLoadedMeshPath = null;
-    private static String lastLoadedTexturePath = null;
+    private static final Map<String, ModelData> meshCache = new HashMap<>();
+    private static final Map<String, TextureData> textureCache = new HashMap<>();
 
     public static void main(String[] args) {
         System.out.println("===========================================");
@@ -42,11 +45,13 @@ public class Main {
 
         IRenderBackend rhi = loader.getBackend();
 
+        // Drag and Drop ONLY ingests files into Asset Directory
         window.setOnFileDropListener(filePaths -> {
             editorManager.onFilesDropped(filePaths);
             System.out.println("[Asset Directory] Ingested " + filePaths.size() + " asset(s). Click assets to spawn or link.");
         });
 
+        // Mouse click listener: Forward press & release actions to both selection & camera controllers
         window.setOnMouseClickListener((mouseX, mouseY, button, action) -> {
             selectionController.handleMouseClick(mouseX, mouseY, button, action, editorManager);
             cameraController.onMouseButton(button, action, mouseX, mouseY);
@@ -65,7 +70,7 @@ public class Main {
 
         if (rhi.initialize(window.getWindowInfo())) {
             System.out.println("[Engine] Running. Drag files to Ingest -> Click Asset Cards to Spawn or Link Texture.");
-            System.out.println("[Gizmo] Press 1(Move) / 2(Rotate) / 3(Scale) or W/E/R to switch modes in Viewport.");
+            System.out.println("[Gizmo] Press 1/W(Translate) / 2/E(Rotate) / 3/R(Scale) to switch modes in Viewport.");
 
             long lastTime = System.nanoTime();
 
@@ -116,44 +121,40 @@ public class Main {
 
                 editorManager.update(deltaTime);
 
-                // Stream 3D Ground Grid lines to Metal VRAM
-                rhi.updateGridMesh(editorManager.get3DGridVertices(), editorManager.get3DGridVertexCount());
+                // Clear & Submit All Active Scene Entities
+                rhi.clearSceneQueue();
 
-                // Sync 3D Mesh & Model Matrix in Viewport if selected entity mesh changed
-                EditorPanelManager.SceneEntity selected = editorManager.getSelectedEntity();
-                if (selected != null) {
-                    rhi.setModelTransform(
-                            selected.transform.posX,
-                            selected.transform.posY,
-                            selected.transform.posZ,
-                            selected.transform.rotX,
-                            selected.transform.rotY,
-                            selected.transform.rotZ,
-                            selected.transform.scaleX,
-                            selected.transform.scaleY,
-                            selected.transform.scaleZ
-                    );
+                for (EditorPanelManager.SceneEntity entity : editorManager.getSceneEntities()) {
+                    if (entity.meshAssetPath != null) {
+                        ModelData model = meshCache.computeIfAbsent(entity.meshAssetPath, ModelLoader::loadModel);
 
-                    if (selected.meshAssetPath != null && !selected.meshAssetPath.equals(lastLoadedMeshPath)) {
-                        ModelData model = ModelLoader.loadModel(selected.meshAssetPath);
-                        if (model != null && model.vertices != null && model.vertices.length > 0) {
-                            rhi.updateMesh(model.vertices, model.vertexCount);
-                            selected.vertexCount = model.vertexCount;
-                            lastLoadedMeshPath = selected.meshAssetPath;
-                            System.out.println("[Engine] Loaded 3D Mesh in Viewport: " + selected.name);
+                        byte[] pixels = null;
+                        int texW = 0, texH = 0;
+                        if (entity.textureAssetPath != null) {
+                            TextureData tex = textureCache.computeIfAbsent(entity.textureAssetPath, TextureLoader::loadTexture);
+                            if (tex != null) {
+                                pixels = tex.pixels;
+                                texW = tex.width;
+                                texH = tex.height;
+                            }
                         }
-                    }
 
-                    if (selected.textureAssetPath != null && !selected.textureAssetPath.equals(lastLoadedTexturePath)) {
-                        TextureData tex = TextureLoader.loadTexture(selected.textureAssetPath);
-                        if (tex != null && tex.pixels != null) {
-                            rhi.updateTexture(tex.pixels, tex.width, tex.height);
-                            lastLoadedTexturePath = selected.textureAssetPath;
-                            System.out.println("[Engine] Linked Texture in Metal VRAM: " + tex.name);
+                        if (model != null && model.vertices != null && model.vertices.length > 0) {
+                            rhi.submitEntity(
+                                    entity.meshAssetPath,
+                                    model.vertices,
+                                    model.vertexCount,
+                                    entity.textureAssetPath,
+                                    pixels, texW, texH,
+                                    entity.transform.posX, entity.transform.posY, entity.transform.posZ,
+                                    entity.transform.rotX, entity.transform.rotY, entity.transform.rotZ,
+                                    entity.transform.scaleX, entity.transform.scaleY, entity.transform.scaleZ
+                            );
                         }
                     }
                 }
 
+                rhi.updateGridMesh(editorManager.get3DGridVertices(), editorManager.get3DGridVertexCount());
                 rhi.updateUiMesh(editorManager.getUiVertices(), editorManager.getUiVertexCount());
 
                 rhi.beginFrame();

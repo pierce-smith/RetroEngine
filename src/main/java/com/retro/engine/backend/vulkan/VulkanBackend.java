@@ -46,6 +46,16 @@ public class VulkanBackend implements IRenderBackend {
     public void setModelTransform(float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {}
 
     @Override
+    public void clearSceneQueue() {}
+
+    @Override
+    public void submitEntity(String meshPath, float[] vertices, int vertexCount,
+                              String texturePath, byte[] pixels, int texW, int texH,
+                              float px, float py, float pz,
+                              float rx, float ry, float rz,
+                              float sx, float sy, float sz) {}
+
+    @Override
     public long createBuffer(BufferCreateInfo createInfo) {
         return 101L;
     }

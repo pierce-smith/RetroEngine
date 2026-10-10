@@ -4,6 +4,10 @@ import com.retro.engine.rhi.*;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.FloatBuffer;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import static org.lwjgl.system.JNI.*;
 import static org.lwjgl.system.macosx.ObjCRuntime.*;
@@ -26,9 +30,6 @@ public class MetalBackend implements IRenderBackend {
     private long gridVertexBuffer = 0L;
     private int gridVertexCount = 0;
 
-    private long meshVertexBuffer = 0L;
-    private int meshVertexCount = 0;
-
     private long uiVertexBuffer = 0L;
     private int uiVertexCount = 0;
 
@@ -45,16 +46,18 @@ public class MetalBackend implements IRenderBackend {
     private float camPitch = 0.0f;
     private float camYaw = 0.0f;
 
-    // Model Transform State
-    private float modelPx = 0.0f;
-    private float modelPy = 0.0f;
-    private float modelPz = 0.0f;
-    private float modelRx = 0.0f;
-    private float modelRy = 0.0f;
-    private float modelRz = 0.0f;
-    private float modelSx = 1.0f;
-    private float modelSy = 1.0f;
-    private float modelSz = 1.0f;
+    // Multi-entity Batch Queue & VRAM Caches
+    private final List<RenderEntity> sceneQueue = new ArrayList<>();
+    private final Map<String, Long> gpuMeshCache = new HashMap<>();
+    private final Map<String, Long> gpuTextureCache = new HashMap<>();
+
+    private static class RenderEntity {
+        long vertexBufferHandle;
+        int vertexCount;
+        long textureHandle;
+        boolean hasTexture;
+        float px, py, pz, rx, ry, rz, sx, sy, sz;
+    }
 
     @Override
     public boolean initialize(WindowInfo windowInfo) {
@@ -65,7 +68,7 @@ public class MetalBackend implements IRenderBackend {
         metalTexture.initDefaultTextureAndSampler(metalDevice.getDevice(), metalDevice.getObjcMsgSend());
 
         uniformBufferGrid = MetalBuffer.createUniformBuffer(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), 80L);
-        uniformBufferModel = MetalBuffer.createUniformBuffer(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), 80L);
+        uniformBufferModel = MetalBuffer.createUniformBuffer(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), 256L * 100);
 
         System.out.println("[MetalBackend] Modular Metal graphics backend active.");
         return true;
@@ -97,42 +100,60 @@ public class MetalBackend implements IRenderBackend {
     }
 
     @Override
-    public void setModelTransform(float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
-        this.modelPx = px;
-        this.modelPy = py;
-        this.modelPz = pz;
-        this.modelRx = rx;
-        this.modelRy = ry;
-        this.modelRz = rz;
-        this.modelSx = sx;
-        this.modelSy = sy;
-        this.modelSz = sz;
-    }
-
-    @Override
     public void updateGridMesh(float[] vertices, int count) {
+        if (vertices == null || count <= 0) return;
         MetalBuffer buf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), vertices, 9);
         this.gridVertexBuffer = buf.getHandle();
         this.gridVertexCount = count;
     }
 
     @Override
-    public void updateMesh(float[] vertices, int count) {
-        MetalBuffer buf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), vertices, 9);
-        this.meshVertexBuffer = buf.getHandle();
-        this.meshVertexCount = count;
-    }
-
-    @Override
     public void updateUiMesh(float[] vertices, int count) {
+        if (vertices == null || count <= 0) return;
         MetalBuffer buf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), vertices, 6);
         this.uiVertexBuffer = buf.getHandle();
         this.uiVertexCount = count;
     }
 
     @Override
-    public void updateTexture(byte[] pixels, int width, int height) {
-        metalTexture.uploadTexture(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), pixels, width, height);
+    public void clearSceneQueue() {
+        sceneQueue.clear();
+    }
+
+    @Override
+    public void submitEntity(String meshPath, float[] vertices, int vertexCount,
+                              String texturePath, byte[] pixels, int texW, int texH,
+                              float px, float py, float pz,
+                              float rx, float ry, float rz,
+                              float sx, float sy, float sz) {
+        if (meshPath == null || vertices == null || vertexCount <= 0) return;
+
+        long vbo = gpuMeshCache.computeIfAbsent(meshPath, k -> {
+            MetalBuffer buf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), vertices, 9);
+            return buf.getHandle();
+        });
+
+        long texHandle = 0L;
+        boolean hasTex = false;
+        if (texturePath != null && pixels != null && pixels.length > 0) {
+            texHandle = gpuTextureCache.computeIfAbsent(texturePath, k -> {
+                MetalTexture tex = new MetalTexture();
+                tex.uploadTexture(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), pixels, texW, texH);
+                return tex.getBindableTexture();
+            });
+            hasTex = (texHandle != 0L);
+        }
+
+        RenderEntity item = new RenderEntity();
+        item.vertexBufferHandle = vbo;
+        item.vertexCount = vertexCount;
+        item.textureHandle = texHandle;
+        item.hasTexture = hasTex;
+        item.px = px; item.py = py; item.pz = pz;
+        item.rx = rx; item.ry = ry; item.rz = rz;
+        item.sx = sx; item.sy = sy; item.sz = sz;
+
+        sceneQueue.add(item);
     }
 
     private float[] createCameraViewMatrix() {
@@ -150,32 +171,32 @@ public class MetalBackend implements IRenderBackend {
         };
     }
 
-    private float[] createModelMatrix() {
-        float radRx = (float) Math.toRadians(modelRx);
-        float radRy = (float) Math.toRadians(modelRy);
-        float radRz = (float) Math.toRadians(modelRz);
+    private float[] createModelMatrix(float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
+        float radRx = (float) Math.toRadians(rx);
+        float radRy = (float) Math.toRadians(ry);
+        float radRz = (float) Math.toRadians(rz);
 
-        float cx = (float) Math.cos(radRx), sx = (float) Math.sin(radRx);
-        float cy = (float) Math.cos(radRy), sy = (float) Math.sin(radRy);
-        float cz = (float) Math.cos(radRz), sz = (float) Math.sin(radRz);
+        float cx = (float) Math.cos(radRx), sx_sin = (float) Math.sin(radRx);
+        float cy = (float) Math.cos(radRy), sy_sin = (float) Math.sin(radRy);
+        float cz = (float) Math.cos(radRz), sz_sin = (float) Math.sin(radRz);
 
-        float m00 = (cy * cz + sy * sx * sz) * modelSx;
-        float m10 = (cx * sz) * modelSx;
-        float m20 = (-sy * cz + cy * sx * sz) * modelSx;
+        float m00 = (cy * cz + sy_sin * sx_sin * sz_sin) * sx;
+        float m10 = (cx * sz_sin) * sx;
+        float m20 = (-sy_sin * cz + cy * sx_sin * sz_sin) * sx;
 
-        float m01 = (-cy * sz + sy * sx * cz) * modelSy;
-        float m11 = (cx * cz) * modelSy;
-        float m21 = (sy * sz + cy * sx * cz) * modelSy;
+        float m01 = (-cy * sz_sin + sy_sin * sx_sin * cz) * sy;
+        float m11 = (cx * cz) * sy;
+        float m21 = (sy_sin * sz_sin + cy * sx_sin * cz) * sy;
 
-        float m02 = (sy * cx) * modelSz;
-        float m12 = (-sx) * modelSz;
-        float m22 = (cy * cx) * modelSz;
+        float m02 = (sy_sin * cx) * sz;
+        float m12 = (-sx_sin) * sz;
+        float m22 = (cy * cx) * sz;
 
         return new float[] {
             m00, m10, m20, 0.0f,
             m01, m11, m21, 0.0f,
             m02, m12, m22, 0.0f,
-            modelPx, modelPy, modelPz, 1.0f
+            px, py, pz, 1.0f
         };
     }
 
@@ -217,10 +238,10 @@ public class MetalBackend implements IRenderBackend {
         return multiplyMat4(P, V);
     }
 
-    private float[] create3DMVPMatrix(float aspect) {
+    private float[] create3DMVPMatrix(float aspect, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
         float[] P = createPerspectiveMatrix(aspect);
         float[] V = createCameraViewMatrix();
-        float[] M = createModelMatrix();
+        float[] M = createModelMatrix(px, py, pz, rx, ry, rz, sx, sy, sz);
         float[] VM = multiplyMat4(V, M);
         return multiplyMat4(P, VM);
     }
@@ -235,7 +256,6 @@ public class MetalBackend implements IRenderBackend {
 
         float aspect = 1280.0f / 720.0f;
         float[] mvpGrid = createGridMVPMatrix(aspect);
-        float[] mvpModel = create3DMVPMatrix(aspect);
 
         long pGridContents = invokePPP(uniformBufferGrid, sel_registerName("contents"), send);
         if (pGridContents != 0L) {
@@ -243,14 +263,6 @@ public class MetalBackend implements IRenderBackend {
             fb.clear();
             fb.put(mvpGrid);
             MemoryUtil.memPutInt(pGridContents + 64L, 0); // Grid has no texture
-        }
-
-        long pModelContents = invokePPP(uniformBufferModel, sel_registerName("contents"), send);
-        if (pModelContents != 0L) {
-            FloatBuffer fb = MemoryUtil.memFloatBuffer(pModelContents, 16);
-            fb.clear();
-            fb.put(mvpModel);
-            MemoryUtil.memPutInt(pModelContents + 64L, metalTexture.getHasActiveTexture());
         }
 
         currentDrawable = invokePPP(metalLayer, sel_registerName("nextDrawable"), send);
@@ -289,23 +301,34 @@ public class MetalBackend implements IRenderBackend {
             invokePPPPPP(encoder, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 1L, 0L, (long) gridVertexCount, send); // 1L = MTLPrimitiveTypeLine
         }
 
-        // PASS 2: 3D Perspective Model Mesh (Triangles = 3L)
-        if (meshVertexBuffer != 0L && meshVertexCount > 0) {
+        // PASS 2: 3D Perspective Model Meshes (Triangles = 3L)
+        for (int i = 0; i < sceneQueue.size(); i++) {
+            RenderEntity item = sceneQueue.get(i);
+            long offset = i * 256L;
+
+            float[] mvpModel = create3DMVPMatrix(aspect, item.px, item.py, item.pz, item.rx, item.ry, item.rz, item.sx, item.sy, item.sz);
+
+            long pModelContents = invokePPP(uniformBufferModel, sel_registerName("contents"), send);
+            if (pModelContents != 0L) {
+                FloatBuffer fb = MemoryUtil.memFloatBuffer(pModelContents + offset, 16);
+                fb.clear();
+                fb.put(mvpModel);
+                MemoryUtil.memPutInt(pModelContents + offset + 64L, item.hasTexture ? 1 : 0);
+            }
+
             invokePPPP(encoder, sel_registerName("setRenderPipelineState:"), metalPipeline.getPipelineState3D(), send);
             invokePPPP(encoder, sel_registerName("setDepthStencilState:"), metalPipeline.getDepthStencilState3D(), send);
 
-            long texToBind = metalTexture.getBindableTexture();
-            if (texToBind != 0L) {
-                invokePPPPP(encoder, sel_registerName("setFragmentTexture:atIndex:"), texToBind, 0L, send);
-            }
+            long texToBind = (item.hasTexture && item.textureHandle != 0L) ? item.textureHandle : metalTexture.getBindableTexture();
+            invokePPPPP(encoder, sel_registerName("setFragmentTexture:atIndex:"), texToBind, 0L, send);
             if (metalTexture.getSamplerStateHandle() != 0L) {
                 invokePPPPP(encoder, sel_registerName("setFragmentSamplerState:atIndex:"), metalTexture.getSamplerStateHandle(), 0L, send);
             }
 
-            invokePPPPPP(encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), meshVertexBuffer, 0L, 0L, send);
-            invokePPPPPP(encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), uniformBufferModel, 0L, 1L, send);
-            invokePPPPPP(encoder, sel_registerName("setFragmentBuffer:offset:atIndex:"), uniformBufferModel, 0L, 1L, send);
-            invokePPPPPP(encoder, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, (long) meshVertexCount, send); // 3L = MTLPrimitiveTypeTriangle
+            invokePPPPPP(encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), item.vertexBufferHandle, 0L, 0L, send);
+            invokePPPPPP(encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), uniformBufferModel, offset, 1L, send);
+            invokePPPPPP(encoder, sel_registerName("setFragmentBuffer:offset:atIndex:"), uniformBufferModel, offset, 1L, send);
+            invokePPPPPP(encoder, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, (long) item.vertexCount, send); // 3L = MTLPrimitiveTypeTriangle
         }
 
         // PASS 3: 2D UI Overlay & Viewport Transform Gizmos
@@ -314,7 +337,7 @@ public class MetalBackend implements IRenderBackend {
             invokePPPP(encoder, sel_registerName("setDepthStencilState:"), metalPipeline.getDepthStencilStateUI(), send);
 
             invokePPPPPP(encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), uiVertexBuffer, 0L, 0L, send);
-            invokePPPPPP(encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), uniformBufferModel, 0L, 1L, send);
+            invokePPPPPP(encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), uniformBufferGrid, 0L, 1L, send);
             invokePPPPPP(encoder, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, (long) uiVertexCount, send);
         }
 
