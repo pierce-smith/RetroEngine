@@ -1,9 +1,8 @@
 package com.retro.engine;
 
+import com.retro.engine.content.AssetStreamingService;
 import com.retro.engine.content.mesh.ModelData;
-import com.retro.engine.content.mesh.ModelLoader;
 import com.retro.engine.content.texture.TextureData;
-import com.retro.engine.content.texture.TextureLoader;
 import com.retro.engine.editor.EditorPanelManager;
 import com.retro.engine.editor.EditorSelectionController;
 import com.retro.engine.editor.ViewportCameraController;
@@ -11,19 +10,15 @@ import com.retro.engine.host.GlfwWindow;
 import com.retro.engine.host.HostBackendLoader;
 import com.retro.engine.rhi.IRenderBackend;
 
-import java.util.HashMap;
-import java.util.Map;
-
 import static org.lwjgl.glfw.GLFW.*;
 
 public class Main {
-
-    private static final Map<String, ModelData> meshCache = new HashMap<>();
-    private static final Map<String, TextureData> textureCache = new HashMap<>();
+    private static final AssetStreamingService streamingService = new AssetStreamingService();
 
     public static void main(String[] args) {
         System.out.println("===========================================");
         System.out.println("  Retro Engine Shell - Visual Editor IDE   ");
+        System.out.println("  JDK 21+ Virtual Thread Asset Streaming   ");
         System.out.println("===========================================");
 
         GlfwWindow window = new GlfwWindow(1280, 720, "Retro Engine Editor & Runtime");
@@ -45,13 +40,11 @@ public class Main {
 
         IRenderBackend rhi = loader.getBackend();
 
-        // Drag and Drop ONLY ingests files into Asset Directory
         window.setOnFileDropListener(filePaths -> {
             editorManager.onFilesDropped(filePaths);
             System.out.println("[Asset Directory] Ingested " + filePaths.size() + " asset(s). Click assets to spawn or link.");
         });
 
-        // Mouse click listener: Forward press & release actions to both selection & camera controllers
         window.setOnMouseClickListener((mouseX, mouseY, button, action) -> {
             selectionController.handleMouseClick(mouseX, mouseY, button, action, editorManager);
             cameraController.onMouseButton(button, action, mouseX, mouseY);
@@ -69,7 +62,7 @@ public class Main {
         window.setOnScrollListener((xoffset, yoffset) -> cameraController.onScroll(yoffset));
 
         if (rhi.initialize(window.getWindowInfo())) {
-            System.out.println("[Engine] Running. Drag files to Ingest -> Click Asset Cards to Spawn or Link Texture.");
+            System.out.println("[Engine] Running. Virtual Thread Asset Streaming Enabled.");
             System.out.println("[Gizmo] Press 1/W(Translate) / 2/E(Rotate) / 3/R(Scale) to switch modes in Viewport.");
 
             long lastTime = System.nanoTime();
@@ -94,7 +87,6 @@ public class Main {
                 boolean isR = window.isKeyDown(GLFW_KEY_R);
                 if (window.isKeyDown(GLFW_KEY_F)) cameraController.reset();
 
-                // Quick Gizmo Mode Shortcuts: 1/W -> Move, 2/E -> Rotate, 3/R -> Scale
                 if (!isCtrlDown && !cameraController.isDraggingRmb() && !cameraController.isDraggingMmb()) {
                     if (is1 || isW) editorManager.setCurrentGizmoMode(EditorPanelManager.GizmoMode.TRANSLATE);
                     if (is2 || isE) editorManager.setCurrentGizmoMode(EditorPanelManager.GizmoMode.ROTATE);
@@ -103,7 +95,6 @@ public class Main {
 
                 cameraController.update(deltaTime, isW, isS, isA, isD, isQ, isE);
 
-                // Pass Camera Transform State to RHI & Editor Manager for 3D Projection
                 rhi.setCameraTransform(
                         cameraController.getPanX(),
                         cameraController.getPanY(),
@@ -121,17 +112,27 @@ public class Main {
 
                 editorManager.update(deltaTime);
 
-                // Clear & Submit All Active Scene Entities
+                // Step 4: Sync Virtual Thread async asset completions into main render cache
+                streamingService.processCompletedUploads();
+
                 rhi.clearSceneQueue();
 
                 for (EditorPanelManager.SceneEntity entity : editorManager.getSceneEntities()) {
                     if (entity.meshAssetPath != null) {
-                        ModelData model = meshCache.computeIfAbsent(entity.meshAssetPath, ModelLoader::loadModel);
+                        if (!streamingService.isMeshLoaded(entity.meshAssetPath)) {
+                            streamingService.requestModelAsync(entity.meshAssetPath);
+                        }
+
+                        if (entity.textureAssetPath != null && !streamingService.isTextureLoaded(entity.textureAssetPath)) {
+                            streamingService.requestTextureAsync(entity.textureAssetPath);
+                        }
+
+                        ModelData model = streamingService.getModel(entity.meshAssetPath);
 
                         byte[] pixels = null;
                         int texW = 0, texH = 0;
                         if (entity.textureAssetPath != null) {
-                            TextureData tex = textureCache.computeIfAbsent(entity.textureAssetPath, TextureLoader::loadTexture);
+                            TextureData tex = streamingService.getTexture(entity.textureAssetPath);
                             if (tex != null) {
                                 pixels = tex.pixels;
                                 texW = tex.width;
@@ -162,6 +163,7 @@ public class Main {
                 rhi.present();
             }
 
+            streamingService.shutdown();
             rhi.shutdown();
         }
 
