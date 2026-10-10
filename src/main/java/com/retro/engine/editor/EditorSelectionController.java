@@ -9,7 +9,7 @@ import java.util.List;
 
 /**
  * EditorSelectionController handles panel region hit-testing, input routing, 3D Viewport Transform Gizmos,
- * and Inspector Panel direct field editing (click & drag to adjust POS, ROT, SCL coordinates).
+ * and Inspector Panel direct field editing.
  */
 public class EditorSelectionController {
 
@@ -119,25 +119,55 @@ public class EditorSelectionController {
         float ndcX = (float) (mouseX / 1280.0 * 2.0 - 1.0);
         float ndcY = (float) (1.0 - mouseY / 720.0 * 2.0);
 
-        float[] anchorNdc = manager.projectWorldToNdc(selected.transform.posX, selected.transform.posY, selected.transform.posZ);
-        float cx = Math.max(-0.50f, Math.min(0.50f, anchorNdc[0]));
-        float cy = Math.max(-0.40f, Math.min(0.75f, anchorNdc[1]));
+        float px = selected.transform.posX;
+        float py = selected.transform.posY;
+        float pz = selected.transform.posZ;
 
-        float len = 0.16f;
+        float[] p0 = manager.projectWorldToNdc(px, py, pz);
+        float cx = Math.max(-0.50f, Math.min(0.50f, p0[0]));
+        float cy = Math.max(-0.40f, Math.min(0.75f, p0[1]));
 
-        float xX = cx + len, xY = cy;
-        float yX = cx, yY = cy + len;
-        float zX = cx - len * 0.707f, zY = cy - len * 0.707f;
+        float axisLen = 0.8f;
+        float[] pX = manager.projectWorldToNdc(px + axisLen, py, pz);
+        float[] pY = manager.projectWorldToNdc(px, py + axisLen, pz);
+        float[] pZ = manager.projectWorldToNdc(px, py, pz + axisLen);
 
-        float distX = (ndcX - xX) * (ndcX - xX) + (ndcY - xY) * (ndcY - xY);
-        float distY = (ndcX - yX) * (ndcX - yX) + (ndcY - yY) * (ndcY - yY);
-        float distZ = (ndcX - zX) * (ndcX - zX) + (ndcY - zY) * (ndcY - zY);
+        float dxX = pX[0] - p0[0], dyX = pX[1] - p0[1];
+        float dxY = pY[0] - p0[0], dyY = pY[1] - p0[1];
+        float dxZ = pZ[0] - p0[0], dyZ = pZ[1] - p0[1];
 
-        float threshold = 0.012f;
+        float lenX = (float) Math.hypot(dxX, dyX);
+        float lenY = (float) Math.hypot(dxY, dyY);
+        float lenZ = (float) Math.hypot(dxZ, dyZ);
+
+        float handleVisualLen = 0.14f;
+
+        float dirXX = lenX > 0.0001f ? (dxX / lenX) * handleVisualLen : handleVisualLen;
+        float dirXY = lenX > 0.0001f ? (dyX / lenX) * handleVisualLen : 0.0f;
+
+        float dirYX = lenY > 0.0001f ? (dxY / lenY) * handleVisualLen : 0.0f;
+        float dirYY = lenY > 0.0001f ? (dyY / lenY) * handleVisualLen : handleVisualLen;
+
+        float dirZX = lenZ > 0.0001f ? (dxZ / lenZ) * handleVisualLen : -handleVisualLen * 0.707f;
+        float dirZY = lenZ > 0.0001f ? (dyZ / lenZ) * handleVisualLen : -handleVisualLen * 0.707f;
+
+        float xTipX = cx + dirXX, xTipY = cy + dirXY;
+        float yTipX = cx + dirYX, yTipY = cy + dirYY;
+        float zTipX = cx + dirZX, zTipY = cy + dirZY;
+
+        float distX = (ndcX - xTipX) * (ndcX - xTipX) + (ndcY - xTipY) * (ndcY - xTipY);
+        float distY = (ndcX - yTipX) * (ndcX - yTipX) + (ndcY - yTipY) * (ndcY - yTipY);
+        float distZ = (ndcX - zTipX) * (ndcX - zTipX) + (ndcY - zTipY) * (ndcY - zTipY);
+
+        float distSegX = distToSegment(ndcX, ndcY, cx, cy, xTipX, xTipY);
+        float distSegY = distToSegment(ndcX, ndcY, cx, cy, yTipX, yTipY);
+        float distSegZ = distToSegment(ndcX, ndcY, cx, cy, zTipX, zTipY);
+
+        float threshold = 0.0015f;
 
         if (manager.getCurrentGizmoMode() == GizmoMode.ROTATE) {
             float distCenter = (float) Math.sqrt((ndcX - cx) * (ndcX - cx) + (ndcY - cy) * (ndcY - cy));
-            if (Math.abs(distCenter - 0.15f) < 0.05f) {
+            if (Math.abs(distCenter - 0.14f) < 0.05f) {
                 if (Math.abs(ndcX - cx) < 0.06f) {
                     manager.setActiveGizmoAxis(GizmoAxis.X);
                     System.out.println("[Gizmo] Grabbed RED X Pitch Arc.");
@@ -146,22 +176,35 @@ public class EditorSelectionController {
                     System.out.println("[Gizmo] Grabbed GREEN Y Yaw Arc.");
                 } else {
                     manager.setActiveGizmoAxis(GizmoAxis.Z);
-                    System.out.println("[Gizmo] Grabbed PURPLE Z Roll Outer Ring.");
+                    System.out.println("[Gizmo] Grabbed BLUE Z Roll Outer Ring.");
                 }
                 lastAngle = Math.atan2(ndcY - cy, ndcX - cx);
             }
         } else {
-            if (distX < threshold) {
+            if (distSegX < 0.03f || distX < threshold) {
                 manager.setActiveGizmoAxis(GizmoAxis.X);
                 System.out.println("[Gizmo] Grabbed RED X Axis Handle.");
-            } else if (distY < threshold) {
+            } else if (distSegY < 0.03f || distY < threshold) {
                 manager.setActiveGizmoAxis(GizmoAxis.Y);
                 System.out.println("[Gizmo] Grabbed GREEN Y Axis Handle.");
-            } else if (distZ < threshold) {
+            } else if (distSegZ < 0.03f || distZ < threshold) {
                 manager.setActiveGizmoAxis(GizmoAxis.Z);
-                System.out.println("[Gizmo] Grabbed PURPLE Z Axis Handle.");
+                System.out.println("[Gizmo] Grabbed BLUE Z Axis Handle.");
             }
         }
+    }
+
+    private float distToSegment(float px, float py, float x1, float y1, float x2, float y2) {
+        float dx = x2 - x1;
+        float dy = y2 - y1;
+        if (dx == 0.0f && dy == 0.0f) {
+            return (float) Math.hypot(px - x1, py - y1);
+        }
+        float t = ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy);
+        t = Math.max(0.0f, Math.min(1.0f, t));
+        float projX = x1 + t * dx;
+        float projY = y1 + t * dy;
+        return (float) Math.hypot(px - projX, py - projY);
     }
 
     public boolean onCursorPos(double mouseX, double mouseY, EditorPanelManager manager) {
@@ -207,25 +250,56 @@ public class EditorSelectionController {
             float ndcX = (float) (mouseX / 1280.0 * 2.0 - 1.0);
             float ndcY = (float) (1.0 - mouseY / 720.0 * 2.0);
 
-            float[] anchorNdc = activeManager.projectWorldToNdc(selected.transform.posX, selected.transform.posY, selected.transform.posZ);
-            float cx = Math.max(-0.50f, Math.min(0.50f, anchorNdc[0]));
-            float cy = Math.max(-0.40f, Math.min(0.75f, anchorNdc[1]));
+            float px = selected.transform.posX;
+            float py = selected.transform.posY;
+            float pz = selected.transform.posZ;
 
-            if (mode == GizmoMode.TRANSLATE) {
-                float speed = 0.02f;
-                switch (axis) {
-                    case X -> selected.transform.posX += (float) dx * speed;
-                    case Y -> selected.transform.posY -= (float) dy * speed;
-                    case Z -> selected.transform.posZ += (float) (dx - dy) * speed;
-                    default -> {}
-                }
-            } else if (mode == GizmoMode.SCALE) {
-                float speed = 0.02f;
-                switch (axis) {
-                    case X -> selected.transform.scaleX = Math.max(0.1f, selected.transform.scaleX + (float) dx * speed);
-                    case Y -> selected.transform.scaleY = Math.max(0.1f, selected.transform.scaleY - (float) dy * speed);
-                    case Z -> selected.transform.scaleZ = Math.max(0.1f, selected.transform.scaleZ + (float) (dx - dy) * speed);
-                    default -> {}
+            float[] p0 = activeManager.projectWorldToNdc(px, py, pz);
+            float cx = Math.max(-0.50f, Math.min(0.50f, p0[0]));
+            float cy = Math.max(-0.40f, Math.min(0.75f, p0[1]));
+
+            if (mode == GizmoMode.TRANSLATE || mode == GizmoMode.SCALE) {
+                float axisLen = 0.8f;
+                float[] pX = activeManager.projectWorldToNdc(px + axisLen, py, pz);
+                float[] pY = activeManager.projectWorldToNdc(px, py + axisLen, pz);
+                float[] pZ = activeManager.projectWorldToNdc(px, py, pz + axisLen);
+
+                float dxX = pX[0] - p0[0], dyX = pX[1] - p0[1];
+                float dxY = pY[0] - p0[0], dyY = pY[1] - p0[1];
+                float dxZ = pZ[0] - p0[0], dyZ = pZ[1] - p0[1];
+
+                float lenX = (float) Math.hypot(dxX, dyX);
+                float lenY = (float) Math.hypot(dxY, dyY);
+                float lenZ = (float) Math.hypot(dxZ, dyZ);
+
+                float uXX = lenX > 0.0001f ? (dxX / lenX) : 1.0f;
+                float uXY = lenX > 0.0001f ? (dyX / lenX) : 0.0f;
+
+                float uYX = lenY > 0.0001f ? (dxY / lenY) : 0.0f;
+                float uYY = lenY > 0.0001f ? (dyY / lenY) : 1.0f;
+
+                float uZX = lenZ > 0.0001f ? (dxZ / lenZ) : -0.707f;
+                float uZY = lenZ > 0.0001f ? (dyZ / lenZ) : -0.707f;
+
+                float ndcDx = (float) (dx / 1280.0 * 2.0);
+                float ndcDy = (float) (-dy / 720.0 * 2.0);
+
+                if (mode == GizmoMode.TRANSLATE) {
+                    float speed = 2.5f;
+                    switch (axis) {
+                        case X -> selected.transform.posX += (ndcDx * uXX + ndcDy * uXY) * speed;
+                        case Y -> selected.transform.posY += (ndcDx * uYX + ndcDy * uYY) * speed;
+                        case Z -> selected.transform.posZ += (ndcDx * uZX + ndcDy * uZY) * speed;
+                        default -> {}
+                    }
+                } else if (mode == GizmoMode.SCALE) {
+                    float speed = 2.5f;
+                    switch (axis) {
+                        case X -> selected.transform.scaleX = Math.max(0.1f, selected.transform.scaleX + (ndcDx * uXX + ndcDy * uXY) * speed);
+                        case Y -> selected.transform.scaleY = Math.max(0.1f, selected.transform.scaleY + (ndcDx * uYX + ndcDy * uYY) * speed);
+                        case Z -> selected.transform.scaleZ = Math.max(0.1f, selected.transform.scaleZ + (ndcDx * uZX + ndcDy * uZY) * speed);
+                        default -> {}
+                    }
                 }
             } else if (mode == GizmoMode.ROTATE) {
                 double currentAngle = Math.atan2(ndcY - cy, ndcX - cx);

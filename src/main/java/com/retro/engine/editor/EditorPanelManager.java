@@ -6,8 +6,8 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * EditorPanelManager handles the 4-panel layout state for the Retro Engine Editor.
- * Includes Unity-style 3D Perspective Ground Grid, Viewport Transform Gizmos,
+ * EditorPanelManager orchestrates the editor panel layout and state for the Retro Engine Editor.
+ * Includes 3D Perspective Ground Grid, 3D Projected Viewport Transform Gizmos,
  * and Viewport Toolbar Switcher.
  */
 public class EditorPanelManager {
@@ -63,14 +63,15 @@ public class EditorPanelManager {
     private GizmoMode currentGizmoMode = GizmoMode.TRANSLATE;
     private GizmoAxis activeGizmoAxis = GizmoAxis.NONE;
 
-    private float camPanX = 0.0f, camPanY = 0.25f, camZoom = -5.0f, camPitch = 0.0f, camYaw = 0.0f;
-
     private float[] cached3DGridVertices = new float[0];
     private float[] cachedUiVertices = new float[0];
 
-    public EditorPanelManager() {}
-
-    public void update(float deltaTime) {}
+    // Camera Transform State for 3D Viewport Projection
+    private float camPanX = 0.0f;
+    private float camPanY = -1.2f;
+    private float camZoom = -8.5f;
+    private float camPitch = 22.0f;
+    private float camYaw = -35.0f;
 
     public void setCameraState(float panX, float panY, float zoom, float pitch, float yaw) {
         this.camPanX = panX;
@@ -106,6 +107,10 @@ public class EditorPanelManager {
 
         return new float[] { ndcX, ndcY };
     }
+
+    public EditorPanelManager() {}
+
+    public void update(float deltaTime) {}
 
     public float[] get3DGridVertices() {
         if (cached3DGridVertices == null || cached3DGridVertices.length == 0) {
@@ -225,20 +230,116 @@ public class EditorPanelManager {
     public float[] generateUiVertices() {
         List<Float> verts = new ArrayList<>();
 
+        // 1. Scene Hierarchy Panel
         SceneHierarchyPanel.render(verts, sceneEntities);
+
+        // 2. Inspector Panel
         InspectorPanel.render(verts, selectedEntity, assetDirectory);
+
+        // 3. Asset Directory Panel
         AssetDirectoryPanel.render(verts, assetDirectory);
+
+        // 4. Center Viewport Framing, Toolbar & Gizmos
         ViewportPanel.renderFraming(verts);
         ViewportPanel.renderToolbar(verts, currentGizmoMode);
 
         if (selectedEntity != null) {
-            float[] anchorNdc = projectWorldToNdc(selectedEntity.transform.posX, selectedEntity.transform.posY, selectedEntity.transform.posZ);
-            ViewportPanel.renderGizmos(verts, selectedEntity, currentGizmoMode, activeGizmoAxis, anchorNdc);
+            render3DGizmos(verts, selectedEntity, currentGizmoMode, activeGizmoAxis);
         }
 
         float[] array = new float[verts.size()];
         for (int i = 0; i < verts.size(); i++) array[i] = verts.get(i);
         return array;
+    }
+
+    private void render3DGizmos(List<Float> verts, SceneEntity entity, GizmoMode mode, GizmoAxis activeAxis) {
+        float px = entity.transform.posX;
+        float py = entity.transform.posY;
+        float pz = entity.transform.posZ;
+
+        float[] p0 = projectWorldToNdc(px, py, pz);
+        float cx = Math.max(-0.50f, Math.min(0.50f, p0[0]));
+        float cy = Math.max(-0.40f, Math.min(0.75f, p0[1]));
+
+        float axisLen = 0.8f;
+        float[] pX = projectWorldToNdc(px + axisLen, py, pz);
+        float[] pY = projectWorldToNdc(px, py + axisLen, pz);
+        float[] pZ = projectWorldToNdc(px, py, pz + axisLen);
+
+        float dxX = pX[0] - p0[0], dyX = pX[1] - p0[1];
+        float dxY = pY[0] - p0[0], dyY = pY[1] - p0[1];
+        float dxZ = pZ[0] - p0[0], dyZ = pZ[1] - p0[1];
+
+        float lenX = (float) Math.hypot(dxX, dyX);
+        float lenY = (float) Math.hypot(dxY, dyY);
+        float lenZ = (float) Math.hypot(dxZ, dyZ);
+
+        float handleVisualLen = 0.14f;
+
+        float dirXX = lenX > 0.0001f ? (dxX / lenX) * handleVisualLen : handleVisualLen;
+        float dirXY = lenX > 0.0001f ? (dyX / lenX) * handleVisualLen : 0.0f;
+
+        float dirYX = lenY > 0.0001f ? (dxY / lenY) * handleVisualLen : 0.0f;
+        float dirYY = lenY > 0.0001f ? (dyY / lenY) * handleVisualLen : handleVisualLen;
+
+        float dirZX = lenZ > 0.0001f ? (dxZ / lenZ) * handleVisualLen : -handleVisualLen * 0.707f;
+        float dirZY = lenZ > 0.0001f ? (dyZ / lenZ) * handleVisualLen : -handleVisualLen * 0.707f;
+
+        float xTipX = cx + dirXX, xTipY = cy + dirXY;
+        float yTipX = cx + dirYX, yTipY = cy + dirYY;
+        float zTipX = cx + dirZX, zTipY = cy + dirZY;
+
+        // Center Origin Quad
+        UIBatchBuilder.addSquareEnd(verts, cx, cy, 0.02f, 0.9f, 0.9f, 0.9f, 1.0f);
+
+        // Highlight Colors
+        float rx = 1.0f, rg = 0.25f, rb = 0.25f; // RED
+        float gx = 0.25f, gg = 1.0f, gb = 0.25f; // GREEN
+        float bx = 0.25f, bg = 0.55f, bb = 1.0f; // BLUE
+
+        if (activeAxis == GizmoAxis.X) { rx = 1.0f; rg = 0.9f; rb = 0.2f; }
+        if (activeAxis == GizmoAxis.Y) { gx = 0.2f; gg = 1.0f; gb = 0.9f; }
+        if (activeAxis == GizmoAxis.Z) { bx = 0.9f; bg = 0.2f; bb = 1.0f; }
+
+        float lineThick = 0.006f;
+
+        if (mode == GizmoMode.TRANSLATE) {
+            // RED X AXIS
+            UIBatchBuilder.addLineSegment(verts, cx, cy, xTipX, xTipY, lineThick, rx, rg, rb, 1.0f);
+            UIBatchBuilder.addArrowhead(verts, xTipX, xTipY, dirXX, dirXY, 0.03f, 0.015f, rx, rg, rb, 1.0f);
+            UIBatchBuilder.addBoundedText(verts, "X", xTipX + dirXX * 0.15f, xTipY + dirXY * 0.15f, xTipX + dirXX * 0.15f + 0.04f, 1.1f, rx, rg, rb, 1.0f);
+
+            // GREEN Y AXIS
+            UIBatchBuilder.addLineSegment(verts, cx, cy, yTipX, yTipY, lineThick, gx, gg, gb, 1.0f);
+            UIBatchBuilder.addArrowhead(verts, yTipX, yTipY, dirYX, dirYY, 0.03f, 0.015f, gx, gg, gb, 1.0f);
+            UIBatchBuilder.addBoundedText(verts, "Y", yTipX + dirYX * 0.15f, yTipY + dirYY * 0.15f, yTipX + dirYX * 0.15f + 0.04f, 1.1f, gx, gg, gb, 1.0f);
+
+            // BLUE Z AXIS
+            UIBatchBuilder.addLineSegment(verts, cx, cy, zTipX, zTipY, lineThick, bx, bg, bb, 1.0f);
+            UIBatchBuilder.addArrowhead(verts, zTipX, zTipY, dirZX, dirZY, 0.03f, 0.015f, bx, bg, bb, 1.0f);
+            UIBatchBuilder.addBoundedText(verts, "Z", zTipX + dirZX * 0.15f, zTipY + dirZY * 0.15f, zTipX + dirZX * 0.15f + 0.04f, 1.1f, bx, bg, bb, 1.0f);
+
+        } else if (mode == GizmoMode.SCALE) {
+            // RED X SCALE
+            UIBatchBuilder.addLineSegment(verts, cx, cy, xTipX, xTipY, lineThick, rx, rg, rb, 1.0f);
+            UIBatchBuilder.addSquareEnd(verts, xTipX, xTipY, 0.024f, rx, rg, rb, 1.0f);
+
+            // GREEN Y SCALE
+            UIBatchBuilder.addLineSegment(verts, cx, cy, yTipX, yTipY, lineThick, gx, gg, gb, 1.0f);
+            UIBatchBuilder.addSquareEnd(verts, yTipX, yTipY, 0.024f, gx, gg, gb, 1.0f);
+
+            // BLUE Z SCALE
+            UIBatchBuilder.addLineSegment(verts, cx, cy, zTipX, zTipY, lineThick, bx, bg, bb, 1.0f);
+            UIBatchBuilder.addSquareEnd(verts, zTipX, zTipY, 0.024f, bx, bg, bb, 1.0f);
+
+        } else if (mode == GizmoMode.ROTATE) {
+            // RED PITCH ARC
+            UIBatchBuilder.addArcRing(verts, cx, cy, 0.05f, 0.14f, -90.0f, 90.0f, lineThick, rx, rg, rb, 1.0f);
+            // GREEN YAW ARC
+            UIBatchBuilder.addArcRing(verts, cx, cy, 0.14f, 0.05f, 0.0f, 180.0f, lineThick, gx, gg, gb, 1.0f);
+            // BLUE ROLL ARC
+            UIBatchBuilder.addArcRing(verts, cx, cy, 0.14f, 0.14f, 0.0f, 360.0f, lineThick + 0.002f, bx, bg, bb, 1.0f);
+        }
     }
 
     private AssetType resolveAssetType(String extension) {
