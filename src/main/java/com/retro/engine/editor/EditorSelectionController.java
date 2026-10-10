@@ -2,16 +2,17 @@ package com.retro.engine.editor;
 
 import com.retro.engine.ecs.components.TransformComponent;
 import com.retro.engine.editor.EditorPanelManager.AssetEntry;
+import com.retro.engine.editor.EditorPanelManager.DropdownMenu;
 import com.retro.engine.editor.EditorPanelManager.GizmoAxis;
 import com.retro.engine.editor.EditorPanelManager.GizmoMode;
 import com.retro.engine.editor.EditorPanelManager.SceneEntity;
+import com.retro.engine.editor.commands.TransformCommand;
 
 import java.util.List;
 
 /**
- * EditorSelectionController handles panel region hit-testing, input routing, 3D Viewport Transform Gizmos,
- * Top Bar File controls, and Inspector Panel direct field editing.
- * Updated: Accurate hitboxes for X (Pitch), Y (Yaw), and Z (Roll) Rotate Gizmo rings.
+ * EditorSelectionController routes mouse input to Top Bar Dropdown Menus,
+ * 3D Viewport Transform Gizmos, Inspector Fields, and captures Transform edits for Undo/Redo.
  */
 public class EditorSelectionController {
     public enum PanelType { TOP_BAR, SCENE_HIERARCHY, VIEWPORT_3D, INSPECTOR, ASSET_DIRECTORY, NONE }
@@ -22,12 +23,19 @@ public class EditorSelectionController {
     public static final float BOTTOM_PANEL_HEIGHT = 200.0f;
 
     private EditorPanelManager panelManager;
+    private ViewportCameraController cameraController;
 
     private double lastMouseX = 0.0;
     private double lastMouseY = 0.0;
     private double lastAngle = 0.0;
 
     private InspectorField activeInspectorField = InspectorField.NONE;
+
+    // Transform Undo capture snapshots
+    private SceneEntity transformDragEntity = null;
+    private float startPx, startPy, startPz;
+    private float startRx, startRy, startRz;
+    private float startSx, startSy, startSz;
 
     public EditorSelectionController() { this(null); }
 
@@ -39,13 +47,51 @@ public class EditorSelectionController {
         this.panelManager = panelManager;
     }
 
+    public void setCameraController(ViewportCameraController cameraController) {
+        this.cameraController = cameraController;
+    }
+
+    private void captureTransformStart(SceneEntity entity) {
+        if (entity == null) return;
+        this.transformDragEntity = entity;
+        TransformComponent tc = entity.getTransform();
+        this.startPx = tc.posX; this.startPy = tc.posY; this.startPz = tc.posZ;
+        this.startRx = tc.rotX; this.startRy = tc.rotY; this.startRz = tc.rotZ;
+        this.startSx = tc.scaleX; this.startSy = tc.scaleY; this.startSz = tc.scaleZ;
+    }
+
+    private void checkAndPushTransformEnd() {
+        if (transformDragEntity != null) {
+            TransformComponent tc = transformDragEntity.getTransform();
+            boolean changed = (tc.posX != startPx || tc.posY != startPy || tc.posZ != startPz ||
+                               tc.rotX != startRx || tc.rotY != startRy || tc.rotZ != startRz ||
+                               tc.scaleX != startSx || tc.scaleY != startSy || tc.scaleZ != startSz);
+
+            if (changed && panelManager != null) {
+                TransformCommand cmd = new TransformCommand(
+                        transformDragEntity,
+                        startPx, startPy, startPz,
+                        startRx, startRy, startRz,
+                        startSx, startSy, startSz,
+                        tc.posX, tc.posY, tc.posZ,
+                        tc.rotX, tc.rotY, tc.rotZ,
+                        tc.scaleX, tc.scaleY, tc.scaleZ
+                );
+                panelManager.getCommandHistory().executeCommand(cmd);
+            }
+            transformDragEntity = null;
+        }
+    }
+
     public void onMouseRelease() {
         if (panelManager != null && panelManager.getActiveGizmoAxis() != GizmoAxis.NONE) {
             System.out.println("[Gizmo] Released Axis Drag.");
+            checkAndPushTransformEnd();
             panelManager.setActiveGizmoAxis(GizmoAxis.NONE);
         }
         if (activeInspectorField != InspectorField.NONE) {
             System.out.println("[Inspector] Released Field Edit.");
+            checkAndPushTransformEnd();
             activeInspectorField = InspectorField.NONE;
         }
     }
@@ -70,9 +116,18 @@ public class EditorSelectionController {
         EditorPanelManager activeManager = manager != null ? manager : this.panelManager;
         if (activeManager == null) return;
 
-        PanelType clickedPanel = hitTest(mouseX, mouseY, 1280.0f, 720.0f);
-
         if (action == 1) { // GLFW_PRESS
+            DropdownMenu activeMenu = activeManager.getActiveDropdownMenu();
+
+            // If a dropdown menu is open, test clicks inside dropdown items first
+            if (activeMenu != DropdownMenu.NONE) {
+                boolean handled = processDropdownOverlayClick(mouseX, mouseY, activeMenu, activeManager);
+                activeManager.setActiveDropdownMenu(DropdownMenu.NONE);
+                if (handled) return;
+            }
+
+            PanelType clickedPanel = hitTest(mouseX, mouseY, 1280.0f, 720.0f);
+
             switch (clickedPanel) {
                 case TOP_BAR -> processTopBarClick(mouseX, mouseY, activeManager);
                 case SCENE_HIERARCHY -> processHierarchyClick(mouseY, activeManager);
@@ -94,16 +149,71 @@ public class EditorSelectionController {
     }
 
     private void processTopBarClick(double mouseX, double mouseY, EditorPanelManager manager) {
-        // [OPEN SCENE] Button (X: 240 to 370, Y: 0 to 30)
-        if (mouseX >= 240.0 && mouseX <= 370.0) {
-            System.out.println("[Top Bar] Clicked OPEN SCENE -> Launching Native File Dialog...");
-            manager.promptOpenSceneWithNativeDialog();
+        // FILE Menu Button (X: 180 to 240)
+        if (mouseX >= 170.0 && mouseX <= 245.0) {
+            DropdownMenu next = (manager.getActiveDropdownMenu() == DropdownMenu.FILE) ? DropdownMenu.NONE : DropdownMenu.FILE;
+            manager.setActiveDropdownMenu(next);
         }
-        // [SAVE SCENE] Button (X: 385 to 510, Y: 0 to 30)
-        else if (mouseX >= 385.0 && mouseX <= 510.0) {
-            System.out.println("[Top Bar] Clicked SAVE SCENE -> Launching Native File Save Dialog...");
-            manager.promptSaveSceneWithNativeDialog();
+        // EDIT Menu Button (X: 250 to 310)
+        else if (mouseX >= 250.0 && mouseX <= 315.0) {
+            DropdownMenu next = (manager.getActiveDropdownMenu() == DropdownMenu.EDIT) ? DropdownMenu.NONE : DropdownMenu.EDIT;
+            manager.setActiveDropdownMenu(next);
         }
+        // ENTITY Menu Button (X: 320 to 395)
+        else if (mouseX >= 320.0 && mouseX <= 395.0) {
+            DropdownMenu next = (manager.getActiveDropdownMenu() == DropdownMenu.ENTITY) ? DropdownMenu.NONE : DropdownMenu.ENTITY;
+            manager.setActiveDropdownMenu(next);
+        }
+        // VIEW Menu Button (X: 400 to 465)
+        else if (mouseX >= 400.0 && mouseX <= 465.0) {
+            DropdownMenu next = (manager.getActiveDropdownMenu() == DropdownMenu.VIEW) ? DropdownMenu.NONE : DropdownMenu.VIEW;
+            manager.setActiveDropdownMenu(next);
+        }
+    }
+
+    private boolean processDropdownOverlayClick(double mouseX, double mouseY, DropdownMenu menu, EditorPanelManager manager) {
+        double minX = switch (menu) {
+            case FILE -> 175.0;
+            case EDIT -> 250.0;
+            case ENTITY -> 320.0;
+            case VIEW -> 400.0;
+            default -> 175.0;
+        };
+        double maxX = minX + 210.0;
+
+        if (mouseX >= minX && mouseX <= maxX && mouseY >= 30.0 && mouseY <= 180.0) {
+            int itemIndex = (int) ((mouseY - 30.0) / 32.0);
+
+            switch (menu) {
+                case FILE -> {
+                    if (itemIndex == 0) manager.newScene();
+                    else if (itemIndex == 1) manager.promptOpenSceneWithNativeDialog();
+                    else if (itemIndex == 2) manager.promptSaveSceneWithNativeDialog();
+                }
+                case EDIT -> {
+                    if (itemIndex == 0) manager.undo();
+                    else if (itemIndex == 1) manager.redo();
+                    else if (itemIndex == 2) manager.deleteSelectedEntity();
+                }
+                case ENTITY -> {
+                    if (itemIndex == 0) manager.spawnDefaultCube();
+                    else if (itemIndex == 1) manager.spawnLightSource();
+                }
+                case VIEW -> {
+                    if (itemIndex == 0) {
+                        if (cameraController != null) {
+                            cameraController.reset();
+                            System.out.println("[View Menu] Reset Viewport Camera.");
+                        }
+                    } else if (itemIndex == 1) {
+                        manager.toggle3DGrid();
+                    }
+                }
+                default -> {}
+            }
+            return true;
+        }
+        return false;
     }
 
     private boolean processViewportToolbarClick(double mouseX, double mouseY, EditorPanelManager manager) {
@@ -175,51 +285,42 @@ public class EditorSelectionController {
 
             double threshold = 0.045;
 
-            if (distToX < threshold && distToX <= distToY && distToX <= distToZ) {
-                manager.setActiveGizmoAxis(GizmoAxis.X);
-                System.out.println("[Gizmo] Grabbed X Axis Handle.");
-            } else if (distToY < threshold && distToY <= distToX && distToY <= distToZ) {
-                manager.setActiveGizmoAxis(GizmoAxis.Y);
-                System.out.println("[Gizmo] Grabbed Y Axis Handle.");
-            } else if (distToZ < threshold && distToZ <= distToX && distToZ <= distToY) {
-                manager.setActiveGizmoAxis(GizmoAxis.Z);
-                System.out.println("[Gizmo] Grabbed Z Axis Handle.");
+            GizmoAxis grabbed = GizmoAxis.NONE;
+            if (distToX < threshold && distToX <= distToY && distToX <= distToZ) grabbed = GizmoAxis.X;
+            else if (distToY < threshold && distToY <= distToX && distToY <= distToZ) grabbed = GizmoAxis.Y;
+            else if (distToZ < threshold && distToZ <= distToX && distToZ <= distToY) grabbed = GizmoAxis.Z;
+
+            if (grabbed != GizmoAxis.NONE) {
+                manager.setActiveGizmoAxis(grabbed);
+                captureTransformStart(selected);
+                System.out.println("[Gizmo] Grabbed " + grabbed + " Axis Handle.");
             }
         } else if (mode == GizmoMode.ROTATE) {
-            float rxR = 0.05f, ryR = 0.14f; // Red arc (X - Pitch)
-            float gxR = 0.14f, gyR = 0.05f; // Green arc (Y - Yaw)
-            float zRadius = 0.14f;           // Blue circle (Z - Roll)
+            double rxNorm = 0.05, ryNorm = 0.14;
+            double dxNormX = (ndcX - cx) / rxNorm;
+            double dyNormX = (ndcY - cy) / ryNorm;
+            double distEllipseX = Math.abs(Math.hypot(dxNormX, dyNormX) - 1.0);
 
-            // Distance error for X Pitch Ellipse Arc (Right half: ndcX >= cx - 0.02)
-            float dxX = (ndcX - cx) / rxR;
-            float dyX = (ndcY - cy) / ryR;
-            float distX = (float) Math.hypot(dxX, dyX);
-            float errX = Math.abs(distX - 1.0f);
-            boolean validX = (errX < 0.35f) && (ndcX >= cx - 0.02f);
+            double gxNorm = 0.14, gyNorm = 0.05;
+            double dxNormY = (ndcX - cx) / gxNorm;
+            double dyNormY = (ndcY - cy) / gyNorm;
+            double distEllipseY = Math.abs(Math.hypot(dxNormY, dyNormY) - 1.0);
 
-            // Distance error for Y Yaw Ellipse Arc (Upper half: ndcY >= cy - 0.02)
-            float dxY = (ndcX - cx) / gxR;
-            float dyY = (ndcY - cy) / gyR;
-            float distY = (float) Math.hypot(dxY, dyY);
-            float errY = Math.abs(distY - 1.0f);
-            boolean validY = (errY < 0.35f) && (ndcY >= cy - 0.02f);
+            double distToCenter = Math.hypot(ndcX - cx, ndcY - cy);
+            double distCircleZ = Math.abs(distToCenter - 0.14);
 
-            // Distance error for Z Roll Circle (Full ring)
-            float distZ = (float) Math.hypot(ndcX - cx, ndcY - cy);
-            float errZ = Math.abs(distZ - zRadius) / zRadius;
-            boolean validZ = Math.abs(distZ - zRadius) < 0.035f;
+            double thresh = 0.35;
+            GizmoAxis grabbed = GizmoAxis.NONE;
 
-            GizmoAxis chosen = GizmoAxis.NONE;
-            float minErr = 999.0f;
+            if (distEllipseX < thresh && distEllipseX <= distEllipseY && distEllipseX <= distCircleZ) grabbed = GizmoAxis.X;
+            else if (distEllipseY < thresh && distEllipseY <= distEllipseX && distEllipseY <= distCircleZ) grabbed = GizmoAxis.Y;
+            else if (distCircleZ < 0.05) grabbed = GizmoAxis.Z;
 
-            if (validX && errX < minErr) { minErr = errX; chosen = GizmoAxis.X; }
-            if (validY && errY < minErr) { minErr = errY; chosen = GizmoAxis.Y; }
-            if (validZ && errZ < minErr) { minErr = errZ; chosen = GizmoAxis.Z; }
-
-            if (chosen != GizmoAxis.NONE) {
-                manager.setActiveGizmoAxis(chosen);
+            if (grabbed != GizmoAxis.NONE) {
+                manager.setActiveGizmoAxis(grabbed);
+                captureTransformStart(selected);
                 lastAngle = Math.atan2(ndcY - cy, ndcX - cx);
-                System.out.println("[Gizmo] Grabbed " + chosen + " Rotate Ring.");
+                System.out.println("[Gizmo] Grabbed Rotate " + grabbed + " Arc.");
             }
         }
     }
@@ -328,20 +429,20 @@ public class EditorSelectionController {
                     }
                 }
             } else if (mode == GizmoMode.ROTATE) {
+                double currentAngle = Math.atan2(ndcY - cy, ndcX - cx);
+                double deltaAngle = Math.toDegrees(currentAngle - lastAngle);
+
+                if (deltaAngle > 180.0) deltaAngle -= 360.0;
+                if (deltaAngle < -180.0) deltaAngle += 360.0;
+
                 float rotSpeed = 0.8f;
                 switch (axis) {
-                    case X -> tc.rotX -= (float) dy * rotSpeed;
+                    case X -> tc.rotX += (float) dy * rotSpeed;
                     case Y -> tc.rotY += (float) dx * rotSpeed;
-                    case Z -> {
-                        double currentAngle = Math.atan2(ndcY - cy, ndcX - cx);
-                        double deltaAngle = Math.toDegrees(currentAngle - lastAngle);
-                        if (deltaAngle > 180.0) deltaAngle -= 360.0;
-                        if (deltaAngle < -180.0) deltaAngle += 360.0;
-                        tc.rotZ += (float) deltaAngle * rotSpeed;
-                        lastAngle = currentAngle;
-                    }
+                    case Z -> tc.rotZ += (float) deltaAngle * rotSpeed;
                     default -> {}
                 }
+                lastAngle = currentAngle;
             }
             return true;
         }
@@ -388,6 +489,7 @@ public class EditorSelectionController {
                     case 1 -> InspectorField.POS_Y;
                     default -> InspectorField.POS_Z;
                 };
+                captureTransformStart(active);
                 System.out.println("[Inspector] Grabbed Position " + (axis == 0 ? "X" : axis == 1 ? "Y" : "Z") + " Field.");
             } else if (mouseY >= 154.0 && mouseY <= 184.0) {
                 activeInspectorField = switch (axis) {
@@ -395,6 +497,7 @@ public class EditorSelectionController {
                     case 1 -> InspectorField.ROT_Y;
                     default -> InspectorField.ROT_Z;
                 };
+                captureTransformStart(active);
                 System.out.println("[Inspector] Grabbed Rotation " + (axis == 0 ? "X" : axis == 1 ? "Y" : "Z") + " Field.");
             } else if (mouseY >= 190.0 && mouseY <= 220.0) {
                 activeInspectorField = switch (axis) {
@@ -402,6 +505,7 @@ public class EditorSelectionController {
                     case 1 -> InspectorField.SCL_Y;
                     default -> InspectorField.SCL_Z;
                 };
+                captureTransformStart(active);
                 System.out.println("[Inspector] Grabbed Scale " + (axis == 0 ? "X" : axis == 1 ? "Y" : "Z") + " Field.");
             }
         }

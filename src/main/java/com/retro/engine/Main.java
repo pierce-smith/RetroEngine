@@ -34,6 +34,7 @@ public class Main {
         EditorPanelManager editorManager = new EditorPanelManager();
         EditorSelectionController selectionController = new EditorSelectionController(editorManager);
         ViewportCameraController cameraController = new ViewportCameraController();
+        selectionController.setCameraController(cameraController);
 
         HostBackendLoader loader = new HostBackendLoader();
         if (!loader.loadTargetBackend()) {
@@ -66,13 +67,14 @@ public class Main {
         window.setOnScrollListener((xoffset, yoffset) -> cameraController.onScroll(yoffset));
 
         if (rhi.initialize(window.getWindowInfo())) {
-            System.out.println("[Engine] Running. Cross-Platform Native OS File Dialogs & Scene Persistence Enabled.");
-            System.out.println("[Shortcuts] Cmd+S / Ctrl+S (Native Save Dialog) | Cmd+O / Ctrl+O (Native Open Dialog)");
+            System.out.println("[Engine] Running. Virtual Thread Asset Streaming & Top Menu Bar Enabled.");
+            System.out.println("[Shortcuts] Cmd+Z (Undo) | Cmd+Shift+Z (Redo) | Cmd+S (Save) | Cmd+O (Open)");
             System.out.println("[Gizmo] Press 1/W(Translate) / 2/E(Rotate) / 3/R(Scale) to switch modes in Viewport.");
 
             long lastTime = System.nanoTime();
             boolean saveKeyPressedLastFrame = false;
             boolean loadKeyPressedLastFrame = false;
+            boolean undoKeyPressedLastFrame = false;
 
             while (!window.shouldClose()) {
                 window.pollEvents();
@@ -82,6 +84,8 @@ public class Main {
                 lastTime = currentTime;
 
                 boolean isCtrlDown = window.isKeyDown(GLFW_KEY_LEFT_CONTROL) || window.isKeyDown(GLFW_KEY_RIGHT_CONTROL) || window.isKeyDown(GLFW_KEY_LEFT_SUPER) || window.isKeyDown(GLFW_KEY_RIGHT_SUPER);
+                boolean isShiftDown = window.isKeyDown(GLFW_KEY_LEFT_SHIFT) || window.isKeyDown(GLFW_KEY_RIGHT_SHIFT);
+
                 boolean is1 = window.isKeyDown(GLFW_KEY_1);
                 boolean is2 = window.isKeyDown(GLFW_KEY_2);
                 boolean is3 = window.isKeyDown(GLFW_KEY_3);
@@ -93,9 +97,25 @@ public class Main {
                 boolean isE = window.isKeyDown(GLFW_KEY_E);
                 boolean isR = window.isKeyDown(GLFW_KEY_R);
                 boolean isO = window.isKeyDown(GLFW_KEY_O);
+                boolean isZ = window.isKeyDown(GLFW_KEY_Z);
+
                 if (window.isKeyDown(GLFW_KEY_F)) cameraController.reset();
 
-                // Cmd+S / Ctrl+S: Native Save Dialog
+                // Cmd+Z / Ctrl+Z: Undo | Cmd+Shift+Z / Ctrl+Shift+Z: Redo
+                if (isCtrlDown && isZ) {
+                    if (!undoKeyPressedLastFrame) {
+                        if (isShiftDown) {
+                            editorManager.redo();
+                        } else {
+                            editorManager.undo();
+                        }
+                        undoKeyPressedLastFrame = true;
+                    }
+                } else {
+                    undoKeyPressedLastFrame = false;
+                }
+
+                // Cmd+S / Ctrl+S: Save Scene
                 if (isCtrlDown && isS) {
                     if (!saveKeyPressedLastFrame) {
                         editorManager.promptSaveSceneWithNativeDialog();
@@ -105,7 +125,7 @@ public class Main {
                     saveKeyPressedLastFrame = false;
                 }
 
-                // Cmd+O / Ctrl+O: Native Open Dialog
+                // Cmd+O / Ctrl+O: Load Scene
                 if (isCtrlDown && isO) {
                     if (!loadKeyPressedLastFrame) {
                         editorManager.promptOpenSceneWithNativeDialog();

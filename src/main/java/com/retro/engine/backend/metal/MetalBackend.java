@@ -186,30 +186,16 @@ public class MetalBackend implements IRenderBackend {
         }
     }
 
-    @Override
-    public long getOffscreenViewportTexture() {
-        return offscreenColorTexture;
-    }
-
-    @Override
-    public void resizeViewport(int width, int height) {
-        if (width > 0 && height > 0) {
-            initOffscreenFramebuffer(width, height);
-        }
-    }
-
-    @Override
-    public void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw) {
-        this.camPanX = panX;
-        this.camPanY = panY;
-        this.camZoom = zoom;
-        this.camPitch = pitch;
-        this.camYaw = yaw;
-    }
+    @Override public long getOffscreenViewportTexture() { return offscreenColorTexture; }
+    @Override public void resizeViewport(int width, int height) { if (width > 0 && height > 0) { initOffscreenFramebuffer(width, height); } }
+    @Override public void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw) { this.camPanX = panX; this.camPanY = panY; this.camZoom = zoom; this.camPitch = pitch; this.camYaw = yaw; }
 
     @Override
     public void updateGridMesh(float[] vertices, int count) {
-        if (vertices == null || count <= 0) return;
+        if (vertices == null || count <= 0) {
+            this.gridVertexCount = 0;
+            return;
+        }
         MetalBuffer buf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), vertices, 9);
         this.gridVertexBuffer = buf.getHandle();
         this.gridVertexCount = count;
@@ -217,14 +203,16 @@ public class MetalBackend implements IRenderBackend {
 
     @Override
     public void updateUiMesh(float[] vertices, int count) {
-        if (vertices == null || count <= 0) return;
+        if (vertices == null || count <= 0) {
+            this.uiVertexCount = 0;
+            return;
+        }
         MetalBuffer buf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), vertices, 6);
         this.uiVertexBuffer = buf.getHandle();
         this.uiVertexCount = count;
     }
 
-    @Override
-    public void clearSceneQueue() { sceneQueue.clear(); }
+    @Override public void clearSceneQueue() { sceneQueue.clear(); }
 
     @Override
     public void submitEntity(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {

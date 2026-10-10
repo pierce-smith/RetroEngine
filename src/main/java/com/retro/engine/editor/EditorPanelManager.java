@@ -5,19 +5,22 @@ import com.retro.engine.ecs.components.LightComponent;
 import com.retro.engine.ecs.components.MaterialComponent;
 import com.retro.engine.ecs.components.MeshRendererComponent;
 import com.retro.engine.ecs.components.TransformComponent;
+import com.retro.engine.editor.commands.CommandHistory;
+import com.retro.engine.editor.commands.TransformCommand;
 import com.retro.engine.serialization.SceneSerializer;
 
 import java.io.File;
 import java.util.*;
 
 /**
- * EditorPanelManager orchestrates the editor panel layout and state for the Retro Engine Editor.
- * Updated: Native OS file dialog integration and Top Bar File controls.
+ * EditorPanelManager orchestrates the editor panel layout, top menu dropdowns,
+ * command history (Undo/Redo), and component-based Scene Entity management.
  */
 public class EditorPanelManager {
     public enum AssetType { MESH_3D, TEXTURE, SHADER, SCENE, UNKNOWN }
     public enum GizmoMode { TRANSLATE, ROTATE, SCALE }
     public enum GizmoAxis { NONE, X, Y, Z }
+    public enum DropdownMenu { NONE, FILE, EDIT, ENTITY, VIEW }
 
     public static class SceneEntity {
         public String id;
@@ -30,7 +33,6 @@ public class EditorPanelManager {
             this.id = id;
             this.name = name;
 
-            // Attach core components by default
             TransformComponent tc = new TransformComponent();
             addComponent(tc);
 
@@ -59,7 +61,6 @@ public class EditorPanelManager {
             return Collections.unmodifiableCollection(components.values());
         }
 
-        // Backward compatibility helpers
         public TransformComponent getTransform() {
             TransformComponent tc = getComponent(TransformComponent.class);
             if (tc == null) {
@@ -113,7 +114,11 @@ public class EditorPanelManager {
 
     private GizmoMode currentGizmoMode = GizmoMode.TRANSLATE;
     private GizmoAxis activeGizmoAxis = GizmoAxis.NONE;
+    private DropdownMenu activeDropdownMenu = DropdownMenu.NONE;
 
+    private final CommandHistory commandHistory = new CommandHistory();
+
+    private boolean show3DGrid = true;
     private float[] cached3DGridVertices = null;
     private float[] cachedUiVertices = null;
 
@@ -128,30 +133,43 @@ public class EditorPanelManager {
 
     public EditorPanelManager() {}
 
-    public void promptSaveSceneWithNativeDialog() {
-        String chosenPath = NativeFileDialog.saveFileDialog(
-                "Save Retro Engine Scene (.scene)",
-                this.activeScenePath,
-                "Retro Scene Files (*.scene)",
-                "scene"
-        );
-        if (chosenPath != null && !chosenPath.isBlank()) {
-            if (!chosenPath.endsWith(".scene")) {
-                chosenPath += ".scene";
-            }
-            saveActiveScene(chosenPath);
-        }
+    public boolean is3DGridVisible() { return show3DGrid; }
+    public void toggle3DGrid() {
+        this.show3DGrid = !this.show3DGrid;
+        System.out.println("[View] Toggle 3D Grid -> " + (this.show3DGrid ? "VISIBLE" : "HIDDEN"));
+    }
+
+    public CommandHistory getCommandHistory() {
+        return commandHistory;
+    }
+
+    public void undo() {
+        commandHistory.undo();
+    }
+
+    public void redo() {
+        commandHistory.redo();
+    }
+
+    public void newScene() {
+        sceneEntities.clear();
+        selectedEntity = null;
+        activeScenePath = "Assets/Scenes/NewLevel.scene";
+        System.out.println("[EditorPanelManager] Created New Empty Scene.");
     }
 
     public void promptOpenSceneWithNativeDialog() {
-        String chosenPath = NativeFileDialog.openFileDialog(
-                "Open Retro Engine Scene (.scene)",
-                this.activeScenePath,
-                "Retro Scene Files (*.scene)",
-                "scene"
-        );
-        if (chosenPath != null && !chosenPath.isBlank()) {
-            loadSceneFromFile(chosenPath);
+        String path = NativeFileDialog.openFileDialog("Open Retro Engine Scene", activeScenePath, "Retro Scene (*.scene)", "scene");
+        if (path != null && !path.trim().isEmpty()) {
+            loadSceneFromFile(path);
+        }
+    }
+
+    public void promptSaveSceneWithNativeDialog() {
+        String path = NativeFileDialog.saveFileDialog("Save Retro Engine Scene", activeScenePath, "Retro Scene (*.scene)", "scene");
+        if (path != null && !path.trim().isEmpty()) {
+            if (!path.endsWith(".scene")) path += ".scene";
+            saveActiveScene(path);
         }
     }
 
@@ -179,8 +197,37 @@ public class EditorPanelManager {
                 sceneEntities.get(i).selected = (i == 0);
             }
             this.activeScenePath = filePath;
-            System.out.println("[EditorPanelManager] Active scene updated -> " + filePath);
+            System.out.println("[EditorPanelManager] Active scene loaded -> " + filePath);
         }
+    }
+
+    public void deleteSelectedEntity() {
+        if (selectedEntity != null) {
+            String name = selectedEntity.name;
+            sceneEntities.remove(selectedEntity);
+            selectedEntity = sceneEntities.isEmpty() ? null : sceneEntities.get(0);
+            if (selectedEntity != null) selectedEntity.selected = true;
+            System.out.println("[EditorPanelManager] Deleted Entity: " + name);
+        }
+    }
+
+    public void spawnDefaultCube() {
+        String entityId = "entity_" + (sceneEntities.size() + 1);
+        String name = "Cube_" + (sceneEntities.size() + 1);
+        SceneEntity entity = new SceneEntity(entityId, name, "Assets/Models/cube.obj");
+        sceneEntities.add(entity);
+        selectEntity(entity);
+        System.out.println("[EditorPanelManager] Spawned 3D Cube Entity: " + name);
+    }
+
+    public void spawnLightSource() {
+        String entityId = "light_" + (sceneEntities.size() + 1);
+        String name = "DirectionalLight_" + (sceneEntities.size() + 1);
+        SceneEntity entity = new SceneEntity(entityId, name, null);
+        entity.addComponent(new LightComponent());
+        sceneEntities.add(entity);
+        selectEntity(entity);
+        System.out.println("[EditorPanelManager] Spawned Light Source Entity: " + name);
     }
 
     public void setCameraState(float panX, float panY, float zoom, float pitch, float yaw) {
@@ -224,6 +271,7 @@ public class EditorPanelManager {
     public void update(float deltaTime) {}
 
     public float[] get3DGridVertices() {
+        if (!show3DGrid) return new float[0];
         if (cached3DGridVertices == null || cached3DGridVertices.length == 0) {
             cached3DGridVertices = generate3DGridVertices();
         }
@@ -231,6 +279,7 @@ public class EditorPanelManager {
     }
 
     public int get3DGridVertexCount() {
+        if (!show3DGrid) return 0;
         if (cached3DGridVertices == null || cached3DGridVertices.length == 0) get3DGridVertices();
         return cached3DGridVertices.length / 9;
     }
@@ -338,6 +387,14 @@ public class EditorPanelManager {
     public GizmoAxis getActiveGizmoAxis() { return activeGizmoAxis; }
     public void setActiveGizmoAxis(GizmoAxis axis) { this.activeGizmoAxis = axis; }
 
+    public DropdownMenu getActiveDropdownMenu() { return activeDropdownMenu; }
+    public void setActiveDropdownMenu(DropdownMenu menu) {
+        this.activeDropdownMenu = menu;
+        if (menu != DropdownMenu.NONE) {
+            System.out.println("[Top Menu Bar] Opened Dropdown -> " + menu);
+        }
+    }
+
     public float[] getUiVertices() {
         this.cachedUiVertices = generateUiVertices();
         return this.cachedUiVertices;
@@ -351,9 +408,6 @@ public class EditorPanelManager {
     public float[] generateUiVertices() {
         List<Float> verts = new ArrayList<>();
 
-        // Render Top Header Bar with clickable File Open/Save buttons
-        renderTopHeaderBar(verts);
-
         SceneHierarchyPanel.render(verts, sceneEntities);
         InspectorPanel.render(verts, selectedEntity, assetDirectory);
         AssetDirectoryPanel.render(verts, assetDirectory);
@@ -361,8 +415,15 @@ public class EditorPanelManager {
         ViewportPanel.renderFraming(verts);
         ViewportPanel.renderToolbar(verts, currentGizmoMode);
 
+        renderTopMenuBar(verts);
+
         if (selectedEntity != null) {
             render3DGizmos(verts, selectedEntity, currentGizmoMode, activeGizmoAxis);
+        }
+
+        // Render Dropdown Popover on top of UI elements
+        if (activeDropdownMenu != DropdownMenu.NONE) {
+            renderDropdownMenuOverlay(verts, activeDropdownMenu);
         }
 
         float[] array = new float[verts.size()];
@@ -370,27 +431,83 @@ public class EditorPanelManager {
         return array;
     }
 
-    private void renderTopHeaderBar(List<Float> verts) {
-        // Top Header Bar Background (-1.0 to 1.0, Y: 0.92 to 1.00)
-        UIBatchBuilder.addQuad(verts, -1.0f, 0.91f, 1.0f, 1.0f, 0.12f, 0.12f, 0.15f, 1.0f);
-        UIBatchBuilder.addFrameBorder(verts, -1.0f, 0.91f, 1.0f, 1.0f, 0.002f, 0.25f, 0.25f, 0.32f, 1.0f);
+    private void renderTopMenuBar(List<Float> verts) {
+        // Top Header Background Bar
+        UIBatchBuilder.addQuad(verts, -1.0f, 0.92f, 1.0f, 1.0f, 0.10f, 0.10f, 0.14f, 1.0f);
+        UIBatchBuilder.addFrameBorder(verts, -1.0f, 0.92f, 1.0f, 1.0f, 0.002f, 0.20f, 0.20f, 0.28f, 1.0f);
 
-        // Title
-        UIBatchBuilder.addBoundedText(verts, "RETRO ENGINE IDE", -0.98f, 0.98f, -0.65f, 1.3f, 1.0f, 0.8f, 0.2f, 1.0f);
+        // Logo Title
+        UIBatchBuilder.addBoundedText(verts, "RETRO ENGINE", -0.98f, 0.94f, -0.75f, 1.2f, 0.25f, 0.80f, 1.0f, 1.0f);
 
-        // Button 1: [OPEN SCENE]
-        UIBatchBuilder.addQuad(verts, -0.62f, 0.93f, -0.42f, 0.99f, 0.18f, 0.22f, 0.28f, 1.0f);
-        UIBatchBuilder.addFrameBorder(verts, -0.62f, 0.93f, -0.42f, 0.99f, 0.002f, 0.0f, 0.55f, 0.85f, 1.0f);
-        UIBatchBuilder.addBoundedText(verts, "OPEN SCENE", -0.60f, 0.98f, -0.43f, 1.1f, 1.0f, 1.0f, 1.0f, 1.0f);
+        // Header Menu Buttons (FILE, EDIT, ENTITY, VIEW)
+        renderHeaderMenuButton(verts, "FILE", -0.72f, -0.62f, activeDropdownMenu == DropdownMenu.FILE);
+        renderHeaderMenuButton(verts, "EDIT", -0.61f, -0.51f, activeDropdownMenu == DropdownMenu.EDIT);
+        renderHeaderMenuButton(verts, "ENTITY", -0.50f, -0.38f, activeDropdownMenu == DropdownMenu.ENTITY);
+        renderHeaderMenuButton(verts, "VIEW", -0.37f, -0.27f, activeDropdownMenu == DropdownMenu.VIEW);
 
-        // Button 2: [SAVE SCENE]
-        UIBatchBuilder.addQuad(verts, -0.40f, 0.93f, -0.20f, 0.99f, 0.18f, 0.22f, 0.28f, 1.0f);
-        UIBatchBuilder.addFrameBorder(verts, -0.40f, 0.93f, -0.20f, 0.99f, 0.002f, 0.2f, 0.8f, 0.3f, 1.0f);
-        UIBatchBuilder.addBoundedText(verts, "SAVE SCENE", -0.38f, 0.98f, -0.21f, 1.1f, 1.0f, 1.0f, 1.0f, 1.0f);
+        // Status Readout
+        String sceneName = new File(activeScenePath).getName();
+        UIBatchBuilder.addBoundedText(verts, "SCENE: " + sceneName, 0.35f, 0.94f, 0.98f, 1.0f, 0.7f, 0.7f, 0.8f, 1.0f);
+    }
 
-        // Active scene status
-        String activeName = new File(activeScenePath).getName();
-        UIBatchBuilder.addBoundedText(verts, "SCENE: " + activeName, -0.15f, 0.98f, 0.50f, 1.1f, 0.7f, 0.7f, 0.8f, 1.0f);
+    private void renderHeaderMenuButton(List<Float> verts, String label, float minX, float maxX, boolean isActive) {
+        float r = isActive ? 0.22f : 0.14f;
+        float g = isActive ? 0.28f : 0.14f;
+        float b = isActive ? 0.38f : 0.18f;
+
+        UIBatchBuilder.addQuad(verts, minX, 0.93f, maxX, 0.99f, r, g, b, 1.0f);
+        if (isActive) {
+            UIBatchBuilder.addFrameBorder(verts, minX, 0.93f, maxX, 0.99f, 0.002f, 0.0f, 0.6f, 1.0f, 1.0f);
+        }
+        UIBatchBuilder.addBoundedText(verts, label, minX + 0.015f, 0.945f, maxX - 0.005f, 1.1f, 1.0f, 1.0f, 1.0f, 1.0f);
+    }
+
+    private void renderDropdownMenuOverlay(List<Float> verts, DropdownMenu menu) {
+        float minX = switch (menu) {
+            case FILE -> -0.72f;
+            case EDIT -> -0.61f;
+            case ENTITY -> -0.50f;
+            case VIEW -> -0.37f;
+            default -> -0.72f;
+        };
+        float maxX = minX + 0.32f;
+        float minY = 0.58f;
+        float maxY = 0.92f;
+
+        // Dropdown Card Panel
+        UIBatchBuilder.addQuad(verts, minX, minY, maxX, maxY, 0.12f, 0.12f, 0.16f, 0.98f);
+        UIBatchBuilder.addFrameBorder(verts, minX, minY, maxX, maxY, 0.003f, 0.0f, 0.55f, 0.90f, 1.0f);
+
+        switch (menu) {
+            case FILE -> {
+                renderDropdownItem(verts, "New Scene", minX + 0.01f, 0.85f, maxX - 0.01f);
+                renderDropdownItem(verts, "Open Scene... (Cmd+O)", minX + 0.01f, 0.76f, maxX - 0.01f);
+                renderDropdownItem(verts, "Save Scene... (Cmd+S)", minX + 0.01f, 0.67f, maxX - 0.01f);
+            }
+            case EDIT -> {
+                String undoLabel = "Undo " + (commandHistory.canUndo() ? "(Cmd+Z)" : "[Disabled]");
+                String redoLabel = "Redo " + (commandHistory.canRedo() ? "(Cmd+Shift+Z)" : "[Disabled]");
+                renderDropdownItem(verts, undoLabel, minX + 0.01f, 0.85f, maxX - 0.01f);
+                renderDropdownItem(verts, redoLabel, minX + 0.01f, 0.76f, maxX - 0.01f);
+                renderDropdownItem(verts, "Delete Selected (Del)", minX + 0.01f, 0.67f, maxX - 0.01f);
+            }
+            case ENTITY -> {
+                renderDropdownItem(verts, "+ Spawn 3D Cube", minX + 0.01f, 0.85f, maxX - 0.01f);
+                renderDropdownItem(verts, "+ Spawn Light Source", minX + 0.01f, 0.76f, maxX - 0.01f);
+            }
+            case VIEW -> {
+                renderDropdownItem(verts, "Reset Viewport Camera (F)", minX + 0.01f, 0.85f, maxX - 0.01f);
+                String gridLabel = show3DGrid ? "Hide 3D Grid" : "Show 3D Grid";
+                renderDropdownItem(verts, gridLabel, minX + 0.01f, 0.76f, maxX - 0.01f);
+            }
+            default -> {}
+        }
+    }
+
+    private void renderDropdownItem(List<Float> verts, String text, float minX, float y, float maxX) {
+        UIBatchBuilder.addQuad(verts, minX, y - 0.02f, maxX, y + 0.05f, 0.16f, 0.18f, 0.24f, 1.0f);
+        UIBatchBuilder.addFrameBorder(verts, minX, y - 0.02f, maxX, y + 0.05f, 0.001f, 0.25f, 0.28f, 0.35f, 1.0f);
+        UIBatchBuilder.addBoundedText(verts, text, minX + 0.01f, y + 0.01f, maxX - 0.01f, 1.0f, 0.95f, 0.95f, 0.95f, 1.0f);
     }
 
     private void render3DGizmos(List<Float> verts, SceneEntity entity, GizmoMode mode, GizmoAxis activeAxis) {
