@@ -10,8 +10,8 @@ import java.util.List;
 
 /**
  * EditorSelectionController handles panel region hit-testing, input routing, 3D Viewport Transform Gizmos,
- * and Inspector Panel direct field editing.
- * Updated: Operates cleanly on ECS TransformComponents.
+ * Top Bar File controls, and Inspector Panel direct field editing.
+ * Updated: Accurate hitboxes for X (Pitch), Y (Yaw), and Z (Roll) Rotate Gizmo rings.
  */
 public class EditorSelectionController {
     public enum PanelType { TOP_BAR, SCENE_HIERARCHY, VIEWPORT_3D, INSPECTOR, ASSET_DIRECTORY, NONE }
@@ -74,6 +74,7 @@ public class EditorSelectionController {
 
         if (action == 1) { // GLFW_PRESS
             switch (clickedPanel) {
+                case TOP_BAR -> processTopBarClick(mouseX, mouseY, activeManager);
                 case SCENE_HIERARCHY -> processHierarchyClick(mouseY, activeManager);
                 case INSPECTOR -> processInspectorClick(mouseX, mouseY, activeManager);
                 case ASSET_DIRECTORY -> processAssetClick(mouseX, mouseY, activeManager);
@@ -89,6 +90,19 @@ public class EditorSelectionController {
             }
         } else if (action == 0) { // GLFW_RELEASE
             onMouseRelease();
+        }
+    }
+
+    private void processTopBarClick(double mouseX, double mouseY, EditorPanelManager manager) {
+        // [OPEN SCENE] Button (X: 240 to 370, Y: 0 to 30)
+        if (mouseX >= 240.0 && mouseX <= 370.0) {
+            System.out.println("[Top Bar] Clicked OPEN SCENE -> Launching Native File Dialog...");
+            manager.promptOpenSceneWithNativeDialog();
+        }
+        // [SAVE SCENE] Button (X: 385 to 510, Y: 0 to 30)
+        else if (mouseX >= 385.0 && mouseX <= 510.0) {
+            System.out.println("[Top Bar] Clicked SAVE SCENE -> Launching Native File Save Dialog...");
+            manager.promptSaveSceneWithNativeDialog();
         }
     }
 
@@ -172,11 +186,40 @@ public class EditorSelectionController {
                 System.out.println("[Gizmo] Grabbed Z Axis Handle.");
             }
         } else if (mode == GizmoMode.ROTATE) {
-            double distToCenter = Math.hypot(ndcX - cx, ndcY - cy);
-            if (distToCenter >= 0.08 && distToCenter <= 0.18) {
-                manager.setActiveGizmoAxis(GizmoAxis.Z);
+            float rxR = 0.05f, ryR = 0.14f; // Red arc (X - Pitch)
+            float gxR = 0.14f, gyR = 0.05f; // Green arc (Y - Yaw)
+            float zRadius = 0.14f;           // Blue circle (Z - Roll)
+
+            // Distance error for X Pitch Ellipse Arc (Right half: ndcX >= cx - 0.02)
+            float dxX = (ndcX - cx) / rxR;
+            float dyX = (ndcY - cy) / ryR;
+            float distX = (float) Math.hypot(dxX, dyX);
+            float errX = Math.abs(distX - 1.0f);
+            boolean validX = (errX < 0.35f) && (ndcX >= cx - 0.02f);
+
+            // Distance error for Y Yaw Ellipse Arc (Upper half: ndcY >= cy - 0.02)
+            float dxY = (ndcX - cx) / gxR;
+            float dyY = (ndcY - cy) / gyR;
+            float distY = (float) Math.hypot(dxY, dyY);
+            float errY = Math.abs(distY - 1.0f);
+            boolean validY = (errY < 0.35f) && (ndcY >= cy - 0.02f);
+
+            // Distance error for Z Roll Circle (Full ring)
+            float distZ = (float) Math.hypot(ndcX - cx, ndcY - cy);
+            float errZ = Math.abs(distZ - zRadius) / zRadius;
+            boolean validZ = Math.abs(distZ - zRadius) < 0.035f;
+
+            GizmoAxis chosen = GizmoAxis.NONE;
+            float minErr = 999.0f;
+
+            if (validX && errX < minErr) { minErr = errX; chosen = GizmoAxis.X; }
+            if (validY && errY < minErr) { minErr = errY; chosen = GizmoAxis.Y; }
+            if (validZ && errZ < minErr) { minErr = errZ; chosen = GizmoAxis.Z; }
+
+            if (chosen != GizmoAxis.NONE) {
+                manager.setActiveGizmoAxis(chosen);
                 lastAngle = Math.atan2(ndcY - cy, ndcX - cx);
-                System.out.println("[Gizmo] Grabbed Z Roll Ring.");
+                System.out.println("[Gizmo] Grabbed " + chosen + " Rotate Ring.");
             }
         }
     }
@@ -285,20 +328,20 @@ public class EditorSelectionController {
                     }
                 }
             } else if (mode == GizmoMode.ROTATE) {
-                double currentAngle = Math.atan2(ndcY - cy, ndcX - cx);
-                double deltaAngle = Math.toDegrees(currentAngle - lastAngle);
-
-                if (deltaAngle > 180.0) deltaAngle -= 360.0;
-                if (deltaAngle < -180.0) deltaAngle += 360.0;
-
                 float rotSpeed = 0.8f;
                 switch (axis) {
-                    case X -> tc.rotX += (float) deltaAngle * rotSpeed;
-                    case Y -> tc.rotY += (float) deltaAngle * rotSpeed;
-                    case Z -> tc.rotZ += (float) deltaAngle * rotSpeed;
+                    case X -> tc.rotX -= (float) dy * rotSpeed;
+                    case Y -> tc.rotY += (float) dx * rotSpeed;
+                    case Z -> {
+                        double currentAngle = Math.atan2(ndcY - cy, ndcX - cx);
+                        double deltaAngle = Math.toDegrees(currentAngle - lastAngle);
+                        if (deltaAngle > 180.0) deltaAngle -= 360.0;
+                        if (deltaAngle < -180.0) deltaAngle += 360.0;
+                        tc.rotZ += (float) deltaAngle * rotSpeed;
+                        lastAngle = currentAngle;
+                    }
                     default -> {}
                 }
-                lastAngle = currentAngle;
             }
             return true;
         }
@@ -378,6 +421,8 @@ public class EditorSelectionController {
                 manager.spawnEntityFromAsset(clickedAsset);
             } else if (clickedAsset.type == EditorPanelManager.AssetType.TEXTURE) {
                 manager.assignTextureToSelectedEntity(clickedAsset);
+            } else if (clickedAsset.type == EditorPanelManager.AssetType.SCENE) {
+                manager.loadSceneFromFile(clickedAsset.absolutePath);
             }
         }
     }

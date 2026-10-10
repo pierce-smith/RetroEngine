@@ -5,16 +5,17 @@ import com.retro.engine.ecs.components.LightComponent;
 import com.retro.engine.ecs.components.MaterialComponent;
 import com.retro.engine.ecs.components.MeshRendererComponent;
 import com.retro.engine.ecs.components.TransformComponent;
+import com.retro.engine.serialization.SceneSerializer;
 
 import java.io.File;
 import java.util.*;
 
 /**
  * EditorPanelManager orchestrates the editor panel layout and state for the Retro Engine Editor.
- * Updated: Refactored SceneEntity to lightweight ECS container holding modular components.
+ * Updated: Native OS file dialog integration and Top Bar File controls.
  */
 public class EditorPanelManager {
-    public enum AssetType { MESH_3D, TEXTURE, SHADER, UNKNOWN }
+    public enum AssetType { MESH_3D, TEXTURE, SHADER, SCENE, UNKNOWN }
     public enum GizmoMode { TRANSLATE, ROTATE, SCALE }
     public enum GizmoAxis { NONE, X, Y, Z }
 
@@ -58,7 +59,7 @@ public class EditorPanelManager {
             return Collections.unmodifiableCollection(components.values());
         }
 
-        // Backward compatibility helpers for EditorSelectionController & Main
+        // Backward compatibility helpers
         public TransformComponent getTransform() {
             TransformComponent tc = getComponent(TransformComponent.class);
             if (tc == null) {
@@ -116,12 +117,71 @@ public class EditorPanelManager {
     private float[] cached3DGridVertices = null;
     private float[] cachedUiVertices = null;
 
+    private String activeScenePath = "Assets/Scenes/MainLevel.scene";
+
     // Viewport Camera parameters
     private float camPanX = 0.0f;
     private float camPanY = -1.2f;
     private float camZoom = -8.5f;
     private float camPitch = 22.0f;
     private float camYaw = -35.0f;
+
+    public EditorPanelManager() {}
+
+    public void promptSaveSceneWithNativeDialog() {
+        String chosenPath = NativeFileDialog.saveFileDialog(
+                "Save Retro Engine Scene (.scene)",
+                this.activeScenePath,
+                "Retro Scene Files (*.scene)",
+                "scene"
+        );
+        if (chosenPath != null && !chosenPath.isBlank()) {
+            if (!chosenPath.endsWith(".scene")) {
+                chosenPath += ".scene";
+            }
+            saveActiveScene(chosenPath);
+        }
+    }
+
+    public void promptOpenSceneWithNativeDialog() {
+        String chosenPath = NativeFileDialog.openFileDialog(
+                "Open Retro Engine Scene (.scene)",
+                this.activeScenePath,
+                "Retro Scene Files (*.scene)",
+                "scene"
+        );
+        if (chosenPath != null && !chosenPath.isBlank()) {
+            loadSceneFromFile(chosenPath);
+        }
+    }
+
+    public void saveActiveScene() {
+        saveActiveScene(this.activeScenePath);
+    }
+
+    public void saveActiveScene(String filePath) {
+        if (filePath != null) this.activeScenePath = filePath;
+        boolean ok = SceneSerializer.saveScene(this.activeScenePath, this.sceneEntities);
+        if (ok) {
+            System.out.println("[EditorPanelManager] Scene saved to: " + this.activeScenePath);
+        }
+    }
+
+    public void loadSceneFromFile(String filePath) {
+        if (filePath == null) return;
+        List<SceneEntity> loaded = SceneSerializer.loadScene(filePath);
+        if (!loaded.isEmpty()) {
+            this.sceneEntities.clear();
+            this.sceneEntities.addAll(loaded);
+            this.selectedEntity = sceneEntities.get(0);
+
+            for (int i = 0; i < sceneEntities.size(); i++) {
+                sceneEntities.get(i).selected = (i == 0);
+            }
+            this.activeScenePath = filePath;
+            System.out.println("[EditorPanelManager] Active scene updated -> " + filePath);
+        }
+    }
 
     public void setCameraState(float panX, float panY, float zoom, float pitch, float yaw) {
         this.camPanX = panX;
@@ -145,7 +205,6 @@ public class EditorPanelManager {
         float cy = (float) Math.cos(radYaw), sy = (float) Math.sin(radYaw);
         float cp = (float) Math.cos(radPitch), sp = (float) Math.sin(radPitch);
 
-        // View space transformation matching MetalBackend view matrix
         float vx = cy * wx - sy * wz + camPanX;
         float vy = sy * sp * wx + cp * wy + cy * sp * wz + camPanY;
         float vz = sy * cp * wx - sp * wy + cy * cp * wz + camZoom;
@@ -161,8 +220,6 @@ public class EditorPanelManager {
 
         return new float[] { uiX, uiY };
     }
-
-    public EditorPanelManager() {}
 
     public void update(float deltaTime) {}
 
@@ -227,6 +284,8 @@ public class EditorPanelManager {
                 type = AssetType.MESH_3D;
             } else if (ext.equals("png") || ext.equals("jpg") || ext.equals("tga")) {
                 type = AssetType.TEXTURE;
+            } else if (ext.equals("scene")) {
+                type = AssetType.SCENE;
             }
 
             AssetEntry entry = new AssetEntry(name, path, type);
@@ -268,6 +327,7 @@ public class EditorPanelManager {
     public List<SceneEntity> getSceneEntities() { return Collections.unmodifiableList(sceneEntities); }
     public List<AssetEntry> getAssetDirectory() { return Collections.unmodifiableList(assetDirectory); }
     public SceneEntity getSelectedEntity() { return selectedEntity; }
+    public String getActiveScenePath() { return activeScenePath; }
 
     public GizmoMode getCurrentGizmoMode() { return currentGizmoMode; }
     public void setCurrentGizmoMode(GizmoMode mode) {
@@ -291,6 +351,9 @@ public class EditorPanelManager {
     public float[] generateUiVertices() {
         List<Float> verts = new ArrayList<>();
 
+        // Render Top Header Bar with clickable File Open/Save buttons
+        renderTopHeaderBar(verts);
+
         SceneHierarchyPanel.render(verts, sceneEntities);
         InspectorPanel.render(verts, selectedEntity, assetDirectory);
         AssetDirectoryPanel.render(verts, assetDirectory);
@@ -305,6 +368,29 @@ public class EditorPanelManager {
         float[] array = new float[verts.size()];
         for (int i = 0; i < verts.size(); i++) array[i] = verts.get(i);
         return array;
+    }
+
+    private void renderTopHeaderBar(List<Float> verts) {
+        // Top Header Bar Background (-1.0 to 1.0, Y: 0.92 to 1.00)
+        UIBatchBuilder.addQuad(verts, -1.0f, 0.91f, 1.0f, 1.0f, 0.12f, 0.12f, 0.15f, 1.0f);
+        UIBatchBuilder.addFrameBorder(verts, -1.0f, 0.91f, 1.0f, 1.0f, 0.002f, 0.25f, 0.25f, 0.32f, 1.0f);
+
+        // Title
+        UIBatchBuilder.addBoundedText(verts, "RETRO ENGINE IDE", -0.98f, 0.98f, -0.65f, 1.3f, 1.0f, 0.8f, 0.2f, 1.0f);
+
+        // Button 1: [OPEN SCENE]
+        UIBatchBuilder.addQuad(verts, -0.62f, 0.93f, -0.42f, 0.99f, 0.18f, 0.22f, 0.28f, 1.0f);
+        UIBatchBuilder.addFrameBorder(verts, -0.62f, 0.93f, -0.42f, 0.99f, 0.002f, 0.0f, 0.55f, 0.85f, 1.0f);
+        UIBatchBuilder.addBoundedText(verts, "OPEN SCENE", -0.60f, 0.98f, -0.43f, 1.1f, 1.0f, 1.0f, 1.0f, 1.0f);
+
+        // Button 2: [SAVE SCENE]
+        UIBatchBuilder.addQuad(verts, -0.40f, 0.93f, -0.20f, 0.99f, 0.18f, 0.22f, 0.28f, 1.0f);
+        UIBatchBuilder.addFrameBorder(verts, -0.40f, 0.93f, -0.20f, 0.99f, 0.002f, 0.2f, 0.8f, 0.3f, 1.0f);
+        UIBatchBuilder.addBoundedText(verts, "SAVE SCENE", -0.38f, 0.98f, -0.21f, 1.1f, 1.0f, 1.0f, 1.0f, 1.0f);
+
+        // Active scene status
+        String activeName = new File(activeScenePath).getName();
+        UIBatchBuilder.addBoundedText(verts, "SCENE: " + activeName, -0.15f, 0.98f, 0.50f, 1.1f, 0.7f, 0.7f, 0.8f, 1.0f);
     }
 
     private void render3DGizmos(List<Float> verts, SceneEntity entity, GizmoMode mode, GizmoAxis activeAxis) {

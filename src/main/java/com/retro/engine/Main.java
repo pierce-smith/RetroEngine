@@ -66,10 +66,13 @@ public class Main {
         window.setOnScrollListener((xoffset, yoffset) -> cameraController.onScroll(yoffset));
 
         if (rhi.initialize(window.getWindowInfo())) {
-            System.out.println("[Engine] Running. Virtual Thread Asset Streaming Enabled.");
+            System.out.println("[Engine] Running. Cross-Platform Native OS File Dialogs & Scene Persistence Enabled.");
+            System.out.println("[Shortcuts] Cmd+S / Ctrl+S (Native Save Dialog) | Cmd+O / Ctrl+O (Native Open Dialog)");
             System.out.println("[Gizmo] Press 1/W(Translate) / 2/E(Rotate) / 3/R(Scale) to switch modes in Viewport.");
 
             long lastTime = System.nanoTime();
+            boolean saveKeyPressedLastFrame = false;
+            boolean loadKeyPressedLastFrame = false;
 
             while (!window.shouldClose()) {
                 window.pollEvents();
@@ -78,7 +81,7 @@ public class Main {
                 float deltaTime = (currentTime - lastTime) / 1_000_000_000.0f;
                 lastTime = currentTime;
 
-                boolean isCtrlDown = window.isKeyDown(GLFW_KEY_LEFT_CONTROL) || window.isKeyDown(GLFW_KEY_RIGHT_CONTROL);
+                boolean isCtrlDown = window.isKeyDown(GLFW_KEY_LEFT_CONTROL) || window.isKeyDown(GLFW_KEY_RIGHT_CONTROL) || window.isKeyDown(GLFW_KEY_LEFT_SUPER) || window.isKeyDown(GLFW_KEY_RIGHT_SUPER);
                 boolean is1 = window.isKeyDown(GLFW_KEY_1);
                 boolean is2 = window.isKeyDown(GLFW_KEY_2);
                 boolean is3 = window.isKeyDown(GLFW_KEY_3);
@@ -89,7 +92,28 @@ public class Main {
                 boolean isQ = window.isKeyDown(GLFW_KEY_Q);
                 boolean isE = window.isKeyDown(GLFW_KEY_E);
                 boolean isR = window.isKeyDown(GLFW_KEY_R);
+                boolean isO = window.isKeyDown(GLFW_KEY_O);
                 if (window.isKeyDown(GLFW_KEY_F)) cameraController.reset();
+
+                // Cmd+S / Ctrl+S: Native Save Dialog
+                if (isCtrlDown && isS) {
+                    if (!saveKeyPressedLastFrame) {
+                        editorManager.promptSaveSceneWithNativeDialog();
+                        saveKeyPressedLastFrame = true;
+                    }
+                } else {
+                    saveKeyPressedLastFrame = false;
+                }
+
+                // Cmd+O / Ctrl+O: Native Open Dialog
+                if (isCtrlDown && isO) {
+                    if (!loadKeyPressedLastFrame) {
+                        editorManager.promptOpenSceneWithNativeDialog();
+                        loadKeyPressedLastFrame = true;
+                    }
+                } else {
+                    loadKeyPressedLastFrame = false;
+                }
 
                 if (!isCtrlDown && !cameraController.isDraggingRmb() && !cameraController.isDraggingMmb()) {
                     if (is1 || isW) editorManager.setCurrentGizmoMode(EditorPanelManager.GizmoMode.TRANSLATE);

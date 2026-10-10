@@ -27,11 +27,13 @@ dependencies {
     implementation("org.lwjgl", "lwjgl-glfw")
     implementation("org.lwjgl", "lwjgl-vulkan")
     implementation("org.lwjgl", "lwjgl-assimp")
+    implementation("org.lwjgl", "lwjgl-tinyfd")
 
     for (platformNative in lwjglNatives) {
         runtimeOnly("org.lwjgl", "lwjgl", classifier = platformNative)
         runtimeOnly("org.lwjgl", "lwjgl-glfw", classifier = platformNative)
         runtimeOnly("org.lwjgl", "lwjgl-assimp", classifier = platformNative)
+        runtimeOnly("org.lwjgl", "lwjgl-tinyfd", classifier = platformNative)
     }
 }
 
