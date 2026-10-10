@@ -2,6 +2,10 @@ package com.retro.engine.backend.vulkan;
 
 import com.retro.engine.rhi.*;
 
+/**
+ * Stub implementation of VulkanBackend implementing the updated IRenderBackend contract.
+ * Includes Offscreen Viewport Render Target stubs for cross-platform RHI parity.
+ */
 public class VulkanBackend implements IRenderBackend {
 
     @Override
@@ -25,25 +29,13 @@ public class VulkanBackend implements IRenderBackend {
     public void present() {}
 
     @Override
-    public void updateMesh(float[] vertices, int count) {}
-
-    @Override
     public void updateGridMesh(float[] vertices, int count) {}
 
     @Override
     public void updateUiMesh(float[] vertices, int count) {}
 
     @Override
-    public void updateUiBackgroundMesh(float[] vertices, int count) {}
-
-    @Override
-    public void updateTexture(byte[] pixels, int width, int height) {}
-
-    @Override
     public void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw) {}
-
-    @Override
-    public void setModelTransform(float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {}
 
     @Override
     public void clearSceneQueue() {}
@@ -54,6 +46,14 @@ public class VulkanBackend implements IRenderBackend {
                               float px, float py, float pz,
                               float rx, float ry, float rz,
                               float sx, float sy, float sz) {}
+
+    @Override
+    public long getOffscreenViewportTexture() {
+        return 0L;
+    }
+
+    @Override
+    public void resizeViewport(int width, int height) {}
 
     @Override
     public long createBuffer(BufferCreateInfo createInfo) {

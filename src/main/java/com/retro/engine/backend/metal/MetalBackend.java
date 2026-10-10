@@ -13,19 +13,19 @@ import static org.lwjgl.system.JNI.*;
 import static org.lwjgl.system.macosx.ObjCRuntime.*;
 
 /**
- * MetalBackend implements IRenderBackend by coordinating MetalDevice, MetalBuffer, MetalTexture, and MetalPipeline.
- * Features 3 rendering passes:
- * Pass 1: 3D Perspective Ground Grid (Lines = 1L)
- * Pass 2: 3D Perspective Model Mesh (Triangles = 3L)
- * Pass 3: 2D Editor UI Overlay & Viewport Transform Gizmos
+ * MetalBackend implements IRenderBackend using LWJGL native Objective-C bindings.
+ * Offscreen Viewport Target Implementation:
+ * Pass 1: 3D Perspective Ground Grid & Model Meshes -> Offscreen MTLTexture (712x488 aspect).
+ * Pass 2: Main Window Pass -> Viewport Quad (drawing Offscreen Texture) + 2D Editor UI & Gizmos.
  */
 public class MetalBackend implements IRenderBackend {
-
     private final MetalDevice metalDevice = new MetalDevice();
     private final MetalTexture metalTexture = new MetalTexture();
     private final MetalPipeline metalPipeline = new MetalPipeline();
 
-    private long depthTexture = 0L;
+    private long offscreenColorTexture = 0L;
+    private long offscreenDepthTexture = 0L;
+    private long windowDepthTexture = 0L;
 
     private long gridVertexBuffer = 0L;
     private int gridVertexCount = 0;
@@ -33,8 +33,11 @@ public class MetalBackend implements IRenderBackend {
     private long uiVertexBuffer = 0L;
     private int uiVertexCount = 0;
 
+    private long viewportQuadBuffer = 0L;
+
     private long uniformBufferGrid = 0L;
     private long uniformBufferModel = 0L;
+    private long uniformBufferIdentity = 0L;
 
     private long currentDrawable = 0L;
     private long currentCommandBuffer = 0L;
@@ -64,30 +67,104 @@ public class MetalBackend implements IRenderBackend {
         if (!metalDevice.initialize(windowInfo)) return false;
         if (!metalPipeline.initialize(metalDevice)) return false;
 
-        initDepthBuffer(1280, 720);
+        initOffscreenFramebuffer(712, 488);
+        initViewportQuad();
+
         metalTexture.initDefaultTextureAndSampler(metalDevice.getDevice(), metalDevice.getObjcMsgSend());
 
         uniformBufferGrid = MetalBuffer.createUniformBuffer(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), 80L);
         uniformBufferModel = MetalBuffer.createUniformBuffer(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), 256L * 100);
+        initIdentityUniform();
 
-        System.out.println("[MetalBackend] Modular Metal graphics backend active.");
+        System.out.println("[MetalBackend] Dedicated Offscreen Viewport Render Target initialized successfully.");
         return true;
     }
 
-    private void initDepthBuffer(int width, int height) {
+    private void initOffscreenFramebuffer(int width, int height) {
         long d = metalDevice.getDevice();
         long send = metalDevice.getObjcMsgSend();
+        if (d == 0L || send == 0L) return;
 
         long descClass = objc_getClass("MTLTextureDescriptor");
+
+        // 1. Offscreen Color Texture (RenderTarget + ShaderRead)
         long desc = invokePPP(descClass, sel_registerName("new"), send);
-        invokePPPP(desc, sel_registerName("setTextureType:"), 2L, send);
-        invokePPPP(desc, sel_registerName("setPixelFormat:"), 252L, send);
+        invokePPPP(desc, sel_registerName("setTextureType:"), 2L, send); // 2L = MTLTextureType2D
+        invokePPPP(desc, sel_registerName("setPixelFormat:"), 80L, send); // 80L = BGRA8Unorm
         invokePPPP(desc, sel_registerName("setWidth:"), (long) width, send);
         invokePPPP(desc, sel_registerName("setHeight:"), (long) height, send);
-        invokePPPP(desc, sel_registerName("setUsage:"), 4L, send);
-        invokePPPP(desc, sel_registerName("setStorageMode:"), 2L, send);
+        invokePPPP(desc, sel_registerName("setUsage:"), 5L, send); // 5L = RenderTarget (4) | ShaderRead (1)
+        invokePPPP(desc, sel_registerName("setStorageMode:"), 2L, send); // Private
 
-        depthTexture = invokePPPP(d, sel_registerName("newTextureWithDescriptor:"), desc, send);
+        offscreenColorTexture = invokePPPP(d, sel_registerName("newTextureWithDescriptor:"), desc, send);
+
+        // 2. Offscreen Depth Texture (Depth32Float)
+        long depthDesc = invokePPP(descClass, sel_registerName("new"), send);
+        invokePPPP(depthDesc, sel_registerName("setTextureType:"), 2L, send);
+        invokePPPP(depthDesc, sel_registerName("setPixelFormat:"), 252L, send); // 252L = Depth32Float
+        invokePPPP(depthDesc, sel_registerName("setWidth:"), (long) width, send);
+        invokePPPP(depthDesc, sel_registerName("setHeight:"), (long) height, send);
+        invokePPPP(depthDesc, sel_registerName("setUsage:"), 4L, send);
+        invokePPPP(depthDesc, sel_registerName("setStorageMode:"), 2L, send);
+
+        offscreenDepthTexture = invokePPPP(d, sel_registerName("newTextureWithDescriptor:"), depthDesc, send);
+
+        // 3. Main Window Depth Texture
+        long winDepthDesc = invokePPP(descClass, sel_registerName("new"), send);
+        invokePPPP(winDepthDesc, sel_registerName("setTextureType:"), 2L, send);
+        invokePPPP(winDepthDesc, sel_registerName("setPixelFormat:"), 252L, send);
+        invokePPPP(winDepthDesc, sel_registerName("setWidth:"), 1280L, send);
+        invokePPPP(winDepthDesc, sel_registerName("setHeight:"), 720L, send);
+        invokePPPP(winDepthDesc, sel_registerName("setUsage:"), 4L, send);
+        invokePPPP(winDepthDesc, sel_registerName("setStorageMode:"), 2L, send);
+
+        windowDepthTexture = invokePPPP(d, sel_registerName("newTextureWithDescriptor:"), winDepthDesc, send);
+    }
+
+    private void initViewportQuad() {
+        // Viewport panel quad coordinates matching UI layout: X: -0.55f to 0.55f, Y: -0.50f to 0.88f
+        float[] quadVerts = new float[] {
+            // X,       Y,      Z,    R,    G,    B,    A,    U,    V
+            -0.55f,  0.88f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f,
+            -0.55f, -0.50f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f,
+             0.55f, -0.50f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+
+            -0.55f,  0.88f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f,
+             0.55f, -0.50f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+             0.55f,  0.88f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f
+        };
+        MetalBuffer buf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), quadVerts, 9);
+        viewportQuadBuffer = buf.getHandle();
+    }
+
+    private void initIdentityUniform() {
+        float[] identityMVP = new float[] {
+            1.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, 1.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f
+        };
+        long send = metalDevice.getObjcMsgSend();
+        uniformBufferIdentity = MetalBuffer.createUniformBuffer(metalDevice.getDevice(), send, 80L);
+        long pIdentity = invokePPP(uniformBufferIdentity, sel_registerName("contents"), send);
+        if (pIdentity != 0L) {
+            FloatBuffer fb = MemoryUtil.memFloatBuffer(pIdentity, 16);
+            fb.clear();
+            fb.put(identityMVP);
+            MemoryUtil.memPutInt(pIdentity + 64L, 1); // hasTexture = 1
+        }
+    }
+
+    @Override
+    public long getOffscreenViewportTexture() {
+        return offscreenColorTexture;
+    }
+
+    @Override
+    public void resizeViewport(int width, int height) {
+        if (width > 0 && height > 0) {
+            initOffscreenFramebuffer(width, height);
+        }
     }
 
     @Override
@@ -116,16 +193,10 @@ public class MetalBackend implements IRenderBackend {
     }
 
     @Override
-    public void clearSceneQueue() {
-        sceneQueue.clear();
-    }
+    public void clearSceneQueue() { sceneQueue.clear(); }
 
     @Override
-    public void submitEntity(String meshPath, float[] vertices, int vertexCount,
-                              String texturePath, byte[] pixels, int texW, int texH,
-                              float px, float py, float pz,
-                              float rx, float ry, float rz,
-                              float sx, float sy, float sz) {
+    public void submitEntity(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
         if (meshPath == null || vertices == null || vertexCount <= 0) return;
 
         long vbo = gpuMeshCache.computeIfAbsent(meshPath, k -> {
@@ -156,6 +227,7 @@ public class MetalBackend implements IRenderBackend {
         sceneQueue.add(item);
     }
 
+    // Camera View & Projection Matrix Calculations
     private float[] createCameraViewMatrix() {
         float radYaw = (float) Math.toRadians(camYaw);
         float radPitch = (float) Math.toRadians(camPitch);
@@ -176,26 +248,26 @@ public class MetalBackend implements IRenderBackend {
         float radRy = (float) Math.toRadians(ry);
         float radRz = (float) Math.toRadians(rz);
 
-        float cx = (float) Math.cos(radRx), sx_sin = (float) Math.sin(radRx);
-        float cy = (float) Math.cos(radRy), sy_sin = (float) Math.sin(radRy);
-        float cz = (float) Math.cos(radRz), sz_sin = (float) Math.sin(radRz);
+        float cx = (float) Math.cos(radRx), sx1 = (float) Math.sin(radRx);
+        float cy = (float) Math.cos(radRy), sy1 = (float) Math.sin(radRy);
+        float cz = (float) Math.cos(radRz), sz1 = (float) Math.sin(radRz);
 
-        float m00 = (cy * cz + sy_sin * sx_sin * sz_sin) * sx;
-        float m10 = (cx * sz_sin) * sx;
-        float m20 = (-sy_sin * cz + cy * sx_sin * sz_sin) * sx;
+        float m00 = cz * cy;
+        float m01 = cz * sy1 * sx1 - sz1 * cx;
+        float m02 = cz * sy1 * cx + sz1 * sx1;
 
-        float m01 = (-cy * sz_sin + sy_sin * sx_sin * cz) * sy;
-        float m11 = (cx * cz) * sy;
-        float m21 = (sy_sin * sz_sin + cy * sx_sin * cz) * sy;
+        float m10 = sz1 * cy;
+        float m11 = sz1 * sy1 * sx1 + cz * cx;
+        float m12 = sz1 * sy1 * cx - cz * sx1;
 
-        float m02 = (sy_sin * cx) * sz;
-        float m12 = (-sx_sin) * sz;
-        float m22 = (cy * cx) * sz;
+        float m20 = -sy1;
+        float m21 = cy * sx1;
+        float m22 = cy * cx;
 
         return new float[] {
-            m00, m10, m20, 0.0f,
-            m01, m11, m21, 0.0f,
-            m02, m12, m22, 0.0f,
+            m00 * sx, m10 * sx, m20 * sx, 0.0f,
+            m01 * sy, m11 * sy, m21 * sy, 0.0f,
+            m02 * sz, m12 * sz, m22 * sz, 0.0f,
             px, py, pz, 1.0f
         };
     }
@@ -254,7 +326,7 @@ public class MetalBackend implements IRenderBackend {
 
         if (metalLayer == 0L || commandQueue == 0L || metalPipeline.getPipelineState3D() == 0L) return;
 
-        float aspect = 1280.0f / 720.0f;
+        float aspect = 712.0f / 488.0f; // Viewport Canvas Aspect Ratio
         float[] mvpGrid = createGridMVPMatrix(aspect);
 
         long pGridContents = invokePPP(uniformBufferGrid, sel_registerName("contents"), send);
@@ -269,39 +341,41 @@ public class MetalBackend implements IRenderBackend {
         if (currentDrawable == 0L) return;
 
         currentCommandBuffer = invokePPP(commandQueue, sel_registerName("commandBuffer"), send);
-        long texture = invokePPP(currentDrawable, sel_registerName("texture"), send);
 
+        // =========================================================================
+        // PASS 1: OFFSCREEN 3D SCENE PASS (Grid + Models -> offscreenColorTexture)
+        // =========================================================================
         long passDescClass = objc_getClass("MTLRenderPassDescriptor");
-        long renderPassDesc = invokePPP(passDescClass, sel_registerName("renderPassDescriptor"), send);
+        long offscreenPassDesc = invokePPP(passDescClass, sel_registerName("renderPassDescriptor"), send);
 
-        long colorAttachments = invokePPP(renderPassDesc, sel_registerName("colorAttachments"), send);
-        long colorAttach0 = invokePPPP(colorAttachments, sel_registerName("objectAtIndexedSubscript:"), 0L, send);
+        long colorAttachOff = invokePPP(offscreenPassDesc, sel_registerName("colorAttachments"), send);
+        long colorAttachOff0 = invokePPPP(colorAttachOff, sel_registerName("objectAtIndexedSubscript:"), 0L, send);
 
-        invokePPPP(colorAttach0, sel_registerName("setTexture:"), texture, send);
-        invokePPPP(colorAttach0, sel_registerName("setLoadAction:"), 2L, send);
-        invokePPPP(colorAttach0, sel_registerName("setStoreAction:"), 1L, send);
+        invokePPPP(colorAttachOff0, sel_registerName("setTexture:"), offscreenColorTexture, send);
+        invokePPPP(colorAttachOff0, sel_registerName("setLoadAction:"), 2L, send); // Clear
+        invokePPPP(colorAttachOff0, sel_registerName("setStoreAction:"), 1L, send); // Store
 
-        if (depthTexture != 0L) {
-            long depthAttachment = invokePPP(renderPassDesc, sel_registerName("depthAttachment"), send);
-            invokePPPP(depthAttachment, sel_registerName("setTexture:"), depthTexture, send);
-            invokePPPP(depthAttachment, sel_registerName("setLoadAction:"), 2L, send);
-            invokePPPP(depthAttachment, sel_registerName("setStoreAction:"), 0L, send);
+        if (offscreenDepthTexture != 0L) {
+            long depthAttachOff = invokePPP(offscreenPassDesc, sel_registerName("depthAttachment"), send);
+            invokePPPP(depthAttachOff, sel_registerName("setTexture:"), offscreenDepthTexture, send);
+            invokePPPP(depthAttachOff, sel_registerName("setLoadAction:"), 2L, send); // Clear
+            invokePPPP(depthAttachOff, sel_registerName("setStoreAction:"), 0L, send);
         }
 
-        long encoder = invokePPPP(currentCommandBuffer, sel_registerName("renderCommandEncoderWithDescriptor:"), renderPassDesc, send);
+        long encoder3D = invokePPPP(currentCommandBuffer, sel_registerName("renderCommandEncoderWithDescriptor:"), offscreenPassDesc, send);
 
-        // PASS 1: 3D Perspective Ground Grid (Lines = 1L)
+        // Subpass 1A: 3D Ground Grid (Lines = 1L)
         if (gridVertexBuffer != 0L && gridVertexCount > 0) {
-            invokePPPP(encoder, sel_registerName("setRenderPipelineState:"), metalPipeline.getPipelineState3D(), send);
-            invokePPPP(encoder, sel_registerName("setDepthStencilState:"), metalPipeline.getDepthStencilState3D(), send);
+            invokePPPP(encoder3D, sel_registerName("setRenderPipelineState:"), metalPipeline.getPipelineState3D(), send);
+            invokePPPP(encoder3D, sel_registerName("setDepthStencilState:"), metalPipeline.getDepthStencilState3D(), send);
 
-            invokePPPPPP(encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), gridVertexBuffer, 0L, 0L, send);
-            invokePPPPPP(encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), uniformBufferGrid, 0L, 1L, send);
-            invokePPPPPP(encoder, sel_registerName("setFragmentBuffer:offset:atIndex:"), uniformBufferGrid, 0L, 1L, send);
-            invokePPPPPP(encoder, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 1L, 0L, (long) gridVertexCount, send); // 1L = MTLPrimitiveTypeLine
+            invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), gridVertexBuffer, 0L, 0L, send);
+            invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), uniformBufferGrid, 0L, 1L, send);
+            invokePPPPPP(encoder3D, sel_registerName("setFragmentBuffer:offset:atIndex:"), uniformBufferGrid, 0L, 1L, send);
+            invokePPPPPP(encoder3D, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 1L, 0L, (long) gridVertexCount, send);
         }
 
-        // PASS 2: 3D Perspective Model Meshes (Triangles = 3L)
+        // Subpass 1B: 3D Model Meshes (Triangles = 3L)
         for (int i = 0; i < sceneQueue.size(); i++) {
             RenderEntity item = sceneQueue.get(i);
             long offset = i * 256L;
@@ -316,32 +390,71 @@ public class MetalBackend implements IRenderBackend {
                 MemoryUtil.memPutInt(pModelContents + offset + 64L, item.hasTexture ? 1 : 0);
             }
 
-            invokePPPP(encoder, sel_registerName("setRenderPipelineState:"), metalPipeline.getPipelineState3D(), send);
-            invokePPPP(encoder, sel_registerName("setDepthStencilState:"), metalPipeline.getDepthStencilState3D(), send);
+            invokePPPP(encoder3D, sel_registerName("setRenderPipelineState:"), metalPipeline.getPipelineState3D(), send);
+            invokePPPP(encoder3D, sel_registerName("setDepthStencilState:"), metalPipeline.getDepthStencilState3D(), send);
 
             long texToBind = (item.hasTexture && item.textureHandle != 0L) ? item.textureHandle : metalTexture.getBindableTexture();
-            invokePPPPP(encoder, sel_registerName("setFragmentTexture:atIndex:"), texToBind, 0L, send);
+            invokePPPPP(encoder3D, sel_registerName("setFragmentTexture:atIndex:"), texToBind, 0L, send);
             if (metalTexture.getSamplerStateHandle() != 0L) {
-                invokePPPPP(encoder, sel_registerName("setFragmentSamplerState:atIndex:"), metalTexture.getSamplerStateHandle(), 0L, send);
+                invokePPPPP(encoder3D, sel_registerName("setFragmentSamplerState:atIndex:"), metalTexture.getSamplerStateHandle(), 0L, send);
             }
 
-            invokePPPPPP(encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), item.vertexBufferHandle, 0L, 0L, send);
-            invokePPPPPP(encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), uniformBufferModel, offset, 1L, send);
-            invokePPPPPP(encoder, sel_registerName("setFragmentBuffer:offset:atIndex:"), uniformBufferModel, offset, 1L, send);
-            invokePPPPPP(encoder, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, (long) item.vertexCount, send); // 3L = MTLPrimitiveTypeTriangle
+            invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), item.vertexBufferHandle, 0L, 0L, send);
+            invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), uniformBufferModel, offset, 1L, send);
+            invokePPPPPP(encoder3D, sel_registerName("setFragmentBuffer:offset:atIndex:"), uniformBufferModel, offset, 1L, send);
+            invokePPPPPP(encoder3D, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, (long) item.vertexCount, send);
         }
 
-        // PASS 3: 2D UI Overlay & Viewport Transform Gizmos
+        invokePPP(encoder3D, sel_registerName("endEncoding"), send);
+
+        // =========================================================================
+        // PASS 2: MAIN WINDOW PASS (Offscreen Viewport Quad + 2D UI Overlay)
+        // =========================================================================
+        long drawableTexture = invokePPP(currentDrawable, sel_registerName("texture"), send);
+
+        long windowPassDesc = invokePPP(passDescClass, sel_registerName("renderPassDescriptor"), send);
+        long colorAttachWin = invokePPP(windowPassDesc, sel_registerName("colorAttachments"), send);
+        long colorAttachWin0 = invokePPPP(colorAttachWin, sel_registerName("objectAtIndexedSubscript:"), 0L, send);
+
+        invokePPPP(colorAttachWin0, sel_registerName("setTexture:"), drawableTexture, send);
+        invokePPPP(colorAttachWin0, sel_registerName("setLoadAction:"), 2L, send); // Clear
+        invokePPPP(colorAttachWin0, sel_registerName("setStoreAction:"), 1L, send); // Store
+
+        if (windowDepthTexture != 0L) {
+            long depthAttachWin = invokePPP(windowPassDesc, sel_registerName("depthAttachment"), send);
+            invokePPPP(depthAttachWin, sel_registerName("setTexture:"), windowDepthTexture, send);
+            invokePPPP(depthAttachWin, sel_registerName("setLoadAction:"), 2L, send); // Clear
+            invokePPPP(depthAttachWin, sel_registerName("setStoreAction:"), 0L, send);
+        }
+
+        long encoderWin = invokePPPP(currentCommandBuffer, sel_registerName("renderCommandEncoderWithDescriptor:"), windowPassDesc, send);
+
+        // Subpass 2A: Draw Offscreen 3D Viewport Quad into Viewport Canvas Region
+        if (viewportQuadBuffer != 0L && offscreenColorTexture != 0L) {
+            invokePPPP(encoderWin, sel_registerName("setRenderPipelineState:"), metalPipeline.getPipelineState3D(), send);
+            invokePPPP(encoderWin, sel_registerName("setDepthStencilState:"), metalPipeline.getDepthStencilStateUI(), send);
+
+            invokePPPPP(encoderWin, sel_registerName("setFragmentTexture:atIndex:"), offscreenColorTexture, 0L, send);
+            if (metalTexture.getSamplerStateHandle() != 0L) {
+                invokePPPPP(encoderWin, sel_registerName("setFragmentSamplerState:atIndex:"), metalTexture.getSamplerStateHandle(), 0L, send);
+            }
+
+            invokePPPPPP(encoderWin, sel_registerName("setVertexBuffer:offset:atIndex:"), viewportQuadBuffer, 0L, 0L, send);
+            invokePPPPPP(encoderWin, sel_registerName("setVertexBuffer:offset:atIndex:"), uniformBufferIdentity, 0L, 1L, send);
+            invokePPPPPP(encoderWin, sel_registerName("setFragmentBuffer:offset:atIndex:"), uniformBufferIdentity, 0L, 1L, send);
+            invokePPPPPP(encoderWin, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, 6L, send);
+        }
+
+        // Subpass 2B: Draw 2D Editor UI Overlay & Viewport Transform Gizmos
         if (uiVertexBuffer != 0L && uiVertexCount > 0 && metalPipeline.getPipelineStateUI() != 0L) {
-            invokePPPP(encoder, sel_registerName("setRenderPipelineState:"), metalPipeline.getPipelineStateUI(), send);
-            invokePPPP(encoder, sel_registerName("setDepthStencilState:"), metalPipeline.getDepthStencilStateUI(), send);
+            invokePPPP(encoderWin, sel_registerName("setRenderPipelineState:"), metalPipeline.getPipelineStateUI(), send);
+            invokePPPP(encoderWin, sel_registerName("setDepthStencilState:"), metalPipeline.getDepthStencilStateUI(), send);
 
-            invokePPPPPP(encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), uiVertexBuffer, 0L, 0L, send);
-            invokePPPPPP(encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), uniformBufferGrid, 0L, 1L, send);
-            invokePPPPPP(encoder, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, (long) uiVertexCount, send);
+            invokePPPPPP(encoderWin, sel_registerName("setVertexBuffer:offset:atIndex:"), uiVertexBuffer, 0L, 0L, send);
+            invokePPPPPP(encoderWin, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, (long) uiVertexCount, send);
         }
 
-        invokePPP(encoder, sel_registerName("endEncoding"), send);
+        invokePPP(encoderWin, sel_registerName("endEncoding"), send);
     }
 
     @Override
@@ -360,19 +473,13 @@ public class MetalBackend implements IRenderBackend {
 
     @Override
     public void shutdown() {
-        System.out.println("[MetalBackend] Releasing Metal resources...");
+        System.out.println("[MetalBackend] Releasing Metal offscreen and pipeline resources...");
     }
 
-    @Override
-    public long createBuffer(BufferCreateInfo createInfo) { return 102L; }
-    @Override
-    public void destroyBuffer(long handle) {}
-    @Override
-    public long createTexture(TextureCreateInfo createInfo) { return 202L; }
-    @Override
-    public void destroyTexture(long handle) {}
-    @Override
-    public GraphicsAPI getAPI() { return GraphicsAPI.METAL; }
-    @Override
-    public String getDeviceName() { return "Native Apple Metal Driver (macOS)"; }
+    @Override public long createBuffer(BufferCreateInfo createInfo) { return 102L; }
+    @Override public void destroyBuffer(long handle) {}
+    @Override public long createTexture(TextureCreateInfo createInfo) { return 202L; }
+    @Override public void destroyTexture(long handle) {}
+    @Override public GraphicsAPI getAPI() { return GraphicsAPI.METAL; }
+    @Override public String getDeviceName() { return "Native Apple Metal Driver (Offscreen Viewport Target)"; }
 }

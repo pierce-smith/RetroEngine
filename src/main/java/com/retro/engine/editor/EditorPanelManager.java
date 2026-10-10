@@ -7,31 +7,15 @@ import java.util.List;
 
 /**
  * EditorPanelManager orchestrates the editor panel layout and state for the Retro Engine Editor.
- * Includes 3D Perspective Ground Grid, 3D Projected Viewport Transform Gizmos,
- * and Viewport Toolbar Switcher.
+ * Updated: Transform Gizmos are anchored directly to the model's 3D base/origin,
+ * with X, Y, Z axes projected directly from 3D world space so handles remain
+ * perfectly aligned with the Global Grid in the 3D viewport.
  */
 public class EditorPanelManager {
 
     public enum AssetType { MESH_3D, TEXTURE, SHADER, UNKNOWN }
     public enum GizmoMode { TRANSLATE, ROTATE, SCALE }
     public enum GizmoAxis { NONE, X, Y, Z }
-
-    public static class AssetEntry {
-        public final String name;
-        public final String absolutePath;
-        public final AssetType type;
-
-        public AssetEntry(String name, String absolutePath, AssetType type) {
-            this.name = name;
-            this.absolutePath = absolutePath;
-            this.type = type;
-        }
-
-        @Override
-        public String toString() {
-            return "[" + type + "] " + name;
-        }
-    }
 
     public static class Transform {
         public float posX = 0.0f, posY = 0.0f, posZ = 0.0f;
@@ -40,19 +24,30 @@ public class EditorPanelManager {
     }
 
     public static class SceneEntity {
-        public final String id;
+        public String id;
         public String name;
-        public final Transform transform = new Transform();
+        public Transform transform = new Transform();
         public String meshAssetPath;
-        public String textureAssetPath = null;
-        public String textureName = "NONE";
-        public int vertexCount = 0;
+        public String textureAssetPath;
+        public String textureName = "DEFAULT_CHECKER";
         public boolean selected = false;
 
         public SceneEntity(String id, String name, String meshAssetPath) {
             this.id = id;
             this.name = name;
             this.meshAssetPath = meshAssetPath;
+        }
+    }
+
+    public static class AssetEntry {
+        public String name;
+        public String absolutePath;
+        public AssetType type;
+
+        public AssetEntry(String name, String absolutePath, AssetType type) {
+            this.name = name;
+            this.absolutePath = absolutePath;
+            this.type = type;
         }
     }
 
@@ -68,10 +63,10 @@ public class EditorPanelManager {
 
     // Camera Transform State for 3D Viewport Projection
     private float camPanX = 0.0f;
-    private float camPanY = -1.2f;
-    private float camZoom = -8.5f;
-    private float camPitch = 22.0f;
-    private float camYaw = -35.0f;
+    private float camPanY = 0.25f;
+    private float camZoom = -5.0f;
+    private float camPitch = 0.0f;
+    private float camYaw = 0.0f;
 
     public void setCameraState(float panX, float panY, float zoom, float pitch, float yaw) {
         this.camPanX = panX;
@@ -81,8 +76,15 @@ public class EditorPanelManager {
         this.camYaw = yaw;
     }
 
+    /**
+     * Projects 3D World coordinates to 2D UI NDC coordinates.
+     * Maps 3D perspective projection into 2D Viewport Panel quad space:
+     * Viewport Quad Bounds: X [-0.55, 0.55], Y [-0.50, 0.88]
+     * Viewport Center: X = 0.0f, Y = 0.19f
+     * Viewport Half-Scale: X = 0.55f, Y = 0.69f
+     */
     public float[] projectWorldToNdc(float wx, float wy, float wz) {
-        float aspect = 1280.0f / 720.0f;
+        float aspect = 712.0f / 488.0f;
         float fov = (float) Math.toRadians(50.0);
         float f = (float) (1.0 / Math.tan(fov / 2.0));
 
@@ -95,6 +97,7 @@ public class EditorPanelManager {
         float cy = (float) Math.cos(radYaw), sy = (float) Math.sin(radYaw);
         float cp = (float) Math.cos(radPitch), sp = (float) Math.sin(radPitch);
 
+        // View space transformation matching MetalBackend GPU camera
         float vx = cy * wx - sy * wz + camPanX;
         float vy = sy * sp * wx + cp * wy + cy * sp * wz + camPanY;
         float vz = sy * cp * wx - sp * wy + cy * cp * wz + camZoom;
@@ -102,10 +105,15 @@ public class EditorPanelManager {
         float clipW = -vz;
         if (clipW <= 0.001f) clipW = 0.001f;
 
+        // Raw 3D NDC [-1.0, 1.0]
         float ndcX = (p00 * vx) / clipW;
         float ndcY = (p11 * vy) / clipW;
 
-        return new float[] { ndcX, ndcY };
+        // Map 3D NDC into 2D Viewport Canvas Region in UI space
+        float uiX = 0.0f + ndcX * 0.55f;
+        float uiY = 0.19f + ndcY * 0.69f;
+
+        return new float[] { uiX, uiY };
     }
 
     public EditorPanelManager() {}
@@ -155,11 +163,11 @@ public class EditorPanelManager {
 
     private void addGridLine(List<Float> verts, float x1, float y1, float z1, float x2, float y2, float z2, float r, float g, float b, float a) {
         verts.add(x1); verts.add(y1); verts.add(z1);
-        verts.add(r); verts.add(g); verts.add(b); verts.add(a);
+        verts.add(r);  verts.add(g);  verts.add(b);  verts.add(a);
         verts.add(0.0f); verts.add(0.0f);
 
         verts.add(x2); verts.add(y2); verts.add(z2);
-        verts.add(r); verts.add(g); verts.add(b); verts.add(a);
+        verts.add(r);  verts.add(g);  verts.add(b);  verts.add(a);
         verts.add(0.0f); verts.add(0.0f);
     }
 
@@ -169,25 +177,34 @@ public class EditorPanelManager {
             String name = file.getName();
             String ext = getFileExtension(name).toLowerCase();
 
-            AssetType type = resolveAssetType(ext);
-            AssetEntry asset = new AssetEntry(name, path, type);
-            assetDirectory.add(asset);
-            System.out.println("[Asset Directory] Ingested file into Asset Directory: " + asset);
+            AssetType type = AssetType.UNKNOWN;
+            if (ext.equals("obj") || ext.equals("fbx") || ext.equals("gltf") || ext.equals("glb")) {
+                type = AssetType.MESH_3D;
+            } else if (ext.equals("png") || ext.equals("jpg") || ext.equals("tga")) {
+                type = AssetType.TEXTURE;
+            }
+
+            AssetEntry entry = new AssetEntry(name, path, type);
+            assetDirectory.add(entry);
+            System.out.println("[Asset Directory] Registered File: " + name + " (" + type + ")");
         }
     }
 
-    public SceneEntity spawnEntityFromAsset(AssetEntry asset) {
-        if (asset == null || asset.type != AssetType.MESH_3D) return null;
+    private String getFileExtension(String fileName) {
+        int dot = fileName.lastIndexOf('.');
+        return (dot == -1) ? "" : fileName.substring(dot + 1);
+    }
 
-        String entityId = "mesh_entity_" + (sceneEntities.size() + 1);
-        String entityName = removeExtension(asset.name);
-        SceneEntity newEntity = new SceneEntity(entityId, entityName, asset.absolutePath);
+    public void spawnEntityFromAsset(AssetEntry meshAsset) {
+        if (meshAsset == null || meshAsset.type != AssetType.MESH_3D) return;
 
-        sceneEntities.add(newEntity);
-        selectEntity(newEntity);
+        String entityId = "entity_" + (sceneEntities.size() + 1);
+        String name = meshAsset.name.replaceAll("\\.[^.]+$", "");
+        SceneEntity entity = new SceneEntity(entityId, name, meshAsset.absolutePath);
 
-        System.out.println("[Scene Hierarchy] Spawned Entity in Scene: " + entityName);
-        return newEntity;
+        sceneEntities.add(entity);
+        selectEntity(entity);
+        System.out.println("[Scene Hierarchy] Spawned Entity: '" + name + "' from " + meshAsset.name);
     }
 
     public void assignTextureToSelectedEntity(AssetEntry textureAsset) {
@@ -253,41 +270,50 @@ public class EditorPanelManager {
     }
 
     private void render3DGizmos(List<Float> verts, SceneEntity entity, GizmoMode mode, GizmoAxis activeAxis) {
+        // 1. Anchor directly to the model's base/origin in 3D world space
         float px = entity.transform.posX;
         float py = entity.transform.posY;
         float pz = entity.transform.posZ;
 
         float[] p0 = projectWorldToNdc(px, py, pz);
-        float cx = Math.max(-0.50f, Math.min(0.50f, p0[0]));
-        float cy = Math.max(-0.40f, Math.min(0.75f, p0[1]));
+        float cx = p0[0];
+        float cy = p0[1];
 
-        float axisLen = 0.8f;
-        float[] pX = projectWorldToNdc(px + axisLen, py, pz);
-        float[] pY = projectWorldToNdc(px, py + axisLen, pz);
-        float[] pZ = projectWorldToNdc(px, py, pz + axisLen);
+        // 2. Project World X, Y, Z axis points (aligned to Global Grid in 3D)
+        float axisStep = 1.0f;
+        float[] pX = projectWorldToNdc(px + axisStep, py, pz);
+        float[] pY = projectWorldToNdc(px, py + axisStep, pz);
+        float[] pZ = projectWorldToNdc(px, py, pz + axisStep);
 
-        float dxX = pX[0] - p0[0], dyX = pX[1] - p0[1];
-        float dxY = pY[0] - p0[0], dyY = pY[1] - p0[1];
-        float dxZ = pZ[0] - p0[0], dyZ = pZ[1] - p0[1];
+        // 3. Compute 2D screen directions along projected Global Grid axes
+        float dxX = pX[0] - cx, dyX = pX[1] - cy;
+        float dxY = pY[0] - cx, dyY = pY[1] - cy;
+        float dxZ = pZ[0] - cx, dyZ = pZ[1] - cy;
 
         float lenX = (float) Math.hypot(dxX, dyX);
         float lenY = (float) Math.hypot(dxY, dyY);
         float lenZ = (float) Math.hypot(dxZ, dyZ);
 
-        float handleVisualLen = 0.14f;
+        float handleVisualLen = 0.16f;
 
-        float dirXX = lenX > 0.0001f ? (dxX / lenX) * handleVisualLen : handleVisualLen;
-        float dirXY = lenX > 0.0001f ? (dyX / lenX) * handleVisualLen : 0.0f;
+        // Normalized direction vectors along 3D Global Grid
+        float uX_x = lenX > 0.0001f ? (dxX / lenX) : 1.0f;
+        float uX_y = lenX > 0.0001f ? (dyX / lenX) : 0.0f;
 
-        float dirYX = lenY > 0.0001f ? (dxY / lenY) * handleVisualLen : 0.0f;
-        float dirYY = lenY > 0.0001f ? (dyY / lenY) * handleVisualLen : handleVisualLen;
+        float uY_x = lenY > 0.0001f ? (dxY / lenY) : 0.0f;
+        float uY_y = lenY > 0.0001f ? (dyY / lenY) : 1.0f;
 
-        float dirZX = lenZ > 0.0001f ? (dxZ / lenZ) * handleVisualLen : -handleVisualLen * 0.707f;
-        float dirZY = lenZ > 0.0001f ? (dyZ / lenZ) * handleVisualLen : -handleVisualLen * 0.707f;
+        float uZ_x = lenZ > 0.0001f ? (dxZ / lenZ) : -0.707f;
+        float uZ_y = lenZ > 0.0001f ? (dyZ / lenZ) : -0.707f;
 
-        float xTipX = cx + dirXX, xTipY = cy + dirXY;
-        float yTipX = cx + dirYX, yTipY = cy + dirYY;
-        float zTipX = cx + dirZX, zTipY = cy + dirZY;
+        float xTipX = cx + uX_x * handleVisualLen;
+        float xTipY = cy + uX_y * handleVisualLen;
+
+        float yTipX = cx + uY_x * handleVisualLen;
+        float yTipY = cy + uY_y * handleVisualLen;
+
+        float zTipX = cx + uZ_x * handleVisualLen;
+        float zTipY = cy + uZ_y * handleVisualLen;
 
         // Center Origin Quad
         UIBatchBuilder.addSquareEnd(verts, cx, cy, 0.02f, 0.9f, 0.9f, 0.9f, 1.0f);
@@ -301,63 +327,52 @@ public class EditorPanelManager {
         if (activeAxis == GizmoAxis.Y) { gx = 0.2f; gg = 1.0f; gb = 0.9f; }
         if (activeAxis == GizmoAxis.Z) { bx = 0.9f; bg = 0.2f; bb = 1.0f; }
 
-        float lineThick = 0.006f;
+        float lineThick = 0.008f;
 
         if (mode == GizmoMode.TRANSLATE) {
-            // RED X AXIS
+            // RED X AXIS (Aligned to World X Grid line)
             UIBatchBuilder.addLineSegment(verts, cx, cy, xTipX, xTipY, lineThick, rx, rg, rb, 1.0f);
-            UIBatchBuilder.addArrowhead(verts, xTipX, xTipY, dirXX, dirXY, 0.03f, 0.015f, rx, rg, rb, 1.0f);
-            UIBatchBuilder.addBoundedText(verts, "X", xTipX + dirXX * 0.15f, xTipY + dirXY * 0.15f, xTipX + dirXX * 0.15f + 0.04f, 1.1f, rx, rg, rb, 1.0f);
+            UIBatchBuilder.addArrowhead(verts, xTipX, xTipY, uX_x, uX_y, 0.035f, 0.018f, rx, rg, rb, 1.0f);
+            UIBatchBuilder.addBoundedText(verts, "X", xTipX + uX_x * 0.025f, xTipY + uX_y * 0.025f, xTipX + uX_x * 0.025f + 0.04f, 1.1f, rx, rg, rb, 1.0f);
 
-            // GREEN Y AXIS
+            // GREEN Y AXIS (Aligned to World Y Vertical Axis)
             UIBatchBuilder.addLineSegment(verts, cx, cy, yTipX, yTipY, lineThick, gx, gg, gb, 1.0f);
-            UIBatchBuilder.addArrowhead(verts, yTipX, yTipY, dirYX, dirYY, 0.03f, 0.015f, gx, gg, gb, 1.0f);
-            UIBatchBuilder.addBoundedText(verts, "Y", yTipX + dirYX * 0.15f, yTipY + dirYY * 0.15f, yTipX + dirYX * 0.15f + 0.04f, 1.1f, gx, gg, gb, 1.0f);
+            UIBatchBuilder.addArrowhead(verts, yTipX, yTipY, uY_x, uY_y, 0.035f, 0.018f, gx, gg, gb, 1.0f);
+            UIBatchBuilder.addBoundedText(verts, "Y", yTipX + uY_x * 0.025f, yTipY + uY_y * 0.025f, yTipX + uY_x * 0.025f + 0.04f, 1.1f, gx, gg, gb, 1.0f);
 
-            // BLUE Z AXIS
+            // BLUE Z AXIS (Aligned to World Z Grid line)
             UIBatchBuilder.addLineSegment(verts, cx, cy, zTipX, zTipY, lineThick, bx, bg, bb, 1.0f);
-            UIBatchBuilder.addArrowhead(verts, zTipX, zTipY, dirZX, dirZY, 0.03f, 0.015f, bx, bg, bb, 1.0f);
-            UIBatchBuilder.addBoundedText(verts, "Z", zTipX + dirZX * 0.15f, zTipY + dirZY * 0.15f, zTipX + dirZX * 0.15f + 0.04f, 1.1f, bx, bg, bb, 1.0f);
+            UIBatchBuilder.addArrowhead(verts, zTipX, zTipY, uZ_x, uZ_y, 0.035f, 0.018f, bx, bg, bb, 1.0f);
+            UIBatchBuilder.addBoundedText(verts, "Z", zTipX + uZ_x * 0.025f, zTipY + uZ_y * 0.025f, zTipX + uZ_x * 0.025f + 0.04f, 1.1f, bx, bg, bb, 1.0f);
 
         } else if (mode == GizmoMode.SCALE) {
             // RED X SCALE
             UIBatchBuilder.addLineSegment(verts, cx, cy, xTipX, xTipY, lineThick, rx, rg, rb, 1.0f);
-            UIBatchBuilder.addSquareEnd(verts, xTipX, xTipY, 0.024f, rx, rg, rb, 1.0f);
+            UIBatchBuilder.addSquareEnd(verts, xTipX, xTipY, 0.026f, rx, rg, rb, 1.0f);
+            UIBatchBuilder.addBoundedText(verts, "X", xTipX + uX_x * 0.025f, xTipY + uX_y * 0.025f, xTipX + uX_x * 0.025f + 0.04f, 1.1f, rx, rg, rb, 1.0f);
 
             // GREEN Y SCALE
             UIBatchBuilder.addLineSegment(verts, cx, cy, yTipX, yTipY, lineThick, gx, gg, gb, 1.0f);
-            UIBatchBuilder.addSquareEnd(verts, yTipX, yTipY, 0.024f, gx, gg, gb, 1.0f);
+            UIBatchBuilder.addSquareEnd(verts, yTipX, yTipY, 0.026f, gx, gg, gb, 1.0f);
+            UIBatchBuilder.addBoundedText(verts, "Y", yTipX + uY_x * 0.025f, yTipY + uY_y * 0.025f, yTipX + uY_x * 0.025f + 0.04f, 1.1f, gx, gg, gb, 1.0f);
 
             // BLUE Z SCALE
             UIBatchBuilder.addLineSegment(verts, cx, cy, zTipX, zTipY, lineThick, bx, bg, bb, 1.0f);
-            UIBatchBuilder.addSquareEnd(verts, zTipX, zTipY, 0.024f, bx, bg, bb, 1.0f);
+            UIBatchBuilder.addSquareEnd(verts, zTipX, zTipY, 0.026f, bx, bg, bb, 1.0f);
+            UIBatchBuilder.addBoundedText(verts, "Z", zTipX + uZ_x * 0.025f, zTipY + uZ_y * 0.025f, zTipX + uZ_x * 0.025f + 0.04f, 1.1f, bx, bg, bb, 1.0f);
 
         } else if (mode == GizmoMode.ROTATE) {
             // RED PITCH ARC
             UIBatchBuilder.addArcRing(verts, cx, cy, 0.05f, 0.14f, -90.0f, 90.0f, lineThick, rx, rg, rb, 1.0f);
+            UIBatchBuilder.addBoundedText(verts, "X:PITCH", cx + 0.06f, cy + 0.08f, cx + 0.20f, 1.0f, rx, rg, rb, 1.0f);
+
             // GREEN YAW ARC
             UIBatchBuilder.addArcRing(verts, cx, cy, 0.14f, 0.05f, 0.0f, 180.0f, lineThick, gx, gg, gb, 1.0f);
+            UIBatchBuilder.addBoundedText(verts, "Y:YAW", cx - 0.05f, cy + 0.08f, cx + 0.08f, 1.0f, gx, gg, gb, 1.0f);
+
             // BLUE ROLL ARC
             UIBatchBuilder.addArcRing(verts, cx, cy, 0.14f, 0.14f, 0.0f, 360.0f, lineThick + 0.002f, bx, bg, bb, 1.0f);
+            UIBatchBuilder.addBoundedText(verts, "Z:ROLL", cx - 0.18f, cy - 0.12f, cx - 0.02f, 1.0f, bx, bg, bb, 1.0f);
         }
-    }
-
-    private AssetType resolveAssetType(String extension) {
-        return switch (extension) {
-            case "obj", "gltf", "glb", "fbx" -> AssetType.MESH_3D;
-            case "png", "jpg", "jpeg", "tga", "bmp" -> AssetType.TEXTURE;
-            case "metal", "glsl", "hlsl", "spv" -> AssetType.SHADER;
-            default -> AssetType.UNKNOWN;
-        };
-    }
-
-    private String getFileExtension(String name) {
-        int lastDot = name.lastIndexOf('.');
-        return (lastDot == -1) ? "" : name.substring(lastDot + 1);
-    }
-
-    private String removeExtension(String name) {
-        int lastDot = name.lastIndexOf('.');
-        return (lastDot == -1) ? name : name.substring(0, lastDot);
     }
 }
