@@ -3,7 +3,11 @@ package com.retro.engine;
 import com.retro.engine.content.AssetStreamingService;
 import com.retro.engine.content.mesh.ModelData;
 import com.retro.engine.content.texture.TextureData;
+import com.retro.engine.ecs.components.MaterialComponent;
+import com.retro.engine.ecs.components.MeshRendererComponent;
+import com.retro.engine.ecs.components.TransformComponent;
 import com.retro.engine.editor.EditorPanelManager;
+import com.retro.engine.editor.EditorPanelManager.SceneEntity;
 import com.retro.engine.editor.EditorSelectionController;
 import com.retro.engine.editor.ViewportCameraController;
 import com.retro.engine.host.GlfwWindow;
@@ -112,27 +116,36 @@ public class Main {
 
                 editorManager.update(deltaTime);
 
-                // Step 4: Sync Virtual Thread async asset completions into main render cache
+                // Sync Virtual Thread async asset completions into main render cache
                 streamingService.processCompletedUploads();
 
                 rhi.clearSceneQueue();
 
-                for (EditorPanelManager.SceneEntity entity : editorManager.getSceneEntities()) {
-                    if (entity.meshAssetPath != null) {
-                        if (!streamingService.isMeshLoaded(entity.meshAssetPath)) {
-                            streamingService.requestModelAsync(entity.meshAssetPath);
+                for (SceneEntity entity : editorManager.getSceneEntities()) {
+                    TransformComponent tc = entity.getComponent(TransformComponent.class);
+                    MeshRendererComponent mc = entity.getComponent(MeshRendererComponent.class);
+                    MaterialComponent mat = entity.getComponent(MaterialComponent.class);
+
+                    if (tc == null || mc == null) continue;
+
+                    String meshPath = mc.meshAssetPath;
+                    String texturePath = (mat != null) ? mat.textureAssetPath : null;
+
+                    if (meshPath != null) {
+                        if (!streamingService.isMeshLoaded(meshPath)) {
+                            streamingService.requestModelAsync(meshPath);
                         }
 
-                        if (entity.textureAssetPath != null && !streamingService.isTextureLoaded(entity.textureAssetPath)) {
-                            streamingService.requestTextureAsync(entity.textureAssetPath);
+                        if (texturePath != null && !streamingService.isTextureLoaded(texturePath)) {
+                            streamingService.requestTextureAsync(texturePath);
                         }
 
-                        ModelData model = streamingService.getModel(entity.meshAssetPath);
+                        ModelData model = streamingService.getModel(meshPath);
 
                         byte[] pixels = null;
                         int texW = 0, texH = 0;
-                        if (entity.textureAssetPath != null) {
-                            TextureData tex = streamingService.getTexture(entity.textureAssetPath);
+                        if (texturePath != null) {
+                            TextureData tex = streamingService.getTexture(texturePath);
                             if (tex != null) {
                                 pixels = tex.pixels;
                                 texW = tex.width;
@@ -142,14 +155,14 @@ public class Main {
 
                         if (model != null && model.vertices != null && model.vertices.length > 0) {
                             rhi.submitEntity(
-                                    entity.meshAssetPath,
+                                    meshPath,
                                     model.vertices,
                                     model.vertexCount,
-                                    entity.textureAssetPath,
+                                    texturePath,
                                     pixels, texW, texH,
-                                    entity.transform.posX, entity.transform.posY, entity.transform.posZ,
-                                    entity.transform.rotX, entity.transform.rotY, entity.transform.rotZ,
-                                    entity.transform.scaleX, entity.transform.scaleY, entity.transform.scaleZ
+                                    tc.posX, tc.posY, tc.posZ,
+                                    tc.rotX, tc.rotY, tc.rotZ,
+                                    tc.scaleX, tc.scaleY, tc.scaleZ
                             );
                         }
                     }
