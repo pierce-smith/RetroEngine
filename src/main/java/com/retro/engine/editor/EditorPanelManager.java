@@ -14,13 +14,16 @@ import java.util.*;
 
 /**
  * EditorPanelManager orchestrates the editor panel layout, top menu dropdowns,
- * command history (Undo/Redo), and component-based Scene Entity management.
+ * modal dialog overlays (Unity-Style Asset Pickers), command history (Undo/Redo),
+ * and component-based Scene Entity management.
+ * Target JDK: JDK 21+ / JDK 25 / macOS
  */
 public class EditorPanelManager {
     public enum AssetType { MESH_3D, TEXTURE, SHADER, SCENE, UNKNOWN }
     public enum GizmoMode { TRANSLATE, ROTATE, SCALE }
     public enum GizmoAxis { NONE, X, Y, Z }
     public enum DropdownMenu { NONE, FILE, EDIT, ENTITY, VIEW }
+    public enum ModalState { NONE, ASSET_PICKER }
 
     public static class SceneEntity {
         public String id;
@@ -94,6 +97,16 @@ public class EditorPanelManager {
             mat.textureAssetPath = path;
             mat.textureName = name;
         }
+
+        public void setMeshAssetPath(String path) {
+            MeshRendererComponent mc = getComponent(MeshRendererComponent.class);
+            if (mc == null) {
+                mc = new MeshRendererComponent(path);
+                addComponent(mc);
+            } else {
+                mc.meshAssetPath = path;
+            }
+        }
     }
 
     public static class AssetEntry {
@@ -115,6 +128,10 @@ public class EditorPanelManager {
     private GizmoMode currentGizmoMode = GizmoMode.TRANSLATE;
     private GizmoAxis activeGizmoAxis = GizmoAxis.NONE;
     private DropdownMenu activeDropdownMenu = DropdownMenu.NONE;
+
+    // Modal Overlays
+    private ModalState activeModal = ModalState.NONE;
+    private AssetType pickerFilterType = AssetType.TEXTURE;
 
     private final CommandHistory commandHistory = new CommandHistory();
 
@@ -139,17 +156,10 @@ public class EditorPanelManager {
         System.out.println("[View] Toggle 3D Grid -> " + (this.show3DGrid ? "VISIBLE" : "HIDDEN"));
     }
 
-    public CommandHistory getCommandHistory() {
-        return commandHistory;
-    }
+    public CommandHistory getCommandHistory() { return commandHistory; }
 
-    public void undo() {
-        commandHistory.undo();
-    }
-
-    public void redo() {
-        commandHistory.redo();
-    }
+    public void undo() { commandHistory.undo(); }
+    public void redo() { commandHistory.redo(); }
 
     public void newScene() {
         sceneEntities.clear();
@@ -173,9 +183,7 @@ public class EditorPanelManager {
         }
     }
 
-    public void saveActiveScene() {
-        saveActiveScene(this.activeScenePath);
-    }
+    public void saveActiveScene() { saveActiveScene(this.activeScenePath); }
 
     public void saveActiveScene(String filePath) {
         if (filePath != null) this.activeScenePath = filePath;
@@ -289,22 +297,26 @@ public class EditorPanelManager {
         int extent = 15;
         float y = 0.0f;
 
+        // Baseline grid generation:
+        // 1. Z-constant lines running along X axis ((-extent, y, z) to (extent, y, z))
         for (int z_i = -extent; z_i <= extent; z_i++) {
             float z = (float) z_i;
             float r = 0.22f, g = 0.22f, b = 0.28f, a = 0.8f;
-            if (z_i == 0) { r = 1.0f; g = 0.25f; b = 0.25f; a = 1.0f; }
+            if (z_i == 0) { r = 1.0f; g = 0.25f; b = 0.25f; a = 1.0f; } // RED for X Axis (Z=0 line)
 
             addGridLine(verts, -extent, y, z, extent, y, z, r, g, b, a);
         }
 
+        // 2. X-constant lines running along Z axis ((x, y, -extent) to (x, y, extent))
         for (int x_i = -extent; x_i <= extent; x_i++) {
             float x = (float) x_i;
             float r = 0.22f, g = 0.22f, b = 0.28f, a = 0.8f;
-            if (x_i == 0) { r = 0.25f; g = 0.55f; b = 1.0f; a = 1.0f; }
+            if (x_i == 0) { r = 0.25f; g = 0.55f; b = 1.0f; a = 1.0f; } // BLUE for Z Axis (X=0 line)
 
             addGridLine(verts, x, y, -extent, x, y, extent, r, g, b, a);
         }
 
+        // 3. Y Axis Vertical Line (GREEN) from Y=0.0f to Y=3.0f!
         addGridLine(verts, 0.0f, 0.0f, 0.0f, 0.0f, 3.0f, 0.0f, 0.25f, 1.0f, 0.25f, 1.0f);
 
         float[] array = new float[verts.size()];
@@ -313,13 +325,8 @@ public class EditorPanelManager {
     }
 
     private void addGridLine(List<Float> verts, float x1, float y1, float z1, float x2, float y2, float z2, float r, float g, float b, float a) {
-        verts.add(x1); verts.add(y1); verts.add(z1);
-        verts.add(r);  verts.add(g);  verts.add(b);  verts.add(a);
-        verts.add(0.0f); verts.add(0.0f);
-
-        verts.add(x2); verts.add(y2); verts.add(z2);
-        verts.add(r);  verts.add(g);  verts.add(b);  verts.add(a);
-        verts.add(0.0f); verts.add(0.0f);
+        verts.add(x1); verts.add(y1); verts.add(z1); verts.add(r); verts.add(g); verts.add(b); verts.add(a); verts.add(0.0f); verts.add(0.0f);
+        verts.add(x2); verts.add(y2); verts.add(z2); verts.add(r); verts.add(g); verts.add(b); verts.add(a); verts.add(0.0f); verts.add(0.0f);
     }
 
     public void onFilesDropped(List<String> filePaths) {
@@ -350,7 +357,6 @@ public class EditorPanelManager {
 
     public void spawnEntityFromAsset(AssetEntry meshAsset) {
         if (meshAsset == null || meshAsset.type != AssetType.MESH_3D) return;
-
         String entityId = "entity_" + (sceneEntities.size() + 1);
         String name = meshAsset.name.replaceAll("\\.[^.]+$", "");
         SceneEntity entity = new SceneEntity(entityId, name, meshAsset.absolutePath);
@@ -364,6 +370,12 @@ public class EditorPanelManager {
         if (selectedEntity == null || textureAsset == null || textureAsset.type != AssetType.TEXTURE) return;
         selectedEntity.setTextureAsset(textureAsset.absolutePath, textureAsset.name);
         System.out.println("[Inspector] Linked Texture '" + textureAsset.name + "' to ECS Entity '" + selectedEntity.name + "'");
+    }
+
+    public void assignMeshToSelectedEntity(AssetEntry meshAsset) {
+        if (selectedEntity == null || meshAsset == null || meshAsset.type != AssetType.MESH_3D) return;
+        selectedEntity.setMeshAssetPath(meshAsset.absolutePath);
+        System.out.println("[Inspector] Linked 3D Mesh '" + meshAsset.name + "' to ECS Entity '" + selectedEntity.name + "'");
     }
 
     public void selectEntity(SceneEntity entity) {
@@ -395,6 +407,21 @@ public class EditorPanelManager {
         }
     }
 
+    // Asset Picker Modal Management
+    public ModalState getActiveModal() { return activeModal; }
+    public AssetType getPickerFilterType() { return pickerFilterType; }
+
+    public void openAssetPicker(AssetType filterType) {
+        this.pickerFilterType = filterType;
+        this.activeModal = ModalState.ASSET_PICKER;
+        System.out.println("[EditorUI] Opened In-Engine Asset Picker Modal for type: " + filterType);
+    }
+
+    public void closeModal() {
+        this.activeModal = ModalState.NONE;
+        System.out.println("[EditorUI] Closed Modal Overlay.");
+    }
+
     public float[] getUiVertices() {
         this.cachedUiVertices = generateUiVertices();
         return this.cachedUiVertices;
@@ -421,9 +448,12 @@ public class EditorPanelManager {
             render3DGizmos(verts, selectedEntity, currentGizmoMode, activeGizmoAxis);
         }
 
-        // Render Dropdown Popover on top of UI elements
         if (activeDropdownMenu != DropdownMenu.NONE) {
             renderDropdownMenuOverlay(verts, activeDropdownMenu);
+        }
+
+        if (activeModal == ModalState.ASSET_PICKER) {
+            renderAssetPickerModal(verts);
         }
 
         float[] array = new float[verts.size()];
@@ -432,20 +462,16 @@ public class EditorPanelManager {
     }
 
     private void renderTopMenuBar(List<Float> verts) {
-        // Top Header Background Bar
         UIBatchBuilder.addQuad(verts, -1.0f, 0.92f, 1.0f, 1.0f, 0.10f, 0.10f, 0.14f, 1.0f);
         UIBatchBuilder.addFrameBorder(verts, -1.0f, 0.92f, 1.0f, 1.0f, 0.002f, 0.20f, 0.20f, 0.28f, 1.0f);
 
-        // Logo Title
         UIBatchBuilder.addBoundedText(verts, "RETRO ENGINE", -0.98f, 0.94f, -0.75f, 1.2f, 0.25f, 0.80f, 1.0f, 1.0f);
 
-        // Header Menu Buttons (FILE, EDIT, ENTITY, VIEW)
         renderHeaderMenuButton(verts, "FILE", -0.72f, -0.62f, activeDropdownMenu == DropdownMenu.FILE);
         renderHeaderMenuButton(verts, "EDIT", -0.61f, -0.51f, activeDropdownMenu == DropdownMenu.EDIT);
         renderHeaderMenuButton(verts, "ENTITY", -0.50f, -0.38f, activeDropdownMenu == DropdownMenu.ENTITY);
         renderHeaderMenuButton(verts, "VIEW", -0.37f, -0.27f, activeDropdownMenu == DropdownMenu.VIEW);
 
-        // Status Readout
         String sceneName = new File(activeScenePath).getName();
         UIBatchBuilder.addBoundedText(verts, "SCENE: " + sceneName, 0.35f, 0.94f, 0.98f, 1.0f, 0.7f, 0.7f, 0.8f, 1.0f);
     }
@@ -474,7 +500,6 @@ public class EditorPanelManager {
         float minY = 0.58f;
         float maxY = 0.92f;
 
-        // Dropdown Card Panel
         UIBatchBuilder.addQuad(verts, minX, minY, maxX, maxY, 0.12f, 0.12f, 0.16f, 0.98f);
         UIBatchBuilder.addFrameBorder(verts, minX, minY, maxX, maxY, 0.003f, 0.0f, 0.55f, 0.90f, 1.0f);
 
@@ -508,6 +533,55 @@ public class EditorPanelManager {
         UIBatchBuilder.addQuad(verts, minX, y - 0.02f, maxX, y + 0.05f, 0.16f, 0.18f, 0.24f, 1.0f);
         UIBatchBuilder.addFrameBorder(verts, minX, y - 0.02f, maxX, y + 0.05f, 0.001f, 0.25f, 0.28f, 0.35f, 1.0f);
         UIBatchBuilder.addBoundedText(verts, text, minX + 0.01f, y + 0.01f, maxX - 0.01f, 1.0f, 0.95f, 0.95f, 0.95f, 1.0f);
+    }
+
+    public void renderAssetPickerModal(List<Float> verts) {
+        UIBatchBuilder.addQuad(verts, -1.0f, -1.0f, 1.0f, 1.0f, 0.02f, 0.02f, 0.04f, 0.75f);
+
+        float cardMinX = -0.45f, cardMaxX = 0.45f;
+        float cardMinY = -0.45f, cardMaxY = 0.45f;
+
+        UIBatchBuilder.addQuad(verts, cardMinX, cardMinY, cardMaxX, cardMaxY, 0.10f, 0.11f, 0.15f, 0.98f);
+        UIBatchBuilder.addFrameBorder(verts, cardMinX, cardMinY, cardMaxX, cardMaxY, 0.004f, 0.0f, 0.55f, 0.90f, 1.0f);
+
+        UIBatchBuilder.addQuad(verts, cardMinX, cardMaxY - 0.10f, cardMaxX, cardMaxY, 0.16f, 0.18f, 0.24f, 1.0f);
+        UIBatchBuilder.addBoundedText(verts, "SELECT " + pickerFilterType.name() + " ASSET", cardMinX + 0.03f, cardMaxY - 0.04f, cardMaxX - 0.10f, 1.3f, 1.0f, 1.0f, 1.0f, 1.0f);
+
+        UIBatchBuilder.addQuad(verts, cardMaxX - 0.08f, cardMaxY - 0.08f, cardMaxX - 0.02f, cardMaxY - 0.02f, 0.65f, 0.15f, 0.15f, 1.0f);
+        UIBatchBuilder.addBoundedText(verts, "X", cardMaxX - 0.065f, cardMaxY - 0.035f, cardMaxX - 0.03f, 1.2f, 1.0f, 1.0f, 1.0f, 1.0f);
+
+        UIBatchBuilder.addQuad(verts, cardMinX + 0.03f, cardMaxY - 0.18f, cardMinX + 0.38f, cardMaxY - 0.12f, 0.25f, 0.15f, 0.15f, 1.0f);
+        UIBatchBuilder.addFrameBorder(verts, cardMinX + 0.03f, cardMaxY - 0.18f, cardMinX + 0.38f, cardMaxY - 0.12f, 0.002f, 0.8f, 0.2f, 0.2f, 1.0f);
+        UIBatchBuilder.addBoundedText(verts, "[NONE / UNBIND]", cardMinX + 0.05f, cardMaxY - 0.14f, cardMinX + 0.36f, 1.0f, 1.0f, 0.6f, 0.6f, 1.0f);
+
+        UIBatchBuilder.addQuad(verts, cardMaxX - 0.38f, cardMaxY - 0.18f, cardMaxX - 0.03f, cardMaxY - 0.12f, 0.15f, 0.45f, 0.30f, 1.0f);
+        UIBatchBuilder.addFrameBorder(verts, cardMaxX - 0.38f, cardMaxY - 0.18f, cardMaxX - 0.03f, cardMaxY - 0.12f, 0.002f, 0.3f, 0.9f, 0.5f, 1.0f);
+        UIBatchBuilder.addBoundedText(verts, "[IMPORT DISK...]", cardMaxX - 0.36f, cardMaxY - 0.14f, cardMaxX - 0.05f, 1.0f, 0.4f, 1.0f, 0.6f, 1.0f);
+
+        List<AssetEntry> filtered = assetDirectory.stream()
+                .filter(a -> a.type == pickerFilterType)
+                .toList();
+
+        float listY = cardMaxY - 0.24f;
+
+        if (filtered.isEmpty()) {
+            UIBatchBuilder.addBoundedText(verts, "NO " + pickerFilterType.name() + " ASSETS IN PROJECT", cardMinX + 0.05f, listY, cardMaxX - 0.05f, 1.1f, 0.5f, 0.5f, 0.5f, 1.0f);
+            UIBatchBuilder.addBoundedText(verts, "CLICK [IMPORT DISK...] TO BROWSE NATIVE FILES", cardMinX + 0.05f, listY - 0.08f, cardMaxX - 0.05f, 1.0f, 0.3f, 0.8f, 1.0f, 1.0f);
+        } else {
+            for (AssetEntry asset : filtered) {
+                if (listY < cardMinY + 0.05f) break;
+
+                UIBatchBuilder.addQuad(verts, cardMinX + 0.03f, listY - 0.05f, cardMaxX - 0.03f, listY + 0.03f, 0.15f, 0.18f, 0.24f, 1.0f);
+                UIBatchBuilder.addFrameBorder(verts, cardMinX + 0.03f, listY - 0.05f, cardMaxX - 0.03f, listY + 0.03f, 0.001f, 0.25f, 0.30f, 0.40f, 1.0f);
+
+                UIBatchBuilder.addBoundedText(verts, "• " + asset.name, cardMinX + 0.05f, listY - 0.01f, cardMaxX - 0.22f, 1.1f, 0.95f, 0.95f, 0.95f, 1.0f);
+
+                UIBatchBuilder.addQuad(verts, cardMaxX - 0.20f, listY - 0.04f, cardMaxX - 0.05f, listY + 0.02f, 0.0f, 0.45f, 0.70f, 1.0f);
+                UIBatchBuilder.addBoundedText(verts, "SELECT", cardMaxX - 0.18f, listY - 0.01f, cardMaxX - 0.06f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f);
+
+                listY -= 0.10f;
+            }
+        }
     }
 
     private void render3DGizmos(List<Float> verts, SceneEntity entity, GizmoMode mode, GizmoAxis activeAxis) {

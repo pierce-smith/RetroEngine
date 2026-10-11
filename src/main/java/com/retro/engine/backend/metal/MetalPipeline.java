@@ -5,7 +5,6 @@ import static org.lwjgl.system.macosx.ObjCRuntime.objc_getClass;
 import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 
 public class MetalPipeline {
-
     private long pipelineState3D = 0L;
     private long depthStencilState3D = 0L;
 

@@ -2,17 +2,22 @@ package com.retro.engine.editor;
 
 import com.retro.engine.ecs.components.TransformComponent;
 import com.retro.engine.editor.EditorPanelManager.AssetEntry;
+import com.retro.engine.editor.EditorPanelManager.AssetType;
 import com.retro.engine.editor.EditorPanelManager.DropdownMenu;
 import com.retro.engine.editor.EditorPanelManager.GizmoAxis;
 import com.retro.engine.editor.EditorPanelManager.GizmoMode;
+import com.retro.engine.editor.EditorPanelManager.ModalState;
 import com.retro.engine.editor.EditorPanelManager.SceneEntity;
 import com.retro.engine.editor.commands.TransformCommand;
 
+import java.io.File;
 import java.util.List;
 
 /**
  * EditorSelectionController routes mouse input to Top Bar Dropdown Menus,
- * 3D Viewport Transform Gizmos, Inspector Fields, and captures Transform edits for Undo/Redo.
+ * Asset Picker Modals, 3D Viewport Transform Gizmos, Inspector Fields, and
+ * captures Transform edits for Undo/Redo.
+ * Target JDK: JDK 21+ / JDK 25 / macOS
  */
 public class EditorSelectionController {
     public enum PanelType { TOP_BAR, SCENE_HIERARCHY, VIEWPORT_3D, INSPECTOR, ASSET_DIRECTORY, NONE }
@@ -31,7 +36,6 @@ public class EditorSelectionController {
 
     private InspectorField activeInspectorField = InspectorField.NONE;
 
-    // Transform Undo capture snapshots
     private SceneEntity transformDragEntity = null;
     private float startPx, startPy, startPz;
     private float startRx, startRy, startRz;
@@ -55,17 +59,23 @@ public class EditorSelectionController {
         if (entity == null) return;
         this.transformDragEntity = entity;
         TransformComponent tc = entity.getTransform();
-        this.startPx = tc.posX; this.startPy = tc.posY; this.startPz = tc.posZ;
-        this.startRx = tc.rotX; this.startRy = tc.rotY; this.startRz = tc.rotZ;
-        this.startSx = tc.scaleX; this.startSy = tc.scaleY; this.startSz = tc.scaleZ;
+        this.startPx = tc.posX;
+        this.startPy = tc.posY;
+        this.startPz = tc.posZ;
+        this.startRx = tc.rotX;
+        this.startRy = tc.rotY;
+        this.startRz = tc.rotZ;
+        this.startSx = tc.scaleX;
+        this.startSy = tc.scaleY;
+        this.startSz = tc.scaleZ;
     }
 
     private void checkAndPushTransformEnd() {
         if (transformDragEntity != null) {
             TransformComponent tc = transformDragEntity.getTransform();
             boolean changed = (tc.posX != startPx || tc.posY != startPy || tc.posZ != startPz ||
-                               tc.rotX != startRx || tc.rotY != startRy || tc.rotZ != startRz ||
-                               tc.scaleX != startSx || tc.scaleY != startSy || tc.scaleZ != startSz);
+                    tc.rotX != startRx || tc.rotY != startRy || tc.rotZ != startRz ||
+                    tc.scaleX != startSx || tc.scaleY != startSy || tc.scaleZ != startSz);
 
             if (changed && panelManager != null) {
                 TransformCommand cmd = new TransformCommand(
@@ -117,15 +127,21 @@ public class EditorSelectionController {
         if (activeManager == null) return;
 
         if (action == 1) { // GLFW_PRESS
-            DropdownMenu activeMenu = activeManager.getActiveDropdownMenu();
+            // 1. Modal Dialog Overlay Clicks
+            if (activeManager.getActiveModal() == ModalState.ASSET_PICKER) {
+                boolean handled = processModalClick(mouseX, mouseY, activeManager);
+                if (handled) return;
+            }
 
-            // If a dropdown menu is open, test clicks inside dropdown items first
+            // 2. Dropdown Menu Overlay Clicks
+            DropdownMenu activeMenu = activeManager.getActiveDropdownMenu();
             if (activeMenu != DropdownMenu.NONE) {
                 boolean handled = processDropdownOverlayClick(mouseX, mouseY, activeMenu, activeManager);
                 activeManager.setActiveDropdownMenu(DropdownMenu.NONE);
                 if (handled) return;
             }
 
+            // 3. Main Editor Panel Clicks
             PanelType clickedPanel = hitTest(mouseX, mouseY, 1280.0f, 720.0f);
 
             switch (clickedPanel) {
@@ -148,24 +164,136 @@ public class EditorSelectionController {
         }
     }
 
+    private boolean processModalClick(double mouseX, double mouseY, EditorPanelManager manager) {
+        double minX = 352.0, maxX = 928.0;
+        double minY = 198.0, maxY = 522.0;
+
+        if (mouseX < minX || mouseX > maxX || mouseY < minY || mouseY > maxY) {
+            manager.closeModal();
+            return true;
+        }
+
+        // Close [X] Button
+        if (mouseX >= 870.0 && mouseX <= 915.0 && mouseY >= 198.0 && mouseY <= 230.0) {
+            manager.closeModal();
+            return true;
+        }
+
+        // [NONE / UNBIND] Button
+        if (mouseX >= 370.0 && mouseX <= 590.0 && mouseY >= 238.0 && mouseY <= 270.0) {
+            SceneEntity selected = manager.getSelectedEntity();
+            if (selected != null) {
+                if (manager.getPickerFilterType() == AssetType.TEXTURE) {
+                    selected.setTextureAsset(null, "DEFAULT_CHECKER");
+                    System.out.println("[AssetPicker] Unbound texture from selected entity.");
+                } else if (manager.getPickerFilterType() == AssetType.MESH_3D) {
+                    selected.setMeshAssetPath(null);
+                    System.out.println("[AssetPicker] Unbound 3D mesh from selected entity.");
+                }
+            }
+            manager.closeModal();
+            return true;
+        }
+
+        // [IMPORT DISK...] Button
+        if (mouseX >= 680.0 && mouseX <= 900.0 && mouseY >= 238.0 && mouseY <= 270.0) {
+            manager.closeModal();
+            if (manager.getPickerFilterType() == AssetType.TEXTURE) {
+                promptImportTexture(manager);
+            } else if (manager.getPickerFilterType() == AssetType.MESH_3D) {
+                promptImportMesh(manager);
+            }
+            return true;
+        }
+
+        List<AssetEntry> filtered = manager.getAssetDirectory().stream()
+                .filter(a -> a.type == manager.getPickerFilterType())
+                .toList();
+
+        if (!filtered.isEmpty()) {
+            double startItemY = 285.0;
+            double itemHeight = 36.0;
+
+            for (int i = 0; i < filtered.size(); i++) {
+                double itemY = startItemY + (i * itemHeight);
+                if (mouseY >= itemY && mouseY <= itemY + itemHeight) {
+                    AssetEntry selectedAsset = filtered.get(i);
+                    if (manager.getPickerFilterType() == AssetType.TEXTURE) {
+                        manager.assignTextureToSelectedEntity(selectedAsset);
+                    } else if (manager.getPickerFilterType() == AssetType.MESH_3D) {
+                        manager.assignMeshToSelectedEntity(selectedAsset);
+                    }
+                    manager.closeModal();
+                    return true;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private void promptImportTexture(EditorPanelManager manager) {
+        String defaultDir = new File("Assets/Textures").getAbsolutePath();
+        String importedPath = NativeFileDialog.openFileDialog(
+                "Select Texture Asset",
+                defaultDir,
+                "Texture Images (*.png, *.jpg, *.tga)",
+                "png", "jpg", "tga"
+        );
+        if (importedPath != null && !importedPath.trim().isEmpty()) {
+            File file = new File(importedPath);
+            AssetEntry newAsset = new AssetEntry(file.getName(), importedPath, AssetType.TEXTURE);
+            manager.onFilesDropped(List.of(importedPath));
+            manager.assignTextureToSelectedEntity(newAsset);
+            System.out.println("[Inspector] Imported & Bound Texture: " + file.getName());
+        }
+    }
+
+    private void promptImportMesh(EditorPanelManager manager) {
+        String defaultDir = new File("Assets/Models").getAbsolutePath();
+        String importedPath = NativeFileDialog.openFileDialog(
+                "Select 3D Mesh Asset",
+                defaultDir,
+                "3D Models (*.obj, *.fbx, *.gltf)",
+                "obj", "fbx", "gltf", "glb"
+        );
+        if (importedPath != null && !importedPath.trim().isEmpty()) {
+            File file = new File(importedPath);
+            AssetEntry newAsset = new AssetEntry(file.getName(), importedPath, AssetType.MESH_3D);
+            manager.onFilesDropped(List.of(importedPath));
+            manager.assignMeshToSelectedEntity(newAsset);
+            System.out.println("[Inspector] Imported & Bound 3D Mesh: " + file.getName());
+        }
+    }
+
+    private void promptImportAssetForDirectory(EditorPanelManager manager) {
+        try {
+            String defaultDir = new File("Assets").getAbsolutePath();
+            String importedPath = NativeFileDialog.openFileDialog(
+                    "Import Asset to Directory",
+                    defaultDir,
+                    "Supported Assets (*.obj, *.fbx, *.gltf, *.png, *.jpg, *.tga, *.scene)",
+                    "obj", "fbx", "gltf", "glb", "png", "jpg", "tga", "scene"
+            );
+            if (importedPath != null && !importedPath.trim().isEmpty()) {
+                manager.onFilesDropped(List.of(importedPath));
+            }
+        } catch (Exception e) {
+            System.err.println("[AssetDirectory] File import dialog error: " + e.getMessage());
+        }
+    }
+
     private void processTopBarClick(double mouseX, double mouseY, EditorPanelManager manager) {
-        // FILE Menu Button (X: 180 to 240)
         if (mouseX >= 170.0 && mouseX <= 245.0) {
             DropdownMenu next = (manager.getActiveDropdownMenu() == DropdownMenu.FILE) ? DropdownMenu.NONE : DropdownMenu.FILE;
             manager.setActiveDropdownMenu(next);
-        }
-        // EDIT Menu Button (X: 250 to 310)
-        else if (mouseX >= 250.0 && mouseX <= 315.0) {
+        } else if (mouseX >= 250.0 && mouseX <= 315.0) {
             DropdownMenu next = (manager.getActiveDropdownMenu() == DropdownMenu.EDIT) ? DropdownMenu.NONE : DropdownMenu.EDIT;
             manager.setActiveDropdownMenu(next);
-        }
-        // ENTITY Menu Button (X: 320 to 395)
-        else if (mouseX >= 320.0 && mouseX <= 395.0) {
+        } else if (mouseX >= 320.0 && mouseX <= 395.0) {
             DropdownMenu next = (manager.getActiveDropdownMenu() == DropdownMenu.ENTITY) ? DropdownMenu.NONE : DropdownMenu.ENTITY;
             manager.setActiveDropdownMenu(next);
-        }
-        // VIEW Menu Button (X: 400 to 465)
-        else if (mouseX >= 400.0 && mouseX <= 465.0) {
+        } else if (mouseX >= 400.0 && mouseX <= 465.0) {
             DropdownMenu next = (manager.getActiveDropdownMenu() == DropdownMenu.VIEW) ? DropdownMenu.NONE : DropdownMenu.VIEW;
             manager.setActiveDropdownMenu(next);
         }
@@ -374,9 +502,6 @@ public class EditorSelectionController {
             GizmoMode mode = activeManager.getCurrentGizmoMode();
             GizmoAxis axis = activeManager.getActiveGizmoAxis();
 
-            float ndcX = (float) (mouseX / 1280.0 * 2.0 - 1.0);
-            float ndcY = (float) (1.0 - mouseY / 720.0 * 2.0);
-
             float px = tc.posX;
             float py = tc.posY;
             float pz = tc.posZ;
@@ -384,6 +509,9 @@ public class EditorSelectionController {
             float[] p0 = activeManager.projectWorldToNdc(px, py, pz);
             float cx = p0[0];
             float cy = p0[1];
+
+            float ndcX = (float) (mouseX / 1280.0 * 2.0 - 1.0);
+            float ndcY = (float) (1.0 - mouseY / 720.0 * 2.0);
 
             if (mode == GizmoMode.TRANSLATE || mode == GizmoMode.SCALE) {
                 float axisWorldLen = 1.2f;
@@ -467,14 +595,28 @@ public class EditorSelectionController {
         SceneEntity active = manager.getSelectedEntity();
         if (active == null) return;
 
-        if (mouseY >= 280.0 && mouseY <= 320.0) {
-            List<AssetEntry> assets = manager.getAssetDirectory();
-            List<AssetEntry> textures = assets.stream().filter(a -> a.type == EditorPanelManager.AssetType.TEXTURE).toList();
-            if (!textures.isEmpty()) {
-                AssetEntry nextTex = textures.get(0);
-                manager.assignTextureToSelectedEntity(nextTex);
+        // Mesh Renderer Row Clicks (Y: 185 to 225)
+        if (mouseY >= 185.0 && mouseY <= 225.0) {
+            if (mouseX >= 1150.0 && mouseX <= 1205.0) {
+                manager.openAssetPicker(AssetType.MESH_3D);
+                return;
             }
-            return;
+            if (mouseX >= 1210.0 && mouseX <= 1270.0) {
+                promptImportMesh(manager);
+                return;
+            }
+        }
+
+        // Material Texture Row Clicks (Y: 250 to 295)
+        if (mouseY >= 250.0 && mouseY <= 295.0) {
+            if (mouseX >= 1150.0 && mouseX <= 1205.0) {
+                manager.openAssetPicker(AssetType.TEXTURE);
+                return;
+            }
+            if (mouseX >= 1210.0 && mouseX <= 1270.0) {
+                promptImportTexture(manager);
+                return;
+            }
         }
 
         int axis = -1;
@@ -512,8 +654,17 @@ public class EditorSelectionController {
     }
 
     private void processAssetClick(double mouseX, double mouseY, EditorPanelManager manager) {
+        // [+ IMPORT ASSET] Header Button click (X: 1030 to 1250, Y: 520 to 555)
+        if (mouseX >= 1030.0 && mouseX <= 1250.0 && mouseY >= 520.0 && mouseY <= 555.0) {
+            promptImportAssetForDirectory(manager);
+            return;
+        }
+
         List<AssetEntry> assets = manager.getAssetDirectory();
-        if (assets.isEmpty()) return;
+        if (assets.isEmpty()) {
+            promptImportAssetForDirectory(manager);
+            return;
+        }
 
         double startX = 20.0;
         double cardWidth = 230.0;
@@ -521,11 +672,11 @@ public class EditorSelectionController {
         int index = (int) ((mouseX - startX) / cardWidth);
         if (index >= 0 && index < assets.size()) {
             AssetEntry clickedAsset = assets.get(index);
-            if (clickedAsset.type == EditorPanelManager.AssetType.MESH_3D) {
+            if (clickedAsset.type == AssetType.MESH_3D) {
                 manager.spawnEntityFromAsset(clickedAsset);
-            } else if (clickedAsset.type == EditorPanelManager.AssetType.TEXTURE) {
+            } else if (clickedAsset.type == AssetType.TEXTURE) {
                 manager.assignTextureToSelectedEntity(clickedAsset);
-            } else if (clickedAsset.type == EditorPanelManager.AssetType.SCENE) {
+            } else if (clickedAsset.type == AssetType.SCENE) {
                 manager.loadSceneFromFile(clickedAsset.absolutePath);
             }
         }
