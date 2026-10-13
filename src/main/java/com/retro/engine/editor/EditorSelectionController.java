@@ -18,9 +18,6 @@ import java.util.List;
  * EditorSelectionController routes mouse input to Top Bar Dropdown Menus,
  * Asset Picker Modals, 3D Viewport Transform Gizmos, Inspector Fields, and
  * captures Transform edits for Undo/Redo.
- *
- * Refactored in Step 3 to support dynamic layout scaling and decoupled panel event routing.
- * Target JDK: JDK 21+ / JDK 25 / macOS
  */
 public class EditorSelectionController {
     public enum PanelType { TOP_BAR, SCENE_HIERARCHY, VIEWPORT_3D, INSPECTOR, ASSET_DIRECTORY, NONE }
@@ -52,6 +49,11 @@ public class EditorSelectionController {
         this.panelManager = panelManager;
     }
 
+    public EditorSelectionController(EditorPanelManager panelManager, ViewportCameraController cameraController) {
+        this.panelManager = panelManager;
+        this.cameraController = cameraController;
+    }
+
     public void setPanelManager(EditorPanelManager panelManager) {
         this.panelManager = panelManager;
     }
@@ -64,23 +66,17 @@ public class EditorSelectionController {
         if (entity == null) return;
         this.transformDragEntity = entity;
         TransformComponent tc = entity.getTransform();
-        this.startPx = tc.posX;
-        this.startPy = tc.posY;
-        this.startPz = tc.posZ;
-        this.startRx = tc.rotX;
-        this.startRy = tc.rotY;
-        this.startRz = tc.rotZ;
-        this.startSx = tc.scaleX;
-        this.startSy = tc.scaleY;
-        this.startSz = tc.scaleZ;
+        this.startPx = tc.posX; this.startPy = tc.posY; this.startPz = tc.posZ;
+        this.startRx = tc.rotX; this.startRy = tc.rotY; this.startRz = tc.rotZ;
+        this.startSx = tc.scaleX; this.startSy = tc.scaleY; this.startSz = tc.scaleZ;
     }
 
     private void checkAndPushTransformEnd() {
         if (transformDragEntity != null) {
             TransformComponent tc = transformDragEntity.getTransform();
-            boolean changed = (tc.posX != startPx || tc.posY != startPy || tc.posZ != startPz
-                    || tc.rotX != startRx || tc.rotY != startRy || tc.rotZ != startRz
-                    || tc.scaleX != startSx || tc.scaleY != startSy || tc.scaleZ != startSz);
+            boolean changed = (tc.posX != startPx || tc.posY != startPy || tc.posZ != startPz ||
+                               tc.rotX != startRx || tc.rotY != startRy || tc.rotZ != startRz ||
+                               tc.scaleX != startSx || tc.scaleY != startSy || tc.scaleZ != startSz);
 
             if (changed && panelManager != null) {
                 TransformCommand cmd = new TransformCommand(
@@ -146,23 +142,24 @@ public class EditorSelectionController {
                 if (handled) return;
             }
 
-            // 3. Main Editor Panel Clicks (Supports dynamic layout scaling)
+            // 3. Main Editor Panel Clicks
             PanelType clickedPanel = hitTest(mouseX, mouseY, 1280.0f, 720.0f);
 
-            switch (clickedPanel) {
-                case TOP_BAR -> processTopBarClick(mouseX, mouseY, activeManager);
-                case SCENE_HIERARCHY -> processHierarchyClick(mouseY, activeManager);
-                case INSPECTOR -> processInspectorClick(mouseX, mouseY, activeManager);
-                case ASSET_DIRECTORY -> processAssetClick(mouseX, mouseY, activeManager);
-                case VIEWPORT_3D -> {
-                    if (button == 0) { // LMB
-                        boolean hitToolbar = processViewportToolbarClick(mouseX, mouseY, activeManager);
-                        if (!hitToolbar) {
-                            processViewportGizmoClick(mouseX, mouseY, activeManager);
-                        }
+            if (clickedPanel == PanelType.TOP_BAR) {
+                processTopBarClick(mouseX, mouseY, activeManager);
+            } else if (clickedPanel == PanelType.SCENE_HIERARCHY) {
+                processHierarchyClick(mouseY, activeManager);
+            } else if (clickedPanel == PanelType.INSPECTOR) {
+                processInspectorClick(mouseX, mouseY, activeManager);
+            } else if (clickedPanel == PanelType.ASSET_DIRECTORY) {
+                processAssetClick(mouseX, mouseY, activeManager);
+            } else if (clickedPanel == PanelType.VIEWPORT_3D) {
+                if (button == 0) { // LMB
+                    boolean hitToolbar = processViewportToolbarClick(mouseX, mouseY, activeManager);
+                    if (!hitToolbar) {
+                        processViewportGizmoClick(mouseX, mouseY, activeManager);
                     }
                 }
-                default -> {}
             }
         } else if (action == 0) { // GLFW_RELEASE
             onMouseRelease();
@@ -178,14 +175,14 @@ public class EditorSelectionController {
             return true;
         }
 
-        // Close [X] Button
+        // Close [X] Button (Top-Right)
         if (mouseX >= 870.0 && mouseX <= 915.0 && mouseY >= 198.0 && mouseY <= 230.0) {
             manager.closeModal();
             return true;
         }
 
         // [NONE / UNBIND] Button
-        if (mouseX >= 370.0 && mouseX <= 590.0 && mouseY >= 238.0 && mouseY <= 270.0) {
+        if (mouseX >= 367.0 && mouseX <= 600.0 && mouseY >= 233.0 && mouseY <= 270.0) {
             SceneEntity selected = manager.getSelectedEntity();
             if (selected != null) {
                 if (manager.getPickerFilterType() == AssetType.TEXTURE) {
@@ -201,7 +198,7 @@ public class EditorSelectionController {
         }
 
         // [IMPORT DISK...] Button
-        if (mouseX >= 680.0 && mouseX <= 900.0 && mouseY >= 238.0 && mouseY <= 270.0) {
+        if (mouseX >= 680.0 && mouseX <= 915.0 && mouseY >= 233.0 && mouseY <= 270.0) {
             manager.closeModal();
             if (manager.getPickerFilterType() == AssetType.TEXTURE) {
                 promptImportTexture(manager);
@@ -211,6 +208,7 @@ public class EditorSelectionController {
             return true;
         }
 
+        // Asset Directory Item List inside Modal
         List<AssetEntry> filtered = manager.getAssetDirectory().stream()
                 .filter(a -> a.type == manager.getPickerFilterType())
                 .toList();
@@ -301,52 +299,156 @@ public class EditorSelectionController {
         } else if (mouseX >= 400.0 && mouseX <= 465.0) {
             DropdownMenu next = (manager.getActiveDropdownMenu() == DropdownMenu.VIEW) ? DropdownMenu.NONE : DropdownMenu.VIEW;
             manager.setActiveDropdownMenu(next);
+        } else if (mouseX >= 540.0 && mouseX <= 625.0) {
+            manager.play();
+        } else if (mouseX >= 633.0 && mouseX <= 710.0) {
+            manager.pause();
+        } else if (mouseX >= 716.0 && mouseX <= 787.0) {
+            manager.stop();
         }
     }
 
     private boolean processDropdownOverlayClick(double mouseX, double mouseY, DropdownMenu menu, EditorPanelManager manager) {
-        double minX = switch (menu) {
-            case FILE -> 175.0;
-            case EDIT -> 250.0;
-            case ENTITY -> 320.0;
-            case VIEW -> 400.0;
-            default -> 175.0;
-        };
+        double minX = 175.0;
+        if (menu == DropdownMenu.EDIT) minX = 250.0;
+        else if (menu == DropdownMenu.ENTITY) minX = 320.0;
+        else if (menu == DropdownMenu.VIEW) minX = 400.0;
+
         double maxX = minX + 210.0;
 
         if (mouseX >= minX && mouseX <= maxX && mouseY >= 30.0 && mouseY <= 180.0) {
             int itemIndex = (int) ((mouseY - 30.0) / 32.0);
 
-            switch (menu) {
-                case FILE -> {
-                    if (itemIndex == 0) manager.newScene();
-                    else if (itemIndex == 1) manager.promptOpenSceneWithNativeDialog();
-                    else if (itemIndex == 2) manager.promptSaveSceneWithNativeDialog();
-                }
-                case EDIT -> {
-                    if (itemIndex == 0) manager.undo();
-                    else if (itemIndex == 1) manager.redo();
-                    else if (itemIndex == 2) manager.deleteSelectedEntity();
-                }
-                case ENTITY -> {
-                    if (itemIndex == 0) manager.spawnDefaultCube();
-                    else if (itemIndex == 1) manager.spawnLightSource();
-                }
-                case VIEW -> {
-                    if (itemIndex == 0) {
-                        if (cameraController != null) {
-                            cameraController.reset();
-                            System.out.println("[View Menu] Reset Viewport Camera.");
-                        }
-                    } else if (itemIndex == 1) {
-                        manager.toggle3DGrid();
+            if (menu == DropdownMenu.FILE) {
+                if (itemIndex == 0) manager.newScene();
+                else if (itemIndex == 1) manager.promptOpenSceneWithNativeDialog();
+                else if (itemIndex == 2) manager.promptSaveSceneWithNativeDialog();
+            } else if (menu == DropdownMenu.EDIT) {
+                if (itemIndex == 0) manager.undo();
+                else if (itemIndex == 1) manager.redo();
+                else if (itemIndex == 2) manager.deleteSelectedEntity();
+            } else if (menu == DropdownMenu.ENTITY) {
+                if (itemIndex == 0) manager.spawnDefaultCube();
+                else if (itemIndex == 1) manager.spawnLightSource();
+            } else if (menu == DropdownMenu.VIEW) {
+                if (itemIndex == 0) {
+                    if (cameraController != null) {
+                        cameraController.reset();
+                        System.out.println("[View Menu] Reset Viewport Camera.");
                     }
+                } else if (itemIndex == 1) {
+                    manager.toggle3DGrid();
                 }
-                default -> {}
             }
             return true;
         }
         return false;
+    }
+
+    private void processHierarchyClick(double mouseY, EditorPanelManager manager) {
+        List<SceneEntity> entities = manager.getSceneEntities();
+        if (entities.isEmpty()) return;
+
+        double startY = TOP_BAR_HEIGHT + 30.0;
+        double itemHeight = 24.0;
+
+        int index = (int) ((mouseY - startY) / itemHeight);
+        if (index >= 0 && index < entities.size()) {
+            manager.selectEntity(entities.get(index));
+            System.out.println("[Scene Hierarchy] Selected Entity: " + entities.get(index).name);
+        }
+    }
+
+    private void processInspectorClick(double mouseX, double mouseY, EditorPanelManager manager) {
+        SceneEntity active = manager.getSelectedEntity();
+        if (active == null) return;
+
+        double rightMinX = 1280.0 - SIDE_PANEL_WIDTH;
+
+        // 1. Mesh Renderer Row Clicks (Y: 190.0 to 225.0)
+        if (mouseY >= 190.0 && mouseY <= 225.0) {
+            if (mouseX >= 1150.0 && mouseX <= 1205.0) {
+                manager.openAssetPicker(AssetType.MESH_3D);
+                return;
+            }
+            if (mouseX >= 1210.0 && mouseX <= 1270.0) {
+                promptImportMesh(manager);
+                return;
+            }
+        }
+
+        // 2. Material Texture Row Clicks (Y: 255.0 to 295.0)
+        if (mouseY >= 255.0 && mouseY <= 295.0) {
+            if (mouseX >= 1150.0 && mouseX <= 1205.0) {
+                manager.openAssetPicker(AssetType.TEXTURE);
+                return;
+            }
+            if (mouseX >= 1210.0 && mouseX <= 1270.0) {
+                promptImportTexture(manager);
+                return;
+            }
+        }
+
+        // 3. Transform Numerical Fields (POS Y: 115-132, ROT Y: 133-150, SCL Y: 151-168)
+        if (mouseX >= rightMinX + 20.0 && mouseX <= rightMinX + 250.0) {
+            InspectorField field = getHitInspectorField(mouseX, mouseY, rightMinX);
+            if (field != InspectorField.NONE) {
+                this.activeInspectorField = field;
+                captureTransformStart(active);
+                System.out.println("[Inspector] Grabbed Inspector Field: " + field);
+            }
+        }
+    }
+
+    private InspectorField getHitInspectorField(double mouseX, double mouseY, double rightMinX) {
+        if (mouseX < rightMinX + 20.0 || mouseX > rightMinX + 260.0) return InspectorField.NONE;
+
+        double relX = mouseX - (rightMinX + 20.0);
+        int col = (int) (relX / 80.0);
+        if (col < 0 || col > 2) return InspectorField.NONE;
+
+        if (mouseY >= 115.0 && mouseY <= 132.0) {
+            if (col == 0) return InspectorField.POS_X;
+            if (col == 1) return InspectorField.POS_Y;
+            if (col == 2) return InspectorField.POS_Z;
+        } else if (mouseY >= 133.0 && mouseY <= 150.0) {
+            if (col == 0) return InspectorField.ROT_X;
+            if (col == 1) return InspectorField.ROT_Y;
+            if (col == 2) return InspectorField.ROT_Z;
+        } else if (mouseY >= 151.0 && mouseY <= 168.0) {
+            if (col == 0) return InspectorField.SCL_X;
+            if (col == 1) return InspectorField.SCL_Y;
+            if (col == 2) return InspectorField.SCL_Z;
+        }
+        return InspectorField.NONE;
+    }
+
+    private void processAssetClick(double mouseX, double mouseY, EditorPanelManager manager) {
+        if (mouseX >= 1030.0 && mouseX <= 1250.0 && mouseY >= 520.0 && mouseY <= 555.0) {
+            promptImportAssetForDirectory(manager);
+            return;
+        }
+
+        List<AssetEntry> assets = manager.getAssetDirectory();
+        if (assets.isEmpty()) {
+            promptImportAssetForDirectory(manager);
+            return;
+        }
+
+        double startX = 20.0;
+        double cardWidth = 230.0;
+
+        int index = (int) ((mouseX - startX) / cardWidth);
+        if (index >= 0 && index < assets.size()) {
+            AssetEntry clickedAsset = assets.get(index);
+            if (clickedAsset.type == AssetType.MESH_3D) {
+                manager.spawnEntityFromAsset(clickedAsset);
+            } else if (clickedAsset.type == AssetType.TEXTURE) {
+                manager.assignTextureToSelectedEntity(clickedAsset);
+            } else if (clickedAsset.type == AssetType.SCENE) {
+                manager.loadSceneFromFile(clickedAsset.absolutePath);
+            }
+        }
     }
 
     private boolean processViewportToolbarClick(double mouseX, double mouseY, EditorPanelManager manager) {
@@ -486,20 +588,16 @@ public class EditorSelectionController {
             float dragSpeedRot = 0.8f;
             float dragSpeedScl = 0.02f;
 
-            switch (activeInspectorField) {
-                case POS_X -> tc.posX += (float) dx * dragSpeedPos;
-                case POS_Y -> tc.posY -= (float) dy * dragSpeedPos;
-                case POS_Z -> tc.posZ += (float) dx * dragSpeedPos;
+            if (activeInspectorField == InspectorField.POS_X) tc.posX += (float) dx * dragSpeedPos;
+            else if (activeInspectorField == InspectorField.POS_Y) tc.posY -= (float) dy * dragSpeedPos;
+            else if (activeInspectorField == InspectorField.POS_Z) tc.posZ += (float) dx * dragSpeedPos;
+            else if (activeInspectorField == InspectorField.ROT_X) tc.rotX += (float) dx * dragSpeedRot;
+            else if (activeInspectorField == InspectorField.ROT_Y) tc.rotY += (float) dx * dragSpeedRot;
+            else if (activeInspectorField == InspectorField.ROT_Z) tc.rotZ += (float) dx * dragSpeedRot;
+            else if (activeInspectorField == InspectorField.SCL_X) tc.scaleX = Math.max(0.1f, tc.scaleX + (float) dx * dragSpeedScl);
+            else if (activeInspectorField == InspectorField.SCL_Y) tc.scaleY = Math.max(0.1f, tc.scaleY - (float) dy * dragSpeedScl);
+            else if (activeInspectorField == InspectorField.SCL_Z) tc.scaleZ = Math.max(0.1f, tc.scaleZ + (float) dx * dragSpeedScl);
 
-                case ROT_X -> tc.rotX += (float) dx * dragSpeedRot;
-                case ROT_Y -> tc.rotY += (float) dx * dragSpeedRot;
-                case ROT_Z -> tc.rotZ += (float) dx * dragSpeedRot;
-
-                case SCL_X -> tc.scaleX = Math.max(0.1f, tc.scaleX + (float) dx * dragSpeedScl);
-                case SCL_Y -> tc.scaleY = Math.max(0.1f, tc.scaleY - (float) dy * dragSpeedScl);
-                case SCL_Z -> tc.scaleZ = Math.max(0.1f, tc.scaleZ + (float) dx * dragSpeedScl);
-                default -> {}
-            }
             return true;
         }
 
@@ -546,20 +644,14 @@ public class EditorSelectionController {
 
                 if (mode == GizmoMode.TRANSLATE) {
                     float speed = 2.5f;
-                    switch (axis) {
-                        case X -> tc.posX += (ndcDx * uXX + ndcDy * uXY) * speed;
-                        case Y -> tc.posY += (ndcDx * uYX + ndcDy * uYY) * speed;
-                        case Z -> tc.posZ += (ndcDx * uZX + ndcDy * uZY) * speed;
-                        default -> {}
-                    }
+                    if (axis == GizmoAxis.X) tc.posX += (ndcDx * uXX + ndcDy * uXY) * speed;
+                    else if (axis == GizmoAxis.Y) tc.posY += (ndcDx * uYX + ndcDy * uYY) * speed;
+                    else if (axis == GizmoAxis.Z) tc.posZ += (ndcDx * uZX + ndcDy * uZY) * speed;
                 } else if (mode == GizmoMode.SCALE) {
                     float speed = 2.5f;
-                    switch (axis) {
-                        case X -> tc.scaleX = Math.max(0.1f, tc.scaleX + (ndcDx * uXX + ndcDy * uXY) * speed);
-                        case Y -> tc.scaleY = Math.max(0.1f, tc.scaleY + (ndcDx * uYX + ndcDy * uYY) * speed);
-                        case Z -> tc.scaleZ = Math.max(0.1f, tc.scaleZ + (ndcDx * uZX + ndcDy * uZY) * speed);
-                        default -> {}
-                    }
+                    if (axis == GizmoAxis.X) tc.scaleX = Math.max(0.1f, tc.scaleX + (ndcDx * uXX + ndcDy * uXY) * speed);
+                    else if (axis == GizmoAxis.Y) tc.scaleY = Math.max(0.1f, tc.scaleY + (ndcDx * uYX + ndcDy * uYY) * speed);
+                    else if (axis == GizmoAxis.Z) tc.scaleZ = Math.max(0.1f, tc.scaleZ + (ndcDx * uZX + ndcDy * uZY) * speed);
                 }
             } else if (mode == GizmoMode.ROTATE) {
                 double currentAngle = Math.atan2(ndcY - cy, ndcX - cx);
@@ -569,121 +661,14 @@ public class EditorSelectionController {
                 if (deltaAngle < -180.0) deltaAngle += 360.0;
 
                 float rotSpeed = 0.8f;
-                switch (axis) {
-                    case X -> tc.rotX += (float) dy * rotSpeed;
-                    case Y -> tc.rotY += (float) dx * rotSpeed;
-                    case Z -> tc.rotZ += (float) deltaAngle * rotSpeed;
-                    default -> {}
-                }
+                if (axis == GizmoAxis.X) tc.rotX += (float) dy * rotSpeed;
+                else if (axis == GizmoAxis.Y) tc.rotY += (float) dx * rotSpeed;
+                else if (axis == GizmoAxis.Z) tc.rotZ += (float) deltaAngle * rotSpeed;
+
                 lastAngle = currentAngle;
             }
             return true;
         }
         return false;
-    }
-
-    private void processHierarchyClick(double mouseY, EditorPanelManager manager) {
-        List<SceneEntity> entities = manager.getSceneEntities();
-        if (entities.isEmpty()) return;
-
-        double startY = TOP_BAR_HEIGHT + 30.0;
-        double itemHeight = 24.0;
-
-        int index = (int) ((mouseY - startY) / itemHeight);
-        if (index >= 0 && index < entities.size()) {
-            manager.selectEntity(entities.get(index));
-            System.out.println("[Scene Hierarchy] Selected Entity: " + entities.get(index).name);
-        }
-    }
-
-    private void processInspectorClick(double mouseX, double mouseY, EditorPanelManager manager) {
-        SceneEntity active = manager.getSelectedEntity();
-        if (active == null) return;
-
-        // Mesh Renderer Row Clicks (Y: 185 to 225)
-        if (mouseY >= 185.0 && mouseY <= 225.0) {
-            if (mouseX >= 1150.0 && mouseX <= 1205.0) {
-                manager.openAssetPicker(AssetType.MESH_3D);
-                return;
-            }
-            if (mouseX >= 1210.0 && mouseX <= 1270.0) {
-                promptImportMesh(manager);
-                return;
-            }
-        }
-
-        // Material Texture Row Clicks (Y: 250 to 295)
-        if (mouseY >= 250.0 && mouseY <= 295.0) {
-            if (mouseX >= 1150.0 && mouseX <= 1205.0) {
-                manager.openAssetPicker(AssetType.TEXTURE);
-                return;
-            }
-            if (mouseX >= 1210.0 && mouseX <= 1270.0) {
-                promptImportTexture(manager);
-                return;
-            }
-        }
-
-        int axis = -1;
-        if (mouseX >= 1050.0 && mouseX <= 1115.0) axis = 0;
-        else if (mouseX >= 1120.0 && mouseX <= 1185.0) axis = 1;
-        else if (mouseX >= 1190.0 && mouseX <= 1255.0) axis = 2;
-
-        if (axis != -1) {
-            if (mouseY >= 118.0 && mouseY <= 148.0) {
-                activeInspectorField = switch (axis) {
-                    case 0 -> InspectorField.POS_X;
-                    case 1 -> InspectorField.POS_Y;
-                    default -> InspectorField.POS_Z;
-                };
-                captureTransformStart(active);
-                System.out.println("[Inspector] Grabbed Position " + (axis == 0 ? "X" : axis == 1 ? "Y" : "Z") + " Field.");
-            } else if (mouseY >= 154.0 && mouseY <= 184.0) {
-                activeInspectorField = switch (axis) {
-                    case 0 -> InspectorField.ROT_X;
-                    case 1 -> InspectorField.ROT_Y;
-                    default -> InspectorField.ROT_Z;
-                };
-                captureTransformStart(active);
-                System.out.println("[Inspector] Grabbed Rotation " + (axis == 0 ? "X" : axis == 1 ? "Y" : "Z") + " Field.");
-            } else if (mouseY >= 190.0 && mouseY <= 220.0) {
-                activeInspectorField = switch (axis) {
-                    case 0 -> InspectorField.SCL_X;
-                    case 1 -> InspectorField.SCL_Y;
-                    default -> InspectorField.SCL_Z;
-                };
-                captureTransformStart(active);
-                System.out.println("[Inspector] Grabbed Scale " + (axis == 0 ? "X" : axis == 1 ? "Y" : "Z") + " Field.");
-            }
-        }
-    }
-
-    private void processAssetClick(double mouseX, double mouseY, EditorPanelManager manager) {
-        // [+ IMPORT ASSET] Header Button click (X: 1030 to 1250, Y: 520 to 555)
-        if (mouseX >= 1030.0 && mouseX <= 1250.0 && mouseY >= 520.0 && mouseY <= 555.0) {
-            promptImportAssetForDirectory(manager);
-            return;
-        }
-
-        List<AssetEntry> assets = manager.getAssetDirectory();
-        if (assets.isEmpty()) {
-            promptImportAssetForDirectory(manager);
-            return;
-        }
-
-        double startX = 20.0;
-        double cardWidth = 230.0;
-
-        int index = (int) ((mouseX - startX) / cardWidth);
-        if (index >= 0 && index < assets.size()) {
-            AssetEntry clickedAsset = assets.get(index);
-            if (clickedAsset.type == AssetType.MESH_3D) {
-                manager.spawnEntityFromAsset(clickedAsset);
-            } else if (clickedAsset.type == AssetType.TEXTURE) {
-                manager.assignTextureToSelectedEntity(clickedAsset);
-            } else if (clickedAsset.type == AssetType.SCENE) {
-                manager.loadSceneFromFile(clickedAsset.absolutePath);
-            }
-        }
     }
 }

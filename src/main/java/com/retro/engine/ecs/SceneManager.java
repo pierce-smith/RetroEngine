@@ -1,30 +1,48 @@
 package com.retro.engine.ecs;
 
 import com.retro.engine.ecs.components.LightComponent;
+import com.retro.engine.ecs.components.MaterialComponent;
+import com.retro.engine.ecs.components.MeshRendererComponent;
+import com.retro.engine.ecs.components.TransformComponent;
 import com.retro.engine.editor.EditorPanelManager.AssetEntry;
 import com.retro.engine.editor.EditorPanelManager.AssetType;
 import com.retro.engine.editor.EditorPanelManager.SceneEntity;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.serialization.SceneSerializer;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
 /**
- * SceneManager encapsulates central scene entity lifecycle, entity selection state,
- * scene spawning routines, asset assignment, and persistence (save/load serialization).
+ * SceneManager handles central entity storage, selection, scene persistence,
+ * and the Play/Pause runtime simulation state machine (snapshotting & state isolation).
  *
  * Target JDK: JDK 21+ / JDK 25 / macOS
  */
 public class SceneManager {
+    public enum PlayState { EDITING, SIMULATING, PAUSED }
+
     private final List<SceneEntity> sceneEntities = new ArrayList<>();
     private SceneEntity selectedEntity = null;
-    private String activeScenePath = "Assets/Scenes/MainLevel.scene";
+    private String activeScenePath = "Assets/Scenes/Default.scene";
 
-    public SceneManager() {}
+    // Play/Pause State Machine
+    private PlayState playState = PlayState.EDITING;
+    private List<SceneEntity> sceneSnapshot = null;
 
-    // --- Entity Selection & Retrieval ---
+    public SceneManager() {
+        // Clean startup without default missing-asset entities
+    }
+
+    public List<SceneEntity> getSceneEntities() {
+        return Collections.unmodifiableList(sceneEntities);
+    }
+
+    public SceneEntity getSelectedEntity() {
+        return selectedEntity;
+    }
 
     public void selectEntity(SceneEntity entity) {
         for (SceneEntity e : sceneEntities) {
@@ -33,86 +51,159 @@ public class SceneManager {
         this.selectedEntity = entity;
     }
 
-    public SceneEntity getSelectedEntity() {
-        return selectedEntity;
-    }
+    public String getActiveScenePath() { return activeScenePath; }
+    public void setActiveScenePath(String path) { if (path != null) this.activeScenePath = path; }
+    public PlayState getPlayState() { return playState; }
 
-    public List<SceneEntity> getSceneEntities() {
-        return Collections.unmodifiableList(sceneEntities);
-    }
+    // --- Simulation Lifecycle Controls ---
 
-    public String getActiveScenePath() {
-        return activeScenePath;
-    }
-
-    public void setActiveScenePath(String path) {
-        if (path != null) {
-            this.activeScenePath = path;
+    public void play() {
+        if (playState == PlayState.EDITING) {
+            System.out.println("[SceneManager] Entering SIMULATION (PLAY) mode. Creating scene snapshot...");
+            this.sceneSnapshot = cloneSceneEntities(sceneEntities);
+            this.playState = PlayState.SIMULATING;
+        } else if (playState == PlayState.PAUSED) {
+            System.out.println("[SceneManager] Resuming SIMULATION...");
+            this.playState = PlayState.SIMULATING;
         }
     }
 
-    // --- Scene Lifecycle & Persistence ---
+    public void pause() {
+        if (playState == PlayState.SIMULATING) {
+            System.out.println("[SceneManager] PAUSING Simulation...");
+            this.playState = PlayState.PAUSED;
+        }
+    }
+
+    public void stop() {
+        if (playState == PlayState.SIMULATING || playState == PlayState.PAUSED) {
+            System.out.println("[SceneManager] Stopping SIMULATION. Restoring pre-play scene snapshot...");
+            if (sceneSnapshot != null) {
+                this.sceneEntities.clear();
+                this.sceneEntities.addAll(cloneSceneEntities(sceneSnapshot));
+                this.sceneSnapshot = null;
+            }
+            this.selectedEntity = null;
+            this.playState = PlayState.EDITING;
+        }
+    }
+
+    public void update(float deltaTime) {
+        if (playState != PlayState.SIMULATING) return;
+
+        // Run simulation tick on active entities
+        for (SceneEntity entity : sceneEntities) {
+            TransformComponent tc = entity.getTransform();
+            if (tc != null) {
+                tc.rotY = (tc.rotY + 45.0f * deltaTime) % 360.0f;
+            }
+        }
+    }
+
+    private List<SceneEntity> cloneSceneEntities(List<SceneEntity> source) {
+        List<SceneEntity> copy = new ArrayList<>();
+
+        for (SceneEntity orig : source) {
+            SceneEntity cloned = new SceneEntity(
+                orig.id + "_sim",
+                orig.name,
+                orig.getMeshAssetPath()
+            );
+            cloned.id = orig.id;
+            cloned.selected = orig.selected;
+
+            TransformComponent origTc = orig.getTransform();
+            TransformComponent cloneTc = cloned.getTransform();
+            cloneTc.posX = origTc.posX;
+            cloneTc.posY = origTc.posY;
+            cloneTc.posZ = origTc.posZ;
+            cloneTc.rotX = origTc.rotX;
+            cloneTc.rotY = origTc.rotY;
+            cloneTc.rotZ = origTc.rotZ;
+            cloneTc.scaleX = origTc.scaleX;
+            cloneTc.scaleY = origTc.scaleY;
+            cloneTc.scaleZ = origTc.scaleZ;
+
+            if (orig.getTextureAssetPath() != null) {
+                cloned.setTextureAsset(orig.getTextureAssetPath(), orig.getTextureName());
+            }
+
+            LightComponent origLight = orig.getComponent(LightComponent.class);
+            if (origLight != null) {
+                LightComponent cloneLight = new LightComponent();
+                cloneLight.intensity = origLight.intensity;
+                cloneLight.r = origLight.r;
+                cloneLight.g = origLight.g;
+                cloneLight.b = origLight.b;
+                cloned.addComponent(cloneLight);
+            }
+
+            copy.add(cloned);
+        }
+        return copy;
+    }
+
+    // --- Scene Operations ---
 
     public void newScene() {
+        stop();
         sceneEntities.clear();
         selectedEntity = null;
-        activeScenePath = "Assets/Scenes/NewLevel.scene";
-        System.out.println("[SceneManager] Created New Empty Scene.");
+        activeScenePath = "Assets/Scenes/Untitled.scene";
+        System.out.println("[SceneManager] Created New Scene.");
     }
 
     public void promptOpenSceneWithNativeDialog() {
-        String path = NativeFileDialog.openFileDialog("Open Retro Engine Scene", activeScenePath, "Retro Scene (*.scene)", "scene");
-        if (path != null && !path.trim().isEmpty()) {
-            loadSceneFromFile(path);
+        stop();
+        String defaultDir = new File("Assets/Scenes").getAbsolutePath();
+        String selected = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.scene)", "scene");
+        if (selected != null && !selected.trim().isEmpty()) {
+            loadSceneFromFile(selected);
         }
     }
 
     public void promptSaveSceneWithNativeDialog() {
-        String path = NativeFileDialog.saveFileDialog("Save Retro Engine Scene", activeScenePath, "Retro Scene (*.scene)", "scene");
-        if (path != null && !path.trim().isEmpty()) {
-            if (!path.endsWith(".scene")) path += ".scene";
-            saveActiveScene(path);
+        String defaultDir = new File("Assets/Scenes").getAbsolutePath();
+        String selected = NativeFileDialog.saveFileDialog("Save Scene File", defaultDir, "Retro Scene (*.scene)", "scene");
+        if (selected != null && !selected.trim().isEmpty()) {
+            saveActiveScene(selected);
         }
     }
 
-    public void saveActiveScene() {
-        saveActiveScene(this.activeScenePath);
-    }
+    public void saveActiveScene() { saveActiveScene(activeScenePath); }
 
     public void saveActiveScene(String filePath) {
-        if (filePath != null) this.activeScenePath = filePath;
-        boolean ok = SceneSerializer.saveScene(this.activeScenePath, this.sceneEntities);
+        this.activeScenePath = filePath;
+        boolean ok = SceneSerializer.saveScene(filePath, sceneEntities);
         if (ok) {
-            System.out.println("[SceneManager] Scene saved to: " + this.activeScenePath);
+            System.out.println("[SceneManager] Saved Scene to -> " + filePath);
         }
     }
 
     public void loadSceneFromFile(String filePath) {
-        if (filePath == null) return;
+        stop();
+        this.activeScenePath = filePath;
+        sceneEntities.clear();
+        selectedEntity = null;
         List<SceneEntity> loaded = SceneSerializer.loadScene(filePath);
-        if (!loaded.isEmpty()) {
-            this.sceneEntities.clear();
-            this.sceneEntities.addAll(loaded);
-            this.selectedEntity = sceneEntities.get(0);
+        if (loaded != null && !loaded.isEmpty()) {
+            sceneEntities.addAll(loaded);
+            selectedEntity = sceneEntities.get(0);
             for (int i = 0; i < sceneEntities.size(); i++) {
                 sceneEntities.get(i).selected = (i == 0);
             }
-            this.activeScenePath = filePath;
-            System.out.println("[SceneManager] Active scene loaded -> " + filePath);
         }
+        System.out.println("[SceneManager] Loaded Scene from -> " + filePath);
     }
 
     public void deleteSelectedEntity() {
         if (selectedEntity != null) {
-            String name = selectedEntity.name;
             sceneEntities.remove(selectedEntity);
+            System.out.println("[SceneManager] Deleted Entity: " + selectedEntity.name);
             selectedEntity = sceneEntities.isEmpty() ? null : sceneEntities.get(0);
             if (selectedEntity != null) selectedEntity.selected = true;
-            System.out.println("[SceneManager] Deleted Entity: " + name);
         }
     }
-
-    // --- Spawning & Asset Assignment ---
 
     public void spawnDefaultCube() {
         String entityId = "entity_" + (sceneEntities.size() + 1);

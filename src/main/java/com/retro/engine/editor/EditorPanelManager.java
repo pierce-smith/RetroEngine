@@ -2,6 +2,8 @@ package com.retro.engine.editor;
 
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.SceneManager;
+import com.retro.engine.ecs.SceneManager.PlayState;
+import com.retro.engine.ecs.components.LightComponent;
 import com.retro.engine.ecs.components.MaterialComponent;
 import com.retro.engine.ecs.components.MeshRendererComponent;
 import com.retro.engine.ecs.components.TransformComponent;
@@ -13,8 +15,7 @@ import java.util.*;
 
 /**
  * EditorPanelManager orchestrates the editor 4-panel layout, top menu bar dropdowns,
- * modal dialog overlays, command history (Undo/Redo), and delegates central scene
- * entity management to SceneManager.
+ * Play/Pause simulation state toggles, modal dialog overlays, and command history.
  *
  * Target JDK: JDK 21+ / JDK 25 / macOS
  */
@@ -156,6 +157,13 @@ public class EditorPanelManager {
         return sceneManager;
     }
 
+    // --- Simulation State Delegation ---
+
+    public PlayState getPlayState() { return sceneManager.getPlayState(); }
+    public void play() { sceneManager.play(); }
+    public void pause() { sceneManager.pause(); }
+    public void stop() { sceneManager.stop(); }
+
     // --- Delegated Scene Operations ---
 
     public List<SceneEntity> getSceneEntities() {
@@ -272,7 +280,9 @@ public class EditorPanelManager {
         return new float[] { uiX, uiY };
     }
 
-    public void update(float deltaTime) {}
+    public void update(float deltaTime) {
+        sceneManager.update(deltaTime);
+    }
 
     public float[] get3DGridVertices() {
         if (!show3DGrid) return new float[0];
@@ -311,7 +321,7 @@ public class EditorPanelManager {
             addGridLine(verts, x, y, -extent, x, y, extent, r, g, b, a);
         }
 
-        // 3. Y Axis Vertical Line (GREEN) from Y=0.0f to Y=3.0f!
+        // 3. Y Axis Vertical Line (GREEN) from Y=0.0f to Y=3.0f
         addGridLine(verts, 0.0f, 0.0f, 0.0f, 0.0f, 3.0f, 0.0f, 0.25f, 1.0f, 0.25f, 1.0f);
 
         float[] array = new float[verts.size()];
@@ -399,7 +409,7 @@ public class EditorPanelManager {
         ViewportPanel.renderFraming(verts);
         ViewportPanel.renderToolbar(verts, currentGizmoMode);
 
-        TopMenuBar.render(verts, activeDropdownMenu, getActiveScenePath());
+        TopMenuBar.render(verts, activeDropdownMenu, getActiveScenePath(), getPlayState());
 
         SceneEntity activeEntity = getSelectedEntity();
         if (activeEntity != null) {
