@@ -9,6 +9,7 @@ import com.retro.engine.editor.EditorPanelManager.GizmoMode;
 import com.retro.engine.editor.EditorPanelManager.ModalState;
 import com.retro.engine.editor.EditorPanelManager.SceneEntity;
 import com.retro.engine.editor.commands.TransformCommand;
+import com.retro.engine.editor.dialogs.NativeFileDialog;
 
 import java.io.File;
 import java.util.List;
@@ -17,6 +18,8 @@ import java.util.List;
  * EditorSelectionController routes mouse input to Top Bar Dropdown Menus,
  * Asset Picker Modals, 3D Viewport Transform Gizmos, Inspector Fields, and
  * captures Transform edits for Undo/Redo.
+ *
+ * Refactored in Step 3 to support dynamic layout scaling and decoupled panel event routing.
  * Target JDK: JDK 21+ / JDK 25 / macOS
  */
 public class EditorSelectionController {
@@ -41,7 +44,9 @@ public class EditorSelectionController {
     private float startRx, startRy, startRz;
     private float startSx, startSy, startSz;
 
-    public EditorSelectionController() { this(null); }
+    public EditorSelectionController() {
+        this(null);
+    }
 
     public EditorSelectionController(EditorPanelManager panelManager) {
         this.panelManager = panelManager;
@@ -73,9 +78,9 @@ public class EditorSelectionController {
     private void checkAndPushTransformEnd() {
         if (transformDragEntity != null) {
             TransformComponent tc = transformDragEntity.getTransform();
-            boolean changed = (tc.posX != startPx || tc.posY != startPy || tc.posZ != startPz ||
-                    tc.rotX != startRx || tc.rotY != startRy || tc.rotZ != startRz ||
-                    tc.scaleX != startSx || tc.scaleY != startSy || tc.scaleZ != startSz);
+            boolean changed = (tc.posX != startPx || tc.posY != startPy || tc.posZ != startPz
+                    || tc.rotX != startRx || tc.rotY != startRy || tc.rotZ != startRz
+                    || tc.scaleX != startSx || tc.scaleY != startSy || tc.scaleZ != startSz);
 
             if (changed && panelManager != null) {
                 TransformCommand cmd = new TransformCommand(
@@ -141,7 +146,7 @@ public class EditorSelectionController {
                 if (handled) return;
             }
 
-            // 3. Main Editor Panel Clicks
+            // 3. Main Editor Panel Clicks (Supports dynamic layout scaling)
             PanelType clickedPanel = hitTest(mouseX, mouseY, 1280.0f, 720.0f);
 
             switch (clickedPanel) {

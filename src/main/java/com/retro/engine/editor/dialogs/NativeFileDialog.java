@@ -1,4 +1,4 @@
-package com.retro.engine.editor;
+package com.retro.engine.editor.dialogs;
 
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;

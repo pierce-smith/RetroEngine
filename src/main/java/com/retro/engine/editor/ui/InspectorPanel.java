@@ -1,10 +1,11 @@
-package com.retro.engine.editor;
+package com.retro.engine.editor.ui;
 
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.components.LightComponent;
 import com.retro.engine.ecs.components.MaterialComponent;
 import com.retro.engine.ecs.components.MeshRendererComponent;
 import com.retro.engine.ecs.components.TransformComponent;
+import com.retro.engine.editor.EditorPanelManager;
 
 import java.util.List;
 

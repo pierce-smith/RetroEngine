@@ -1,4 +1,4 @@
-package com.retro.engine.editor;
+package com.retro.engine.editor.ui;
 
 import java.util.List;
 

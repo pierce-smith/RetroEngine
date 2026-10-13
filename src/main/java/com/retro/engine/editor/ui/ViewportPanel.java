@@ -1,4 +1,6 @@
-package com.retro.engine.editor;
+package com.retro.engine.editor.ui;
+
+import com.retro.engine.editor.EditorPanelManager;
 
 import java.util.List;
 
