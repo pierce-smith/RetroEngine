@@ -49,12 +49,19 @@ public class SceneManager {
         this.selectedEntity = entity;
     }
 
-    public String getActiveScenePath() { return activeScenePath; }
-    public void setActiveScenePath(String path) { if (path != null) this.activeScenePath = path; }
-    public PlayState getPlayState() { return playState; }
+    public String getActiveScenePath() {
+        return activeScenePath;
+    }
+
+    public void setActiveScenePath(String path) {
+        if (path != null) this.activeScenePath = path;
+    }
+
+    public PlayState getPlayState() {
+        return playState;
+    }
 
     // --- Simulation Lifecycle Controls ---
-
     public void play() {
         if (playState == PlayState.EDITING) {
             System.out.println("[SceneManager] Entering SIMULATION (PLAY) mode. Creating scene snapshot...");
@@ -126,6 +133,7 @@ public class SceneManager {
             cloned.id = orig.id;
             cloned.selected = orig.selected;
 
+            // 1. Clone Transform Component
             TransformComponent origTc = orig.getTransform();
             TransformComponent cloneTc = cloned.getTransform();
             if (origTc != null && cloneTc != null) {
@@ -138,6 +146,41 @@ public class SceneManager {
                 cloneTc.scaleX = origTc.scaleX;
                 cloneTc.scaleY = origTc.scaleY;
                 cloneTc.scaleZ = origTc.scaleZ;
+            }
+
+            // 2. Clone Material Component (Texture path, texture name, shader)
+            MaterialComponent origMat = orig.getComponent(MaterialComponent.class);
+            if (origMat != null) {
+                MaterialComponent cloneMat = cloned.getComponent(MaterialComponent.class);
+                if (cloneMat == null) {
+                    cloneMat = new MaterialComponent();
+                    cloned.addComponent(cloneMat);
+                }
+                cloneMat.textureAssetPath = origMat.textureAssetPath;
+                cloneMat.textureName = origMat.textureName;
+                cloneMat.shaderName = origMat.shaderName;
+            }
+
+            // 3. Clone MeshRenderer Visibility
+            MeshRendererComponent origMc = orig.getComponent(MeshRendererComponent.class);
+            MeshRendererComponent cloneMc = cloned.getComponent(MeshRendererComponent.class);
+            if (origMc != null && cloneMc != null) {
+                cloneMc.isVisible = origMc.isVisible;
+            }
+
+            // 4. Clone Light Component if present
+            LightComponent origLc = orig.getComponent(LightComponent.class);
+            if (origLc != null) {
+                LightComponent cloneLc = cloned.getComponent(LightComponent.class);
+                if (cloneLc == null) {
+                    cloneLc = new LightComponent();
+                    cloned.addComponent(cloneLc);
+                }
+                cloneLc.type = origLc.type;
+                cloneLc.intensity = origLc.intensity;
+                cloneLc.r = origLc.r;
+                cloneLc.g = origLc.g;
+                cloneLc.b = origLc.b;
             }
 
             copy.add(cloned);
@@ -157,7 +200,10 @@ public class SceneManager {
     public void promptOpenSceneWithNativeDialog() {
         String defaultDir = new File("Assets/Scenes").getAbsolutePath();
         String importedPath = NativeFileDialog.openFileDialog(
-                "Open Scene File", defaultDir, "Retro Scene (*.scene)", "scene"
+            "Open Scene File",
+            defaultDir,
+            "Retro Scene (*.scene)",
+            "scene"
         );
         if (importedPath != null && !importedPath.trim().isEmpty()) {
             loadSceneFromFile(importedPath);
@@ -167,7 +213,10 @@ public class SceneManager {
     public void promptSaveSceneWithNativeDialog() {
         String defaultDir = new File("Assets/Scenes").getAbsolutePath();
         String savePath = NativeFileDialog.saveFileDialog(
-                "Save Scene File", defaultDir, "Retro Scene (*.scene)", "scene"
+            "Save Scene File",
+            defaultDir,
+            "Retro Scene (*.scene)",
+            "scene"
         );
         if (savePath != null && !savePath.trim().isEmpty()) {
             saveActiveScene(savePath);
