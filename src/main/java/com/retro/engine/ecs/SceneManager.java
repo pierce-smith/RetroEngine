@@ -4,9 +4,8 @@ import com.retro.engine.ecs.components.LightComponent;
 import com.retro.engine.ecs.components.MaterialComponent;
 import com.retro.engine.ecs.components.MeshRendererComponent;
 import com.retro.engine.ecs.components.TransformComponent;
-import com.retro.engine.editor.EditorPanelManager.AssetEntry;
-import com.retro.engine.editor.EditorPanelManager.AssetType;
-import com.retro.engine.editor.EditorPanelManager.SceneEntity;
+import com.retro.engine.editor.assets.AssetEntry;
+import com.retro.engine.editor.assets.AssetType;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.serialization.SceneSerializer;
 
@@ -18,7 +17,6 @@ import java.util.List;
 /**
  * SceneManager handles central entity storage, selection, scene persistence,
  * and the Play/Pause runtime simulation state machine (snapshotting & state isolation).
- *
  * Target JDK: JDK 21+ / JDK 25 / macOS
  */
 public class SceneManager {
@@ -78,13 +76,29 @@ public class SceneManager {
     public void stop() {
         if (playState == PlayState.SIMULATING || playState == PlayState.PAUSED) {
             System.out.println("[SceneManager] Stopping SIMULATION. Restoring pre-play scene snapshot...");
+            String previousSelectedId = (selectedEntity != null) ? selectedEntity.id.replace("_sim", "") : null;
+
             if (sceneSnapshot != null) {
                 this.sceneEntities.clear();
                 this.sceneEntities.addAll(cloneSceneEntities(sceneSnapshot));
                 this.sceneSnapshot = null;
             }
-            this.selectedEntity = null;
+
             this.playState = PlayState.EDITING;
+
+            // Preserve selection after stop
+            this.selectedEntity = null;
+            if (previousSelectedId != null) {
+                for (SceneEntity e : sceneEntities) {
+                    if (e.id.equals(previousSelectedId)) {
+                        selectEntity(e);
+                        break;
+                    }
+                }
+            }
+            if (this.selectedEntity == null && !sceneEntities.isEmpty()) {
+                selectEntity(sceneEntities.get(0));
+            }
         }
     }
 
@@ -114,70 +128,64 @@ public class SceneManager {
 
             TransformComponent origTc = orig.getTransform();
             TransformComponent cloneTc = cloned.getTransform();
-            cloneTc.posX = origTc.posX;
-            cloneTc.posY = origTc.posY;
-            cloneTc.posZ = origTc.posZ;
-            cloneTc.rotX = origTc.rotX;
-            cloneTc.rotY = origTc.rotY;
-            cloneTc.rotZ = origTc.rotZ;
-            cloneTc.scaleX = origTc.scaleX;
-            cloneTc.scaleY = origTc.scaleY;
-            cloneTc.scaleZ = origTc.scaleZ;
-
-            if (orig.getTextureAssetPath() != null) {
-                cloned.setTextureAsset(orig.getTextureAssetPath(), orig.getTextureName());
-            }
-
-            LightComponent origLight = orig.getComponent(LightComponent.class);
-            if (origLight != null) {
-                LightComponent cloneLight = new LightComponent();
-                cloneLight.intensity = origLight.intensity;
-                cloneLight.r = origLight.r;
-                cloneLight.g = origLight.g;
-                cloneLight.b = origLight.b;
-                cloned.addComponent(cloneLight);
+            if (origTc != null && cloneTc != null) {
+                cloneTc.posX = origTc.posX;
+                cloneTc.posY = origTc.posY;
+                cloneTc.posZ = origTc.posZ;
+                cloneTc.rotX = origTc.rotX;
+                cloneTc.rotY = origTc.rotY;
+                cloneTc.rotZ = origTc.rotZ;
+                cloneTc.scaleX = origTc.scaleX;
+                cloneTc.scaleY = origTc.scaleY;
+                cloneTc.scaleZ = origTc.scaleZ;
             }
 
             copy.add(cloned);
         }
+
         return copy;
     }
 
-    // --- Scene Operations ---
-
     public void newScene() {
         stop();
-        sceneEntities.clear();
-        selectedEntity = null;
-        activeScenePath = "Assets/Scenes/Untitled.scene";
-        System.out.println("[SceneManager] Created New Scene.");
+        this.sceneEntities.clear();
+        this.selectedEntity = null;
+        this.activeScenePath = "Assets/Scenes/Untitled.scene";
+        System.out.println("[SceneManager] Initialized New Empty Scene.");
     }
 
     public void promptOpenSceneWithNativeDialog() {
-        stop();
         String defaultDir = new File("Assets/Scenes").getAbsolutePath();
-        String selected = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.scene)", "scene");
-        if (selected != null && !selected.trim().isEmpty()) {
-            loadSceneFromFile(selected);
+        String importedPath = NativeFileDialog.openFileDialog(
+                "Open Scene File", defaultDir, "Retro Scene (*.scene)", "scene"
+        );
+        if (importedPath != null && !importedPath.trim().isEmpty()) {
+            loadSceneFromFile(importedPath);
         }
     }
 
     public void promptSaveSceneWithNativeDialog() {
         String defaultDir = new File("Assets/Scenes").getAbsolutePath();
-        String selected = NativeFileDialog.saveFileDialog("Save Scene File", defaultDir, "Retro Scene (*.scene)", "scene");
-        if (selected != null && !selected.trim().isEmpty()) {
-            saveActiveScene(selected);
+        String savePath = NativeFileDialog.saveFileDialog(
+                "Save Scene File", defaultDir, "Retro Scene (*.scene)", "scene"
+        );
+        if (savePath != null && !savePath.trim().isEmpty()) {
+            saveActiveScene(savePath);
         }
     }
 
-    public void saveActiveScene() { saveActiveScene(activeScenePath); }
+    public void saveActiveScene() {
+        saveActiveScene(this.activeScenePath);
+    }
 
     public void saveActiveScene(String filePath) {
-        this.activeScenePath = filePath;
-        boolean ok = SceneSerializer.saveScene(filePath, sceneEntities);
-        if (ok) {
-            System.out.println("[SceneManager] Saved Scene to -> " + filePath);
+        if (filePath == null || filePath.trim().isEmpty()) {
+            promptSaveSceneWithNativeDialog();
+            return;
         }
+        this.activeScenePath = filePath;
+        SceneSerializer.saveScene(filePath, sceneEntities);
+        System.out.println("[SceneManager] Saved Scene to -> " + filePath);
     }
 
     public void loadSceneFromFile(String filePath) {
@@ -185,13 +193,11 @@ public class SceneManager {
         this.activeScenePath = filePath;
         sceneEntities.clear();
         selectedEntity = null;
+
         List<SceneEntity> loaded = SceneSerializer.loadScene(filePath);
         if (loaded != null && !loaded.isEmpty()) {
             sceneEntities.addAll(loaded);
-            selectedEntity = sceneEntities.get(0);
-            for (int i = 0; i < sceneEntities.size(); i++) {
-                sceneEntities.get(i).selected = (i == 0);
-            }
+            selectEntity(sceneEntities.get(0));
         }
         System.out.println("[SceneManager] Loaded Scene from -> " + filePath);
     }

@@ -1,13 +1,13 @@
 package com.retro.engine.editor;
 
+import com.retro.engine.ecs.SceneEntity;
 import com.retro.engine.ecs.components.TransformComponent;
-import com.retro.engine.editor.EditorPanelManager.AssetEntry;
-import com.retro.engine.editor.EditorPanelManager.AssetType;
 import com.retro.engine.editor.EditorPanelManager.DropdownMenu;
 import com.retro.engine.editor.EditorPanelManager.GizmoAxis;
 import com.retro.engine.editor.EditorPanelManager.GizmoMode;
 import com.retro.engine.editor.EditorPanelManager.ModalState;
-import com.retro.engine.editor.EditorPanelManager.SceneEntity;
+import com.retro.engine.editor.assets.AssetEntry;
+import com.retro.engine.editor.assets.AssetType;
 import com.retro.engine.editor.commands.TransformCommand;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 
@@ -54,13 +54,8 @@ public class EditorSelectionController {
         this.cameraController = cameraController;
     }
 
-    public void setPanelManager(EditorPanelManager panelManager) {
-        this.panelManager = panelManager;
-    }
-
-    public void setCameraController(ViewportCameraController cameraController) {
-        this.cameraController = cameraController;
-    }
+    public void setPanelManager(EditorPanelManager panelManager) { this.panelManager = panelManager; }
+    public void setCameraController(ViewportCameraController cameraController) { this.cameraController = cameraController; }
 
     private void captureTransformStart(SceneEntity entity) {
         if (entity == null) return;
@@ -77,7 +72,6 @@ public class EditorSelectionController {
             boolean changed = (tc.posX != startPx || tc.posY != startPy || tc.posZ != startPz ||
                                tc.rotX != startRx || tc.rotY != startRy || tc.rotZ != startRz ||
                                tc.scaleX != startSx || tc.scaleY != startSy || tc.scaleZ != startSz);
-
             if (changed && panelManager != null) {
                 TransformCommand cmd = new TransformCommand(
                         transformDragEntity,
@@ -238,10 +232,7 @@ public class EditorSelectionController {
     private void promptImportTexture(EditorPanelManager manager) {
         String defaultDir = new File("Assets/Textures").getAbsolutePath();
         String importedPath = NativeFileDialog.openFileDialog(
-                "Select Texture Asset",
-                defaultDir,
-                "Texture Images (*.png, *.jpg, *.tga)",
-                "png", "jpg", "tga"
+                "Select Texture Asset", defaultDir, "Texture Images (*.png, *.jpg, *.tga)", "png", "jpg", "tga"
         );
         if (importedPath != null && !importedPath.trim().isEmpty()) {
             File file = new File(importedPath);
@@ -255,10 +246,7 @@ public class EditorSelectionController {
     private void promptImportMesh(EditorPanelManager manager) {
         String defaultDir = new File("Assets/Models").getAbsolutePath();
         String importedPath = NativeFileDialog.openFileDialog(
-                "Select 3D Mesh Asset",
-                defaultDir,
-                "3D Models (*.obj, *.fbx, *.gltf)",
-                "obj", "fbx", "gltf", "glb"
+                "Select 3D Mesh Asset", defaultDir, "3D Models (*.obj, *.fbx, *.gltf)", "obj", "fbx", "gltf", "glb"
         );
         if (importedPath != null && !importedPath.trim().isEmpty()) {
             File file = new File(importedPath);
@@ -273,10 +261,7 @@ public class EditorSelectionController {
         try {
             String defaultDir = new File("Assets").getAbsolutePath();
             String importedPath = NativeFileDialog.openFileDialog(
-                    "Import Asset to Directory",
-                    defaultDir,
-                    "Supported Assets (*.obj, *.fbx, *.gltf, *.png, *.jpg, *.tga, *.scene)",
-                    "obj", "fbx", "gltf", "glb", "png", "jpg", "tga", "scene"
+                    "Import Asset to Directory", defaultDir, "Supported Assets (*.obj, *.fbx, *.gltf, *.png, *.jpg, *.tga, *.scene)", "obj", "fbx", "gltf", "glb", "png", "jpg", "tga", "scene"
             );
             if (importedPath != null && !importedPath.trim().isEmpty()) {
                 manager.onFilesDropped(List.of(importedPath));

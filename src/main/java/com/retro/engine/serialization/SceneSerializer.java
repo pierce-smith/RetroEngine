@@ -1,11 +1,11 @@
 package com.retro.engine.serialization;
 
 import com.retro.engine.ecs.Component;
+import com.retro.engine.ecs.SceneEntity;
 import com.retro.engine.ecs.components.LightComponent;
 import com.retro.engine.ecs.components.MaterialComponent;
 import com.retro.engine.ecs.components.MeshRendererComponent;
 import com.retro.engine.ecs.components.TransformComponent;
-import com.retro.engine.editor.EditorPanelManager.SceneEntity;
 
 import java.io.File;
 import java.io.FileReader;
@@ -234,52 +234,43 @@ public class SceneSerializer {
         return list;
     }
 
-    private static String extractJsonValue(String block, String key) {
+    private static String extractJsonValue(String json, String key) {
         String pattern = "\"" + key + "\":";
-        int idx = block.indexOf(pattern);
+        int idx = json.indexOf(pattern);
         if (idx == -1) return null;
 
         int valStart = idx + pattern.length();
-        while (valStart < block.length() && Character.isWhitespace(block.charAt(valStart))) valStart++;
+        while (valStart < json.length() && Character.isWhitespace(json.charAt(valStart))) valStart++;
+        if (valStart >= json.length()) return null;
 
-        if (valStart >= block.length()) return null;
-
-        if (block.charAt(valStart) == '"') {
-            int valEnd = block.indexOf('"', valStart + 1);
+        if (json.charAt(valStart) == '"') {
+            int valEnd = json.indexOf('"', valStart + 1);
             if (valEnd == -1) return null;
-            return unescapeJson(block.substring(valStart + 1, valEnd));
+            return unescapeJson(json.substring(valStart + 1, valEnd));
         } else {
             int valEnd = valStart;
-            while (valEnd < block.length() && block.charAt(valEnd) != ',' && block.charAt(valEnd) != '\n' && block.charAt(valEnd) != '}') {
-                valEnd++;
-            }
-            return block.substring(valStart, valEnd).trim();
+            while (valEnd < json.length() && json.charAt(valEnd) != ',' && json.charAt(valEnd) != '\n' && json.charAt(valEnd) != '}') valEnd++;
+            return json.substring(valStart, valEnd).trim();
         }
     }
 
-    private static float parseJsonFloat(String block, String key, float defaultValue) {
-        String str = extractJsonValue(block, key);
-        if (str == null) return defaultValue;
+    private static float parseJsonFloat(String json, String key, float defaultValue) {
+        String valStr = extractJsonValue(json, key);
+        if (valStr == null) return defaultValue;
         try {
-            return Float.parseFloat(str);
+            return Float.parseFloat(valStr);
         } catch (NumberFormatException e) {
             return defaultValue;
         }
     }
 
-    private static String escapeJson(String input) {
-        if (input == null) return "";
-        return input.replace("\\", "\\\\")
-                    .replace("\"", "\\\"")
-                    .replace("\n", "\\n")
-                    .replace("\r", "\\r");
+    private static String escapeJson(String str) {
+        if (str == null) return "";
+        return str.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
-    private static String unescapeJson(String input) {
-        if (input == null) return "";
-        return input.replace("\\n", "\n")
-                    .replace("\\r", "\r")
-                    .replace("\\\"", "\"")
-                    .replace("\\\\", "\\");
+    private static String unescapeJson(String str) {
+        if (str == null) return "";
+        return str.replace("\\\"", "\"").replace("\\\\", "\\");
     }
 }

@@ -1,12 +1,15 @@
 package com.retro.engine.editor;
 
 import com.retro.engine.ecs.Component;
+import com.retro.engine.ecs.SceneEntity;
 import com.retro.engine.ecs.SceneManager;
 import com.retro.engine.ecs.SceneManager.PlayState;
 import com.retro.engine.ecs.components.LightComponent;
 import com.retro.engine.ecs.components.MaterialComponent;
 import com.retro.engine.ecs.components.MeshRendererComponent;
 import com.retro.engine.ecs.components.TransformComponent;
+import com.retro.engine.editor.assets.AssetEntry;
+import com.retro.engine.editor.assets.AssetType;
 import com.retro.engine.editor.commands.CommandHistory;
 import com.retro.engine.editor.ui.*;
 
@@ -16,111 +19,13 @@ import java.util.*;
 /**
  * EditorPanelManager orchestrates the editor 4-panel layout, top menu bar dropdowns,
  * Play/Pause simulation state toggles, modal dialog overlays, and command history.
- *
  * Target JDK: JDK 21+ / JDK 25 / macOS
  */
 public class EditorPanelManager {
-    public enum AssetType { MESH_3D, TEXTURE, SHADER, SCENE, UNKNOWN }
     public enum GizmoMode { TRANSLATE, ROTATE, SCALE }
     public enum GizmoAxis { NONE, X, Y, Z }
     public enum DropdownMenu { NONE, FILE, EDIT, ENTITY, VIEW }
     public enum ModalState { NONE, ASSET_PICKER }
-
-    public static class SceneEntity {
-        public String id;
-        public String name;
-        public boolean selected = false;
-
-        private final Map<Class<? extends Component>, Component> components = new LinkedHashMap<>();
-
-        public SceneEntity(String id, String name, String meshAssetPath) {
-            this.id = id;
-            this.name = name;
-
-            TransformComponent tc = new TransformComponent();
-            addComponent(tc);
-
-            if (meshAssetPath != null) {
-                addComponent(new MeshRendererComponent(meshAssetPath));
-            }
-            addComponent(new MaterialComponent());
-        }
-
-        @SuppressWarnings("unchecked")
-        public <T extends Component> T getComponent(Class<T> type) {
-            return (T) components.get(type);
-        }
-
-        public void addComponent(Component component) {
-            if (component != null) {
-                components.put(component.getClass(), component);
-            }
-        }
-
-        public void removeComponent(Class<? extends Component> type) {
-            components.remove(type);
-        }
-
-        public Collection<Component> getAllComponents() {
-            return Collections.unmodifiableCollection(components.values());
-        }
-
-        public TransformComponent getTransform() {
-            TransformComponent tc = getComponent(TransformComponent.class);
-            if (tc == null) {
-                tc = new TransformComponent();
-                addComponent(tc);
-            }
-            return tc;
-        }
-
-        public String getMeshAssetPath() {
-            MeshRendererComponent mc = getComponent(MeshRendererComponent.class);
-            return mc != null ? mc.meshAssetPath : null;
-        }
-
-        public String getTextureAssetPath() {
-            MaterialComponent mat = getComponent(MaterialComponent.class);
-            return mat != null ? mat.textureAssetPath : null;
-        }
-
-        public String getTextureName() {
-            MaterialComponent mat = getComponent(MaterialComponent.class);
-            return mat != null ? mat.textureName : "DEFAULT_CHECKER";
-        }
-
-        public void setTextureAsset(String path, String name) {
-            MaterialComponent mat = getComponent(MaterialComponent.class);
-            if (mat == null) {
-                mat = new MaterialComponent();
-                addComponent(mat);
-            }
-            mat.textureAssetPath = path;
-            mat.textureName = name;
-        }
-
-        public void setMeshAssetPath(String path) {
-            MeshRendererComponent mc = getComponent(MeshRendererComponent.class);
-            if (mc == null) {
-                mc = new MeshRendererComponent(path);
-                addComponent(mc);
-            } else {
-                mc.meshAssetPath = path;
-            }
-        }
-    }
-
-    public static class AssetEntry {
-        public String name;
-        public String absolutePath;
-        public AssetType type;
-
-        public AssetEntry(String name, String absolutePath, AssetType type) {
-            this.name = name;
-            this.absolutePath = absolutePath;
-            this.type = type;
-        }
-    }
 
     private final SceneManager sceneManager;
     private final List<AssetEntry> assetDirectory = new ArrayList<>();
@@ -153,85 +58,33 @@ public class EditorPanelManager {
         this.sceneManager = (sceneManager != null) ? sceneManager : new SceneManager();
     }
 
-    public SceneManager getSceneManager() {
-        return sceneManager;
-    }
+    public SceneManager getSceneManager() { return sceneManager; }
 
     // --- Simulation State Delegation ---
-
     public PlayState getPlayState() { return sceneManager.getPlayState(); }
     public void play() { sceneManager.play(); }
     public void pause() { sceneManager.pause(); }
     public void stop() { sceneManager.stop(); }
 
     // --- Delegated Scene Operations ---
-
-    public List<SceneEntity> getSceneEntities() {
-        return sceneManager.getSceneEntities();
-    }
-
-    public SceneEntity getSelectedEntity() {
-        return sceneManager.getSelectedEntity();
-    }
-
-    public void selectEntity(SceneEntity entity) {
-        sceneManager.selectEntity(entity);
-    }
-
-    public String getActiveScenePath() {
-        return sceneManager.getActiveScenePath();
-    }
-
-    public void newScene() {
-        sceneManager.newScene();
-    }
-
-    public void promptOpenSceneWithNativeDialog() {
-        sceneManager.promptOpenSceneWithNativeDialog();
-    }
-
-    public void promptSaveSceneWithNativeDialog() {
-        sceneManager.promptSaveSceneWithNativeDialog();
-    }
-
-    public void saveActiveScene() {
-        sceneManager.saveActiveScene();
-    }
-
-    public void saveActiveScene(String filePath) {
-        sceneManager.saveActiveScene(filePath);
-    }
-
-    public void loadSceneFromFile(String filePath) {
-        sceneManager.loadSceneFromFile(filePath);
-    }
-
-    public void deleteSelectedEntity() {
-        sceneManager.deleteSelectedEntity();
-    }
-
-    public void spawnDefaultCube() {
-        sceneManager.spawnDefaultCube();
-    }
-
-    public void spawnLightSource() {
-        sceneManager.spawnLightSource();
-    }
-
-    public void spawnEntityFromAsset(AssetEntry meshAsset) {
-        sceneManager.spawnEntityFromAsset(meshAsset);
-    }
-
-    public void assignTextureToSelectedEntity(AssetEntry textureAsset) {
-        sceneManager.assignTextureToSelectedEntity(textureAsset);
-    }
-
-    public void assignMeshToSelectedEntity(AssetEntry meshAsset) {
-        sceneManager.assignMeshToSelectedEntity(meshAsset);
-    }
+    public List<SceneEntity> getSceneEntities() { return sceneManager.getSceneEntities(); }
+    public SceneEntity getSelectedEntity() { return sceneManager.getSelectedEntity(); }
+    public void selectEntity(SceneEntity entity) { sceneManager.selectEntity(entity); }
+    public String getActiveScenePath() { return sceneManager.getActiveScenePath(); }
+    public void newScene() { sceneManager.newScene(); }
+    public void promptOpenSceneWithNativeDialog() { sceneManager.promptOpenSceneWithNativeDialog(); }
+    public void promptSaveSceneWithNativeDialog() { sceneManager.promptSaveSceneWithNativeDialog(); }
+    public void saveActiveScene() { sceneManager.saveActiveScene(); }
+    public void saveActiveScene(String filePath) { sceneManager.saveActiveScene(filePath); }
+    public void loadSceneFromFile(String filePath) { sceneManager.loadSceneFromFile(filePath); }
+    public void deleteSelectedEntity() { sceneManager.deleteSelectedEntity(); }
+    public void spawnDefaultCube() { sceneManager.spawnDefaultCube(); }
+    public void spawnLightSource() { sceneManager.spawnLightSource(); }
+    public void spawnEntityFromAsset(AssetEntry meshAsset) { sceneManager.spawnEntityFromAsset(meshAsset); }
+    public void assignTextureToSelectedEntity(AssetEntry textureAsset) { sceneManager.assignTextureToSelectedEntity(textureAsset); }
+    public void assignMeshToSelectedEntity(AssetEntry meshAsset) { sceneManager.assignMeshToSelectedEntity(meshAsset); }
 
     // --- Grid & Viewport Navigation ---
-
     public boolean is3DGridVisible() { return show3DGrid; }
     public void toggle3DGrid() {
         this.show3DGrid = !this.show3DGrid;
@@ -321,7 +174,7 @@ public class EditorPanelManager {
             addGridLine(verts, x, y, -extent, x, y, extent, r, g, b, a);
         }
 
-        // 3. Y Axis Vertical Line (GREEN) from Y=0.0f to Y=3.0f
+        // 3. Y Axis Vertical Line (GREEN) extending upward from Y=0.0f to Y=3.0f
         addGridLine(verts, 0.0f, 0.0f, 0.0f, 0.0f, 3.0f, 0.0f, 0.25f, 1.0f, 0.25f, 1.0f);
 
         float[] array = new float[verts.size()];

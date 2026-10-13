@@ -39,8 +39,8 @@ public class ViewportCameraController {
             if (isSDown) zoom -= speed * 4.0f;
 
             // A / D: Strafe LEFT / RIGHT
-            if (isADown) panX -= speed;
-            if (isDDown) panX += speed;
+            if (isADown) panX += speed;
+            if (isDDown) panX -= speed;
 
             // Q / E: Elevation DOWN / UP
             if (isQDown) panY -= speed;

@@ -1,6 +1,7 @@
 package com.retro.engine.editor.ui;
 
-import com.retro.engine.editor.EditorPanelManager;
+import com.retro.engine.editor.assets.AssetEntry;
+import com.retro.engine.editor.assets.AssetType;
 
 import java.util.List;
 
@@ -9,7 +10,8 @@ import java.util.List;
  * Target JDK: JDK 21+ / JDK 25 / macOS
  */
 public class AssetDirectoryPanel {
-    public static void render(List<Float> verts, List<EditorPanelManager.AssetEntry> assetDirectory) {
+
+    public static void render(List<Float> verts, List<AssetEntry> assetDirectory) {
         UIBatchBuilder.addQuad(verts, -1.0f, -1.0f, 1.0f, -0.5f, 0.06f, 0.06f, 0.08f, 1.0f);
         UIBatchBuilder.addQuad(verts, -1.0f, -0.5f, 1.0f, -0.42f, 0.14f, 0.14f, 0.18f, 1.0f);
         UIBatchBuilder.addFrameBorder(verts, -1.0f, -1.0f, 1.0f, -0.5f, 0.003f, 0.25f, 0.25f, 0.32f, 1.0f);
@@ -24,9 +26,8 @@ public class AssetDirectoryPanel {
             UIBatchBuilder.addBoundedText(verts, "NO ASSETS LOADED - DRAG & DROP FILES OR CLICK [+ IMPORT ASSET]", -0.80f, -0.70f, 0.90f, 1.2f, 0.4f, 0.4f, 0.4f, 1.0f);
         } else {
             float cardX = -0.95f;
-            // Create a local snapshot to avoid ConcurrentModificationException during rendering
-            List<EditorPanelManager.AssetEntry> snapshot = List.copyOf(assetDirectory);
-            for (EditorPanelManager.AssetEntry asset : snapshot) {
+            List<AssetEntry> snapshot = List.copyOf(assetDirectory);
+            for (AssetEntry asset : snapshot) {
                 if (cardX + 0.35f > 0.95f) break;
                 UIBatchBuilder.addQuad(verts, cardX, -0.92f, cardX + 0.32f, -0.55f, 0.10f, 0.10f, 0.13f, 1.0f);
                 UIBatchBuilder.addFrameBorder(verts, cardX, -0.92f, cardX + 0.32f, -0.55f, 0.002f, 0.2f, 0.2f, 0.25f, 1.0f);
@@ -35,7 +36,7 @@ public class AssetDirectoryPanel {
                 UIBatchBuilder.addBoundedText(verts, "." + asset.type.name(), cardX + 0.03f, -0.60f, cardX + 0.17f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f);
 
                 UIBatchBuilder.addBoundedText(verts, asset.name, cardX + 0.02f, -0.75f, cardX + 0.30f, 1.0f, 0.9f, 0.9f, 0.9f, 1.0f);
-                UIBatchBuilder.addBoundedText(verts, asset.type == EditorPanelManager.AssetType.MESH_3D ? "[CLICK: SPAWN]" : "[CLICK: LINK]", cardX + 0.02f, -0.85f, cardX + 0.30f, 0.9f, 0.2f, 0.8f, 1.0f, 1.0f);
+                UIBatchBuilder.addBoundedText(verts, asset.type == AssetType.MESH_3D ? "[CLICK: SPAWN]" : "[CLICK: LINK]", cardX + 0.02f, -0.85f, cardX + 0.30f, 0.9f, 0.2f, 0.8f, 1.0f, 1.0f);
                 cardX += 0.36f;
             }
         }

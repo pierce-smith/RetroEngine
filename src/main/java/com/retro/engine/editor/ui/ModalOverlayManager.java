@@ -1,7 +1,7 @@
 package com.retro.engine.editor.ui;
 
-import com.retro.engine.editor.EditorPanelManager.AssetEntry;
-import com.retro.engine.editor.EditorPanelManager.AssetType;
+import com.retro.engine.editor.assets.AssetEntry;
+import com.retro.engine.editor.assets.AssetType;
 
 import java.util.List;
 

@@ -1,7 +1,7 @@
 package com.retro.engine.editor.commands;
 
+import com.retro.engine.ecs.SceneEntity;
 import com.retro.engine.ecs.components.TransformComponent;
-import com.retro.engine.editor.EditorPanelManager.SceneEntity;
 
 /**
  * Encapsulates 3D transform edits (translation, rotation, scale) for Undo/Redo.

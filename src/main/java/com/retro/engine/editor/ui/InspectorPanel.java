@@ -1,11 +1,12 @@
 package com.retro.engine.editor.ui;
 
 import com.retro.engine.ecs.Component;
+import com.retro.engine.ecs.SceneEntity;
 import com.retro.engine.ecs.components.LightComponent;
 import com.retro.engine.ecs.components.MaterialComponent;
 import com.retro.engine.ecs.components.MeshRendererComponent;
 import com.retro.engine.ecs.components.TransformComponent;
-import com.retro.engine.editor.EditorPanelManager;
+import com.retro.engine.editor.assets.AssetEntry;
 
 import java.util.List;
 
@@ -16,11 +17,11 @@ import java.util.List;
  */
 public class InspectorPanel {
 
-    public static void render(List<Float> verts, EditorPanelManager.SceneEntity selectedEntity) {
+    public static void render(List<Float> verts, SceneEntity selectedEntity) {
         render(verts, selectedEntity, null);
     }
 
-    public static void render(List<Float> verts, EditorPanelManager.SceneEntity selectedEntity, List<EditorPanelManager.AssetEntry> assetDirectory) {
+    public static void render(List<Float> verts, SceneEntity selectedEntity, List<AssetEntry> assetDirectory) {
         UIBatchBuilder.addQuad(verts, 0.55f, -0.5f, 1.0f, 1.0f, 0.08f, 0.08f, 0.10f, 1.0f);
         UIBatchBuilder.addQuad(verts, 0.55f, 0.88f, 1.0f, 1.0f, 0.14f, 0.14f, 0.18f, 1.0f);
         UIBatchBuilder.addFrameBorder(verts, 0.55f, -0.5f, 1.0f, 1.0f, 0.003f, 0.25f, 0.25f, 0.32f, 1.0f);
