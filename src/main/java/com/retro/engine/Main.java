@@ -1,15 +1,11 @@
 package com.retro.engine;
 
 import com.retro.engine.content.AssetStreamingService;
-import com.retro.engine.content.mesh.ModelData;
-import com.retro.engine.content.texture.TextureData;
 import com.retro.engine.ecs.SceneEntity;
-import com.retro.engine.ecs.components.MaterialComponent;
-import com.retro.engine.ecs.components.MeshRendererComponent;
-import com.retro.engine.ecs.components.TransformComponent;
 import com.retro.engine.editor.EditorPanelManager;
 import com.retro.engine.editor.EditorSelectionController;
 import com.retro.engine.editor.ViewportCameraController;
+import com.retro.engine.editor.render.SceneRenderSubmitter;
 import com.retro.engine.host.GlfwWindow;
 import com.retro.engine.host.HostBackendLoader;
 import com.retro.engine.rhi.IRenderBackend;
@@ -18,6 +14,7 @@ import static org.lwjgl.glfw.GLFW.*;
 
 public class Main {
     private static final AssetStreamingService streamingService = new AssetStreamingService();
+    private static final SceneRenderSubmitter renderSubmitter = new SceneRenderSubmitter();
 
     public static void main(String[] args) {
         System.out.println("===========================================");
@@ -35,6 +32,9 @@ public class Main {
         EditorSelectionController selectionController = new EditorSelectionController(editorManager);
         ViewportCameraController cameraController = new ViewportCameraController();
         selectionController.setCameraController(cameraController);
+        
+        // Single Source of Truth: Link CameraController to EditorPanelManager
+        editorManager.setCameraController(cameraController);
 
         HostBackendLoader loader = new HostBackendLoader();
         if (!loader.loadTargetBackend()) {
@@ -47,7 +47,7 @@ public class Main {
 
         window.setOnFileDropListener(filePaths -> {
             editorManager.onFilesDropped(filePaths);
-            System.out.println("[Asset Directory] Ingested " + filePaths.size() + " asset(s). Click assets to spawn or link.");
+            System.out.println("[Asset Directory] Ingested " + filePaths.size() + " asset(s).");
         });
 
         window.setOnMouseClickListener((mouseX, mouseY, button, action) -> {
@@ -68,8 +68,6 @@ public class Main {
 
         if (rhi.initialize(window.getWindowInfo())) {
             System.out.println("[Engine] Running. Virtual Thread Asset Streaming & Top Menu Bar Enabled.");
-            System.out.println("[Shortcuts] Cmd+Z (Undo) | Cmd+Shift+Z (Redo) | Cmd+S (Save) | Cmd+O (Open)");
-            System.out.println("[Gizmo] Press 1/W(Translate) / 2/E(Rotate) / 3/R(Scale) to switch modes in Viewport.");
 
             long lastTime = System.nanoTime();
             boolean saveKeyPressedLastFrame = false;
@@ -143,6 +141,7 @@ public class Main {
 
                 cameraController.update(deltaTime, isW, isS, isA, isD, isQ, isE);
 
+                // Update Camera Parameters across RHI and EditorPanelManager
                 rhi.setCameraTransform(
                         cameraController.getPanX(),
                         cameraController.getPanY(),
@@ -160,57 +159,8 @@ public class Main {
 
                 editorManager.update(deltaTime);
 
-                // Sync Virtual Thread async asset completions into main render cache
-                streamingService.processCompletedUploads();
-
-                rhi.clearSceneQueue();
-
-                for (SceneEntity entity : editorManager.getSceneEntities()) {
-                    TransformComponent tc = entity.getComponent(TransformComponent.class);
-                    MeshRendererComponent mc = entity.getComponent(MeshRendererComponent.class);
-                    MaterialComponent mat = entity.getComponent(MaterialComponent.class);
-
-                    if (tc == null || mc == null) continue;
-
-                    String meshPath = mc.meshAssetPath;
-                    String texturePath = (mat != null) ? mat.textureAssetPath : null;
-
-                    if (meshPath != null) {
-                        if (!streamingService.isMeshLoaded(meshPath)) {
-                            streamingService.requestModelAsync(meshPath);
-                        }
-
-                        if (texturePath != null && !streamingService.isTextureLoaded(texturePath)) {
-                            streamingService.requestTextureAsync(texturePath);
-                        }
-
-                        ModelData model = streamingService.getModel(meshPath);
-
-                        byte[] pixels = null;
-                        int texW = 0, texH = 0;
-                        if (texturePath != null) {
-                            TextureData tex = streamingService.getTexture(texturePath);
-                            if (tex != null) {
-                                pixels = tex.pixels;
-                                texW = tex.width;
-                                texH = tex.height;
-                            }
-                        }
-
-                        if (model != null && model.vertices != null && model.vertices.length > 0) {
-                            rhi.submitEntity(
-                                    meshPath,
-                                    model.vertices,
-                                    model.vertexCount,
-                                    texturePath,
-                                    pixels, texW, texH,
-                                    tc.posX, tc.posY, tc.posZ,
-                                    tc.rotX, tc.rotY, tc.rotZ,
-                                    tc.scaleX, tc.scaleY, tc.scaleZ
-                            );
-                        }
-                    }
-                }
+                // 1-Line Scene Graph & Virtual Thread Streaming Render Pass
+                renderSubmitter.submitFrame(editorManager, streamingService, rhi);
 
                 rhi.updateGridMesh(editorManager.get3DGridVertices(), editorManager.get3DGridVertexCount());
                 rhi.updateUiMesh(editorManager.getUiVertices(), editorManager.getUiVertexCount());

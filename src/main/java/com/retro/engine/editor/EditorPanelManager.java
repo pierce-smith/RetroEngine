@@ -19,9 +19,10 @@ import java.util.*;
 /**
  * EditorPanelManager orchestrates the editor 4-panel layout, top menu bar dropdowns,
  * Play/Pause simulation state toggles, modal dialog overlays, and command history.
- * Target JDK: JDK 21+ / JDK 25 / macOS
+ * Bound to ViewportCameraController for Single Source of Truth camera projection.
  */
 public class EditorPanelManager {
+
     public enum GizmoMode { TRANSLATE, ROTATE, SCALE }
     public enum GizmoAxis { NONE, X, Y, Z }
     public enum DropdownMenu { NONE, FILE, EDIT, ENTITY, VIEW }
@@ -43,12 +44,15 @@ public class EditorPanelManager {
     private float[] cached3DGridVertices = null;
     private float[] cachedUiVertices = null;
 
-    // Viewport Camera parameters
+    // Viewport Camera Reference (Single Source of Truth)
+    private ViewportCameraController cameraController;
+
+    // Fallback Viewport Camera parameters
     private float camPanX = 0.0f;
-    private float camPanY = -1.2f;
-    private float camZoom = -8.5f;
-    private float camPitch = 22.0f;
-    private float camYaw = -35.0f;
+    private float camPanY = 0.25f;
+    private float camZoom = -5.0f;
+    private float camPitch = 0.0f;
+    private float camYaw = 0.0f;
 
     public EditorPanelManager() {
         this(new SceneManager());
@@ -58,7 +62,17 @@ public class EditorPanelManager {
         this.sceneManager = (sceneManager != null) ? sceneManager : new SceneManager();
     }
 
-    public SceneManager getSceneManager() { return sceneManager; }
+    public void setCameraController(ViewportCameraController cameraController) {
+        this.cameraController = cameraController;
+    }
+
+    public ViewportCameraController getCameraController() {
+        return cameraController;
+    }
+
+    public SceneManager getSceneManager() {
+        return sceneManager;
+    }
 
     // --- Simulation State Delegation ---
     public PlayState getPlayState() { return sceneManager.getPlayState(); }
@@ -103,6 +117,10 @@ public class EditorPanelManager {
         this.camYaw = yaw;
     }
 
+    /**
+     * Projects 3D world coordinates (wx, wy, wz) to 2D Editor UI Canvas space.
+     * Guaranteed 1:1 match with MetalBackend's 3D perspective matrix.
+     */
     public float[] projectWorldToNdc(float wx, float wy, float wz) {
         float aspect = 712.0f / 488.0f;
         float fov = (float) Math.toRadians(50.0);
@@ -111,15 +129,21 @@ public class EditorPanelManager {
         float p00 = f / aspect;
         float p11 = f;
 
-        float radYaw = (float) Math.toRadians(camYaw);
-        float radPitch = (float) Math.toRadians(camPitch);
+        float activeYaw = (cameraController != null) ? cameraController.getYaw() : camYaw;
+        float activePitch = (cameraController != null) ? cameraController.getPitch() : camPitch;
+        float activePanX = (cameraController != null) ? cameraController.getPanX() : camPanX;
+        float activePanY = (cameraController != null) ? cameraController.getPanY() : camPanY;
+        float activeZoom = (cameraController != null) ? cameraController.getZoom() : camZoom;
+
+        float radYaw = (float) Math.toRadians(activeYaw);
+        float radPitch = (float) Math.toRadians(activePitch);
 
         float cy = (float) Math.cos(radYaw), sy = (float) Math.sin(radYaw);
         float cp = (float) Math.cos(radPitch), sp = (float) Math.sin(radPitch);
 
-        float vx = cy * wx - sy * wz + camPanX;
-        float vy = sy * sp * wx + cp * wy + cy * sp * wz + camPanY;
-        float vz = sy * cp * wx - sp * wy + cy * cp * wz + camZoom;
+        float vx = cy * wx - sy * wz + activePanX;
+        float vy = sy * sp * wx + cp * wy + cy * sp * wz + activePanY;
+        float vz = sy * cp * wx - sp * wy + cy * cp * wz + activeZoom;
 
         float clipW = -vz;
         if (clipW <= 0.001f) clipW = 0.001f;
@@ -156,25 +180,20 @@ public class EditorPanelManager {
         int extent = 15;
         float y = 0.0f;
 
-        // 1. Z-constant lines running along X axis
         for (int z_i = -extent; z_i <= extent; z_i++) {
             float z = (float) z_i;
             float r = 0.22f, g = 0.22f, b = 0.28f, a = 0.8f;
-            if (z_i == 0) { r = 1.0f; g = 0.25f; b = 0.25f; a = 1.0f; } // RED for X Axis (Z=0 line)
-
+            if (z_i == 0) { r = 1.0f; g = 0.25f; b = 0.25f; a = 1.0f; }
             addGridLine(verts, -extent, y, z, extent, y, z, r, g, b, a);
         }
 
-        // 2. X-constant lines running along Z axis
         for (int x_i = -extent; x_i <= extent; x_i++) {
             float x = (float) x_i;
             float r = 0.22f, g = 0.22f, b = 0.28f, a = 0.8f;
-            if (x_i == 0) { r = 0.25f; g = 0.55f; b = 1.0f; a = 1.0f; } // BLUE for Z Axis (X=0 line)
-
+            if (x_i == 0) { r = 0.25f; g = 0.55f; b = 1.0f; a = 1.0f; }
             addGridLine(verts, x, y, -extent, x, y, extent, r, g, b, a);
         }
 
-        // 3. Y Axis Vertical Line (GREEN) extending upward from Y=0.0f to Y=3.0f
         addGridLine(verts, 0.0f, 0.0f, 0.0f, 0.0f, 3.0f, 0.0f, 0.25f, 1.0f, 0.25f, 1.0f);
 
         float[] array = new float[verts.size()];
@@ -207,10 +226,7 @@ public class EditorPanelManager {
         return (dot == -1) ? "" : fileName.substring(dot + 1);
     }
 
-    public List<AssetEntry> getAssetDirectory() {
-        return Collections.unmodifiableList(assetDirectory);
-    }
-
+    public List<AssetEntry> getAssetDirectory() { return Collections.unmodifiableList(assetDirectory); }
     public GizmoMode getCurrentGizmoMode() { return currentGizmoMode; }
     public void setCurrentGizmoMode(GizmoMode mode) {
         this.currentGizmoMode = mode;
@@ -219,7 +235,6 @@ public class EditorPanelManager {
 
     public GizmoAxis getActiveGizmoAxis() { return activeGizmoAxis; }
     public void setActiveGizmoAxis(GizmoAxis axis) { this.activeGizmoAxis = axis; }
-
     public DropdownMenu getActiveDropdownMenu() { return activeDropdownMenu; }
     public void setActiveDropdownMenu(DropdownMenu menu) {
         this.activeDropdownMenu = menu;
@@ -284,6 +299,8 @@ public class EditorPanelManager {
 
     private void render3DGizmos(List<Float> verts, SceneEntity entity, GizmoMode mode, GizmoAxis activeAxis) {
         TransformComponent tc = entity.getTransform();
+        if (tc == null) return;
+
         float px = tc.posX;
         float py = tc.posY;
         float pz = tc.posZ;
@@ -292,7 +309,7 @@ public class EditorPanelManager {
         float cx = p0[0];
         float cy = p0[1];
 
-        float axisWorldLen = 1.2f;
+        float axisWorldLen = 1.0f;
 
         float[] pX = projectWorldToNdc(px + axisWorldLen, py, pz);
         float[] pY = projectWorldToNdc(px, py + axisWorldLen, pz);
