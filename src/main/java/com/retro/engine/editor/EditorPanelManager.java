@@ -6,11 +6,11 @@ import com.retro.engine.ecs.SceneManager;
 import com.retro.engine.ecs.SceneManager.PlayState;
 import com.retro.engine.ecs.components.LightComponent;
 import com.retro.engine.ecs.components.MaterialComponent;
-import com.retro.engine.ecs.components.MeshRendererComponent;
 import com.retro.engine.ecs.components.TransformComponent;
 import com.retro.engine.editor.assets.AssetEntry;
 import com.retro.engine.editor.assets.AssetType;
 import com.retro.engine.editor.commands.CommandHistory;
+import com.retro.engine.editor.commands.TransformCommand;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.editor.ui.*;
 import com.retro.engine.editor.input.GizmoInteractor;
@@ -26,10 +26,9 @@ import java.util.*;
 import static org.lwjgl.glfw.GLFW.*;
 
 /**
- * Aggregated EditorPanelManager & Unified Input Router.
- * Automatically queries GLFW Window Size (Screen Points) to compute 100% exact GPU NDC coordinates,
- * resolving window resize / Retina display hitbox drift across all panels.
+ * Aggregated EditorPanelManager & Unified Input Router with CommandHistory Undo/Redo and Custom Entity Duplication.
  */
+@SuppressWarnings("unused")
 public class EditorPanelManager {
     public enum GizmoMode { TRANSLATE, ROTATE, SCALE }
     public enum GizmoAxis { NONE, X, Y, Z }
@@ -59,6 +58,11 @@ public class EditorPanelManager {
     private double lastMouseY = 0.0;
 
     private float camPanX = 0.0f, camPanY = 0.25f, camZoom = -5.0f, camPitch = 0.0f, camYaw = 0.0f;
+
+    // CommandHistory Transform Tracking State
+    private float dragStartPx, dragStartPy, dragStartPz;
+    private float dragStartRx, dragStartRy, dragStartRz;
+    private float dragStartSx, dragStartSy, dragStartSz;
 
     public EditorPanelManager() { this(new SceneManager()); }
 
@@ -121,6 +125,77 @@ public class EditorPanelManager {
     public void spawnEntityFromAsset(AssetEntry meshAsset) { sceneManager.spawnEntityFromAsset(meshAsset); }
     public void assignTextureToSelectedEntity(AssetEntry textureAsset) { sceneManager.assignTextureToSelectedEntity(textureAsset); }
     public void assignMeshToSelectedEntity(AssetEntry meshAsset) { sceneManager.assignMeshToSelectedEntity(meshAsset); }
+
+    /**
+     * Duplicates the currently selected SceneEntity (preserving custom .obj/.gltf/.fbx mesh handles,
+     * texture bindings, shader types, and light settings) with a 0.5u position offset.
+     */
+    public void duplicateSelectedEntity() {
+        SceneEntity selected = getSelectedEntity();
+        if (selected == null) {
+            spawnDefaultCube();
+            return;
+        }
+
+        String meshPath = selected.getMeshAssetPath();
+        if (meshPath != null && !meshPath.isEmpty()) {
+            File file = new File(meshPath);
+            AssetEntry asset = new AssetEntry(file.getName(), meshPath, AssetType.MESH_3D);
+            spawnEntityFromAsset(asset);
+        } else {
+            spawnDefaultCube();
+        }
+
+        SceneEntity copy = getSelectedEntity();
+        if (copy != null && copy != selected) {
+            copy.name = selected.name + "_Copy";
+
+            // 1. Copy Transform Component with +0.5u offset on X axis
+            TransformComponent origTc = selected.getTransform();
+            TransformComponent copyTc = copy.getTransform();
+            if (origTc != null && copyTc != null) {
+                copyTc.posX = origTc.posX + 0.5f;
+                copyTc.posY = origTc.posY;
+                copyTc.posZ = origTc.posZ;
+                copyTc.rotX = origTc.rotX;
+                copyTc.rotY = origTc.rotY;
+                copyTc.rotZ = origTc.rotZ;
+                copyTc.scaleX = origTc.scaleX;
+                copyTc.scaleY = origTc.scaleY;
+                copyTc.scaleZ = origTc.scaleZ;
+            }
+
+            // 2. Copy Material Component (Texture asset path, texture name, shader name)
+            MaterialComponent origMat = selected.getComponent(MaterialComponent.class);
+            if (origMat != null) {
+                MaterialComponent copyMat = copy.getComponent(MaterialComponent.class);
+                if (copyMat == null) {
+                    copyMat = new MaterialComponent();
+                    copy.addComponent(copyMat);
+                }
+                copyMat.textureAssetPath = origMat.textureAssetPath;
+                copyMat.textureName = origMat.textureName;
+                copyMat.shaderName = origMat.shaderName;
+            }
+
+            // 3. Copy Light Component if present
+            LightComponent origLc = selected.getComponent(LightComponent.class);
+            if (origLc != null) {
+                LightComponent copyLc = copy.getComponent(LightComponent.class);
+                if (copyLc == null) {
+                    copyLc = new LightComponent();
+                    copy.addComponent(copyLc);
+                }
+                copyLc.type = origLc.type;
+                copyLc.intensity = origLc.intensity;
+                copyLc.r = origLc.r;
+                copyLc.g = origLc.g;
+                copyLc.b = origLc.b;
+            }
+
+            System.out.println("[EditorPanelManager] Duplicated Custom Entity: '" + copy.name + "'");
+        }
+    }
 
     public CommandHistory getCommandHistory() { return commandHistory; }
     public void undo() { commandHistory.undo(); }
@@ -190,7 +265,25 @@ public class EditorPanelManager {
                 }
             }
         } else if (action == 0) { // RELEASE
-            if (activeGizmoAxis != GizmoAxis.NONE) {
+            if (activeGizmoAxis != GizmoAxis.NONE && getSelectedEntity() != null) {
+                TransformComponent tc = getSelectedEntity().getTransform();
+                if (tc != null) {
+                    if (tc.posX != dragStartPx || tc.posY != dragStartPy || tc.posZ != dragStartPz ||
+                        tc.rotX != dragStartRx || tc.rotY != dragStartRy || tc.rotZ != dragStartRz ||
+                        tc.scaleX != dragStartSx || tc.scaleY != dragStartSy || tc.scaleZ != dragStartSz) {
+
+                        TransformCommand cmd = new TransformCommand(
+                            getSelectedEntity(),
+                            dragStartPx, dragStartPy, dragStartPz,
+                            dragStartRx, dragStartRy, dragStartRz,
+                            dragStartSx, dragStartSy, dragStartSz,
+                            tc.posX, tc.posY, tc.posZ,
+                            tc.rotX, tc.rotY, tc.rotZ,
+                            tc.scaleX, tc.scaleY, tc.scaleZ
+                        );
+                        commandHistory.executeCommand(cmd);
+                    }
+                }
                 activeGizmoAxis = GizmoAxis.NONE;
             }
         }
@@ -213,18 +306,9 @@ public class EditorPanelManager {
         return false;
     }
 
-    private void processTopBarClick(float ndcX) {
-        TopBarInteractor.processTopBarClick(ndcX, this);
-    }
-
-    private boolean processDropdownOverlayClick(float ndcX, float ndcY) {
-        return TopBarInteractor.processDropdownOverlayClick(ndcX, ndcY, this);
-    }
-
-    private void processHierarchyClick(float ndcY) {
-        PanelInteractor.processHierarchyClick(ndcY, this);
-    }
-
+    private void processTopBarClick(float ndcX) { TopBarInteractor.processTopBarClick(ndcX, this); }
+    private boolean processDropdownOverlayClick(float ndcX, float ndcY) { return TopBarInteractor.processDropdownOverlayClick(ndcX, ndcY, this); }
+    private void processHierarchyClick(float ndcY) { PanelInteractor.processHierarchyClick(ndcY, this); }
     private boolean processViewportToolbarClick(float ndcX, float ndcY) {
         if (ndcY >= 0.80f && ndcY <= 0.86f) {
             if (ndcX >= -0.51f && ndcX <= -0.38f) { setCurrentGizmoMode(GizmoMode.TRANSLATE); return true; }
@@ -236,57 +320,18 @@ public class EditorPanelManager {
 
     private void processViewportGizmoClick(double refX, double refY) {
         this.activeGizmoAxis = GizmoInteractor.pickGizmoAxis(refX, refY, getSelectedEntity(), cameraController, camPanX, camPanY, camZoom, camPitch, camYaw, currentGizmoMode);
-    }
-
-    private void processInspectorClick(float ndcX, float ndcY) {
-        InspectorInteractor.processInspectorClick(ndcX, ndcY, this);
-    }
-
-    private void processAssetDirectoryClick(float ndcX, float ndcY) {
-        PanelInteractor.processAssetDirectoryClick(ndcX, ndcY, this);
-    }
-
-    private void processModalClick(float ndcX, float ndcY) {
-        float cardMinX = -0.45f, cardMaxX = 0.45f;
-        float cardMinY = -0.45f, cardMaxY = 0.45f;
-
-        // Outside modal or [X] close button
-        if (ndcX < cardMinX || ndcX > cardMaxX || ndcY < cardMinY || ndcY > cardMaxY) { closeModal(); return; }
-        if (ndcX >= cardMaxX - 0.08f && ndcX <= cardMaxX - 0.02f && ndcY >= cardMaxY - 0.08f && ndcY <= cardMaxY - 0.02f) { closeModal(); return; }
-
-        // [NONE / UNBIND] Button
-        if (ndcX >= -0.42f && ndcX <= -0.07f && ndcY >= 0.27f && ndcY <= 0.33f) {
-            SceneEntity selected = getSelectedEntity();
-            if (selected != null) {
-                if (pickerFilterType == AssetType.TEXTURE) selected.setTextureAsset(null, "DEFAULT_CHECKER");
-                else if (pickerFilterType == AssetType.MESH_3D) selected.setMeshAssetPath(null);
+        if (this.activeGizmoAxis != GizmoAxis.NONE && getSelectedEntity() != null) {
+            TransformComponent tc = getSelectedEntity().getTransform();
+            if (tc != null) {
+                this.dragStartPx = tc.posX; this.dragStartPy = tc.posY; this.dragStartPz = tc.posZ;
+                this.dragStartRx = tc.rotX; this.dragStartRy = tc.rotY; this.dragStartRz = tc.rotZ;
+                this.dragStartSx = tc.scaleX; this.dragStartSy = tc.scaleY; this.dragStartSz = tc.scaleZ;
             }
-            closeModal();
-            return;
-        }
-
-        // [IMPORT DISK...] Button inside Modal Overlay
-        if (ndcX >= 0.07f && ndcX <= 0.42f && ndcY >= 0.27f && ndcY <= 0.33f) {
-            closeModal();
-            if (pickerFilterType == AssetType.TEXTURE) InspectorInteractor.promptImportTexture(this);
-            else if (pickerFilterType == AssetType.MESH_3D) InspectorInteractor.promptImportMesh(this);
-            return;
-        }
-
-        // Item List Selection
-        List<AssetEntry> filtered = assetDirectory.stream().filter(a -> a.type == pickerFilterType).toList();
-        float listY = cardMaxY - 0.24f;
-        for (AssetEntry asset : filtered) {
-            if (listY < cardMinY + 0.05f) break;
-            if (ndcY >= listY - 0.05f && ndcY <= listY + 0.03f) {
-                if (pickerFilterType == AssetType.TEXTURE) assignTextureToSelectedEntity(asset);
-                else if (pickerFilterType == AssetType.MESH_3D) assignMeshToSelectedEntity(asset);
-                closeModal();
-                return;
-            }
-            listY -= 0.10f;
         }
     }
+
+    private void processInspectorClick(float ndcX, float ndcY) { InspectorInteractor.processInspectorClick(ndcX, ndcY, this); }
+    private void processAssetDirectoryClick(float ndcX, float ndcY) { PanelInteractor.processAssetDirectoryClick(ndcX, ndcY, this); }
 
     // --- 3D GRID GENERATION (Preserving origin axes: Red X, Green Y, Blue Z) ---
     public float[] get3DGridVertices() {
@@ -349,19 +394,10 @@ public class EditorPanelManager {
         return (dot == -1) ? "" : fileName.substring(dot + 1);
     }
 
-
     // --- NATIVE OS FILE DIALOG PROMPTS ---
-    public void promptImportTexture() {
-        InspectorInteractor.promptImportTexture(this);
-    }
-
-    public void promptImportMesh() {
-        InspectorInteractor.promptImportMesh(this);
-    }
-
-    public void promptImportAssetForDirectory() {
-        InspectorInteractor.promptImportAssetForDirectory(this);
-    }
+    public void promptImportTexture() { InspectorInteractor.promptImportTexture(this); }
+    public void promptImportMesh() { InspectorInteractor.promptImportMesh(this); }
+    public void promptImportAssetForDirectory() { InspectorInteractor.promptImportAssetForDirectory(this); }
 
     public float[] getUiVertices() {
         this.cachedUiVertices = generateUiVertices();
