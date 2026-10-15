@@ -170,7 +170,11 @@ public class EditorPanelManager {
     }
 
     public String getCurrentFolderPath() { return currentFolderPath; }
-    public void setCurrentFolderPath(String path) { this.currentFolderPath = (path != null) ? path : ""; }
+    public void setCurrentFolderPath(String path) {
+        String cleanPath = (path != null) ? path.trim() : "";
+        assert (cleanPath.isEmpty() || assetDirectory.stream().anyMatch(a -> a.type == AssetType.FOLDER && a.absolutePath.equalsIgnoreCase(cleanPath))) : "[FATAL] EditorPanelManager currentFolderPath set to non-existent virtual folder: " + cleanPath;
+        this.currentFolderPath = cleanPath;
+    }
 
     public void navigateUpFolder() {
         if (currentFolderPath == null || currentFolderPath.isEmpty()) return;
@@ -201,6 +205,7 @@ public class EditorPanelManager {
 
     private void addAssetDirectoryIfNotExists(String absolutePath, AssetType type) {
         if (absolutePath == null || absolutePath.trim().isEmpty()) return;
+        assert (assetDirectory.stream().filter(a -> a.absolutePath != null && a.absolutePath.equalsIgnoreCase(absolutePath)).count() <= 1) : "[FATAL] Duplicate asset path registered in Asset Directory: " + absolutePath;
         File file = new File(absolutePath);
         if (type == AssetType.UNKNOWN || type == null) {
             String ext = getFileExtension(file.getName()).toLowerCase();
@@ -221,6 +226,7 @@ public class EditorPanelManager {
         }
         assetDirectory.add(new AssetEntry(file.getName(), absolutePath, type, currentFolderPath));
     }
+
     public void deleteSelectedEntity() { sceneManager.deleteSelectedEntity(); }
     public void duplicateSelectedEntity() { sceneManager.duplicateSelectedEntity(); }
     public void spawnDefaultCube() { sceneManager.spawnDefaultCube(); }
@@ -289,7 +295,6 @@ public class EditorPanelManager {
             this.activeModal = ModalState.PARENT_PICKER;
         }
     }
-
 
     public boolean isContextMenuVisible() { return contextMenuVisible; }
     public void closeContextMenu() { this.contextMenuVisible = false; this.contextMenuItems.clear(); }
@@ -699,7 +704,6 @@ public class EditorPanelManager {
             listY -= 0.10f;
         }
     }
-
 
     public float[] get3DGridVertices() {
         if (!show3DGrid) return new float[0];

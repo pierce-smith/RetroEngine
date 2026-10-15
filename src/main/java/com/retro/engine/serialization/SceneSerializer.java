@@ -28,6 +28,7 @@ public class SceneSerializer {
 
     public static boolean saveSceneToFile(String filePath, List<SceneEntity> entities, List<AssetEntry> assetDirectory) {
         if (filePath == null || filePath.trim().isEmpty()) return false;
+        assert (entities == null || entities.stream().allMatch(e -> e.id != null && !e.id.trim().isEmpty())) : "[FATAL] Attempted to serialize entity with null or empty ID";
 
         StringBuilder json = new StringBuilder();
         json.append("{\n");
@@ -251,6 +252,29 @@ public class SceneSerializer {
                     if (p.id.equalsIgnoreCase(e.parentId)) {
                         p.addChildId(e.id);
                         break;
+                    }
+                }
+            }
+        }
+
+        // Post-Deserialization Graph Audit & Advanced Assertions
+        for (SceneEntity entity : entities) {
+            if (entity.parentId != null && !entity.parentId.trim().isEmpty()) {
+                boolean parentExists = entities.stream().anyMatch(p -> p.id.equalsIgnoreCase(entity.parentId));
+                assert parentExists : "[FATAL] Deserialization Error: Entity " + entity.id + " references non-existent parentId: " + entity.parentId;
+
+                if (!parentExists) {
+                    System.err.println("[SceneSerializer] Repairing dangling parent link on " + entity.id);
+                    entity.parentId = null;
+                }
+            }
+
+            if (entity.parentId != null && !entity.parentId.trim().isEmpty()) {
+                SceneEntity parent = entities.stream().filter(p -> p.id.equalsIgnoreCase(entity.parentId)).findFirst().orElse(null);
+                if (parent != null) {
+                    assert parent.hasChild(entity.id) : "[FATAL] Desynchronized Hierarchy: Parent " + parent.id + " missing child reference to " + entity.id;
+                    if (!parent.hasChild(entity.id)) {
+                        parent.addChildId(entity.id);
                     }
                 }
             }

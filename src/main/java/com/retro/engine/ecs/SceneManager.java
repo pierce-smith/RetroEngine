@@ -106,12 +106,26 @@ public class SceneManager {
         if (tc == null) return new WorldTransform(0,0,0, 0,0,0, 1,1,1);
 
         if (entity.parentId == null || entity.parentId.isEmpty()) {
-            return new WorldTransform(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ);
+            WorldTransform wt = new WorldTransform(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ);
+            assert (!Float.isNaN(wt.px()) && !Float.isInfinite(wt.px()) &&
+                !Float.isNaN(wt.py()) && !Float.isInfinite(wt.py()) &&
+                !Float.isNaN(wt.pz()) && !Float.isInfinite(wt.pz()) &&
+                !Float.isNaN(wt.sx()) && !Float.isInfinite(wt.sx()) && wt.sx() != 0.0f &&
+                !Float.isNaN(wt.sy()) && !Float.isInfinite(wt.sy()) && wt.sy() != 0.0f &&
+                !Float.isNaN(wt.sz()) && !Float.isInfinite(wt.sz()) && wt.sz() != 0.0f) : "[FATAL] Degenerate matrix transform calculated for Entity: " + (entity != null ? entity.id : "null");
+            return wt;
         }
 
         SceneEntity parent = findEntityById(entity.parentId);
         if (parent == null || parent == entity) {
-            return new WorldTransform(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ);
+            WorldTransform wt = new WorldTransform(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ);
+            assert (!Float.isNaN(wt.px()) && !Float.isInfinite(wt.px()) &&
+                !Float.isNaN(wt.py()) && !Float.isInfinite(wt.py()) &&
+                !Float.isNaN(wt.pz()) && !Float.isInfinite(wt.pz()) &&
+                !Float.isNaN(wt.sx()) && !Float.isInfinite(wt.sx()) && wt.sx() != 0.0f &&
+                !Float.isNaN(wt.sy()) && !Float.isInfinite(wt.sy()) && wt.sy() != 0.0f &&
+                !Float.isNaN(wt.sz()) && !Float.isInfinite(wt.sz()) && wt.sz() != 0.0f) : "[FATAL] Degenerate matrix transform calculated for Entity: " + (entity != null ? entity.id : "null");
+            return wt;
         }
 
         WorldTransform parentWt = getComputedWorldTransform(parent);
@@ -134,35 +148,57 @@ public class SceneManager {
         float py = parentWt.py() + rot[1];
         float pz = parentWt.pz() + rot[2];
 
-        return new WorldTransform(px, py, pz, rx, ry, rz, sx, sy, sz);
+        WorldTransform wt = new WorldTransform(px, py, pz, rx, ry, rz, sx, sy, sz);
+        assert (!Float.isNaN(wt.px()) && !Float.isInfinite(wt.px()) &&
+                !Float.isNaN(wt.py()) && !Float.isInfinite(wt.py()) &&
+                !Float.isNaN(wt.pz()) && !Float.isInfinite(wt.pz()) &&
+                !Float.isNaN(wt.sx()) && !Float.isInfinite(wt.sx()) && wt.sx() != 0.0f &&
+                !Float.isNaN(wt.sy()) && !Float.isInfinite(wt.sy()) && wt.sy() != 0.0f &&
+                !Float.isNaN(wt.sz()) && !Float.isInfinite(wt.sz()) && wt.sz() != 0.0f) : "[FATAL] Degenerate matrix transform calculated for Entity: " + (entity != null ? entity.id : "null");
+        return wt;
     }
 
-    private static float[] rotateVector(float lx, float ly, float lz, float rx, float ry, float rz) {
-        float radX = (float) Math.toRadians(rx);
-        float radY = (float) Math.toRadians(ry);
-        float radZ = (float) Math.toRadians(rz);
+    private float[] rotateVector(float x, float y, float z, float pitchDeg, float yawDeg, float rollDeg) {
+        float radPitch = (float) Math.toRadians(pitchDeg);
+        float radYaw = (float) Math.toRadians(yawDeg);
+        float radRoll = (float) Math.toRadians(rollDeg);
 
-        float cx = (float) Math.cos(radX), sx = (float) Math.sin(radX);
-        float cy = (float) Math.cos(radY), sy = (float) Math.sin(radY);
-        float cz = (float) Math.cos(radZ), sz = (float) Math.sin(radZ);
+        float cp = (float) Math.cos(radPitch), sp = (float) Math.sin(radPitch);
+        float cy = (float) Math.cos(radYaw), sy = (float) Math.sin(radYaw);
+        float cr = (float) Math.cos(radRoll), sr = (float) Math.sin(radRoll);
 
-        float y1 = cx * ly - sx * lz;
-        float z1 = sx * ly + cx * lz;
-        float x1 = lx;
+        float x1 = cr * x - sr * y;
+        float y1 = sr * x + cr * y;
+        float z1 = z;
 
-        float x2 = cy * x1 + sy * z1;
-        float z2 = -sy * x1 + cy * z1;
-        float y2 = y1;
+        float x2 = x1;
+        float y2 = cp * y1 - sp * z1;
+        float z2 = sp * y1 + cp * z1;
 
-        float x3 = cz * x2 - sz * y2;
-        float y3 = sz * x2 + cz * y2;
-        float z3 = z2;
+        float x3 = cy * x2 + sy * z2;
+        float y3 = y2;
+        float z3 = -sy * x2 + cy * z2;
 
-        return new float[]{ x3, y3, z3 };
+        return new float[]{x3, y3, z3};
+    }
+
+    public boolean hasHierarchyCycle(SceneEntity startEntity) {
+        if (startEntity == null) return false;
+        java.util.Set<String> visitedIds = new java.util.HashSet<>();
+        SceneEntity current = startEntity;
+
+        while (current != null && current.parentId != null && !current.parentId.trim().isEmpty()) {
+            if (!visitedIds.add(current.id)) {
+                return true;
+            }
+            current = findEntityById(current.parentId);
+        }
+        return false;
     }
 
     public boolean setParent(SceneEntity child, SceneEntity parent) {
         if (child == null) return false;
+        assert (parent == null || (!parent.id.equalsIgnoreCase(child.id) && !hasHierarchyCycle(parent))) : "[FATAL] Hierarchy cycle or self-parenting prevented between Child: " + child.id + " and Parent: " + (parent != null ? parent.id : "null");
         if (parent != null && (parent == child || parent.isDescendantOf(child, sceneEntities))) {
             System.out.println("[SceneManager] Circular parenting prevented!");
             return false;
@@ -233,16 +269,50 @@ public class SceneManager {
         return copy;
     }
 
-    public void newScene() { stop(); this.sceneEntities.clear(); this.selectedEntity = null; this.activeScenePath = "Assets/Scenes/Untitled.scene"; }
-    public void promptOpenSceneWithNativeDialog() { String defaultDir = new File("Assets/Scenes").getAbsolutePath(); String importedPath = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.scene)", "scene"); if (importedPath != null && !importedPath.trim().isEmpty()) { loadSceneFromFile(importedPath); } }
-    public void promptSaveSceneWithNativeDialog(List<AssetEntry> assetDirectory) { String defaultDir = new File("Assets/Scenes").getAbsolutePath(); String targetPath = NativeFileDialog.saveFileDialog("Save Scene File", defaultDir, "Retro Scene (*.scene)", "scene"); if (targetPath != null && !targetPath.trim().isEmpty()) { saveActiveScene(targetPath, assetDirectory); } }
+    public void newScene() {
+        stop();
+        this.sceneEntities.clear();
+        this.selectedEntity = null;
+        this.activeScenePath = "Assets/Scenes/Untitled.scene";
+    }
 
-    public void saveActiveScene(String filePath, List<AssetEntry> assetDirectory) { if (filePath == null || filePath.trim().isEmpty()) return; SceneSerializer.saveScene(filePath, sceneEntities, assetDirectory); this.activeScenePath = filePath; }
-    public SceneSerializer.SceneLoadData loadSceneFromFile(String filePath) { stop(); this.activeScenePath = filePath; sceneEntities.clear(); selectedEntity = null; SceneSerializer.SceneLoadData data = SceneSerializer.loadSceneData(filePath); if (data != null && data.entities() != null) { sceneEntities.addAll(data.entities()); selectEntity(sceneEntities.isEmpty() ? null : sceneEntities.get(0)); } return data; }
+    public void promptOpenSceneWithNativeDialog() {
+        String defaultDir = new File("Assets/Scenes").getAbsolutePath();
+        String importedPath = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.scene)", "scene");
+        if (importedPath != null && !importedPath.trim().isEmpty()) {
+            loadSceneFromFile(importedPath);
+        }
+    }
+
+    public void promptSaveSceneWithNativeDialog(List<AssetEntry> assetDirectory) {
+        String defaultDir = new File("Assets/Scenes").getAbsolutePath();
+        String targetPath = NativeFileDialog.saveFileDialog("Save Scene File", defaultDir, "Retro Scene (*.scene)", "scene");
+        if (targetPath != null && !targetPath.trim().isEmpty()) {
+            saveActiveScene(targetPath, assetDirectory);
+        }
+    }
+
+    public void saveActiveScene(String filePath, List<AssetEntry> assetDirectory) {
+        if (filePath == null || filePath.trim().isEmpty()) return;
+        SceneSerializer.saveScene(filePath, sceneEntities, assetDirectory);
+        this.activeScenePath = filePath;
+    }
+
+    public SceneSerializer.SceneLoadData loadSceneFromFile(String filePath) {
+        stop();
+        this.activeScenePath = filePath;
+        sceneEntities.clear();
+        selectedEntity = null;
+        SceneSerializer.SceneLoadData data = SceneSerializer.loadSceneData(filePath);
+        if (data != null && data.entities() != null) {
+            sceneEntities.addAll(data.entities());
+            selectEntity(sceneEntities.isEmpty() ? null : sceneEntities.get(0));
+        }
+        return data;
+    }
 
     public void deleteSelectedEntity() {
         if (selectedEntity != null) {
-            // Unparent children of deleted entity
             for (SceneEntity e : sceneEntities) {
                 if (selectedEntity.id.equalsIgnoreCase(e.parentId)) {
                     e.parentId = null;
@@ -258,7 +328,10 @@ public class SceneManager {
     }
 
     public void duplicateSelectedEntity() {
-        if (selectedEntity == null) { spawnDefaultCube(); return; }
+        if (selectedEntity == null) {
+            spawnDefaultCube();
+            return;
+        }
         String entityId = "entity_" + System.currentTimeMillis();
         String name = selectedEntity.name + "_Copy";
         SceneEntity copy = new SceneEntity(entityId, name, selectedEntity.getMeshAssetPath());
@@ -304,10 +377,48 @@ public class SceneManager {
         selectEntity(copy);
     }
 
-    public void spawnDefaultCube() { String entityId = "entity_" + (sceneEntities.size() + 1); String name = "Cube_" + (sceneEntities.size() + 1); SceneEntity entity = new SceneEntity(entityId, name, "Assets/Models/cube.obj"); sceneEntities.add(entity); selectEntity(entity); }
-    public void spawnLightSource() { String entityId = "light_" + (sceneEntities.size() + 1); String name = "DirectionalLight_" + (sceneEntities.size() + 1); SceneEntity entity = new SceneEntity(entityId, name, null); entity.addComponent(new LightComponent()); sceneEntities.add(entity); selectEntity(entity); }
-    public void spawnCameraEntity() { String entityId = "camera_" + (sceneEntities.size() + 1); String name = "Main Camera_" + (sceneEntities.size() + 1); SceneEntity entity = new SceneEntity(entityId, name, null); entity.addComponent(new CameraComponent()); sceneEntities.add(entity); selectEntity(entity); }
-    public void spawnEntityFromAsset(AssetEntry meshAsset) { if (meshAsset == null || meshAsset.type != AssetType.MESH_3D) return; String entityId = "entity_" + (sceneEntities.size() + 1); String name = meshAsset.name.replaceAll("\\.[^.]+$", ""); SceneEntity entity = new SceneEntity(entityId, name, meshAsset.absolutePath); sceneEntities.add(entity); selectEntity(entity); }
-    public void assignTextureToSelectedEntity(AssetEntry textureAsset) { if (selectedEntity == null || textureAsset == null || textureAsset.type != AssetType.TEXTURE) return; selectedEntity.setTextureAsset(textureAsset.absolutePath, textureAsset.name); }
-    public void assignMeshToSelectedEntity(AssetEntry meshAsset) { if (selectedEntity == null || meshAsset == null || meshAsset.type != AssetType.MESH_3D) return; selectedEntity.setMeshAssetPath(meshAsset.absolutePath); }
+    public void spawnDefaultCube() {
+        String entityId = "entity_" + (sceneEntities.size() + 1);
+        String name = "Cube_" + (sceneEntities.size() + 1);
+        SceneEntity entity = new SceneEntity(entityId, name, "Assets/Models/cube.obj");
+        sceneEntities.add(entity);
+        selectEntity(entity);
+    }
+
+    public void spawnLightSource() {
+        String entityId = "light_" + (sceneEntities.size() + 1);
+        String name = "DirectionalLight_" + (sceneEntities.size() + 1);
+        SceneEntity entity = new SceneEntity(entityId, name, null);
+        entity.addComponent(new LightComponent());
+        sceneEntities.add(entity);
+        selectEntity(entity);
+    }
+
+    public void spawnCameraEntity() {
+        String entityId = "camera_" + (sceneEntities.size() + 1);
+        String name = "Main Camera_" + (sceneEntities.size() + 1);
+        SceneEntity entity = new SceneEntity(entityId, name, null);
+        entity.addComponent(new CameraComponent());
+        sceneEntities.add(entity);
+        selectEntity(entity);
+    }
+
+    public void spawnEntityFromAsset(AssetEntry meshAsset) {
+        if (meshAsset == null || meshAsset.type != AssetType.MESH_3D) return;
+        String entityId = "entity_" + (sceneEntities.size() + 1);
+        String name = meshAsset.name.replaceAll("\\.[^.]+$", "");
+        SceneEntity entity = new SceneEntity(entityId, name, meshAsset.absolutePath);
+        sceneEntities.add(entity);
+        selectEntity(entity);
+    }
+
+    public void assignTextureToSelectedEntity(AssetEntry textureAsset) {
+        if (selectedEntity == null || textureAsset == null || textureAsset.type != AssetType.TEXTURE) return;
+        selectedEntity.setTextureAsset(textureAsset.absolutePath, textureAsset.name);
+    }
+
+    public void assignMeshToSelectedEntity(AssetEntry meshAsset) {
+        if (selectedEntity == null || meshAsset == null || meshAsset.type != AssetType.MESH_3D) return;
+        selectedEntity.setMeshAssetPath(meshAsset.absolutePath);
+    }
 }

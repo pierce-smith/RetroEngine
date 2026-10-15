@@ -56,6 +56,9 @@ public class GizmoInteractor {
         float ndcX = (p00 * vx) / clipW;
         float ndcY = (p11 * vy) / clipW;
 
+        assert (clipW != 0.0f) : "[FATAL] Division by zero during camera view-space transformation";
+        assert (!Float.isNaN(ndcX) && !Float.isInfinite(ndcX) && !Float.isNaN(ndcY) && !Float.isInfinite(ndcY)) : "[FATAL] Invalid NDC coordinate produced during gizmo unprojection";
+
         float uiX = 0.0f + ndcX * 0.55f;
         float uiY = 0.19f + ndcY * 0.69f;
 
@@ -68,7 +71,6 @@ public class GizmoInteractor {
     }
 
     // --- Pick Gizmo Axis Overloads ---
-
     public static GizmoAxis pickGizmoAxis(double refX, double refY, SceneEntity selectedEntity, float wx, float wy, float wz, ViewportCameraController cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw, GizmoMode currentGizmoMode) {
         if (selectedEntity == null) return GizmoAxis.NONE;
 
@@ -122,7 +124,6 @@ public class GizmoInteractor {
     }
 
     // --- Handle Gizmo Drag Overloads ---
-
     public static boolean handleGizmoDrag(double deltaX, double deltaY, double refX, double refY, GizmoAxis activeGizmoAxis, GizmoMode currentGizmoMode, SceneEntity selectedEntity, float wx, float wy, float wz, ViewportCameraController cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
         if (activeGizmoAxis == GizmoAxis.NONE || selectedEntity == null) return false;
         TransformComponent tc = selectedEntity.getTransform();
@@ -216,7 +217,6 @@ public class GizmoInteractor {
     }
 
     // --- Render Gizmos Overloads ---
-
     public static void render3DGizmos(List<Float> verts, SceneEntity entity, GizmoMode mode, GizmoAxis activeAxis, ViewportCameraController cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
         TransformComponent tc = entity.getTransform();
         if (tc == null) return;
@@ -324,10 +324,13 @@ public class GizmoInteractor {
         double dx = x2 - x1;
         double dy = y2 - y1;
         if (dx == 0 && dy == 0) return Math.hypot(px - x1, py - y1);
+
         double t = ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy);
         t = Math.max(0, Math.min(1, t));
+
         double projX = x1 + t * dx;
         double projY = y1 + t * dy;
+
         return Math.hypot(px - projX, py - projY);
     }
 }

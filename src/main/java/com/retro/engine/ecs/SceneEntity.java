@@ -19,7 +19,6 @@ public class SceneEntity {
     public String parentId = null;
     public boolean expandedInHierarchy = true;
     private final List<String> childIds = new ArrayList<>();
-
     private final List<Component> components = new ArrayList<>();
 
     public SceneEntity(String id, String name, String meshAssetPath) {
@@ -99,6 +98,7 @@ public class SceneEntity {
     public void removeChildId(String childId) {
         if (childId != null) {
             childIds.remove(childId);
+            assert (!childIds.contains(childId)) : "[FATAL] Failed to remove child ID " + childId + " from parent " + this.id;
         }
     }
 

@@ -19,6 +19,7 @@ public class CommandHistory {
         if (undoStack.size() > MAX_CAPACITY) {
             undoStack.removeLast();
         }
+        assert (undoStack.size() <= 50) : "[FATAL] CommandHistory undo stack exceeded maximum capacity limit of 50";
         System.out.println("[CommandHistory] Executed: " + cmd.getName());
     }
 
@@ -46,8 +47,14 @@ public class CommandHistory {
         return true;
     }
 
-    public boolean canUndo() { return !undoStack.isEmpty(); }
-    public boolean canRedo() { return !redoStack.isEmpty(); }
+    public boolean canUndo() {
+        return !undoStack.isEmpty();
+    }
+
+    public boolean canRedo() {
+        return !redoStack.isEmpty();
+    }
+
     public void clear() {
         undoStack.clear();
         redoStack.clear();
