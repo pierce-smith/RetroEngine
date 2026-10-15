@@ -12,7 +12,8 @@ import java.util.List;
 
 /**
  * GizmoInteractor encapsulating 100% baseline 3D World Projection,
- * Viewport Framing Offsets (0.55x / 0.69y), Raycasting / Axis Picking,
+ * Viewport Framing Offsets (0.55x / 0.69y), Raycasting / Axis Picking with
+ * Generous Hitbox Thresholds (52px Translate/Scale, 28px 2D Matched Rotate Rings),
  * Delta Dragging with Grid & Angle Snapping, and Immediate-Mode 3D Vector Batching.
  */
 public class GizmoInteractor {
@@ -93,63 +94,42 @@ public class GizmoInteractor {
             double distToY = pointToSegmentDistance(refX, refY, cx, cy, yTipX, yTipY);
             double distToZ = pointToSegmentDistance(refX, refY, cx, cy, zTipX, zTipY);
 
-            double thresh = 35.0;
+            // Generously expanded hitbox threshold for Translate / Scale axis lines (52px radius)
+            double thresh = 52.0;
             if (distToX < thresh && distToX <= distToY && distToX <= distToZ) return GizmoAxis.X;
             if (distToY < thresh && distToY <= distToX && distToY <= distToZ) return GizmoAxis.Y;
             if (distToZ < thresh && distToZ <= distToX && distToZ <= distToY) return GizmoAxis.Z;
         } else if (currentGizmoMode == GizmoMode.ROTATE) {
             double currentMouseAngle = Math.atan2(ndcY - p0[1], ndcX - p0[0]);
-            double distToCenter = Math.hypot(refX - cx, refY - cy);
 
-            float axisLen = 1.0f;
-            double hitThreshold = 18.0;
+            // Balanced 28px hit threshold for 1:1 screen-matched 2D rotate arcs
+            double hitThreshold = 28.0;
 
             GizmoAxis grabbed = GizmoAxis.NONE;
             double bestDist = hitThreshold;
 
-            double maxInnerScreenDist = 0.0;
+            float uiCx = p0[0];
+            float uiCy = p0[1];
 
-            float[] pXTip = projectWorldToNdc(tc.posX + axisLen, tc.posY, tc.posZ, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
-            float[] pYTip = projectWorldToNdc(tc.posX, tc.posY + axisLen, tc.posZ, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
-            float[] pZTip = projectWorldToNdc(tc.posX, tc.posY, tc.posZ + axisLen, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
-
-            maxInnerScreenDist = Math.max(maxInnerScreenDist, Math.hypot((((pXTip[0] + 1.0) / 2.0) * 1280.0) - cx, ((1.0 - pXTip[1]) / 2.0 * 720.0) - cy));
-            maxInnerScreenDist = Math.max(maxInnerScreenDist, Math.hypot((((pYTip[0] + 1.0) / 2.0) * 1280.0) - cx, ((1.0 - pYTip[1]) / 2.0 * 720.0) - cy));
-            maxInnerScreenDist = Math.max(maxInnerScreenDist, Math.hypot((((pZTip[0] + 1.0) / 2.0) * 1280.0) - cx, ((1.0 - pZTip[1]) / 2.0 * 720.0) - cy));
-
-            double dynamicZRadius = maxInnerScreenDist * 1.22;
-            double distToZRing = Math.abs(distToCenter - dynamicZRadius);
-
-            if (distToZRing < bestDist) {
-                grabbed = GizmoAxis.Z;
-                bestDist = distToZRing;
+            // 1. X-Axis (Pitch, Red): 0.05x, 0.14y (-90° to 90°)
+            double distToX = getArcDistance(refX, refY, uiCx, uiCy, 0.05f, 0.14f, -90.0f, 90.0f, 32);
+            if (distToX < bestDist) {
+                grabbed = GizmoAxis.X;
+                bestDist = distToX;
             }
 
-            int numSamples = 64;
-            for (int i = 0; i < numSamples; i++) {
-                double angle = (i * 2.0 * Math.PI) / numSamples;
-                float cosA = (float) Math.cos(angle) * axisLen;
-                float sinA = (float) Math.sin(angle) * axisLen;
+            // 2. Y-Axis (Yaw, Green): 0.14x, 0.05y (0° to 180°)
+            double distToY = getArcDistance(refX, refY, uiCx, uiCy, 0.14f, 0.05f, 0.0f, 180.0f, 32);
+            if (distToY < bestDist) {
+                grabbed = GizmoAxis.Y;
+                bestDist = distToY;
+            }
 
-                float[] pXSample = projectWorldToNdc(tc.posX, tc.posY + cosA, tc.posZ + sinA, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
-                double sXx = ((pXSample[0] + 1.0) / 2.0) * 1280.0;
-                double sXy = ((1.0 - pXSample[1]) / 2.0) * 720.0;
-                double distToXSample = Math.hypot(refX - sXx, refY - sXy);
-
-                if (distToXSample < bestDist) {
-                    grabbed = GizmoAxis.X;
-                    bestDist = distToXSample;
-                }
-
-                float[] pYSample = projectWorldToNdc(tc.posX + cosA, tc.posY, tc.posZ + sinA, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
-                double sYx = ((pYSample[0] + 1.0) / 2.0) * 1280.0;
-                double sYy = ((1.0 - pYSample[1]) / 2.0) * 720.0;
-                double distToYSample = Math.hypot(refX - sYx, refY - sYy);
-
-                if (distToYSample < bestDist) {
-                    grabbed = GizmoAxis.Y;
-                    bestDist = distToYSample;
-                }
+            // 3. Z-Axis (Roll, Blue): 0.14x, 0.14y (0° to 360°)
+            double distToZ = getArcDistance(refX, refY, uiCx, uiCy, 0.14f, 0.14f, 0.0f, 360.0f, 32);
+            if (distToZ < bestDist) {
+                grabbed = GizmoAxis.Z;
+                bestDist = distToZ;
             }
 
             if (grabbed != GizmoAxis.NONE) {
@@ -158,6 +138,32 @@ public class GizmoInteractor {
             }
         }
         return GizmoAxis.NONE;
+    }
+
+    private static double getArcDistance(double refX, double refY, float uiCx, float uiCy, float rxNdc, float ryNdc, float startDeg, float endDeg, int numSamples) {
+        double minDistance = Double.MAX_VALUE;
+        double prevX = 0, prevY = 0;
+
+        for (int i = 0; i <= numSamples; i++) {
+            double deg = startDeg + (endDeg - startDeg) * ((double) i / numSamples);
+            double rad = Math.toRadians(deg);
+
+            float sampleUiX = uiCx + rxNdc * (float) Math.cos(rad);
+            float sampleUiY = uiCy + ryNdc * (float) Math.sin(rad);
+
+            double screenX = ((sampleUiX + 1.0) / 2.0) * 1280.0;
+            double screenY = ((1.0 - sampleUiY) / 2.0) * 720.0;
+
+            if (i > 0) {
+                double dist = pointToSegmentDistance(refX, refY, prevX, prevY, screenX, screenY);
+                if (dist < minDistance) {
+                    minDistance = dist;
+                }
+            }
+            prevX = screenX;
+            prevY = screenY;
+        }
+        return minDistance;
     }
 
     public static GizmoAxis pickGizmoAxis(double refX, double refY, SceneEntity selectedEntity, EditorPanelManager manager, GizmoMode currentGizmoMode) {

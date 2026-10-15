@@ -1,6 +1,5 @@
 package com.retro.engine.editor;
 
-import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.SceneEntity;
 import com.retro.engine.ecs.SceneManager;
 import com.retro.engine.ecs.SceneManager.PlayState;
@@ -10,11 +9,9 @@ import com.retro.engine.editor.assets.AssetType;
 import com.retro.engine.editor.commands.CommandHistory;
 import com.retro.engine.editor.commands.TransformCommand;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
-import com.retro.engine.editor.ui.*;
-import com.retro.engine.editor.input.GizmoInteractor;
-import com.retro.engine.editor.input.InspectorInteractor;
-import com.retro.engine.editor.input.TopBarInteractor;
-import com.retro.engine.editor.input.PanelInteractor;
+import com.retro.engine.editor.input.*;
+import com.retro.engine.editor.render.EditorUiComposer;
+import com.retro.engine.editor.render.GridMeshBuilder;
 
 import org.lwjgl.system.MemoryStack;
 import java.io.File;
@@ -24,7 +21,9 @@ import java.util.*;
 import static org.lwjgl.glfw.GLFW.*;
 
 /**
- * Aggregated EditorPanelManager & Unified Input Router with CommandHistory Undo/Redo integration.
+ * Ultra-Lean EditorPanelManager serving as the central Editor State Container
+ * and Event Dispatcher. All rendering composition, grid generation, asset drop parsing,
+ * and mouse/hotkey interactions are fully delegated to dedicated interactors and builders.
  */
 @SuppressWarnings("unused")
 public class EditorPanelManager {
@@ -279,16 +278,25 @@ public class EditorPanelManager {
                 this.dragStartRx = tc.rotX; this.dragStartRy = tc.rotY; this.dragStartRz = tc.rotZ;
                 this.dragStartSx = tc.scaleX; this.dragStartSy = tc.scaleY; this.dragStartSz = tc.scaleZ;
             }
+        } else {
+            SceneEntity picked = ViewportSelectionInteractor.pickViewportEntity(refX, refY, this);
+            if (picked != null) {
+                selectEntity(picked);
+            } else if (!ViewportSelectionInteractor.isNearGizmoCenter(refX, refY, getSelectedEntity(), this, 110.0)) {
+                selectEntity(null);
+            }
         }
     }
 
     private void processInspectorClick(float ndcX, float ndcY) { InspectorInteractor.processInspectorClick(ndcX, ndcY, this); }
     private void processAssetDirectoryClick(float ndcX, float ndcY) { PanelInteractor.processAssetDirectoryClick(ndcX, ndcY, this); }
 
-    // --- 3D GRID GENERATION (Preserving origin axes: Red X, Green Y, Blue Z) ---
+    // --- 3D GRID GENERATION (Delegated to GridMeshBuilder) ---
     public float[] get3DGridVertices() {
         if (!show3DGrid) return new float[0];
-        if (cached3DGridVertices == null || cached3DGridVertices.length == 0) cached3DGridVertices = generate3DGridVertices();
+        if (cached3DGridVertices == null || cached3DGridVertices.length == 0) {
+            cached3DGridVertices = GridMeshBuilder.generate3DGridVertices(10);
+        }
         return cached3DGridVertices;
     }
 
@@ -298,52 +306,12 @@ public class EditorPanelManager {
         return cached3DGridVertices.length / 9;
     }
 
-    private float[] generate3DGridVertices() {
-        List<Float> verts = new ArrayList<>();
-        int gridSize = 10;
-        for (int i = -gridSize; i <= gridSize; i++) {
-            float alpha = (i == 0) ? 0.9f : 0.35f;
-            float rZ = (i == 0) ? 0.2f : 0.4f, gZ = (i == 0) ? 0.2f : 0.4f, bZ = (i == 0) ? 1.0f : 0.5f;
-            addGridLine(verts, i, 0, -gridSize, i, 0, gridSize, rZ, gZ, bZ, alpha);
-
-            float rX = (i == 0) ? 1.0f : 0.4f, gX = (i == 0) ? 0.2f : 0.4f, bX = (i == 0) ? 0.2f : 0.5f;
-            addGridLine(verts, -gridSize, 0, i, gridSize, 0, i, rX, gX, bX, alpha);
-        }
-        // Vertical Green Y-Axis Line
-        addGridLine(verts, 0.0f, 0.0f, 0.0f, 0.0f, 3.0f, 0.0f, 0.2f, 1.0f, 0.2f, 1.0f);
-
-        float[] array = new float[verts.size()];
-        for (int i = 0; i < verts.size(); i++) array[i] = verts.get(i);
-        return array;
-    }
-
-    private void addGridLine(List<Float> verts, float x1, float y1, float z1, float x2, float y2, float z2, float r, float g, float b, float a) {
-        verts.add(x1); verts.add(y1); verts.add(z1); verts.add(r); verts.add(g); verts.add(b); verts.add(a); verts.add(0.0f); verts.add(0.0f);
-        verts.add(x2); verts.add(y2); verts.add(z2); verts.add(r); verts.add(g); verts.add(b); verts.add(a); verts.add(0.0f); verts.add(0.0f);
-    }
-
     public float[] projectWorldToNdc(float wx, float wy, float wz) {
         return GizmoInteractor.projectWorldToNdc(wx, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
     }
 
     public void onFilesDropped(List<String> filePaths) {
-        for (String path : filePaths) {
-            File file = new File(path);
-            String name = file.getName();
-            String ext = getFileExtension(name).toLowerCase();
-            AssetType type = switch (ext) {
-                case "obj", "fbx", "gltf", "glb" -> AssetType.MESH_3D;
-                case "png", "jpg", "tga" -> AssetType.TEXTURE;
-                case "scene" -> AssetType.SCENE;
-                default -> AssetType.UNKNOWN;
-            };
-            assetDirectory.add(new AssetEntry(name, path, type));
-        }
-    }
-
-    private String getFileExtension(String fileName) {
-        int dot = fileName.lastIndexOf('.');
-        return (dot == -1) ? "" : fileName.substring(dot + 1);
+        this.assetDirectory.addAll(AssetIngestHandler.processDroppedFiles(filePaths));
     }
 
     // --- NATIVE OS FILE DIALOG PROMPTS ---
@@ -352,41 +320,12 @@ public class EditorPanelManager {
     public void promptImportAssetForDirectory() { InspectorInteractor.promptImportAssetForDirectory(this); }
 
     public float[] getUiVertices() {
-        this.cachedUiVertices = generateUiVertices();
+        this.cachedUiVertices = EditorUiComposer.composeUiVertices(this);
         return this.cachedUiVertices;
     }
 
     public int getUiVertexCount() {
         if (cachedUiVertices == null) getUiVertices();
         return cachedUiVertices.length / 6;
-    }
-
-    public float[] generateUiVertices() {
-        List<Float> verts = new ArrayList<>();
-        SceneHierarchyPanel.render(verts, getSceneEntities());
-        InspectorPanel.render(verts, getSelectedEntity(), assetDirectory);
-        AssetDirectoryPanel.render(verts, assetDirectory);
-        ViewportPanel.renderFraming(verts);
-        ViewportPanel.renderToolbar(verts, currentGizmoMode);
-        TopMenuBar.render(verts, activeDropdownMenu, getActiveScenePath(), getPlayState());
-
-        SceneEntity activeEntity = getSelectedEntity();
-        if (activeEntity != null) {
-            render3DGizmos(verts, activeEntity, currentGizmoMode, activeGizmoAxis);
-        }
-
-        if (activeDropdownMenu != DropdownMenu.NONE) {
-            TopMenuBar.renderDropdownMenuOverlay(verts, activeDropdownMenu, commandHistory, show3DGrid);
-        }
-        if (activeModal == ModalState.ASSET_PICKER) {
-            ModalOverlayManager.renderAssetPickerModal(verts, pickerFilterType, assetDirectory);
-        }
-        float[] array = new float[verts.size()];
-        for (int i = 0; i < verts.size(); i++) array[i] = verts.get(i);
-        return array;
-    }
-
-    private void render3DGizmos(List<Float> verts, SceneEntity entity, GizmoMode mode, GizmoAxis activeAxis) {
-        GizmoInteractor.render3DGizmos(verts, entity, mode, activeAxis, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
     }
 }
