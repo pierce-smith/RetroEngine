@@ -3,7 +3,8 @@ package com.retro.engine.editor.assets;
 public enum AssetType {
     MESH_3D,
     TEXTURE,
-    SHADER,
+    AUDIO,
     SCENE,
+    FOLDER,
     UNKNOWN
 }

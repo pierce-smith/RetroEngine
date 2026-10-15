@@ -1,80 +1,87 @@
 package com.retro.engine.editor.dialogs;
 
-import org.lwjgl.PointerBuffer;
-import org.lwjgl.system.MemoryStack;
 import org.lwjgl.util.tinyfd.TinyFileDialogs;
 
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Utility for cross-platform native OS file dialogs (macOS NSOpenPanel/NSSavePanel,
- * Windows File Explorer, Linux GTK/Zenity).
- * Supports both single and multi-file selections.
- */
 public class NativeFileDialog {
 
-    public static String openFileDialog(String title, String defaultPath, String filterDesc, String... extensions) {
-        List<String> files = openMultipleFileDialogs(title, defaultPath, false, filterDesc, extensions);
-        return (files != null && !files.isEmpty()) ? files.get(0) : null;
+    public static String openFileDialog(String title, String defaultPath, String filterDescription, String... extensions) {
+        List<String> results = openMultipleFileDialogs(title, defaultPath, filterDescription, extensions);
+        return (results != null && !results.isEmpty()) ? results.get(0) : null;
     }
 
-    public static List<String> openMultipleFileDialogs(String title, String defaultPath, String filterDesc, String... extensions) {
-        return openMultipleFileDialogs(title, defaultPath, true, filterDesc, extensions);
-    }
-
-    public static List<String> openMultipleFileDialogs(String title, String defaultPath, boolean allowMultiple, String filterDesc, String... extensions) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            PointerBuffer filters = null;
-            if (extensions != null && extensions.length > 0) {
-                filters = stack.mallocPointer(extensions.length);
-                for (String ext : extensions) {
-                    filters.put(stack.UTF8("*." + ext));
-                }
-                filters.flip();
+    public static List<String> openMultipleFileDialogs(String title, String defaultPath, String filterDescription, String... extensions) {
+        org.lwjgl.PointerBuffer filterBuffer = null;
+        if (extensions != null && extensions.length > 0) {
+            filterBuffer = org.lwjgl.system.MemoryUtil.memAllocPointer(extensions.length);
+            for (String ext : extensions) {
+                filterBuffer.put(org.lwjgl.system.MemoryUtil.memUTF8("*." + ext));
             }
+            filterBuffer.flip();
+        }
+
+        try {
             String result = TinyFileDialogs.tinyfd_openFileDialog(
                 title,
-                defaultPath != null ? defaultPath : "Assets/",
-                filters,
-                filterDesc,
-                allowMultiple
+                defaultPath != null ? defaultPath : "",
+                filterBuffer,
+                filterDescription != null ? filterDescription : "Supported Files",
+                true // allow multiple selection
             );
-            if (result == null || result.trim().isEmpty()) {
-                return new ArrayList<>();
-            }
-            String[] split = result.split("\\|");
-            List<String> list = new ArrayList<>();
-            for (String s : split) {
-                if (!s.trim().isEmpty()) {
-                    list.add(s.trim());
+
+            if (result != null && !result.trim().isEmpty()) {
+                String[] paths = result.split("\\|");
+                List<String> list = new ArrayList<>();
+                for (String p : paths) {
+                    if (p != null && !p.trim().isEmpty()) {
+                        list.add(p.trim());
+                    }
                 }
+                return list;
             }
-            return list;
-        } catch (Exception e) {
-            System.err.println("[NativeFileDialog] Error opening file dialog: " + e.getMessage());
-            return new ArrayList<>();
+        } finally {
+            if (filterBuffer != null) {
+                org.lwjgl.system.MemoryUtil.memFree(filterBuffer);
+            }
+        }
+        return null;
+    }
+
+    public static String saveFileDialog(String title, String defaultPath, String filterDescription, String... extensions) {
+        org.lwjgl.PointerBuffer filterBuffer = null;
+        if (extensions != null && extensions.length > 0) {
+            filterBuffer = org.lwjgl.system.MemoryUtil.memAllocPointer(extensions.length);
+            for (String ext : extensions) {
+                filterBuffer.put(org.lwjgl.system.MemoryUtil.memUTF8("*." + ext));
+            }
+            filterBuffer.flip();
+        }
+
+        try {
+            return TinyFileDialogs.tinyfd_saveFileDialog(
+                title,
+                defaultPath != null ? defaultPath : "",
+                filterBuffer,
+                filterDescription != null ? filterDescription : "Supported Files"
+            );
+        } finally {
+            if (filterBuffer != null) {
+                org.lwjgl.system.MemoryUtil.memFree(filterBuffer);
+            }
         }
     }
 
-    public static String saveFileDialog(String title, String defaultPath, String filterDesc, String... extensions) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            PointerBuffer filters = null;
-            if (extensions != null && extensions.length > 0) {
-                filters = stack.mallocPointer(extensions.length);
-                for (String ext : extensions) {
-                    filters.put(stack.UTF8("*." + ext));
-                }
-                filters.flip();
-            }
-            return TinyFileDialogs.tinyfd_saveFileDialog(
-                title,
-                defaultPath != null ? defaultPath : "Assets/Scenes/MainLevel.scene",
-                filters,
-                filterDesc
+    public static String promptInput(String title, String message, String defaultInput) {
+        try {
+            return TinyFileDialogs.tinyfd_inputBox(
+                title != null ? title : "Input",
+                message != null ? message : "Enter text:",
+                defaultInput != null ? defaultInput : ""
             );
         } catch (Exception e) {
-            System.err.println("[NativeFileDialog] Error opening save dialog: " + e.getMessage());
+            e.printStackTrace();
             return null;
         }
     }

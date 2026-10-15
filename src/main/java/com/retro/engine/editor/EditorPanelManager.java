@@ -40,6 +40,8 @@ public class EditorPanelManager {
     private ModalState activeModal = ModalState.NONE;
     private AssetType pickerFilterType = AssetType.TEXTURE;
 
+    private String currentFolderPath = "";
+
     private boolean contextMenuVisible = false;
     private float contextMenuNdcX = 0.0f;
     private float contextMenuNdcY = 0.0f;
@@ -166,7 +168,37 @@ public class EditorPanelManager {
         }
     }
 
-        private void addAssetDirectoryIfNotExists(String absolutePath, AssetType type) {
+        public String getCurrentFolderPath() { return currentFolderPath; }
+    public void setCurrentFolderPath(String path) { this.currentFolderPath = (path != null) ? path : ""; }
+
+    public void navigateUpFolder() {
+        if (currentFolderPath == null || currentFolderPath.isEmpty()) return;
+        int lastSlash = currentFolderPath.lastIndexOf('/');
+        if (lastSlash != -1) {
+            currentFolderPath = currentFolderPath.substring(0, lastSlash);
+        } else {
+            currentFolderPath = "";
+        }
+    }
+
+    public void createNewFolder() {
+        int count = 1;
+        for (AssetEntry entry : assetDirectory) {
+            if (entry.type == AssetType.FOLDER && entry.parentFolderPath.equalsIgnoreCase(currentFolderPath)) {
+                count++;
+            }
+        }
+        String defaultName = "New_Folder_" + count;
+        String inputName = NativeFileDialog.promptInput("Create New Folder", "Enter folder name:", defaultName);
+        if (inputName == null) return; // User pressed Cancel
+        String folderName = !inputName.trim().isEmpty() ? inputName.trim() : defaultName;
+
+        String virtualPath = currentFolderPath.isEmpty() ? folderName : currentFolderPath + "/" + folderName;
+        assetDirectory.add(new AssetEntry(folderName, virtualPath, AssetType.FOLDER, currentFolderPath));
+        System.out.println("[EditorPanelManager] Created new folder: " + folderName + " in " + (currentFolderPath.isEmpty() ? "Assets" : currentFolderPath));
+    }
+
+    private void addAssetDirectoryIfNotExists(String absolutePath, AssetType type) {
         if (absolutePath == null || absolutePath.trim().isEmpty()) return;
         File file = new File(absolutePath);
         if (type == AssetType.UNKNOWN || type == null) {
@@ -186,7 +218,7 @@ public class EditorPanelManager {
                 return;
             }
         }
-        assetDirectory.add(new AssetEntry(file.getName(), absolutePath, type));
+        assetDirectory.add(new AssetEntry(file.getName(), absolutePath, type, currentFolderPath));
     }
     public void deleteSelectedEntity() { sceneManager.deleteSelectedEntity(); }
     public void duplicateSelectedEntity() { sceneManager.duplicateSelectedEntity(); }
@@ -361,10 +393,64 @@ public class EditorPanelManager {
             items.add(new ContextMenuItem("Open Scene... (Cmd+O)", this::promptOpenSceneWithNativeDialog));
             items.add(new ContextMenuItem("Save Scene... (Cmd+S)", this::promptSaveSceneWithNativeDialog));
         } else if (ndcY <= -0.42f) {
-            items.add(new ContextMenuItem("+ Import Asset...", this::promptImportAssetForDirectory));
-            items.add(new ContextMenuItem("+ Import Texture...", this::promptImportTexture));
-            items.add(new ContextMenuItem("+ Import 3D Mesh...", this::promptImportMesh));
-            items.add(new ContextMenuItem("Clear Asset List", () -> this.assetDirectory.clear()));
+            String activePath = (currentFolderPath != null) ? currentFolderPath : "";
+            List<AssetEntry> visibleAssets = assetDirectory.stream()
+                    .filter(a -> a.parentFolderPath != null && a.parentFolderPath.equalsIgnoreCase(activePath))
+                    .toList();
+
+            boolean hasUpLevel = !activePath.isEmpty();
+            float cardX = -0.95f;
+            AssetEntry hitCard = null;
+            boolean hitUpLevel = false;
+
+            if (hasUpLevel) {
+                if (ndcX >= cardX && ndcX <= cardX + 0.32f && ndcY >= -0.92f && ndcY <= -0.55f) {
+                    hitUpLevel = true;
+                }
+                cardX += 0.36f;
+            }
+
+            if (!hitUpLevel) {
+                for (AssetEntry asset : visibleAssets) {
+                    if (cardX + 0.35f > 0.95f) break;
+                    if (ndcX >= cardX && ndcX <= cardX + 0.32f && ndcY >= -0.92f && ndcY <= -0.55f) {
+                        hitCard = asset;
+                        break;
+                    }
+                    cardX += 0.36f;
+                }
+            }
+
+            if (hitUpLevel) {
+                items.add(new ContextMenuItem(".. Return to Parent Folder", this::navigateUpFolder));
+                items.add(new ContextMenuItem("+ Create Folder Here", this::createNewFolder));
+                items.add(new ContextMenuItem("+ Import Asset Here...", this::promptImportAssetForDirectory));
+            } else if (hitCard != null) {
+                AssetEntry targetAsset = hitCard;
+                if (targetAsset.type == AssetType.FOLDER) {
+                    String folderName = targetAsset.name;
+                    String childPath = activePath.isEmpty() ? folderName : activePath + "/" + folderName;
+                    items.add(new ContextMenuItem("Open Folder '" + folderName + "'", () -> setCurrentFolderPath(childPath)));
+                    items.add(new ContextMenuItem("Rename Folder", () -> promptRenameFolder(targetAsset)));
+                    items.add(new ContextMenuItem("Delete Folder", () -> deleteFolder(targetAsset)));
+                } else {
+                    if (targetAsset.type == AssetType.MESH_3D) {
+                        items.add(new ContextMenuItem("Spawn Mesh Entity", () -> spawnEntityFromAsset(targetAsset)));
+                    } else if (targetAsset.type == AssetType.TEXTURE) {
+                        items.add(new ContextMenuItem("Link Texture to Selected", () -> assignTextureToSelectedEntity(targetAsset)));
+                    }
+                    items.add(new ContextMenuItem("Rename Asset", () -> promptRenameAsset(targetAsset)));
+                    items.add(new ContextMenuItem("Remove Asset from Directory", () -> removeAssetFromDirectory(targetAsset)));
+                }
+            } else {
+                items.add(new ContextMenuItem("+ Create Folder", this::createNewFolder));
+                items.add(new ContextMenuItem("+ Import Asset...", this::promptImportAssetForDirectory));
+                items.add(new ContextMenuItem("+ Import Texture...", this::promptImportTexture));
+                items.add(new ContextMenuItem("+ Import 3D Mesh...", this::promptImportMesh));
+                if (!currentFolderPath.isEmpty()) {
+                    items.add(new ContextMenuItem(".. Up Level (" + currentFolderPath + ")", this::navigateUpFolder));
+                }
+            }
         } else if (ndcX <= -0.55f) {
             List<SceneEntity> entities = getSceneEntities();
             int index = (int) ((0.85f - ndcY) / 0.08f);
@@ -572,7 +658,7 @@ public class EditorPanelManager {
         List<Float> verts = new ArrayList<>();
         SceneHierarchyPanel.render(verts, getSceneEntities());
         InspectorPanel.render(verts, getSelectedEntity(), assetDirectory);
-        AssetDirectoryPanel.render(verts, assetDirectory);
+        AssetDirectoryPanel.render(verts, assetDirectory, currentFolderPath);
         ViewportPanel.renderFraming(verts);
         ViewportPanel.renderToolbar(verts, currentGizmoMode);
         if (getSelectedEntity() != null && activeModal == ModalState.NONE) {
@@ -601,4 +687,81 @@ public class EditorPanelManager {
     private void render3DGizmos(List<Float> verts, SceneEntity entity, GizmoMode mode, GizmoAxis activeAxis) {
         GizmoInteractor.render3DGizmos(verts, entity, mode, activeAxis, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
     }
+
+    public void renameFolder(AssetEntry folder, String newName) {
+        if (folder == null || folder.type != AssetType.FOLDER || newName == null || newName.trim().isEmpty()) return;
+
+        String oldFolderName = folder.name;
+        String cleanNewName = newName.trim();
+        if (cleanNewName.equalsIgnoreCase(oldFolderName)) return;
+
+        String parentPath = (folder.parentFolderPath != null) ? folder.parentFolderPath : "";
+        String oldVirtualPath = parentPath.isEmpty() ? oldFolderName : parentPath + "/" + oldFolderName;
+        String newVirtualPath = parentPath.isEmpty() ? cleanNewName : parentPath + "/" + cleanNewName;
+
+        folder.name = cleanNewName;
+        folder.absolutePath = newVirtualPath;
+
+        for (AssetEntry entry : assetDirectory) {
+            if (entry.parentFolderPath != null) {
+                if (entry.parentFolderPath.equalsIgnoreCase(oldVirtualPath)) {
+                    entry.parentFolderPath = newVirtualPath;
+                } else if (entry.parentFolderPath.toLowerCase().startsWith(oldVirtualPath.toLowerCase() + "/")) {
+                    entry.parentFolderPath = newVirtualPath + entry.parentFolderPath.substring(oldVirtualPath.length());
+                }
+            }
+        }
+
+        if (currentFolderPath.equalsIgnoreCase(oldVirtualPath)) {
+            currentFolderPath = newVirtualPath;
+        } else if (currentFolderPath.toLowerCase().startsWith(oldVirtualPath.toLowerCase() + "/")) {
+            currentFolderPath = newVirtualPath + currentFolderPath.substring(oldVirtualPath.length());
+        }
+        System.out.println("[EditorPanelManager] Renamed folder '" + oldFolderName + "' to '" + cleanNewName + "'");
+    }
+
+    public void promptRenameFolder(AssetEntry folder) {
+        if (folder == null || folder.type != AssetType.FOLDER) return;
+        String input = NativeFileDialog.promptInput("Rename Folder", "Enter new folder name:", folder.name);
+        if (input != null && !input.trim().isEmpty()) {
+            renameFolder(folder, input.trim());
+        }
+    }
+
+    public void promptRenameAsset(AssetEntry asset) {
+        if (asset == null || asset.type == AssetType.FOLDER) return;
+        String input = NativeFileDialog.promptInput("Rename Asset", "Enter new asset name:", asset.name);
+        if (input != null && !input.trim().isEmpty()) {
+            asset.name = input.trim();
+            System.out.println("[EditorPanelManager] Renamed asset to  + asset.name + ");
+        }
+    }
+
+    public void deleteFolder(AssetEntry folder) {
+        if (folder == null || folder.type != AssetType.FOLDER) return;
+
+        String parentPath = (folder.parentFolderPath != null) ? folder.parentFolderPath : "";
+        String folderVirtualPath = parentPath.isEmpty() ? folder.name : parentPath + "/" + folder.name;
+
+        for (AssetEntry entry : assetDirectory) {
+            if (entry.parentFolderPath != null && entry.parentFolderPath.equalsIgnoreCase(folderVirtualPath)) {
+                entry.parentFolderPath = parentPath;
+            }
+        }
+
+        assetDirectory.remove(folder);
+
+        if (currentFolderPath.equalsIgnoreCase(folderVirtualPath)) {
+            currentFolderPath = parentPath;
+        }
+        System.out.println("[EditorPanelManager] Deleted folder '" + folder.name + "' (reparented contents to '" + (parentPath.isEmpty() ? "Assets" : parentPath) + "')");
+    }
+
+    public void removeAssetFromDirectory(AssetEntry asset) {
+        if (asset != null) {
+            assetDirectory.remove(asset);
+            System.out.println("[EditorPanelManager] Removed asset '" + asset.name + "' from directory.");
+        }
+    }
+
 }
