@@ -18,6 +18,11 @@ import static org.lwjgl.system.MemoryUtil.NULL;
 public class GlfwWindow {
 
     @FunctionalInterface
+    public interface WindowSizeListener {
+        void onResize(int width, int height);
+    }
+
+    @FunctionalInterface
     public interface MouseClickListener {
         void onClick(double mouseX, double mouseY, int button, int action);
     }
@@ -68,6 +73,7 @@ public class GlfwWindow {
     private int windowedWidth;
     private int windowedHeight;
 
+    private WindowSizeListener windowSizeListener;
     private Consumer<List<String>> fileDropListener;
     private MouseClickListener mouseClickListener;
     private MouseClick3ArgListener mouseClick3ArgListener;
@@ -88,6 +94,10 @@ public class GlfwWindow {
         this.title = title;
         this.windowedWidth = width;
         this.windowedHeight = height;
+    }
+
+    public void setOnWindowSizeListener(WindowSizeListener listener) {
+        this.windowSizeListener = listener;
     }
 
     public void setOnFileDropListener(Consumer<List<String>> listener) {
@@ -182,10 +192,13 @@ public class GlfwWindow {
             }
         });
 
-        // Window resize callback
-        glfwSetFramebufferSizeCallback(windowHandle, (window, w, h) -> {
+        // Window Size Callback - updates screen point dimensions and triggers listener
+        glfwSetWindowSizeCallback(windowHandle, (window, w, h) -> {
             this.width = w;
             this.height = h;
+            if (windowSizeListener != null) {
+                windowSizeListener.onResize(w, h);
+            }
         });
 
         // Drag-and-Drop Callback
@@ -260,6 +273,8 @@ public class GlfwWindow {
 
     public long getNativeHandle() { return windowHandle; }
     public long getWindowHandle() { return windowHandle; }
+    public int getWidth() { return width; }
+    public int getHeight() { return height; }
 
     public WindowInfo getWindowInfo() {
         return new WindowInfo(windowHandle, width, height, true);

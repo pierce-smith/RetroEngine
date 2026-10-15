@@ -13,8 +13,6 @@ import com.retro.engine.rhi.IRenderBackend;
 import static org.lwjgl.glfw.GLFW.*;
 
 public class Main {
-    private static final AssetStreamingService streamingService = new AssetStreamingService();
-    private static final SceneRenderSubmitter renderSubmitter = new SceneRenderSubmitter();
 
     public static void main(String[] args) {
         System.out.println("===========================================");
@@ -29,12 +27,18 @@ public class Main {
         }
 
         EditorPanelManager editorManager = new EditorPanelManager();
+        editorManager.setWindowHandle(window.getWindowHandle());
+        editorManager.setWindowDimensions(1280, 720);
+
         EditorSelectionController selectionController = new EditorSelectionController(editorManager);
         ViewportCameraController cameraController = new ViewportCameraController();
         selectionController.setCameraController(cameraController);
-        
+
         // Single Source of Truth: Link CameraController to EditorPanelManager
         editorManager.setCameraController(cameraController);
+
+        AssetStreamingService streamingService = new AssetStreamingService();
+        SceneRenderSubmitter renderSubmitter = new SceneRenderSubmitter();
 
         HostBackendLoader loader = new HostBackendLoader();
         if (!loader.loadTargetBackend()) {
@@ -44,6 +48,12 @@ public class Main {
         }
 
         IRenderBackend rhi = loader.getBackend();
+
+        // Listen for window resizes and update editorManager dimensions
+        window.setOnWindowSizeListener((w, h) -> {
+            editorManager.setWindowDimensions(w, h);
+            System.out.println("[Engine] Window Resized -> " + w + "x" + h);
+        });
 
         window.setOnFileDropListener(filePaths -> {
             editorManager.onFilesDropped(filePaths);
