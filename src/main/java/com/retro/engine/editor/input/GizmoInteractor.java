@@ -241,6 +241,10 @@ public class GizmoInteractor {
         float[] p0 = projectWorldToNdc(px, py, pz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
         float cx = p0[0], cy = p0[1];
 
+        if (cx < -0.55f || cx > 0.55f || cy < -0.35f || cy > 0.75f) {
+            return;
+        }
+
         float axisWorldLen = 1.0f;
 
         float[] pX = projectWorldToNdc(px + axisWorldLen, py, pz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);

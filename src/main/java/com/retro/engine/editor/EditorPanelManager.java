@@ -780,9 +780,6 @@ public class EditorPanelManager {
 
     public float[] generateUiVertices() {
         List<Float> verts = new ArrayList<>();
-        SceneHierarchyPanel.render(verts, getSceneEntities());
-        InspectorPanel.render(verts, getSelectedEntity(), assetDirectory);
-        AssetDirectoryPanel.render(verts, assetDirectory, currentFolderPath);
         ViewportPanel.renderFraming(verts);
         ViewportPanel.renderToolbar(verts, currentGizmoMode);
 
@@ -791,6 +788,10 @@ public class EditorPanelManager {
             SceneManager.WorldTransform wt = sceneManager.getComputedWorldTransform(selected);
             render3DGizmosWithWorldTransform(verts, selected, wt, currentGizmoMode, activeGizmoAxis);
         }
+
+        SceneHierarchyPanel.render(verts, getSceneEntities());
+        InspectorPanel.render(verts, getSelectedEntity(), assetDirectory);
+        AssetDirectoryPanel.render(verts, assetDirectory, currentFolderPath);
 
         TopMenuBar.render(verts, activeDropdownMenu, getActiveScenePath(), getPlayState());
 
