@@ -14,6 +14,14 @@ public class LightComponent implements Component {
 
     public LightComponent() {}
 
+    public void cycleType() {
+        type = switch (type) {
+            case DIRECTIONAL -> LightType.POINT;
+            case POINT -> LightType.SPOT;
+            case SPOT -> LightType.DIRECTIONAL;
+        };
+    }
+
     @Override
     public String getComponentName() {
         return "Light Source";

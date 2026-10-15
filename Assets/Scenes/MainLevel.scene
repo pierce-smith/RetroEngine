@@ -12,7 +12,7 @@
       "type": "TEXTURE"
     }
   ],
-  "entityCount": 2,
+  "entityCount": 4,
   "entities": [
     {
       "id": "entity_1",
@@ -49,7 +49,7 @@
       "components": [
         {
           "type": "com.retro.engine.ecs.components.TransformComponent",
-          "posX": -1.4394388,
+          "posX": -0.091706894,
           "posY": 0.0,
           "posZ": 0.0,
           "rotX": 0.0,
@@ -66,9 +66,60 @@
         },
         {
           "type": "com.retro.engine.ecs.components.MaterialComponent",
-          "textureAssetPath": null,
-          "textureName": "DEFAULT_CHECKER",
+          "textureAssetPath": "/Users/piercesmith/Downloads/indoor plant_2_NOR.jpg",
+          "textureName": "indoor plant_2_NOR.jpg",
           "shaderName": "RETRO_MSL_3D"
+        }
+      ]
+    },
+    {
+      "id": "camera_3",
+      "name": "Main Camera_3",
+      "components": [
+        {
+          "type": "com.retro.engine.ecs.components.TransformComponent",
+          "posX": 0.9123014,
+          "posY": 3.0592444,
+          "posZ": 0.0,
+          "rotX": 0.0,
+          "rotY": 0.0,
+          "rotZ": 0.0,
+          "scaleX": 1.0,
+          "scaleY": 1.0,
+          "scaleZ": 1.0
+        },
+        {
+          "type": "com.retro.engine.ecs.components.CameraComponent",
+          "fov": 90.0,
+          "nearPlane": 0.1,
+          "farPlane": 1000.0,
+          "isPrimary": false
+        }
+      ]
+    },
+    {
+      "id": "light_4",
+      "name": "DirectionalLight_4",
+      "components": [
+        {
+          "type": "com.retro.engine.ecs.components.TransformComponent",
+          "posX": -3.3758805,
+          "posY": 2.1041667,
+          "posZ": 0.0,
+          "rotX": 0.0,
+          "rotY": 0.0,
+          "rotZ": 0.0,
+          "scaleX": 1.0,
+          "scaleY": 1.0,
+          "scaleZ": 1.0
+        },
+        {
+          "type": "com.retro.engine.ecs.components.LightComponent",
+          "lightType": "SPOT",
+          "intensity": 2.5,
+          "r": 1.0,
+          "g": 1.0,
+          "b": 0.2
         }
       ]
     }

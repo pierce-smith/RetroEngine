@@ -1,5 +1,6 @@
 package com.retro.engine.ecs;
 
+import com.retro.engine.ecs.components.CameraComponent;
 import com.retro.engine.ecs.components.LightComponent;
 import com.retro.engine.ecs.components.MaterialComponent;
 import com.retro.engine.ecs.components.MeshRendererComponent;
@@ -17,7 +18,6 @@ import java.util.List;
 /**
  * SceneManager handles central entity storage, selection, scene persistence,
  * and the Play/Pause runtime simulation state machine (snapshotting & state isolation).
- * Target JDK: JDK 21+ / JDK 25 / macOS
  */
 public class SceneManager {
     public enum PlayState { EDITING, SIMULATING, PAUSED }
@@ -26,13 +26,10 @@ public class SceneManager {
     private SceneEntity selectedEntity = null;
     private String activeScenePath = "Assets/Scenes/Default.scene";
 
-    // Play/Pause State Machine
     private PlayState playState = PlayState.EDITING;
     private List<SceneEntity> sceneSnapshot = null;
 
-    public SceneManager() {
-        // Clean startup without default missing-asset entities
-    }
+    public SceneManager() {}
 
     public List<SceneEntity> getSceneEntities() { return Collections.unmodifiableList(sceneEntities); }
     public SceneEntity getSelectedEntity() { return selectedEntity; }
@@ -49,46 +46,42 @@ public class SceneManager {
 
     public PlayState getPlayState() { return playState; }
 
-    // --- Simulation Lifecycle Controls ---
     public void play() {
         if (playState == PlayState.EDITING) {
-            System.out.println("[SceneManager] Entering SIMULATION (PLAY) mode. Creating scene snapshot...");
             this.sceneSnapshot = cloneSceneEntities(sceneEntities);
             this.playState = PlayState.SIMULATING;
+            System.out.println("[SceneManager] Simulation started.");
         } else if (playState == PlayState.PAUSED) {
-            System.out.println("[SceneManager] Resuming SIMULATION...");
             this.playState = PlayState.SIMULATING;
         }
     }
 
     public void pause() {
         if (playState == PlayState.SIMULATING) {
-            System.out.println("[SceneManager] PAUSING Simulation...");
             this.playState = PlayState.PAUSED;
+            System.out.println("[SceneManager] Simulation paused.");
         }
     }
 
     public void stop() {
-        if (playState != PlayState.EDITING) {
-            System.out.println("[SceneManager] STOPPING Simulation. Restoring pre-simulation scene snapshot...");
+        if (playState == PlayState.SIMULATING || playState == PlayState.PAUSED) {
             if (sceneSnapshot != null) {
-                sceneEntities.clear();
-                sceneEntities.addAll(sceneSnapshot);
-                sceneSnapshot = null;
+                this.sceneEntities.clear();
+                this.sceneEntities.addAll(sceneSnapshot);
+                this.sceneSnapshot = null;
             }
             this.playState = PlayState.EDITING;
-            this.selectedEntity = sceneEntities.isEmpty() ? null : sceneEntities.get(0);
-            if (selectedEntity != null) selectedEntity.selected = true;
+            System.out.println("[SceneManager] Simulation stopped; state restored.");
         }
     }
 
     public void update(float deltaTime) {
-        if (playState != PlayState.SIMULATING) return;
-
-        for (SceneEntity entity : sceneEntities) {
-            TransformComponent tc = entity.getTransform();
-            if (tc != null) {
-                tc.rotY = (tc.rotY + 45.0f * deltaTime) % 360.0f;
+        if (playState == PlayState.SIMULATING) {
+            for (SceneEntity entity : sceneEntities) {
+                TransformComponent tc = entity.getTransform();
+                if (tc != null) {
+                    tc.rotY = (tc.rotY + 45.0f * deltaTime) % 360.0f;
+                }
             }
         }
     }
@@ -96,62 +89,41 @@ public class SceneManager {
     private List<SceneEntity> cloneSceneEntities(List<SceneEntity> source) {
         List<SceneEntity> copy = new ArrayList<>();
         for (SceneEntity orig : source) {
-            SceneEntity cloned = new SceneEntity(
-                orig.id + "_sim",
-                orig.name,
-                orig.getMeshAssetPath()
-            );
+            SceneEntity cloned = new SceneEntity(orig.id + "_sim", orig.name, orig.getMeshAssetPath());
             cloned.id = orig.id;
             cloned.selected = orig.selected;
 
-            // 1. Clone Transform Component
             TransformComponent origTc = orig.getTransform();
             TransformComponent cloneTc = cloned.getTransform();
             if (origTc != null && cloneTc != null) {
-                cloneTc.posX = origTc.posX;
-                cloneTc.posY = origTc.posY;
-                cloneTc.posZ = origTc.posZ;
-                cloneTc.rotX = origTc.rotX;
-                cloneTc.rotY = origTc.rotY;
-                cloneTc.rotZ = origTc.rotZ;
-                cloneTc.scaleX = origTc.scaleX;
-                cloneTc.scaleY = origTc.scaleY;
-                cloneTc.scaleZ = origTc.scaleZ;
+                cloneTc.posX = origTc.posX; cloneTc.posY = origTc.posY; cloneTc.posZ = origTc.posZ;
+                cloneTc.rotX = origTc.rotX; cloneTc.rotY = origTc.rotY; cloneTc.rotZ = origTc.rotZ;
+                cloneTc.scaleX = origTc.scaleX; cloneTc.scaleY = origTc.scaleY; cloneTc.scaleZ = origTc.scaleZ;
             }
 
-            // 2. Clone Material Component
             MaterialComponent origMat = orig.getComponent(MaterialComponent.class);
             if (origMat != null) {
                 MaterialComponent cloneMat = cloned.getComponent(MaterialComponent.class);
-                if (cloneMat == null) {
-                    cloneMat = new MaterialComponent();
-                    cloned.addComponent(cloneMat);
-                }
+                if (cloneMat == null) { cloneMat = new MaterialComponent(); cloned.addComponent(cloneMat); }
                 cloneMat.textureAssetPath = origMat.textureAssetPath;
                 cloneMat.textureName = origMat.textureName;
                 cloneMat.shaderName = origMat.shaderName;
             }
 
-            // 3. Clone MeshRenderer Visibility
-            MeshRendererComponent origMc = orig.getComponent(MeshRendererComponent.class);
-            MeshRendererComponent cloneMc = cloned.getComponent(MeshRendererComponent.class);
-            if (origMc != null && cloneMc != null) {
-                cloneMc.isVisible = origMc.isVisible;
-            }
-
-            // 4. Clone Light Component
             LightComponent origLc = orig.getComponent(LightComponent.class);
             if (origLc != null) {
                 LightComponent cloneLc = cloned.getComponent(LightComponent.class);
-                if (cloneLc == null) {
-                    cloneLc = new LightComponent();
-                    cloned.addComponent(cloneLc);
-                }
-                cloneLc.type = origLc.type;
-                cloneLc.intensity = origLc.intensity;
-                cloneLc.r = origLc.r;
-                cloneLc.g = origLc.g;
-                cloneLc.b = origLc.b;
+                if (cloneLc == null) { cloneLc = new LightComponent(); cloned.addComponent(cloneLc); }
+                cloneLc.type = origLc.type; cloneLc.intensity = origLc.intensity;
+                cloneLc.r = origLc.r; cloneLc.g = origLc.g; cloneLc.b = origLc.b;
+            }
+
+            CameraComponent origCc = orig.getComponent(CameraComponent.class);
+            if (origCc != null) {
+                CameraComponent cloneCc = cloned.getComponent(CameraComponent.class);
+                if (cloneCc == null) { cloneCc = new CameraComponent(); cloned.addComponent(cloneCc); }
+                cloneCc.fov = origCc.fov; cloneCc.nearPlane = origCc.nearPlane;
+                cloneCc.farPlane = origCc.farPlane; cloneCc.isPrimary = origCc.isPrimary;
             }
 
             copy.add(cloned);
@@ -164,49 +136,28 @@ public class SceneManager {
         this.sceneEntities.clear();
         this.selectedEntity = null;
         this.activeScenePath = "Assets/Scenes/Untitled.scene";
-        System.out.println("[SceneManager] Initialized New Empty Scene.");
     }
 
     public void promptOpenSceneWithNativeDialog() {
         String defaultDir = new File("Assets/Scenes").getAbsolutePath();
-        String importedPath = NativeFileDialog.openFileDialog(
-            "Open Scene File", defaultDir, "Retro Scene (*.scene)", "scene"
-        );
+        String importedPath = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.scene)", "scene");
         if (importedPath != null && !importedPath.trim().isEmpty()) {
             loadSceneFromFile(importedPath);
         }
     }
 
-    public void promptSaveSceneWithNativeDialog() {
-        promptSaveSceneWithNativeDialog(null);
-    }
-
     public void promptSaveSceneWithNativeDialog(List<AssetEntry> assetDirectory) {
         String defaultDir = new File("Assets/Scenes").getAbsolutePath();
-        String savePath = NativeFileDialog.saveFileDialog(
-            "Save Scene File", defaultDir, "Retro Scene (*.scene)", "scene"
-        );
-        if (savePath != null && !savePath.trim().isEmpty()) {
-            saveActiveScene(savePath, assetDirectory);
+        String targetPath = NativeFileDialog.saveFileDialog("Save Scene File", defaultDir, "Retro Scene (*.scene)", "scene");
+        if (targetPath != null && !targetPath.trim().isEmpty()) {
+            saveActiveScene(targetPath, assetDirectory);
         }
-    }
-
-    public void saveActiveScene() {
-        saveActiveScene(this.activeScenePath, null);
-    }
-
-    public void saveActiveScene(String filePath) {
-        saveActiveScene(filePath, null);
     }
 
     public void saveActiveScene(String filePath, List<AssetEntry> assetDirectory) {
-        if (filePath == null || filePath.trim().isEmpty()) {
-            promptSaveSceneWithNativeDialog(assetDirectory);
-            return;
-        }
-        this.activeScenePath = filePath;
+        if (filePath == null || filePath.trim().isEmpty()) return;
         SceneSerializer.saveScene(filePath, sceneEntities, assetDirectory);
-        System.out.println("[SceneManager] Saved Scene to -> " + filePath);
+        this.activeScenePath = filePath;
     }
 
     public SceneSerializer.SceneLoadData loadSceneFromFile(String filePath) {
@@ -214,80 +165,61 @@ public class SceneManager {
         this.activeScenePath = filePath;
         sceneEntities.clear();
         selectedEntity = null;
-
         SceneSerializer.SceneLoadData data = SceneSerializer.loadSceneData(filePath);
-        if (data != null && data.entities() != null && !data.entities().isEmpty()) {
+        if (data != null && data.entities() != null) {
             sceneEntities.addAll(data.entities());
-            selectEntity(sceneEntities.get(0));
+            selectEntity(sceneEntities.isEmpty() ? null : sceneEntities.get(0));
         }
-        System.out.println("[SceneManager] Loaded Scene from -> " + filePath);
         return data;
     }
 
     public void deleteSelectedEntity() {
         if (selectedEntity != null) {
             sceneEntities.remove(selectedEntity);
-            System.out.println("[SceneManager] Deleted Entity: " + selectedEntity.name);
-            selectedEntity = sceneEntities.isEmpty() ? null : sceneEntities.get(0);
-            if (selectedEntity != null) selectedEntity.selected = true;
+            selectedEntity = null;
         }
     }
 
     public void duplicateSelectedEntity() {
-        if (selectedEntity == null) {
-            spawnDefaultCube();
-            return;
-        }
+        if (selectedEntity == null) { spawnDefaultCube(); return; }
         String entityId = "entity_" + System.currentTimeMillis();
         String name = selectedEntity.name + "_Copy";
         SceneEntity copy = new SceneEntity(entityId, name, selectedEntity.getMeshAssetPath());
 
-        // Clone Transform
         TransformComponent origTc = selectedEntity.getTransform();
         TransformComponent copyTc = copy.getTransform();
         if (origTc != null && copyTc != null) {
-            copyTc.posX = origTc.posX + 0.5f;
-            copyTc.posY = origTc.posY;
-            copyTc.posZ = origTc.posZ;
-            copyTc.rotX = origTc.rotX;
-            copyTc.rotY = origTc.rotY;
-            copyTc.rotZ = origTc.rotZ;
-            copyTc.scaleX = origTc.scaleX;
-            copyTc.scaleY = origTc.scaleY;
-            copyTc.scaleZ = origTc.scaleZ;
+            copyTc.posX = origTc.posX + 0.5f; copyTc.posY = origTc.posY; copyTc.posZ = origTc.posZ;
+            copyTc.rotX = origTc.rotX; copyTc.rotY = origTc.rotY; copyTc.rotZ = origTc.rotZ;
+            copyTc.scaleX = origTc.scaleX; copyTc.scaleY = origTc.scaleY; copyTc.scaleZ = origTc.scaleZ;
         }
 
-        // Clone Material Component
         MaterialComponent origMat = selectedEntity.getComponent(MaterialComponent.class);
         if (origMat != null) {
             MaterialComponent copyMat = copy.getComponent(MaterialComponent.class);
-            if (copyMat == null) {
-                copyMat = new MaterialComponent();
-                copy.addComponent(copyMat);
-            }
+            if (copyMat == null) { copyMat = new MaterialComponent(); copy.addComponent(copyMat); }
             copyMat.textureAssetPath = origMat.textureAssetPath;
             copyMat.textureName = origMat.textureName;
             copyMat.shaderName = origMat.shaderName;
         }
 
-        // Clone Light Component
         LightComponent origLc = selectedEntity.getComponent(LightComponent.class);
         if (origLc != null) {
-            LightComponent copyLc = copy.getComponent(LightComponent.class);
-            if (copyLc == null) {
-                copyLc = new LightComponent();
-                copy.addComponent(copyLc);
-            }
-            copyLc.type = origLc.type;
-            copyLc.intensity = origLc.intensity;
-            copyLc.r = origLc.r;
-            copyLc.g = origLc.g;
-            copyLc.b = origLc.b;
+            LightComponent copyLc = new LightComponent();
+            copyLc.type = origLc.type; copyLc.intensity = origLc.intensity;
+            copyLc.r = origLc.r; copyLc.g = origLc.g; copyLc.b = origLc.b;
+            copy.addComponent(copyLc);
+        }
+
+        CameraComponent origCc = selectedEntity.getComponent(CameraComponent.class);
+        if (origCc != null) {
+            CameraComponent copyCc = new CameraComponent(origCc.fov, origCc.nearPlane, origCc.farPlane);
+            copyCc.isPrimary = origCc.isPrimary;
+            copy.addComponent(copyCc);
         }
 
         sceneEntities.add(copy);
         selectEntity(copy);
-        System.out.println("[SceneManager] Duplicated Entity: '" + selectedEntity.name + "' -> '" + name + "'");
     }
 
     public void spawnDefaultCube() {
@@ -296,7 +228,6 @@ public class SceneManager {
         SceneEntity entity = new SceneEntity(entityId, name, "Assets/Models/cube.obj");
         sceneEntities.add(entity);
         selectEntity(entity);
-        System.out.println("[SceneManager] Spawned 3D Cube Entity: " + name);
     }
 
     public void spawnLightSource() {
@@ -306,7 +237,15 @@ public class SceneManager {
         entity.addComponent(new LightComponent());
         sceneEntities.add(entity);
         selectEntity(entity);
-        System.out.println("[SceneManager] Spawned Light Source Entity: " + name);
+    }
+
+    public void spawnCameraEntity() {
+        String entityId = "camera_" + (sceneEntities.size() + 1);
+        String name = "Main Camera_" + (sceneEntities.size() + 1);
+        SceneEntity entity = new SceneEntity(entityId, name, null);
+        entity.addComponent(new CameraComponent());
+        sceneEntities.add(entity);
+        selectEntity(entity);
     }
 
     public void spawnEntityFromAsset(AssetEntry meshAsset) {
@@ -316,18 +255,15 @@ public class SceneManager {
         SceneEntity entity = new SceneEntity(entityId, name, meshAsset.absolutePath);
         sceneEntities.add(entity);
         selectEntity(entity);
-        System.out.println("[SceneManager] Spawned ECS Entity: '" + name + "' with Transform, MeshRenderer & Material.");
     }
 
     public void assignTextureToSelectedEntity(AssetEntry textureAsset) {
         if (selectedEntity == null || textureAsset == null || textureAsset.type != AssetType.TEXTURE) return;
         selectedEntity.setTextureAsset(textureAsset.absolutePath, textureAsset.name);
-        System.out.println("[SceneManager] Linked Texture '" + textureAsset.name + "' to ECS Entity '" + selectedEntity.name + "'");
     }
 
     public void assignMeshToSelectedEntity(AssetEntry meshAsset) {
         if (selectedEntity == null || meshAsset == null || meshAsset.type != AssetType.MESH_3D) return;
         selectedEntity.setMeshAssetPath(meshAsset.absolutePath);
-        System.out.println("[SceneManager] Linked 3D Mesh '" + meshAsset.name + "' to ECS Entity '" + selectedEntity.name + "'");
     }
 }

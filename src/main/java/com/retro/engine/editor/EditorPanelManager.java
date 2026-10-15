@@ -1,5 +1,6 @@
 package com.retro.engine.editor;
 
+import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.SceneEntity;
 import com.retro.engine.ecs.SceneManager;
 import com.retro.engine.ecs.SceneManager.PlayState;
@@ -9,9 +10,11 @@ import com.retro.engine.editor.assets.AssetType;
 import com.retro.engine.editor.commands.CommandHistory;
 import com.retro.engine.editor.commands.TransformCommand;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
-import com.retro.engine.editor.input.*;
-import com.retro.engine.editor.render.EditorUiComposer;
-import com.retro.engine.editor.render.GridMeshBuilder;
+import com.retro.engine.editor.ui.*;
+import com.retro.engine.editor.input.GizmoInteractor;
+import com.retro.engine.editor.input.InspectorInteractor;
+import com.retro.engine.editor.input.TopBarInteractor;
+import com.retro.engine.editor.input.PanelInteractor;
 
 import org.lwjgl.system.MemoryStack;
 import java.io.File;
@@ -20,11 +23,6 @@ import java.util.*;
 
 import static org.lwjgl.glfw.GLFW.*;
 
-/**
- * Ultra-Lean EditorPanelManager serving as the central Editor State Container
- * and Event Dispatcher. All rendering composition, grid generation, asset drop parsing,
- * and mouse/hotkey interactions are fully delegated to dedicated interactors and builders.
- */
 @SuppressWarnings("unused")
 public class EditorPanelManager {
     public enum GizmoMode { TRANSLATE, ROTATE, SCALE }
@@ -56,7 +54,6 @@ public class EditorPanelManager {
 
     private float camPanX = 0.0f, camPanY = 0.25f, camZoom = -5.0f, camPitch = 0.0f, camYaw = 0.0f;
 
-    // CommandHistory Transform Tracking State
     private float dragStartPx, dragStartPy, dragStartPz;
     private float dragStartRx, dragStartRy, dragStartRz;
     private float dragStartSx, dragStartSy, dragStartSz;
@@ -135,15 +132,41 @@ public class EditorPanelManager {
     public void loadSceneFromFile(String filePath) {
         com.retro.engine.serialization.SceneSerializer.SceneLoadData data = sceneManager.loadSceneFromFile(filePath);
         this.assetDirectory.clear();
-        if (data != null && data.assetDirectory() != null && !data.assetDirectory().isEmpty()) {
-            this.assetDirectory.addAll(data.assetDirectory());
-            System.out.println("[EditorPanelManager] Restored " + data.assetDirectory().size() + " Asset Directory entry(ies) from scene file.");
+        if (data != null) {
+            if (data.assetDirectory() != null && !data.assetDirectory().isEmpty()) {
+                this.assetDirectory.addAll(data.assetDirectory());
+                System.out.println("[EditorPanelManager] Restored " + data.assetDirectory().size() + " Asset Directory entry(ies) from scene file.");
+            }
+            if (data.entities() != null) {
+                for (SceneEntity entity : data.entities()) {
+                    com.retro.engine.ecs.components.MeshRendererComponent mc = entity.getComponent(com.retro.engine.ecs.components.MeshRendererComponent.class);
+                    if (mc != null && mc.meshAssetPath != null && !mc.meshAssetPath.trim().isEmpty()) {
+                        addAssetDirectoryIfNotExists(mc.meshAssetPath, AssetType.MESH_3D);
+                    }
+                    com.retro.engine.ecs.components.MaterialComponent mat = entity.getComponent(com.retro.engine.ecs.components.MaterialComponent.class);
+                    if (mat != null && mat.textureAssetPath != null && !mat.textureAssetPath.trim().isEmpty()) {
+                        addAssetDirectoryIfNotExists(mat.textureAssetPath, AssetType.TEXTURE);
+                    }
+                }
+            }
         }
+    }
+
+    private void addAssetDirectoryIfNotExists(String absolutePath, AssetType type) {
+        if (absolutePath == null || absolutePath.trim().isEmpty()) return;
+        for (AssetEntry entry : assetDirectory) {
+            if (entry.absolutePath != null && entry.absolutePath.equalsIgnoreCase(absolutePath)) {
+                return;
+            }
+        }
+        File file = new File(absolutePath);
+        assetDirectory.add(new AssetEntry(file.getName(), absolutePath, type));
     }
     public void deleteSelectedEntity() { sceneManager.deleteSelectedEntity(); }
     public void duplicateSelectedEntity() { sceneManager.duplicateSelectedEntity(); }
     public void spawnDefaultCube() { sceneManager.spawnDefaultCube(); }
     public void spawnLightSource() { sceneManager.spawnLightSource(); }
+    public void spawnCameraEntity() { sceneManager.spawnCameraEntity(); }
     public void spawnEntityFromAsset(AssetEntry meshAsset) { sceneManager.spawnEntityFromAsset(meshAsset); }
     public void assignTextureToSelectedEntity(AssetEntry textureAsset) { sceneManager.assignTextureToSelectedEntity(textureAsset); }
     public void assignMeshToSelectedEntity(AssetEntry meshAsset) { sceneManager.assignMeshToSelectedEntity(meshAsset); }
@@ -171,9 +194,8 @@ public class EditorPanelManager {
         this.camPanX = panX; this.camPanY = panY; this.camZoom = zoom; this.camPitch = pitch; this.camYaw = yaw;
     }
 
-    // --- UNIFIED GPU NDC INPUT ROUTER ---
     public void handleMouseClick(double rawX, double rawY, int button, int action) {
-        if (button != 0) return; // Left Click
+        if (button != 0) return;
 
         updateWindowDimensionsFromGlfw();
 
@@ -183,17 +205,15 @@ public class EditorPanelManager {
         double refX = (rawX / (double) windowWidth) * 1280.0;
         double refY = (rawY / (double) windowHeight) * 720.0;
 
-        if (action == 1) { // PRESS
+        if (action == 1) {
             this.lastMouseX = refX;
             this.lastMouseY = refY;
 
-            // 1. Modal Picker Overlay
             if (activeModal == ModalState.ASSET_PICKER) {
                 TopBarInteractor.processModalClick(ndcX, ndcY, this);
                 return;
             }
 
-            // 2. Dropdown Menu Overlay
             if (activeDropdownMenu != DropdownMenu.NONE) {
                 if (TopBarInteractor.processDropdownOverlayClick(ndcX, ndcY, this)) {
                     activeDropdownMenu = DropdownMenu.NONE;
@@ -201,7 +221,6 @@ public class EditorPanelManager {
                 }
             }
 
-            // 3. Region Routing by NDC Bounds
             if (ndcY >= 0.92f) {
                 TopBarInteractor.processTopBarClick(ndcX, this);
             } else if (ndcY <= -0.42f) {
@@ -215,7 +234,7 @@ public class EditorPanelManager {
                     processViewportGizmoClick(refX, refY);
                 }
             }
-        } else if (action == 0) { // RELEASE
+        } else if (action == 0) {
             if (activeGizmoAxis != GizmoAxis.NONE && getSelectedEntity() != null) {
                 TransformComponent tc = getSelectedEntity().getTransform();
                 if (tc != null) {
@@ -257,9 +276,6 @@ public class EditorPanelManager {
         return false;
     }
 
-    private void processTopBarClick(float ndcX) { TopBarInteractor.processTopBarClick(ndcX, this); }
-    private boolean processDropdownOverlayClick(float ndcX, float ndcY) { return TopBarInteractor.processDropdownOverlayClick(ndcX, ndcY, this); }
-    private void processHierarchyClick(float ndcY) { PanelInteractor.processHierarchyClick(ndcY, this); }
     private boolean processViewportToolbarClick(float ndcX, float ndcY) {
         if (ndcY >= 0.80f && ndcY <= 0.86f) {
             if (ndcX >= -0.51f && ndcX <= -0.38f) { setCurrentGizmoMode(GizmoMode.TRANSLATE); return true; }
@@ -279,24 +295,35 @@ public class EditorPanelManager {
                 this.dragStartSx = tc.scaleX; this.dragStartSy = tc.scaleY; this.dragStartSz = tc.scaleZ;
             }
         } else {
-            SceneEntity picked = ViewportSelectionInteractor.pickViewportEntity(refX, refY, this);
-            if (picked != null) {
-                selectEntity(picked);
-            } else if (!ViewportSelectionInteractor.isNearGizmoCenter(refX, refY, getSelectedEntity(), this, 110.0)) {
-                selectEntity(null);
+            SceneEntity bestEntity = null;
+            double minDistance = 60.0;
+
+            for (SceneEntity entity : getSceneEntities()) {
+                TransformComponent tc = entity.getTransform();
+                if (tc == null) continue;
+
+                float[] p0 = GizmoInteractor.projectWorldToNdc(tc.posX, tc.posY, tc.posZ, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+                double cx = ((p0[0] + 1.0) / 2.0) * 1280.0;
+                double cy = ((1.0 - p0[1]) / 2.0) * 720.0;
+
+                double dist = Math.hypot(refX - cx, refY - cy);
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    bestEntity = entity;
+                }
+            }
+
+            if (bestEntity != null) {
+                selectEntity(bestEntity);
             }
         }
     }
 
     private void processInspectorClick(float ndcX, float ndcY) { InspectorInteractor.processInspectorClick(ndcX, ndcY, this); }
-    private void processAssetDirectoryClick(float ndcX, float ndcY) { PanelInteractor.processAssetDirectoryClick(ndcX, ndcY, this); }
 
-    // --- 3D GRID GENERATION (Delegated to GridMeshBuilder) ---
     public float[] get3DGridVertices() {
         if (!show3DGrid) return new float[0];
-        if (cached3DGridVertices == null || cached3DGridVertices.length == 0) {
-            cached3DGridVertices = GridMeshBuilder.generate3DGridVertices(10);
-        }
+        if (cached3DGridVertices == null || cached3DGridVertices.length == 0) cached3DGridVertices = generate3DGridVertices();
         return cached3DGridVertices;
     }
 
@@ -306,26 +333,92 @@ public class EditorPanelManager {
         return cached3DGridVertices.length / 9;
     }
 
-    public float[] projectWorldToNdc(float wx, float wy, float wz) {
-        return GizmoInteractor.projectWorldToNdc(wx, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+    private float[] generate3DGridVertices() {
+        List<Float> verts = new ArrayList<>();
+        int gridSize = 10;
+        for (int i = -gridSize; i <= gridSize; i++) {
+            float alpha = (i == 0) ? 0.9f : 0.35f;
+            float rZ = (i == 0) ? 0.2f : 0.4f, gZ = (i == 0) ? 0.2f : 0.4f, bZ = (i == 0) ? 1.0f : 0.5f;
+            addGridLine(verts, i, 0, -gridSize, i, 0, gridSize, rZ, gZ, bZ, alpha);
+
+            float rX = (i == 0) ? 1.0f : 0.4f, gX = (i == 0) ? 0.2f : 0.4f, bX = (i == 0) ? 0.2f : 0.5f;
+            addGridLine(verts, -gridSize, 0, i, gridSize, 0, i, rX, gX, bX, alpha);
+        }
+        addGridLine(verts, 0.0f, 0.0f, 0.0f, 0.0f, 3.0f, 0.0f, 0.2f, 1.0f, 0.2f, 1.0f);
+
+        float[] array = new float[verts.size()];
+        for (int i = 0; i < verts.size(); i++) array[i] = verts.get(i);
+        return array;
     }
+
+    private void addGridLine(List<Float> verts, float x1, float y1, float z1, float x2, float y2, float z2, float r, float g, float b, float a) {
+        verts.add(x1); verts.add(y1); verts.add(z1); verts.add(r); verts.add(g); verts.add(b); verts.add(a); verts.add(0.0f); verts.add(0.0f);
+        verts.add(x2); verts.add(y2); verts.add(z2); verts.add(r); verts.add(g); verts.add(b); verts.add(a); verts.add(0.0f); verts.add(0.0f);
+    }
+
+    public float[] projectWorldToNdc(float wx, float wy, float wz) { return GizmoInteractor.projectWorldToNdc(wx, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw); }
 
     public void onFilesDropped(List<String> filePaths) {
-        this.assetDirectory.addAll(AssetIngestHandler.processDroppedFiles(filePaths));
+        for (String path : filePaths) {
+            File file = new File(path);
+            String name = file.getName();
+            String ext = getFileExtension(name).toLowerCase();
+            AssetType type = switch (ext) {
+                case "obj", "fbx", "gltf", "glb" -> AssetType.MESH_3D;
+                case "png", "jpg", "tga" -> AssetType.TEXTURE;
+                case "scene" -> AssetType.SCENE;
+                default -> AssetType.UNKNOWN;
+            };
+            assetDirectory.add(new AssetEntry(name, path, type));
+        }
     }
 
-    // --- NATIVE OS FILE DIALOG PROMPTS ---
+    private String getFileExtension(String fileName) {
+        int dot = fileName.lastIndexOf('.');
+        return (dot == -1) ? "" : fileName.substring(dot + 1);
+    }
+
     public void promptImportTexture() { InspectorInteractor.promptImportTexture(this); }
     public void promptImportMesh() { InspectorInteractor.promptImportMesh(this); }
     public void promptImportAssetForDirectory() { InspectorInteractor.promptImportAssetForDirectory(this); }
 
     public float[] getUiVertices() {
-        this.cachedUiVertices = EditorUiComposer.composeUiVertices(this);
+        this.cachedUiVertices = generateUiVertices();
         return this.cachedUiVertices;
     }
 
     public int getUiVertexCount() {
         if (cachedUiVertices == null) getUiVertices();
         return cachedUiVertices.length / 6;
+    }
+
+    public float[] generateUiVertices() {
+        List<Float> verts = new ArrayList<>();
+        SceneHierarchyPanel.render(verts, getSceneEntities());
+        InspectorPanel.render(verts, getSelectedEntity(), assetDirectory);
+        AssetDirectoryPanel.render(verts, assetDirectory);
+        ViewportPanel.renderFraming(verts);
+        ViewportPanel.renderToolbar(verts, currentGizmoMode);
+        if (getSelectedEntity() != null && activeModal == ModalState.NONE) {
+            render3DGizmos(verts, getSelectedEntity(), currentGizmoMode, activeGizmoAxis);
+        }
+
+        TopMenuBar.render(verts, activeDropdownMenu, getActiveScenePath(), getPlayState());
+
+        if (activeDropdownMenu != DropdownMenu.NONE) {
+            TopMenuBar.renderDropdownMenuOverlay(verts, activeDropdownMenu, commandHistory, show3DGrid);
+        }
+
+        if (activeModal == ModalState.ASSET_PICKER) {
+            ModalOverlayManager.renderAssetPickerModal(verts, pickerFilterType, assetDirectory);
+        }
+
+        float[] array = new float[verts.size()];
+        for (int i = 0; i < verts.size(); i++) array[i] = verts.get(i);
+        return array;
+    }
+
+    private void render3DGizmos(List<Float> verts, SceneEntity entity, GizmoMode mode, GizmoAxis activeAxis) {
+        GizmoInteractor.render3DGizmos(verts, entity, mode, activeAxis, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
     }
 }

@@ -8,10 +8,6 @@ import com.retro.engine.editor.assets.AssetType;
 
 import java.util.List;
 
-/**
- * TopBarInteractor handles top menu header clicks (FILE, EDIT, ENTITY, VIEW, PLAY, PAUSE, STOP),
- * dropdown menu overlay item selections, and modal asset picker overlay interactions.
- */
 public class TopBarInteractor {
 
     public static void processTopBarClick(float ndcX, EditorPanelManager manager) {
@@ -59,6 +55,7 @@ public class TopBarInteractor {
             } else if (activeDropdownMenu == DropdownMenu.ENTITY) {
                 if (itemIndex == 0) manager.spawnDefaultCube();
                 else if (itemIndex == 1) manager.spawnLightSource();
+                else if (itemIndex == 2) manager.spawnCameraEntity();
             } else if (activeDropdownMenu == DropdownMenu.VIEW) {
                 if (itemIndex == 1) manager.toggle3DGrid();
             }
@@ -71,13 +68,17 @@ public class TopBarInteractor {
         float cardMinX = -0.45f, cardMaxX = 0.45f;
         float cardMinY = -0.45f, cardMaxY = 0.45f;
 
-        // Outside modal or [X] close button
-        if (ndcX < cardMinX || ndcX > cardMaxX || ndcY < cardMinY || ndcY > cardMaxY) { manager.closeModal(); return; }
-        if (ndcX >= cardMaxX - 0.08f && ndcX <= cardMaxX - 0.02f && ndcY >= cardMaxY - 0.08f && ndcY <= cardMaxY - 0.02f) { manager.closeModal(); return; }
+        if (ndcX < cardMinX || ndcX > cardMaxX || ndcY < cardMinY || ndcY > cardMaxY) {
+            manager.closeModal();
+            return;
+        }
+        if (ndcX >= cardMaxX - 0.08f && ndcX <= cardMaxX - 0.02f && ndcY >= cardMaxY - 0.08f && ndcY <= cardMaxY - 0.02f) {
+            manager.closeModal();
+            return;
+        }
 
         AssetType pickerFilterType = manager.getPickerFilterType();
 
-        // [NONE / UNBIND] Button
         if (ndcX >= -0.42f && ndcX <= -0.07f && ndcY >= 0.27f && ndcY <= 0.33f) {
             SceneEntity selected = manager.getSelectedEntity();
             if (selected != null) {
@@ -88,7 +89,6 @@ public class TopBarInteractor {
             return;
         }
 
-        // [IMPORT DISK...] Button
         if (ndcX >= 0.07f && ndcX <= 0.42f && ndcY >= 0.27f && ndcY <= 0.33f) {
             manager.closeModal();
             if (pickerFilterType == AssetType.TEXTURE) InspectorInteractor.promptImportTexture(manager);
@@ -96,7 +96,6 @@ public class TopBarInteractor {
             return;
         }
 
-        // Item List Selection
         List<AssetEntry> filtered = manager.getAssetDirectory().stream().filter(a -> a.type == pickerFilterType).toList();
         float listY = cardMaxY - 0.24f;
         for (AssetEntry asset : filtered) {

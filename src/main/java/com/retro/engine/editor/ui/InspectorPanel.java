@@ -2,6 +2,7 @@ package com.retro.engine.editor.ui;
 
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.SceneEntity;
+import com.retro.engine.ecs.components.CameraComponent;
 import com.retro.engine.ecs.components.LightComponent;
 import com.retro.engine.ecs.components.MaterialComponent;
 import com.retro.engine.ecs.components.MeshRendererComponent;
@@ -12,8 +13,7 @@ import java.util.List;
 
 /**
  * InspectorPanel handles rendering the Right Panel (Dynamic Component Readout & Inspector Mutation).
- * Overhauled with in-context Asset Pickers [PICK] and Native File Importers [IMPORT].
- * Target JDK: JDK 21+ / JDK 25 / macOS
+ * Supports LightComponent & CameraComponent live property controls.
  */
 public class InspectorPanel {
 
@@ -22,6 +22,7 @@ public class InspectorPanel {
     }
 
     public static void render(List<Float> verts, SceneEntity selectedEntity, List<AssetEntry> assetDirectory) {
+        // Main Inspector Background Quad & Frame Border
         UIBatchBuilder.addQuad(verts, 0.55f, -0.5f, 1.0f, 1.0f, 0.08f, 0.08f, 0.10f, 1.0f);
         UIBatchBuilder.addQuad(verts, 0.55f, 0.88f, 1.0f, 1.0f, 0.14f, 0.14f, 0.18f, 1.0f);
         UIBatchBuilder.addFrameBorder(verts, 0.55f, -0.5f, 1.0f, 1.0f, 0.003f, 0.25f, 0.25f, 0.32f, 1.0f);
@@ -35,6 +36,7 @@ public class InspectorPanel {
             for (Component comp : selectedEntity.getAllComponents()) {
                 if (curY < -0.45f) break;
 
+                // Header line
                 UIBatchBuilder.addBoundedText(verts, "--- " + comp.getComponentName().toUpperCase() + " ---", 0.58f, curY, 0.98f, 1.1f, 0.5f, 0.5f, 0.6f, 1.0f);
                 curY -= 0.06f;
 
@@ -82,10 +84,51 @@ public class InspectorPanel {
                     curY -= 0.09f;
 
                 } else if (comp instanceof LightComponent lc) {
-                    UIBatchBuilder.addBoundedText(verts, "TYPE: " + lc.type.name(), 0.58f, curY, 0.98f, 1.0f, 1.0f, 0.9f, 0.3f, 1.0f);
+                    // Light Type & Cycle Button
+                    UIBatchBuilder.addBoundedText(verts, "TYPE: " + lc.type.name(), 0.58f, curY, 0.82f, 1.0f, 1.0f, 0.9f, 0.3f, 1.0f);
+                    UIBatchBuilder.addQuad(verts, 0.84f, curY - 0.03f, 0.98f, curY + 0.02f, 0.25f, 0.25f, 0.35f, 1.0f);
+                    UIBatchBuilder.addFrameBorder(verts, 0.84f, curY - 0.03f, 0.98f, curY + 0.02f, 0.002f, 0.5f, 0.5f, 0.7f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, "[CYCLE]", 0.85f, curY - 0.01f, 0.97f, 0.90f, 1.0f, 1.0f, 1.0f, 1.0f);
+                    curY -= 0.06f;
+
+                    // Intensity Field & Adjust Buttons
+                    UIBatchBuilder.addBoundedText(verts, String.format("INTENSITY: %.1f", lc.intensity), 0.58f, curY, 0.82f, 1.0f, 0.9f, 0.9f, 0.9f, 1.0f);
+                    UIBatchBuilder.addQuad(verts, 0.84f, curY - 0.03f, 0.90f, curY + 0.02f, 0.20f, 0.20f, 0.25f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, "[-]", 0.85f, curY - 0.01f, 0.89f, 0.90f, 1.0f, 0.4f, 0.4f, 1.0f);
+                    UIBatchBuilder.addQuad(verts, 0.91f, curY - 0.03f, 0.97f, curY + 0.02f, 0.20f, 0.20f, 0.25f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, "[+]", 0.92f, curY - 0.01f, 0.96f, 0.90f, 0.4f, 1.0f, 0.4f, 1.0f);
+                    curY -= 0.06f;
+
+                    // Color Preview Swatch & RGB Channel Toggle Buttons
+                    UIBatchBuilder.addBoundedText(verts, "COLOR (RGB):", 0.58f, curY, 0.75f, 1.0f, 0.9f, 0.9f, 0.9f, 1.0f);
+                    UIBatchBuilder.addQuad(verts, 0.76f, curY - 0.03f, 0.82f, curY + 0.02f, lc.r, lc.g, lc.b, 1.0f);
+                    UIBatchBuilder.addFrameBorder(verts, 0.76f, curY - 0.03f, 0.82f, curY + 0.02f, 0.002f, 1.0f, 1.0f, 1.0f, 1.0f);
+
+                    UIBatchBuilder.addQuad(verts, 0.84f, curY - 0.03f, 0.88f, curY + 0.02f, 0.5f, 0.1f, 0.1f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, "R", 0.85f, curY - 0.01f, 0.87f, 0.90f, 1.0f, 1.0f, 1.0f, 1.0f);
+                    UIBatchBuilder.addQuad(verts, 0.89f, curY - 0.03f, 0.93f, curY + 0.02f, 0.1f, 0.5f, 0.1f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, "G", 0.90f, curY - 0.01f, 0.92f, 0.90f, 1.0f, 1.0f, 1.0f, 1.0f);
+                    UIBatchBuilder.addQuad(verts, 0.94f, curY - 0.03f, 0.98f, curY + 0.02f, 0.1f, 0.1f, 0.5f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, "B", 0.95f, curY - 0.01f, 0.97f, 0.90f, 1.0f, 1.0f, 1.0f, 1.0f);
+                    curY -= 0.08f;
+
+                } else if (comp instanceof CameraComponent cc) {
+                    UIBatchBuilder.addBoundedText(verts, String.format("FOV: %.1f°", cc.fov), 0.58f, curY, 0.82f, 1.0f, 0.3f, 0.8f, 1.0f, 1.0f);
+                    UIBatchBuilder.addQuad(verts, 0.84f, curY - 0.03f, 0.90f, curY + 0.02f, 0.20f, 0.20f, 0.25f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, "[-]", 0.85f, curY - 0.01f, 0.89f, 0.90f, 1.0f, 0.4f, 0.4f, 1.0f);
+                    UIBatchBuilder.addQuad(verts, 0.91f, curY - 0.03f, 0.97f, curY + 0.02f, 0.20f, 0.20f, 0.25f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, "[+]", 0.92f, curY - 0.01f, 0.96f, 0.90f, 0.4f, 1.0f, 0.4f, 1.0f);
+                    curY -= 0.06f;
+
+                    UIBatchBuilder.addBoundedText(verts, String.format("NEAR: %.1f | FAR: %.0f", cc.nearPlane, cc.farPlane), 0.58f, curY, 0.98f, 1.0f, 0.8f, 0.8f, 0.8f, 1.0f);
                     curY -= 0.05f;
-                    UIBatchBuilder.addBoundedText(verts, String.format("INTENSITY: %.1f", lc.intensity), 0.58f, curY, 0.98f, 1.0f, 0.9f, 0.9f, 0.9f, 1.0f);
-                    curY -= 0.07f;
+
+                    String primaryLabel = cc.isPrimary ? "[PRIMARY: YES]" : "[PRIMARY: NO]";
+                    UIBatchBuilder.addQuad(verts, 0.58f, curY - 0.03f, 0.85f, curY + 0.02f, 0.15f, 0.35f, 0.45f, 1.0f);
+                    UIBatchBuilder.addFrameBorder(verts, 0.58f, curY - 0.03f, 0.85f, curY + 0.02f, 0.002f, 0.3f, 0.7f, 0.9f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, primaryLabel, 0.59f, curY - 0.01f, 0.84f, 0.90f, 1.0f, 1.0f, 1.0f, 1.0f);
+                    curY -= 0.08f;
+
                 } else {
                     UIBatchBuilder.addBoundedText(verts, "DATA: " + comp.toString(), 0.58f, curY, 0.98f, 1.0f, 0.7f, 0.7f, 0.7f, 1.0f);
                     curY -= 0.07f;

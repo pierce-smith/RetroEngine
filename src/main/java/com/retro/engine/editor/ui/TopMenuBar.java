@@ -7,30 +7,21 @@ import com.retro.engine.editor.commands.CommandHistory;
 import java.io.File;
 import java.util.List;
 
-/**
- * TopMenuBar handles immediate-mode 2D vector batching for top header branding,
- * Play/Pause/Stop simulation controls, active scene label, and dropdown overlays.
- */
 public class TopMenuBar {
 
     public static void render(List<Float> verts, DropdownMenu activeDropdown, String activeScenePath, PlayState playState) {
-        // Header background
         UIBatchBuilder.addQuad(verts, -1.0f, 0.92f, 1.0f, 1.0f, 0.10f, 0.10f, 0.14f, 1.0f);
         UIBatchBuilder.addFrameBorder(verts, -1.0f, 0.92f, 1.0f, 1.0f, 0.002f, 0.20f, 0.20f, 0.28f, 1.0f);
 
-        // Engine Branding
         UIBatchBuilder.addBoundedText(verts, "RETRO ENGINE", -0.98f, 0.94f, -0.75f, 1.2f, 0.25f, 0.80f, 1.0f, 1.0f);
 
-        // Header Menus
         renderHeaderMenuButton(verts, "FILE", -0.72f, -0.62f, activeDropdown == DropdownMenu.FILE);
         renderHeaderMenuButton(verts, "EDIT", -0.61f, -0.51f, activeDropdown == DropdownMenu.EDIT);
         renderHeaderMenuButton(verts, "ENTITY", -0.50f, -0.38f, activeDropdown == DropdownMenu.ENTITY);
         renderHeaderMenuButton(verts, "VIEW", -0.37f, -0.27f, activeDropdown == DropdownMenu.VIEW);
 
-        // Central Simulation Play/Pause/Stop Toolbar Controls
         renderPlayControls(verts, playState);
 
-        // Active Scene Name
         String sceneName = new File(activeScenePath).getName();
         UIBatchBuilder.addBoundedText(verts, "SCENE: " + sceneName, 0.45f, 0.94f, 0.98f, 1.0f, 0.7f, 0.7f, 0.8f, 1.0f);
     }
@@ -39,7 +30,6 @@ public class TopMenuBar {
         float minX = -0.15f;
         float maxX = 0.25f;
 
-        // Container quad for play controls
         UIBatchBuilder.addQuad(verts, minX, 0.925f, maxX, 0.995f, 0.08f, 0.09f, 0.12f, 1.0f);
         UIBatchBuilder.addFrameBorder(verts, minX, 0.925f, maxX, 0.995f, 0.001f, 0.25f, 0.28f, 0.35f, 1.0f);
 
@@ -47,7 +37,6 @@ public class TopMenuBar {
         boolean isPaused = (playState == PlayState.PAUSED);
         boolean isEditing = (playState == PlayState.EDITING);
 
-        // [► PLAY]
         float rPlay = isSimulating ? 0.2f : 0.14f;
         float gPlay = isSimulating ? 0.8f : 0.18f;
         float bPlay = isSimulating ? 0.3f : 0.22f;
@@ -57,7 +46,6 @@ public class TopMenuBar {
         }
         UIBatchBuilder.addBoundedText(verts, "PLAY", -0.125f, 0.945f, -0.035f, 1.0f, isSimulating ? 1.0f : 0.7f, 1.0f, isSimulating ? 1.0f : 0.7f, 1.0f);
 
-        // [❚❚ PAUSE]
         float rPause = isPaused ? 0.8f : 0.14f;
         float gPause = isPaused ? 0.7f : 0.18f;
         float bPause = isPaused ? 0.2f : 0.22f;
@@ -67,7 +55,6 @@ public class TopMenuBar {
         }
         UIBatchBuilder.addBoundedText(verts, "PAUSE", 0.005f, 0.945f, 0.095f, 1.0f, isPaused ? 1.0f : 0.7f, isPaused ? 1.0f : 0.7f, 0.7f, 1.0f);
 
-        // [■ STOP]
         float rStop = isEditing ? 0.22f : 0.65f;
         float gStop = isEditing ? 0.14f : 0.18f;
         float bStop = isEditing ? 0.18f : 0.22f;
@@ -118,6 +105,7 @@ public class TopMenuBar {
             case ENTITY -> {
                 renderDropdownItem(verts, "+ Spawn 3D Cube", minX + 0.01f, 0.85f, maxX - 0.01f);
                 renderDropdownItem(verts, "+ Spawn Light Source", minX + 0.01f, 0.76f, maxX - 0.01f);
+                renderDropdownItem(verts, "+ Spawn Camera", minX + 0.01f, 0.67f, maxX - 0.01f);
             }
             case VIEW -> {
                 renderDropdownItem(verts, "Reset Viewport Camera (F)", minX + 0.01f, 0.85f, maxX - 0.01f);

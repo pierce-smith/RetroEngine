@@ -2,6 +2,7 @@ package com.retro.engine.serialization;
 
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.SceneEntity;
+import com.retro.engine.ecs.components.CameraComponent;
 import com.retro.engine.ecs.components.LightComponent;
 import com.retro.engine.ecs.components.MaterialComponent;
 import com.retro.engine.ecs.components.MeshRendererComponent;
@@ -96,6 +97,11 @@ public class SceneSerializer {
                     json.append("          \"r\": ").append(lc.r).append(",\n");
                     json.append("          \"g\": ").append(lc.g).append(",\n");
                     json.append("          \"b\": ").append(lc.b).append("\n");
+                } else if (comp instanceof CameraComponent cc) {
+                    json.append("          \"fov\": ").append(cc.fov).append(",\n");
+                    json.append("          \"nearPlane\": ").append(cc.nearPlane).append(",\n");
+                    json.append("          \"farPlane\": ").append(cc.farPlane).append(",\n");
+                    json.append("          \"isPrimary\": ").append(cc.isPrimary).append("\n");
                 }
                 json.append("        }");
                 if (j < compList.size() - 1) json.append(",");
@@ -293,6 +299,14 @@ public class SceneSerializer {
                             lc.g = parseJsonFloat(compBlock, "g", 0.95f);
                             lc.b = parseJsonFloat(compBlock, "b", 0.80f);
                             entity.addComponent(lc);
+                        } else if (type.contains("CameraComponent")) {
+                            CameraComponent cc = new CameraComponent();
+                            cc.fov = parseJsonFloat(compBlock, "fov", 50.0f);
+                            cc.nearPlane = parseJsonFloat(compBlock, "nearPlane", 0.1f);
+                            cc.farPlane = parseJsonFloat(compBlock, "farPlane", 1000.0f);
+                            String isPrim = extractJsonValue(compBlock, "isPrimary");
+                            if (isPrim != null) cc.isPrimary = Boolean.parseBoolean(isPrim);
+                            entity.addComponent(cc);
                         }
                     }
                 }
@@ -308,7 +322,6 @@ public class SceneSerializer {
         List<String> list = new ArrayList<>();
         int depth = 0;
         int start = -1;
-
         for (int i = 0; i < body.length(); i++) {
             char c = body.charAt(i);
             if (c == '{') {
@@ -325,39 +338,58 @@ public class SceneSerializer {
         return list;
     }
 
-    private static String extractJsonValue(String json, String key) {
-        String pattern = "\"" + key + "\":";
-        int idx = json.indexOf(pattern);
+    private static String extractJsonValue(String jsonBlock, String key) {
+        String searchKey = "\"" + key + "\":";
+        int idx = jsonBlock.indexOf(searchKey);
         if (idx == -1) return null;
 
-        int valStart = idx + pattern.length();
-        while (valStart < json.length() && Character.isWhitespace(json.charAt(valStart))) valStart++;
-        if (valStart >= json.length()) return null;
-
-        if (json.charAt(valStart) == '"') {
-            int valEnd = json.indexOf('"', valStart + 1);
-            if (valEnd == -1) return null;
-            return unescapeJson(json.substring(valStart + 1, valEnd));
-        } else {
-            int valEnd = valStart;
-            while (valEnd < json.length() && json.charAt(valEnd) != ',' && json.charAt(valEnd) != '\n' && json.charAt(valEnd) != '}') valEnd++;
-            return json.substring(valStart, valEnd).trim();
+        int start = idx + searchKey.length();
+        while (start < jsonBlock.length() && Character.isWhitespace(jsonBlock.charAt(start))) {
+            start++;
         }
+
+        if (start >= jsonBlock.length()) return null;
+
+        if (jsonBlock.charAt(start) == '"') {
+            int end = jsonBlock.indexOf("\"", start + 1);
+            if (end != -1) {
+                return unescapeJson(jsonBlock.substring(start + 1, end));
+            }
+        } else {
+            int end = start;
+            while (end < jsonBlock.length() && jsonBlock.charAt(end) != ',' && jsonBlock.charAt(end) != '\n' && jsonBlock.charAt(end) != '}') {
+                end++;
+            }
+            return jsonBlock.substring(start, end).trim();
+        }
+        return null;
     }
 
-    private static float parseJsonFloat(String json, String key, float defaultValue) {
-        String valStr = extractJsonValue(json, key);
-        if (valStr == null) return defaultValue;
-        try { return Float.parseFloat(valStr); } catch (NumberFormatException e) { return defaultValue; }
+    private static float parseJsonFloat(String block, String key, float defaultVal) {
+        String val = extractJsonValue(block, key);
+        if (val != null) {
+            try {
+                return Float.parseFloat(val);
+            } catch (Exception ignored) {}
+        }
+        return defaultVal;
     }
 
-    private static String escapeJson(String str) {
-        if (str == null) return "";
-        return str.replace("\\", "\\\\").replace("\"", "\\\"");
+    private static String escapeJson(String input) {
+        if (input == null) return "";
+        return input.replace("\\", "\\\\")
+                    .replace("\"", "\\\"")
+                    .replace("\n", "\\n")
+                    .replace("\r", "\\r")
+                    .replace("\t", "\\t");
     }
 
-    private static String unescapeJson(String str) {
-        if (str == null) return "";
-        return str.replace("\\\"\"", "\"").replace("\\\\", "\\");
+    private static String unescapeJson(String input) {
+        if (input == null) return "";
+        return input.replace("\\\"", "\"")
+                    .replace("\\\\", "\\")
+                    .replace("\\n", "\n")
+                    .replace("\\r", "\r")
+                    .replace("\\t", "\t");
     }
 }
