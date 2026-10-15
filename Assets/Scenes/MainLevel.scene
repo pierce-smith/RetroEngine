@@ -1,6 +1,18 @@
 {
   "version": "1.0",
-  "entityCount": 1,
+  "assetDirectory": [
+    {
+      "name": "indoor plant_02_+2.fbx",
+      "absolutePath": "/Users/piercesmith/Downloads/indoor plant_02_+2.fbx",
+      "type": "MESH_3D"
+    },
+    {
+      "name": "indoor plant_2_NOR.jpg",
+      "absolutePath": "/Users/piercesmith/Downloads/indoor plant_2_NOR.jpg",
+      "type": "TEXTURE"
+    }
+  ],
+  "entityCount": 2,
   "entities": [
     {
       "id": "entity_1",
@@ -8,9 +20,9 @@
       "components": [
         {
           "type": "com.retro.engine.ecs.components.TransformComponent",
-          "posX": 1.6064156,
+          "posX": 4.8483267,
           "posY": 0.0,
-          "posZ": -7.420187,
+          "posZ": 0.0,
           "rotX": 0.0,
           "rotY": 0.0,
           "rotZ": 0.0,
@@ -19,15 +31,44 @@
           "scaleZ": 1.0
         },
         {
+          "type": "com.retro.engine.ecs.components.MeshRendererComponent",
+          "meshAssetPath": "/Users/piercesmith/Downloads/indoor plant_02_+2.fbx",
+          "isVisible": true
+        },
+        {
           "type": "com.retro.engine.ecs.components.MaterialComponent",
-          "textureAssetPath": "/Users/piercesmith/Downloads/indoor plant_2_NOR.jpg",
-          "textureName": "indoor plant_2_NOR.jpg",
+          "textureAssetPath": null,
+          "textureName": "DEFAULT_CHECKER",
           "shaderName": "RETRO_MSL_3D"
+        }
+      ]
+    },
+    {
+      "id": "entity_1792040670262",
+      "name": "indoor plant_02_+2_Copy",
+      "components": [
+        {
+          "type": "com.retro.engine.ecs.components.TransformComponent",
+          "posX": -1.4394388,
+          "posY": 0.0,
+          "posZ": 0.0,
+          "rotX": 0.0,
+          "rotY": 0.0,
+          "rotZ": 0.0,
+          "scaleX": 1.0,
+          "scaleY": 1.0,
+          "scaleZ": 1.0
         },
         {
           "type": "com.retro.engine.ecs.components.MeshRendererComponent",
           "meshAssetPath": "/Users/piercesmith/Downloads/indoor plant_02_+2.fbx",
           "isVisible": true
+        },
+        {
+          "type": "com.retro.engine.ecs.components.MaterialComponent",
+          "textureAssetPath": null,
+          "textureName": "DEFAULT_CHECKER",
+          "shaderName": "RETRO_MSL_3D"
         }
       ]
     }

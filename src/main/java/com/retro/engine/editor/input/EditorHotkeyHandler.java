@@ -7,8 +7,7 @@ import com.retro.engine.host.GlfwWindow;
 import static org.lwjgl.glfw.GLFW.*;
 
 /**
- * EditorHotkeyHandler encapsulates keyboard shortcut routing,
- * input debouncing, gizmo mode toggles, and camera navigation key polling.
+ * Encapsulates keyboard hotkeys, debouncing, and shortcuts for Editor operations.
  */
 public class EditorHotkeyHandler {
 
@@ -19,16 +18,11 @@ public class EditorHotkeyHandler {
     private boolean deleteKeyPressedLastFrame = false;
 
     public void processInput(GlfwWindow window, EditorPanelManager editorManager, ViewportCameraController cameraController, float deltaTime) {
-        if (window == null || editorManager == null || cameraController == null) return;
+        if (window == null || editorManager == null) return;
 
-        boolean isCtrlDown = window.isKeyDown(GLFW_KEY_LEFT_CONTROL) || window.isKeyDown(GLFW_KEY_RIGHT_CONTROL) ||
-                             window.isKeyDown(GLFW_KEY_LEFT_SUPER) || window.isKeyDown(GLFW_KEY_RIGHT_SUPER);
+        boolean isCtrlDown = window.isKeyDown(GLFW_KEY_LEFT_CONTROL) || window.isKeyDown(GLFW_KEY_RIGHT_CONTROL) || window.isKeyDown(GLFW_KEY_LEFT_SUPER) || window.isKeyDown(GLFW_KEY_RIGHT_SUPER);
         boolean isShiftDown = window.isKeyDown(GLFW_KEY_LEFT_SHIFT) || window.isKeyDown(GLFW_KEY_RIGHT_SHIFT);
 
-        // Update Gizmo Snapping State
-        GizmoInteractor.setSnapEnabled(isCtrlDown);
-
-        // Navigation / Mode Keys
         boolean is1 = window.isKeyDown(GLFW_KEY_1);
         boolean is2 = window.isKeyDown(GLFW_KEY_2);
         boolean is3 = window.isKeyDown(GLFW_KEY_3);
@@ -43,9 +37,7 @@ public class EditorHotkeyHandler {
         boolean isZ = window.isKeyDown(GLFW_KEY_Z);
         boolean isDelete = window.isKeyDown(GLFW_KEY_DELETE) || window.isKeyDown(GLFW_KEY_BACKSPACE);
 
-        if (window.isKeyDown(GLFW_KEY_F)) {
-            cameraController.reset();
-        }
+        if (window.isKeyDown(GLFW_KEY_F) && cameraController != null) cameraController.reset();
 
         // Cmd+Z / Ctrl+Z: Undo | Cmd+Shift+Z / Ctrl+Shift+Z: Redo
         if (isCtrlDown && isZ) {
@@ -81,7 +73,7 @@ public class EditorHotkeyHandler {
             loadKeyPressedLastFrame = false;
         }
 
-        // Cmd+D / Ctrl+D: Duplicate Selected Entity (Custom Model / Primitive / Light)
+        // Cmd+D / Ctrl+D: Duplicate Selected Entity
         if (isCtrlDown && isD) {
             if (!duplicateKeyPressedLastFrame) {
                 editorManager.duplicateSelectedEntity();
@@ -101,14 +93,14 @@ public class EditorHotkeyHandler {
             deleteKeyPressedLastFrame = false;
         }
 
-        // Gizmo Mode Switches (1/W = Translate, 2/E = Rotate, 3/R = Scale)
-        if (!isCtrlDown && !cameraController.isDraggingRmb() && !cameraController.isDraggingMmb()) {
+        if (cameraController != null && !isCtrlDown && !cameraController.isDraggingRmb() && !cameraController.isDraggingMmb()) {
             if (is1 || isW) editorManager.setCurrentGizmoMode(EditorPanelManager.GizmoMode.TRANSLATE);
             if (is2 || isE) editorManager.setCurrentGizmoMode(EditorPanelManager.GizmoMode.ROTATE);
             if (is3 || isR) editorManager.setCurrentGizmoMode(EditorPanelManager.GizmoMode.SCALE);
         }
 
-        // Update Camera Flying Controller
-        cameraController.update(deltaTime, isW, isS, isA, isD, isQ, isE);
+        if (cameraController != null) {
+            cameraController.update(deltaTime, isW, isS, isA, isD, isQ, isE);
+        }
     }
 }

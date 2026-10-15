@@ -6,6 +6,8 @@ import com.retro.engine.ecs.components.LightComponent;
 import com.retro.engine.ecs.components.MaterialComponent;
 import com.retro.engine.ecs.components.MeshRendererComponent;
 import com.retro.engine.ecs.components.TransformComponent;
+import com.retro.engine.editor.assets.AssetEntry;
+import com.retro.engine.editor.assets.AssetType;
 
 import java.io.File;
 import java.io.FileReader;
@@ -20,7 +22,13 @@ import java.util.List;
  */
 public class SceneSerializer {
 
+    public record SceneLoadData(List<SceneEntity> entities, List<AssetEntry> assetDirectory) {}
+
     public static boolean saveScene(String filePath, List<SceneEntity> entities) {
+        return saveScene(filePath, entities, null);
+    }
+
+    public static boolean saveScene(String filePath, List<SceneEntity> entities, List<AssetEntry> assetDirectory) {
         if (filePath == null || entities == null) return false;
 
         File file = new File(filePath);
@@ -31,6 +39,24 @@ public class SceneSerializer {
         StringBuilder json = new StringBuilder();
         json.append("{\n");
         json.append("  \"version\": \"1.0\",\n");
+
+        // 1. Asset Directory Serialization
+        json.append("  \"assetDirectory\": [\n");
+        if (assetDirectory != null && !assetDirectory.isEmpty()) {
+            for (int i = 0; i < assetDirectory.size(); i++) {
+                AssetEntry asset = assetDirectory.get(i);
+                json.append("    {\n");
+                json.append("      \"name\": \"").append(escapeJson(asset.name)).append("\",\n");
+                json.append("      \"absolutePath\": \"").append(escapeJson(asset.absolutePath)).append("\",\n");
+                json.append("      \"type\": \"").append(asset.type.name()).append("\"\n");
+                json.append("    }");
+                if (i < assetDirectory.size() - 1) json.append(",");
+                json.append("\n");
+            }
+        }
+        json.append("  ],\n");
+
+        // 2. Entity Graph Serialization
         json.append("  \"entityCount\": ").append(entities.size()).append(",\n");
         json.append("  \"entities\": [\n");
 
@@ -95,10 +121,14 @@ public class SceneSerializer {
     }
 
     public static List<SceneEntity> loadScene(String filePath) {
+        return loadSceneData(filePath).entities();
+    }
+
+    public static SceneLoadData loadSceneData(String filePath) {
         File file = new File(filePath);
         if (!file.exists()) {
             System.err.println("[SceneSerializer] Scene file not found: " + filePath);
-            return new ArrayList<>();
+            return new SceneLoadData(new ArrayList<>(), new ArrayList<>());
         }
 
         try (FileReader reader = new FileReader(file)) {
@@ -111,12 +141,59 @@ public class SceneSerializer {
 
             String jsonText = content.toString();
             List<SceneEntity> entities = parseSceneJson(jsonText);
-            System.out.println("[SceneSerializer] Successfully loaded " + entities.size() + " entity(ies) from: " + file.getAbsolutePath());
-            return entities;
+            List<AssetEntry> assetDirectory = parseAssetDirectoryJson(jsonText);
+            System.out.println("[SceneSerializer] Successfully loaded " + entities.size() + " entity(ies) and " + assetDirectory.size() + " asset(s) from: " + file.getAbsolutePath());
+            return new SceneLoadData(entities, assetDirectory);
         } catch (Exception e) {
             System.err.println("[SceneSerializer] ERROR: Failed to parse scene file: " + e.getMessage());
-            return new ArrayList<>();
+            return new SceneLoadData(new ArrayList<>(), new ArrayList<>());
         }
+    }
+
+    private static List<AssetEntry> parseAssetDirectoryJson(String json) {
+        List<AssetEntry> assets = new ArrayList<>();
+        int assetIdx = json.indexOf("\"assetDirectory\":");
+        if (assetIdx == -1) return assets;
+
+        int arrayStart = json.indexOf("[", assetIdx);
+        if (arrayStart == -1) return assets;
+
+        int depth = 0;
+        int arrayEnd = -1;
+        for (int i = arrayStart; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (c == '[') depth++;
+            else if (c == ']') {
+                depth--;
+                if (depth == 0) {
+                    arrayEnd = i;
+                    break;
+                }
+            }
+        }
+        if (arrayEnd == -1) return assets;
+
+        String assetBody = json.substring(arrayStart + 1, arrayEnd);
+        List<String> assetBlocks = splitJsonObjects(assetBody);
+
+        for (String block : assetBlocks) {
+            String name = extractJsonValue(block, "name");
+            String path = extractJsonValue(block, "absolutePath");
+            String typeStr = extractJsonValue(block, "type");
+
+            if (path != null && !path.equals("null")) {
+                AssetType type = AssetType.UNKNOWN;
+                if (typeStr != null) {
+                    try { type = AssetType.valueOf(typeStr); } catch (Exception ignored) {}
+                }
+                if (name == null || name.isEmpty()) {
+                    name = new File(path).getName();
+                }
+                assets.add(new AssetEntry(name, path, type));
+            }
+        }
+
+        return assets;
     }
 
     private static List<SceneEntity> parseSceneJson(String json) {
@@ -126,8 +203,22 @@ public class SceneSerializer {
         if (entitiesIdx == -1) return entities;
 
         int arrayStart = json.indexOf("[", entitiesIdx);
-        int arrayEnd = json.lastIndexOf("]");
-        if (arrayStart == -1 || arrayEnd == -1 || arrayStart >= arrayEnd) return entities;
+        if (arrayStart == -1) return entities;
+
+        int depth = 0;
+        int arrayEnd = -1;
+        for (int i = arrayStart; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (c == '[') depth++;
+            else if (c == ']') {
+                depth--;
+                if (depth == 0) {
+                    arrayEnd = i;
+                    break;
+                }
+            }
+        }
+        if (arrayEnd == -1) return entities;
 
         String entitiesBody = json.substring(arrayStart + 1, arrayEnd);
         List<String> entityBlocks = splitJsonObjects(entitiesBody);
@@ -257,11 +348,7 @@ public class SceneSerializer {
     private static float parseJsonFloat(String json, String key, float defaultValue) {
         String valStr = extractJsonValue(json, key);
         if (valStr == null) return defaultValue;
-        try {
-            return Float.parseFloat(valStr);
-        } catch (NumberFormatException e) {
-            return defaultValue;
-        }
+        try { return Float.parseFloat(valStr); } catch (NumberFormatException e) { return defaultValue; }
     }
 
     private static String escapeJson(String str) {
@@ -271,6 +358,6 @@ public class SceneSerializer {
 
     private static String unescapeJson(String str) {
         if (str == null) return "";
-        return str.replace("\\\"", "\"").replace("\\\\", "\\");
+        return str.replace("\\\"\"", "\"").replace("\\\\", "\\");
     }
 }

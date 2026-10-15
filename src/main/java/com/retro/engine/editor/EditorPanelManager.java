@@ -4,8 +4,6 @@ import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.SceneEntity;
 import com.retro.engine.ecs.SceneManager;
 import com.retro.engine.ecs.SceneManager.PlayState;
-import com.retro.engine.ecs.components.LightComponent;
-import com.retro.engine.ecs.components.MaterialComponent;
 import com.retro.engine.ecs.components.TransformComponent;
 import com.retro.engine.editor.assets.AssetEntry;
 import com.retro.engine.editor.assets.AssetType;
@@ -26,7 +24,7 @@ import java.util.*;
 import static org.lwjgl.glfw.GLFW.*;
 
 /**
- * Aggregated EditorPanelManager & Unified Input Router with CommandHistory Undo/Redo and Custom Entity Duplication.
+ * Aggregated EditorPanelManager & Unified Input Router with CommandHistory Undo/Redo integration.
  */
 @SuppressWarnings("unused")
 public class EditorPanelManager {
@@ -113,89 +111,43 @@ public class EditorPanelManager {
     public SceneEntity getSelectedEntity() { return sceneManager.getSelectedEntity(); }
     public void selectEntity(SceneEntity entity) { sceneManager.selectEntity(entity); }
     public String getActiveScenePath() { return sceneManager.getActiveScenePath(); }
-    public void newScene() { sceneManager.newScene(); }
-    public void promptOpenSceneWithNativeDialog() { sceneManager.promptOpenSceneWithNativeDialog(); }
-    public void promptSaveSceneWithNativeDialog() { sceneManager.promptSaveSceneWithNativeDialog(); }
-    public void saveActiveScene() { sceneManager.saveActiveScene(); }
-    public void saveActiveScene(String filePath) { sceneManager.saveActiveScene(filePath); }
-    public void loadSceneFromFile(String filePath) { sceneManager.loadSceneFromFile(filePath); }
+    public void newScene() {
+        sceneManager.newScene();
+        this.assetDirectory.clear();
+    }
+    public void promptOpenSceneWithNativeDialog() {
+        String defaultDir = new File("Assets/Scenes").getAbsolutePath();
+        String importedPath = NativeFileDialog.openFileDialog(
+            "Open Scene File", defaultDir, "Retro Scene (*.scene)", "scene"
+        );
+        if (importedPath != null && !importedPath.trim().isEmpty()) {
+            loadSceneFromFile(importedPath);
+        }
+    }
+    public void promptSaveSceneWithNativeDialog() {
+        sceneManager.promptSaveSceneWithNativeDialog(assetDirectory);
+    }
+    public void saveActiveScene() {
+        sceneManager.saveActiveScene(getActiveScenePath(), assetDirectory);
+    }
+    public void saveActiveScene(String filePath) {
+        sceneManager.saveActiveScene(filePath, assetDirectory);
+    }
+    public void loadSceneFromFile(String filePath) {
+        com.retro.engine.serialization.SceneSerializer.SceneLoadData data = sceneManager.loadSceneFromFile(filePath);
+        this.assetDirectory.clear();
+        if (data != null && data.assetDirectory() != null && !data.assetDirectory().isEmpty()) {
+            this.assetDirectory.addAll(data.assetDirectory());
+            System.out.println("[EditorPanelManager] Restored " + data.assetDirectory().size() + " Asset Directory entry(ies) from scene file.");
+        }
+    }
     public void deleteSelectedEntity() { sceneManager.deleteSelectedEntity(); }
+    public void duplicateSelectedEntity() { sceneManager.duplicateSelectedEntity(); }
     public void spawnDefaultCube() { sceneManager.spawnDefaultCube(); }
     public void spawnLightSource() { sceneManager.spawnLightSource(); }
     public void spawnEntityFromAsset(AssetEntry meshAsset) { sceneManager.spawnEntityFromAsset(meshAsset); }
     public void assignTextureToSelectedEntity(AssetEntry textureAsset) { sceneManager.assignTextureToSelectedEntity(textureAsset); }
     public void assignMeshToSelectedEntity(AssetEntry meshAsset) { sceneManager.assignMeshToSelectedEntity(meshAsset); }
-
-    /**
-     * Duplicates the currently selected SceneEntity (preserving custom .obj/.gltf/.fbx mesh handles,
-     * texture bindings, shader types, and light settings) with a 0.5u position offset.
-     */
-    public void duplicateSelectedEntity() {
-        SceneEntity selected = getSelectedEntity();
-        if (selected == null) {
-            spawnDefaultCube();
-            return;
-        }
-
-        String meshPath = selected.getMeshAssetPath();
-        if (meshPath != null && !meshPath.isEmpty()) {
-            File file = new File(meshPath);
-            AssetEntry asset = new AssetEntry(file.getName(), meshPath, AssetType.MESH_3D);
-            spawnEntityFromAsset(asset);
-        } else {
-            spawnDefaultCube();
-        }
-
-        SceneEntity copy = getSelectedEntity();
-        if (copy != null && copy != selected) {
-            copy.name = selected.name + "_Copy";
-
-            // 1. Copy Transform Component with +0.5u offset on X axis
-            TransformComponent origTc = selected.getTransform();
-            TransformComponent copyTc = copy.getTransform();
-            if (origTc != null && copyTc != null) {
-                copyTc.posX = origTc.posX + 0.5f;
-                copyTc.posY = origTc.posY;
-                copyTc.posZ = origTc.posZ;
-                copyTc.rotX = origTc.rotX;
-                copyTc.rotY = origTc.rotY;
-                copyTc.rotZ = origTc.rotZ;
-                copyTc.scaleX = origTc.scaleX;
-                copyTc.scaleY = origTc.scaleY;
-                copyTc.scaleZ = origTc.scaleZ;
-            }
-
-            // 2. Copy Material Component (Texture asset path, texture name, shader name)
-            MaterialComponent origMat = selected.getComponent(MaterialComponent.class);
-            if (origMat != null) {
-                MaterialComponent copyMat = copy.getComponent(MaterialComponent.class);
-                if (copyMat == null) {
-                    copyMat = new MaterialComponent();
-                    copy.addComponent(copyMat);
-                }
-                copyMat.textureAssetPath = origMat.textureAssetPath;
-                copyMat.textureName = origMat.textureName;
-                copyMat.shaderName = origMat.shaderName;
-            }
-
-            // 3. Copy Light Component if present
-            LightComponent origLc = selected.getComponent(LightComponent.class);
-            if (origLc != null) {
-                LightComponent copyLc = copy.getComponent(LightComponent.class);
-                if (copyLc == null) {
-                    copyLc = new LightComponent();
-                    copy.addComponent(copyLc);
-                }
-                copyLc.type = origLc.type;
-                copyLc.intensity = origLc.intensity;
-                copyLc.r = origLc.r;
-                copyLc.g = origLc.g;
-                copyLc.b = origLc.b;
-            }
-
-            System.out.println("[EditorPanelManager] Duplicated Custom Entity: '" + copy.name + "'");
-        }
-    }
 
     public CommandHistory getCommandHistory() { return commandHistory; }
     public void undo() { commandHistory.undo(); }

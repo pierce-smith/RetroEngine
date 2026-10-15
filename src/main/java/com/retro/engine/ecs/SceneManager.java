@@ -34,13 +34,8 @@ public class SceneManager {
         // Clean startup without default missing-asset entities
     }
 
-    public List<SceneEntity> getSceneEntities() {
-        return Collections.unmodifiableList(sceneEntities);
-    }
-
-    public SceneEntity getSelectedEntity() {
-        return selectedEntity;
-    }
+    public List<SceneEntity> getSceneEntities() { return Collections.unmodifiableList(sceneEntities); }
+    public SceneEntity getSelectedEntity() { return selectedEntity; }
 
     public void selectEntity(SceneEntity entity) {
         for (SceneEntity e : sceneEntities) {
@@ -49,17 +44,10 @@ public class SceneManager {
         this.selectedEntity = entity;
     }
 
-    public String getActiveScenePath() {
-        return activeScenePath;
-    }
+    public String getActiveScenePath() { return activeScenePath; }
+    public void setActiveScenePath(String path) { if (path != null) this.activeScenePath = path; }
 
-    public void setActiveScenePath(String path) {
-        if (path != null) this.activeScenePath = path;
-    }
-
-    public PlayState getPlayState() {
-        return playState;
-    }
+    public PlayState getPlayState() { return playState; }
 
     // --- Simulation Lifecycle Controls ---
     public void play() {
@@ -81,38 +69,22 @@ public class SceneManager {
     }
 
     public void stop() {
-        if (playState == PlayState.SIMULATING || playState == PlayState.PAUSED) {
-            System.out.println("[SceneManager] Stopping SIMULATION. Restoring pre-play scene snapshot...");
-            String previousSelectedId = (selectedEntity != null) ? selectedEntity.id.replace("_sim", "") : null;
-
+        if (playState != PlayState.EDITING) {
+            System.out.println("[SceneManager] STOPPING Simulation. Restoring pre-simulation scene snapshot...");
             if (sceneSnapshot != null) {
-                this.sceneEntities.clear();
-                this.sceneEntities.addAll(cloneSceneEntities(sceneSnapshot));
-                this.sceneSnapshot = null;
+                sceneEntities.clear();
+                sceneEntities.addAll(sceneSnapshot);
+                sceneSnapshot = null;
             }
-
             this.playState = PlayState.EDITING;
-
-            // Preserve selection after stop
-            this.selectedEntity = null;
-            if (previousSelectedId != null) {
-                for (SceneEntity e : sceneEntities) {
-                    if (e.id.equals(previousSelectedId)) {
-                        selectEntity(e);
-                        break;
-                    }
-                }
-            }
-            if (this.selectedEntity == null && !sceneEntities.isEmpty()) {
-                selectEntity(sceneEntities.get(0));
-            }
+            this.selectedEntity = sceneEntities.isEmpty() ? null : sceneEntities.get(0);
+            if (selectedEntity != null) selectedEntity.selected = true;
         }
     }
 
     public void update(float deltaTime) {
         if (playState != PlayState.SIMULATING) return;
 
-        // Run simulation tick on active entities
         for (SceneEntity entity : sceneEntities) {
             TransformComponent tc = entity.getTransform();
             if (tc != null) {
@@ -123,7 +95,6 @@ public class SceneManager {
 
     private List<SceneEntity> cloneSceneEntities(List<SceneEntity> source) {
         List<SceneEntity> copy = new ArrayList<>();
-
         for (SceneEntity orig : source) {
             SceneEntity cloned = new SceneEntity(
                 orig.id + "_sim",
@@ -148,7 +119,7 @@ public class SceneManager {
                 cloneTc.scaleZ = origTc.scaleZ;
             }
 
-            // 2. Clone Material Component (Texture path, texture name, shader)
+            // 2. Clone Material Component
             MaterialComponent origMat = orig.getComponent(MaterialComponent.class);
             if (origMat != null) {
                 MaterialComponent cloneMat = cloned.getComponent(MaterialComponent.class);
@@ -168,7 +139,7 @@ public class SceneManager {
                 cloneMc.isVisible = origMc.isVisible;
             }
 
-            // 4. Clone Light Component if present
+            // 4. Clone Light Component
             LightComponent origLc = orig.getComponent(LightComponent.class);
             if (origLc != null) {
                 LightComponent cloneLc = cloned.getComponent(LightComponent.class);
@@ -185,7 +156,6 @@ public class SceneManager {
 
             copy.add(cloned);
         }
-
         return copy;
     }
 
@@ -200,10 +170,7 @@ public class SceneManager {
     public void promptOpenSceneWithNativeDialog() {
         String defaultDir = new File("Assets/Scenes").getAbsolutePath();
         String importedPath = NativeFileDialog.openFileDialog(
-            "Open Scene File",
-            defaultDir,
-            "Retro Scene (*.scene)",
-            "scene"
+            "Open Scene File", defaultDir, "Retro Scene (*.scene)", "scene"
         );
         if (importedPath != null && !importedPath.trim().isEmpty()) {
             loadSceneFromFile(importedPath);
@@ -211,44 +178,50 @@ public class SceneManager {
     }
 
     public void promptSaveSceneWithNativeDialog() {
+        promptSaveSceneWithNativeDialog(null);
+    }
+
+    public void promptSaveSceneWithNativeDialog(List<AssetEntry> assetDirectory) {
         String defaultDir = new File("Assets/Scenes").getAbsolutePath();
         String savePath = NativeFileDialog.saveFileDialog(
-            "Save Scene File",
-            defaultDir,
-            "Retro Scene (*.scene)",
-            "scene"
+            "Save Scene File", defaultDir, "Retro Scene (*.scene)", "scene"
         );
         if (savePath != null && !savePath.trim().isEmpty()) {
-            saveActiveScene(savePath);
+            saveActiveScene(savePath, assetDirectory);
         }
     }
 
     public void saveActiveScene() {
-        saveActiveScene(this.activeScenePath);
+        saveActiveScene(this.activeScenePath, null);
     }
 
     public void saveActiveScene(String filePath) {
+        saveActiveScene(filePath, null);
+    }
+
+    public void saveActiveScene(String filePath, List<AssetEntry> assetDirectory) {
         if (filePath == null || filePath.trim().isEmpty()) {
-            promptSaveSceneWithNativeDialog();
+            promptSaveSceneWithNativeDialog(assetDirectory);
             return;
         }
         this.activeScenePath = filePath;
-        SceneSerializer.saveScene(filePath, sceneEntities);
+        SceneSerializer.saveScene(filePath, sceneEntities, assetDirectory);
         System.out.println("[SceneManager] Saved Scene to -> " + filePath);
     }
 
-    public void loadSceneFromFile(String filePath) {
+    public SceneSerializer.SceneLoadData loadSceneFromFile(String filePath) {
         stop();
         this.activeScenePath = filePath;
         sceneEntities.clear();
         selectedEntity = null;
 
-        List<SceneEntity> loaded = SceneSerializer.loadScene(filePath);
-        if (loaded != null && !loaded.isEmpty()) {
-            sceneEntities.addAll(loaded);
+        SceneSerializer.SceneLoadData data = SceneSerializer.loadSceneData(filePath);
+        if (data != null && data.entities() != null && !data.entities().isEmpty()) {
+            sceneEntities.addAll(data.entities());
             selectEntity(sceneEntities.get(0));
         }
         System.out.println("[SceneManager] Loaded Scene from -> " + filePath);
+        return data;
     }
 
     public void deleteSelectedEntity() {
@@ -258,6 +231,63 @@ public class SceneManager {
             selectedEntity = sceneEntities.isEmpty() ? null : sceneEntities.get(0);
             if (selectedEntity != null) selectedEntity.selected = true;
         }
+    }
+
+    public void duplicateSelectedEntity() {
+        if (selectedEntity == null) {
+            spawnDefaultCube();
+            return;
+        }
+        String entityId = "entity_" + System.currentTimeMillis();
+        String name = selectedEntity.name + "_Copy";
+        SceneEntity copy = new SceneEntity(entityId, name, selectedEntity.getMeshAssetPath());
+
+        // Clone Transform
+        TransformComponent origTc = selectedEntity.getTransform();
+        TransformComponent copyTc = copy.getTransform();
+        if (origTc != null && copyTc != null) {
+            copyTc.posX = origTc.posX + 0.5f;
+            copyTc.posY = origTc.posY;
+            copyTc.posZ = origTc.posZ;
+            copyTc.rotX = origTc.rotX;
+            copyTc.rotY = origTc.rotY;
+            copyTc.rotZ = origTc.rotZ;
+            copyTc.scaleX = origTc.scaleX;
+            copyTc.scaleY = origTc.scaleY;
+            copyTc.scaleZ = origTc.scaleZ;
+        }
+
+        // Clone Material Component
+        MaterialComponent origMat = selectedEntity.getComponent(MaterialComponent.class);
+        if (origMat != null) {
+            MaterialComponent copyMat = copy.getComponent(MaterialComponent.class);
+            if (copyMat == null) {
+                copyMat = new MaterialComponent();
+                copy.addComponent(copyMat);
+            }
+            copyMat.textureAssetPath = origMat.textureAssetPath;
+            copyMat.textureName = origMat.textureName;
+            copyMat.shaderName = origMat.shaderName;
+        }
+
+        // Clone Light Component
+        LightComponent origLc = selectedEntity.getComponent(LightComponent.class);
+        if (origLc != null) {
+            LightComponent copyLc = copy.getComponent(LightComponent.class);
+            if (copyLc == null) {
+                copyLc = new LightComponent();
+                copy.addComponent(copyLc);
+            }
+            copyLc.type = origLc.type;
+            copyLc.intensity = origLc.intensity;
+            copyLc.r = origLc.r;
+            copyLc.g = origLc.g;
+            copyLc.b = origLc.b;
+        }
+
+        sceneEntities.add(copy);
+        selectEntity(copy);
+        System.out.println("[SceneManager] Duplicated Entity: '" + selectedEntity.name + "' -> '" + name + "'");
     }
 
     public void spawnDefaultCube() {
