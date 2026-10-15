@@ -28,7 +28,7 @@ public class EditorPanelManager {
     public enum GizmoMode { TRANSLATE, ROTATE, SCALE }
     public enum GizmoAxis { NONE, X, Y, Z }
     public enum DropdownMenu { NONE, FILE, EDIT, ENTITY, VIEW }
-    public enum ModalState { NONE, ASSET_PICKER }
+    public enum ModalState { NONE, ASSET_PICKER, PARENT_PICKER }
 
     private final SceneManager sceneManager;
     private final List<AssetEntry> assetDirectory = new ArrayList<>();
@@ -39,6 +39,7 @@ public class EditorPanelManager {
     private DropdownMenu activeDropdownMenu = DropdownMenu.NONE;
     private ModalState activeModal = ModalState.NONE;
     private AssetType pickerFilterType = AssetType.TEXTURE;
+    private SceneEntity parentPickerTargetEntity = null;
 
     private String currentFolderPath = "";
 
@@ -168,7 +169,7 @@ public class EditorPanelManager {
         }
     }
 
-        public String getCurrentFolderPath() { return currentFolderPath; }
+    public String getCurrentFolderPath() { return currentFolderPath; }
     public void setCurrentFolderPath(String path) { this.currentFolderPath = (path != null) ? path : ""; }
 
     public void navigateUpFolder() {
@@ -190,7 +191,7 @@ public class EditorPanelManager {
         }
         String defaultName = "New_Folder_" + count;
         String inputName = NativeFileDialog.promptInput("Create New Folder", "Enter folder name:", defaultName);
-        if (inputName == null) return; // User pressed Cancel
+        if (inputName == null) return;
         String folderName = !inputName.trim().isEmpty() ? inputName.trim() : defaultName;
 
         String virtualPath = currentFolderPath.isEmpty() ? folderName : currentFolderPath + "/" + folderName;
@@ -229,6 +230,43 @@ public class EditorPanelManager {
     public void assignTextureToSelectedEntity(AssetEntry textureAsset) { sceneManager.assignTextureToSelectedEntity(textureAsset); }
     public void assignMeshToSelectedEntity(AssetEntry meshAsset) { sceneManager.assignMeshToSelectedEntity(meshAsset); }
 
+    public void setParentEntity(SceneEntity child, SceneEntity parent) { sceneManager.setParent(child, parent); }
+    public void unparentEntity(SceneEntity child) { sceneManager.setParent(child, null); }
+
+    public void spawnChildEntity(SceneEntity parent, String namePrefix, String meshAssetPath) {
+        if (parent == null) return;
+        String entityId = "entity_" + (getSceneEntities().size() + 1);
+        String name = namePrefix + "_" + (getSceneEntities().size() + 1);
+        SceneEntity child = new SceneEntity(entityId, name, meshAssetPath);
+        child.parentId = parent.id;
+        parent.addChildId(child.id);
+        parent.expandedInHierarchy = true;
+
+        TransformComponent tc = child.getTransform();
+        if (tc != null) {
+            tc.posX = 1.0f;
+            tc.posY = 0.0f;
+            tc.posZ = 0.0f;
+        }
+
+        getSceneEntities().add(child);
+        selectEntity(child);
+    }
+
+    public void spawnChildLight(SceneEntity parent) {
+        if (parent == null) return;
+        String entityId = "light_" + (getSceneEntities().size() + 1);
+        String name = "Light_" + (getSceneEntities().size() + 1);
+        SceneEntity child = new SceneEntity(entityId, name, null);
+        child.addComponent(new com.retro.engine.ecs.components.LightComponent());
+        child.parentId = parent.id;
+        parent.addChildId(child.id);
+        parent.expandedInHierarchy = true;
+
+        getSceneEntities().add(child);
+        selectEntity(child);
+    }
+
     public CommandHistory getCommandHistory() { return commandHistory; }
     public void undo() { commandHistory.undo(); }
     public void redo() { commandHistory.redo(); }
@@ -244,6 +282,14 @@ public class EditorPanelManager {
     public void openAssetPicker(AssetType filterType) { this.pickerFilterType = filterType; this.activeModal = ModalState.ASSET_PICKER; }
     public void closeModal() { this.activeModal = ModalState.NONE; }
     public List<AssetEntry> getAssetDirectory() { return Collections.unmodifiableList(assetDirectory); }
+    public SceneEntity getParentPickerTargetEntity() { return parentPickerTargetEntity; }
+    public void openParentPicker(SceneEntity target) {
+        if (target != null) {
+            this.parentPickerTargetEntity = target;
+            this.activeModal = ModalState.PARENT_PICKER;
+        }
+    }
+
 
     public boolean isContextMenuVisible() { return contextMenuVisible; }
     public void closeContextMenu() { this.contextMenuVisible = false; this.contextMenuItems.clear(); }
@@ -280,7 +326,6 @@ public class EditorPanelManager {
             this.lastMouseX = refX;
             this.lastMouseY = refY;
 
-            // Handle Right Click Press (button == 1)
             if (button == 1) {
                 if (contextMenuVisible) closeContextMenu();
                 activeDropdownMenu = DropdownMenu.NONE;
@@ -301,7 +346,6 @@ public class EditorPanelManager {
                 return;
             }
 
-            // Handle Left Click (button == 0)
             if (contextMenuVisible) {
                 boolean consumed = ContextMenuOverlayManager.processClick(ndcX, ndcY, contextMenuNdcX, contextMenuNdcY, contextMenuItems);
                 closeContextMenu();
@@ -310,6 +354,10 @@ public class EditorPanelManager {
 
             if (activeModal == ModalState.ASSET_PICKER) {
                 TopBarInteractor.processModalClick(ndcX, ndcY, this);
+                return;
+            }
+            if (activeModal == ModalState.PARENT_PICKER) {
+                processParentPickerModalClick(ndcX, ndcY);
                 return;
             }
 
@@ -453,14 +501,28 @@ public class EditorPanelManager {
             }
         } else if (ndcX <= -0.55f) {
             List<SceneEntity> entities = getSceneEntities();
+            List<SceneHierarchyPanel.HierarchyNode> visibleTree = SceneHierarchyPanel.buildFlattenedTree(entities);
             int index = (int) ((0.85f - ndcY) / 0.08f);
-            if (index >= 0 && index < entities.size()) {
-                selectEntity(entities.get(index));
+
+            if (index >= 0 && index < visibleTree.size()) {
+                SceneEntity hitEntity = visibleTree.get(index).entity;
+                selectEntity(hitEntity);
+
                 items.add(new ContextMenuItem("Duplicate Entity (Cmd+D)", this::duplicateSelectedEntity));
                 items.add(new ContextMenuItem("Delete Entity (Del)", this::deleteSelectedEntity));
-                items.add(new ContextMenuItem("+ Spawn 3D Cube", this::spawnDefaultCube));
-                items.add(new ContextMenuItem("+ Spawn Light Source", this::spawnLightSource));
-                items.add(new ContextMenuItem("+ Spawn Camera", this::spawnCameraEntity));
+                items.add(new ContextMenuItem("+ Add Child Cube", () -> spawnChildEntity(hitEntity, "Cube", "Assets/Models/cube.obj")));
+                items.add(new ContextMenuItem("+ Add Child Light", () -> spawnChildLight(hitEntity)));
+
+                if (hitEntity.parentId != null && !hitEntity.parentId.isEmpty()) {
+                    items.add(new ContextMenuItem("Unparent (Move to Root)", () -> unparentEntity(hitEntity)));
+                }
+
+                List<SceneEntity> potentialParents = entities.stream()
+                        .filter(e -> !e.id.equalsIgnoreCase(hitEntity.id) && !e.isDescendantOf(hitEntity, entities))
+                        .toList();
+
+                items.add(new ContextMenuItem("Set Parent...", () -> openParentPicker(hitEntity)));
+
                 items.add(new ContextMenuItem("Deselect All", () -> selectEntity(null)));
             } else {
                 items.add(new ContextMenuItem("+ Spawn 3D Cube", this::spawnDefaultCube));
@@ -482,7 +544,8 @@ public class EditorPanelManager {
                 TransformComponent tc = entity.getTransform();
                 if (tc == null) continue;
 
-                float[] p0 = GizmoInteractor.projectWorldToNdc(tc.posX, tc.posY, tc.posZ, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+                SceneManager.WorldTransform wt = sceneManager.getComputedWorldTransform(entity);
+                float[] p0 = GizmoInteractor.projectWorldToNdc(wt.px(), wt.py(), wt.pz(), cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
                 double cx = ((p0[0] + 1.0) / 2.0) * 1280.0;
                 double cy = ((1.0 - p0[1]) / 2.0) * 720.0;
 
@@ -495,8 +558,16 @@ public class EditorPanelManager {
 
             if (bestEntity != null) {
                 selectEntity(bestEntity);
+                SceneEntity hitEntity = bestEntity;
+
                 items.add(new ContextMenuItem("Duplicate Object (Cmd+D)", this::duplicateSelectedEntity));
                 items.add(new ContextMenuItem("Delete Object (Del)", this::deleteSelectedEntity));
+                items.add(new ContextMenuItem("+ Add Child Cube", () -> spawnChildEntity(hitEntity, "Cube", "Assets/Models/cube.obj")));
+
+                if (hitEntity.parentId != null && !hitEntity.parentId.isEmpty()) {
+                    items.add(new ContextMenuItem("Unparent (Move to Root)", () -> unparentEntity(hitEntity)));
+                }
+
                 items.add(new ContextMenuItem("Reset Position", () -> {
                     if (getSelectedEntity() != null && getSelectedEntity().getTransform() != null) {
                         TransformComponent tc = getSelectedEntity().getTransform();
@@ -531,7 +602,8 @@ public class EditorPanelManager {
         }
 
         if (activeGizmoAxis != GizmoAxis.NONE && getSelectedEntity() != null) {
-            return GizmoInteractor.handleGizmoDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, getSelectedEntity(), cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+            SceneManager.WorldTransform wt = sceneManager.getComputedWorldTransform(getSelectedEntity());
+            return GizmoInteractor.handleGizmoDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, getSelectedEntity(), wt.px(), wt.py(), wt.pz(), cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
         }
         return false;
     }
@@ -546,40 +618,88 @@ public class EditorPanelManager {
     }
 
     private void processViewportGizmoClick(double refX, double refY) {
-        this.activeGizmoAxis = GizmoInteractor.pickGizmoAxis(refX, refY, getSelectedEntity(), cameraController, camPanX, camPanY, camZoom, camPitch, camYaw, currentGizmoMode);
-        if (this.activeGizmoAxis != GizmoAxis.NONE && getSelectedEntity() != null) {
-            TransformComponent tc = getSelectedEntity().getTransform();
-            if (tc != null) {
-                this.dragStartPx = tc.posX; this.dragStartPy = tc.posY; this.dragStartPz = tc.posZ;
-                this.dragStartRx = tc.rotX; this.dragStartRy = tc.rotY; this.dragStartRz = tc.rotZ;
-                this.dragStartSx = tc.scaleX; this.dragStartSy = tc.scaleY; this.dragStartSz = tc.scaleZ;
-            }
-        } else {
-            SceneEntity bestEntity = null;
-            double minDistance = 60.0;
-
-            for (SceneEntity entity : getSceneEntities()) {
-                TransformComponent tc = entity.getTransform();
-                if (tc == null) continue;
-
-                float[] p0 = GizmoInteractor.projectWorldToNdc(tc.posX, tc.posY, tc.posZ, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
-                double cx = ((p0[0] + 1.0) / 2.0) * 1280.0;
-                double cy = ((1.0 - p0[1]) / 2.0) * 720.0;
-
-                double dist = Math.hypot(refX - cx, refY - cy);
-                if (dist < minDistance) {
-                    minDistance = dist;
-                    bestEntity = entity;
+        SceneEntity selected = getSelectedEntity();
+        if (selected != null) {
+            SceneManager.WorldTransform wt = sceneManager.getComputedWorldTransform(selected);
+            this.activeGizmoAxis = GizmoInteractor.pickGizmoAxis(refX, refY, selected, wt.px(), wt.py(), wt.pz(), cameraController, camPanX, camPanY, camZoom, camPitch, camYaw, currentGizmoMode);
+            if (this.activeGizmoAxis != GizmoAxis.NONE) {
+                TransformComponent tc = selected.getTransform();
+                if (tc != null) {
+                    this.dragStartPx = tc.posX; this.dragStartPy = tc.posY; this.dragStartPz = tc.posZ;
+                    this.dragStartRx = tc.rotX; this.dragStartRy = tc.rotY; this.dragStartRz = tc.rotZ;
+                    this.dragStartSx = tc.scaleX; this.dragStartSy = tc.scaleY; this.dragStartSz = tc.scaleZ;
                 }
+                return;
             }
+        }
 
-            if (bestEntity != null) {
-                selectEntity(bestEntity);
+        SceneEntity bestEntity = null;
+        double minDistance = 60.0;
+
+        for (SceneEntity entity : getSceneEntities()) {
+            TransformComponent tc = entity.getTransform();
+            if (tc == null) continue;
+
+            SceneManager.WorldTransform wt = sceneManager.getComputedWorldTransform(entity);
+            float[] p0 = GizmoInteractor.projectWorldToNdc(wt.px(), wt.py(), wt.pz(), cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+            double cx = ((p0[0] + 1.0) / 2.0) * 1280.0;
+            double cy = ((1.0 - p0[1]) / 2.0) * 720.0;
+
+            double dist = Math.hypot(refX - cx, refY - cy);
+            if (dist < minDistance) {
+                minDistance = dist;
+                bestEntity = entity;
             }
+        }
+
+        if (bestEntity != null) {
+            selectEntity(bestEntity);
         }
     }
 
     private void processInspectorClick(float ndcX, float ndcY) { InspectorInteractor.processInspectorClick(ndcX, ndcY, this); }
+
+    private void processParentPickerModalClick(float ndcX, float ndcY) {
+        float cardMinX = -0.45f, cardMaxX = 0.45f;
+        float cardMinY = -0.45f, cardMaxY = 0.45f;
+
+        if (ndcX < cardMinX || ndcX > cardMaxX || ndcY < cardMinY || ndcY > cardMaxY) {
+            closeModal();
+            return;
+        }
+        if (ndcX >= cardMaxX - 0.08f && ndcX <= cardMaxX - 0.02f && ndcY >= cardMaxY - 0.08f && ndcY <= cardMaxY - 0.02f) {
+            closeModal();
+            return;
+        }
+
+        if (parentPickerTargetEntity == null) {
+            closeModal();
+            return;
+        }
+
+        // Unparent button click
+        if (ndcX >= cardMinX + 0.03f && ndcX <= cardMaxX - 0.03f && ndcY >= cardMaxY - 0.18f && ndcY <= cardMaxY - 0.11f) {
+            unparentEntity(parentPickerTargetEntity);
+            closeModal();
+            return;
+        }
+
+        List<SceneEntity> candidates = getSceneEntities().stream()
+                .filter(e -> !e.id.equalsIgnoreCase(parentPickerTargetEntity.id) && !e.isDescendantOf(parentPickerTargetEntity, getSceneEntities()))
+                .toList();
+
+        float listY = cardMaxY - 0.24f;
+        for (SceneEntity parentCandidate : candidates) {
+            if (listY < cardMinY + 0.05f) break;
+            if (ndcY >= listY - 0.05f && ndcY <= listY + 0.03f) {
+                setParentEntity(parentPickerTargetEntity, parentCandidate);
+                closeModal();
+                return;
+            }
+            listY -= 0.10f;
+        }
+    }
+
 
     public float[] get3DGridVertices() {
         if (!show3DGrid) return new float[0];
@@ -618,7 +738,7 @@ public class EditorPanelManager {
 
     public float[] projectWorldToNdc(float wx, float wy, float wz) { return GizmoInteractor.projectWorldToNdc(wx, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw); }
 
-        public void onFilesDropped(List<String> filePaths) {
+    public void onFilesDropped(List<String> filePaths) {
         if (filePaths == null) return;
         for (String path : filePaths) {
             if (path == null || path.trim().isEmpty()) continue;
@@ -661,8 +781,11 @@ public class EditorPanelManager {
         AssetDirectoryPanel.render(verts, assetDirectory, currentFolderPath);
         ViewportPanel.renderFraming(verts);
         ViewportPanel.renderToolbar(verts, currentGizmoMode);
-        if (getSelectedEntity() != null && activeModal == ModalState.NONE) {
-            render3DGizmos(verts, getSelectedEntity(), currentGizmoMode, activeGizmoAxis);
+
+        SceneEntity selected = getSelectedEntity();
+        if (selected != null && activeModal == ModalState.NONE) {
+            SceneManager.WorldTransform wt = sceneManager.getComputedWorldTransform(selected);
+            render3DGizmosWithWorldTransform(verts, selected, wt, currentGizmoMode, activeGizmoAxis);
         }
 
         TopMenuBar.render(verts, activeDropdownMenu, getActiveScenePath(), getPlayState());
@@ -673,6 +796,8 @@ public class EditorPanelManager {
 
         if (activeModal == ModalState.ASSET_PICKER) {
             ModalOverlayManager.renderAssetPickerModal(verts, pickerFilterType, assetDirectory);
+        } else if (activeModal == ModalState.PARENT_PICKER && parentPickerTargetEntity != null) {
+            ModalOverlayManager.renderEntityParentPickerModal(verts, parentPickerTargetEntity, getSceneEntities());
         }
 
         if (contextMenuVisible) {
@@ -684,8 +809,8 @@ public class EditorPanelManager {
         return array;
     }
 
-    private void render3DGizmos(List<Float> verts, SceneEntity entity, GizmoMode mode, GizmoAxis activeAxis) {
-        GizmoInteractor.render3DGizmos(verts, entity, mode, activeAxis, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+    private void render3DGizmosWithWorldTransform(List<Float> verts, SceneEntity entity, SceneManager.WorldTransform wt, GizmoMode mode, GizmoAxis activeAxis) {
+        GizmoInteractor.render3DGizmosAtWorldPosition(verts, wt.px(), wt.py(), wt.pz(), mode, activeAxis, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
     }
 
     public void renameFolder(AssetEntry folder, String newName) {
@@ -733,7 +858,7 @@ public class EditorPanelManager {
         String input = NativeFileDialog.promptInput("Rename Asset", "Enter new asset name:", asset.name);
         if (input != null && !input.trim().isEmpty()) {
             asset.name = input.trim();
-            System.out.println("[EditorPanelManager] Renamed asset to  + asset.name + ");
+            System.out.println("[EditorPanelManager] Renamed asset to '" + asset.name + "'");
         }
     }
 
@@ -763,5 +888,4 @@ public class EditorPanelManager {
             System.out.println("[EditorPanelManager] Removed asset '" + asset.name + "' from directory.");
         }
     }
-
 }

@@ -56,6 +56,9 @@ public class SceneSerializer {
                 json.append("    {\n");
                 json.append("      \"id\": \"").append(escapeJson(entity.id)).append("\",\n");
                 json.append("      \"name\": \"").append(escapeJson(entity.name)).append("\",\n");
+                if (entity.parentId != null && !entity.parentId.trim().isEmpty()) {
+                    json.append("      \"parentId\": \"").append(escapeJson(entity.parentId)).append("\",\n");
+                }
                 json.append("      \"components\": [\n");
 
                 List<com.retro.engine.ecs.Component> comps = entity.getAllComponents();
@@ -165,7 +168,9 @@ public class SceneSerializer {
                 for (String entStr : entityObjs) {
                     String id = parseJsonString(entStr, "id");
                     String name = parseJsonString(entStr, "name");
+                    String parentId = parseJsonString(entStr, "parentId");
                     SceneEntity entity = new SceneEntity((id != null) ? id : java.util.UUID.randomUUID().toString(), (name != null) ? name : "Entity", null);
+                    entity.parentId = parentId;
 
                     int compIdx = entStr.indexOf("\"components\"");
                     if (compIdx != -1) {
@@ -235,6 +240,18 @@ public class SceneSerializer {
                         }
                     }
                     entities.add(entity);
+                }
+            }
+        }
+
+        // Rebuild childIds arrays from parentId fields
+        for (SceneEntity e : entities) {
+            if (e.parentId != null && !e.parentId.isEmpty()) {
+                for (SceneEntity p : entities) {
+                    if (p.id.equalsIgnoreCase(e.parentId)) {
+                        p.addChildId(e.id);
+                        break;
+                    }
                 }
             }
         }

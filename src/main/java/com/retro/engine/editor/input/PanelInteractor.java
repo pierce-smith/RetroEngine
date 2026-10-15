@@ -4,6 +4,7 @@ import com.retro.engine.ecs.SceneEntity;
 import com.retro.engine.editor.EditorPanelManager;
 import com.retro.engine.editor.assets.AssetEntry;
 import com.retro.engine.editor.assets.AssetType;
+import com.retro.engine.editor.ui.SceneHierarchyPanel;
 
 import java.util.List;
 
@@ -13,9 +14,17 @@ public class PanelInteractor {
         List<SceneEntity> entities = manager.getSceneEntities();
         if (entities == null || entities.isEmpty()) return;
 
+        List<SceneHierarchyPanel.HierarchyNode> visibleTree = SceneHierarchyPanel.buildFlattenedTree(entities);
+        if (visibleTree.isEmpty()) return;
+
         int index = (int) ((0.85f - ndcY) / 0.08f);
-        if (index >= 0 && index < entities.size()) {
-            manager.selectEntity(entities.get(index));
+        if (index >= 0 && index < visibleTree.size()) {
+            SceneEntity clickedEntity = visibleTree.get(index).entity;
+            if (visibleTree.get(index).hasChildren && manager.getSelectedEntity() == clickedEntity) {
+                clickedEntity.expandedInHierarchy = !clickedEntity.expandedInHierarchy;
+            } else {
+                manager.selectEntity(clickedEntity);
+            }
         } else {
             manager.selectEntity(null);
         }

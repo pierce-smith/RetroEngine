@@ -10,12 +10,15 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Standalone SceneEntity domain class.
+ * Standalone SceneEntity domain class with parent-child scene graph hierarchy support.
  */
 public class SceneEntity {
     public String id;
     public String name;
     public boolean selected = false;
+    public String parentId = null;
+    public boolean expandedInHierarchy = true;
+    private final List<String> childIds = new ArrayList<>();
 
     private final List<Component> components = new ArrayList<>();
 
@@ -73,12 +76,46 @@ public class SceneEntity {
 
     public void setTextureAsset(String path, String name) {
         MaterialComponent mat = getComponent(MaterialComponent.class);
-        if (mat == null && path != null) {
+        if (mat == null) {
             mat = new MaterialComponent(path, name);
             addComponent(mat);
-        } else if (mat != null) {
+        } else {
             mat.textureAssetPath = path;
-            mat.textureName = (name != null) ? name : "CUSTOM";
+            if (name != null) mat.textureName = name;
         }
+    }
+
+    // --- Hierarchy Methods ---
+    public List<String> getChildIds() {
+        return Collections.unmodifiableList(childIds);
+    }
+
+    public void addChildId(String childId) {
+        if (childId != null && !childId.equals(this.id) && !childIds.contains(childId)) {
+            childIds.add(childId);
+        }
+    }
+
+    public void removeChildId(String childId) {
+        if (childId != null) {
+            childIds.remove(childId);
+        }
+    }
+
+    public boolean hasChild(String childId) {
+        return childIds.contains(childId);
+    }
+
+    public boolean isDescendantOf(SceneEntity potentialAncestor, List<SceneEntity> allEntities) {
+        if (potentialAncestor == null || allEntities == null) return false;
+        if (this.parentId == null) return false;
+        if (this.parentId.equalsIgnoreCase(potentialAncestor.id)) return true;
+
+        for (SceneEntity e : allEntities) {
+            if (e.id.equalsIgnoreCase(this.parentId)) {
+                return e.isDescendantOf(potentialAncestor, allEntities);
+            }
+        }
+        return false;
     }
 }

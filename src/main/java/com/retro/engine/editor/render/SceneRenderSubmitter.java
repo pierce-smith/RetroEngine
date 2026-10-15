@@ -5,6 +5,7 @@ import com.retro.engine.content.mesh.ModelData;
 import com.retro.engine.content.mesh.ModelLoader;
 import com.retro.engine.content.texture.TextureData;
 import com.retro.engine.ecs.SceneEntity;
+import com.retro.engine.ecs.SceneManager.WorldTransform;
 import com.retro.engine.ecs.components.MaterialComponent;
 import com.retro.engine.ecs.components.MeshRendererComponent;
 import com.retro.engine.ecs.components.TransformComponent;
@@ -15,6 +16,7 @@ import java.util.List;
 
 /**
  * SceneRenderSubmitter orchestrates non-blocking iteration of scene entities,
+ * evaluates hierarchical world matrix transformations (parent world x local),
  * queries Virtual Thread asset streaming caches, supplies default fallback geometry
  * ONLY if loading fails, and submits 3D draw items to the RHI queue.
  */
@@ -24,12 +26,11 @@ public class SceneRenderSubmitter {
     private final ModelData fallbackCube = ModelLoader.createDefaultCube();
 
     /**
-     * Drains virtual thread uploads, iterates active scene entities, resolves streaming assets,
-     * and submits 3D draw calls to the active RHI backend.
+     * Drains virtual thread uploads, iterates active scene entities, computes
+     * hierarchical world transforms, resolves streaming assets, and submits
+     * 3D draw calls to the active RHI backend.
      */
-    public void submitFrame(EditorPanelManager editorManager, 
-                         AssetStreamingService streamingService, 
-                         IRenderBackend rhi) {
+    public void submitFrame(EditorPanelManager editorManager, AssetStreamingService streamingService, IRenderBackend rhi) {
         if (editorManager == null || streamingService == null || rhi == null) return;
 
         // 1. Drain completed background Virtual Thread asset uploads into main thread cache
@@ -48,6 +49,7 @@ public class SceneRenderSubmitter {
             MaterialComponent mat = entity.getComponent(MaterialComponent.class);
 
             if (tc == null || mc == null) continue;
+            if (!mc.isVisible) continue;
 
             String meshPath = mc.meshAssetPath;
             String texturePath = (mat != null) ? mat.textureAssetPath : null;
@@ -96,16 +98,19 @@ public class SceneRenderSubmitter {
                     continue;
                 }
 
-                // Submit 9-float stride entity geometry to RHI execution queue
+                // Compute accumulated hierarchical world transform
+                WorldTransform wt = editorManager.getSceneManager().getComputedWorldTransform(entity);
+
+                // Submit 9-float stride entity geometry to RHI execution queue using world transform
                 rhi.submitEntity(
                         submitKey,
                         verticesToSubmit,
                         vertexCountToSubmit,
                         texturePath,
                         pixels, texW, texH,
-                        tc.posX, tc.posY, tc.posZ,
-                        tc.rotX, tc.rotY, tc.rotZ,
-                        tc.scaleX, tc.scaleY, tc.scaleZ
+                        wt.px(), wt.py(), wt.pz(),
+                        wt.rx(), wt.ry(), wt.rz(),
+                        wt.sx(), wt.sy(), wt.sz()
                 );
             }
         }

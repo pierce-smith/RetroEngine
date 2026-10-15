@@ -1,6 +1,7 @@
 package com.retro.engine.editor.input;
 
 import com.retro.engine.ecs.SceneEntity;
+import com.retro.engine.ecs.SceneManager;
 import com.retro.engine.ecs.components.TransformComponent;
 import com.retro.engine.editor.EditorPanelManager;
 import com.retro.engine.editor.EditorPanelManager.GizmoAxis;
@@ -11,17 +12,15 @@ import com.retro.engine.editor.ViewportCameraController;
 import java.util.List;
 
 /**
- * GizmoInteractor encapsulating 100% baseline 3D World Projection,
- * Viewport Framing Offsets (0.55x / 0.69y), Raycasting / Axis Picking with
- * Generous Hitbox Thresholds (52px Translate/Scale, 28px 2D Matched Rotate Rings),
+ * GizmoInteractor encapsulating 3D World Projection, Raycasting / Axis Picking,
  * Delta Dragging with Grid & Angle Snapping, and Immediate-Mode 3D Vector Batching.
  */
 public class GizmoInteractor {
 
     private static double lastRotateAngle = 0.0;
     private static boolean snapEnabled = false;
-    private static float gridSnapSize = 0.5f;       // 0.5 units
-    private static float angleSnapStep = 15.0f;     // 15 degrees
+    private static float gridSnapSize = 0.5f;
+    private static float angleSnapStep = 15.0f;
 
     public static void setSnapEnabled(boolean enable) { snapEnabled = enable; }
     public static boolean isSnapEnabled() { return snapEnabled; }
@@ -68,120 +67,73 @@ public class GizmoInteractor {
         return projectWorldToNdc(wx, wy, wz, manager.getCameraController(), 0.0f, 0.25f, -5.0f, 0.0f, 0.0f);
     }
 
+    // --- Pick Gizmo Axis Overloads ---
+
+    public static GizmoAxis pickGizmoAxis(double refX, double refY, SceneEntity selectedEntity, float wx, float wy, float wz, ViewportCameraController cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw, GizmoMode currentGizmoMode) {
+        if (selectedEntity == null) return GizmoAxis.NONE;
+
+        float[] p0 = projectWorldToNdc(wx, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+        double cx = ((p0[0] + 1.0) / 2.0) * 1280.0;
+        double cy = ((1.0 - p0[1]) / 2.0) * 720.0;
+
+        float[] pX = projectWorldToNdc(wx + 1.0f, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+        float[] pY = projectWorldToNdc(wx, wy + 1.0f, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+        float[] pZ = projectWorldToNdc(wx, wy, wz + 1.0f, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+
+        double xx = ((pX[0] + 1.0) / 2.0) * 1280.0, xy = ((1.0 - pX[1]) / 2.0) * 720.0;
+        double yx = ((pY[0] + 1.0) / 2.0) * 1280.0, yy = ((1.0 - pY[1]) / 2.0) * 720.0;
+        double zx = ((pZ[0] + 1.0) / 2.0) * 1280.0, zy = ((1.0 - pZ[1]) / 2.0) * 720.0;
+
+        double distX = pointToSegmentDistance(refX, refY, cx, cy, xx, xy);
+        double distY = pointToSegmentDistance(refX, refY, cx, cy, yx, yy);
+        double distZ = pointToSegmentDistance(refX, refY, cx, cy, zx, zy);
+
+        double threshold = 35.0;
+        if (distX < threshold && distX <= distY && distX <= distZ) return GizmoAxis.X;
+        if (distY < threshold && distY <= distX && distY <= distZ) return GizmoAxis.Y;
+        if (distZ < threshold && distZ <= distX && distZ <= distY) return GizmoAxis.Z;
+
+        return GizmoAxis.NONE;
+    }
+
     public static GizmoAxis pickGizmoAxis(double refX, double refY, SceneEntity selectedEntity, ViewportCameraController cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw, GizmoMode currentGizmoMode) {
         if (selectedEntity == null) return GizmoAxis.NONE;
         TransformComponent tc = selectedEntity.getTransform();
         if (tc == null) return GizmoAxis.NONE;
-
-        float[] p0 = projectWorldToNdc(tc.posX, tc.posY, tc.posZ, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
-        double cx = ((p0[0] + 1.0) / 2.0) * 1280.0;
-        double cy = ((1.0 - p0[1]) / 2.0) * 720.0;
-
-        float ndcX = (float) (refX / 1280.0 * 2.0 - 1.0);
-        float ndcY = (float) (1.0 - refY / 720.0 * 2.0);
-
-        if (currentGizmoMode == GizmoMode.TRANSLATE || currentGizmoMode == GizmoMode.SCALE) {
-            float axisLen = 1.0f;
-            float[] pX = projectWorldToNdc(tc.posX + axisLen, tc.posY, tc.posZ, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
-            float[] pY = projectWorldToNdc(tc.posX, tc.posY + axisLen, tc.posZ, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
-            float[] pZ = projectWorldToNdc(tc.posX, tc.posY, tc.posZ + axisLen, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
-
-            double xTipX = ((pX[0] + 1.0) / 2.0) * 1280.0, xTipY = ((1.0 - pX[1]) / 2.0) * 720.0;
-            double yTipX = ((pY[0] + 1.0) / 2.0) * 1280.0, yTipY = ((1.0 - pY[1]) / 2.0) * 720.0;
-            double zTipX = ((pZ[0] + 1.0) / 2.0) * 1280.0, zTipY = ((1.0 - pZ[1]) / 2.0) * 720.0;
-
-            double distToX = pointToSegmentDistance(refX, refY, cx, cy, xTipX, xTipY);
-            double distToY = pointToSegmentDistance(refX, refY, cx, cy, yTipX, yTipY);
-            double distToZ = pointToSegmentDistance(refX, refY, cx, cy, zTipX, zTipY);
-
-            // Generously expanded hitbox threshold for Translate / Scale axis lines (52px radius)
-            double thresh = 52.0;
-            if (distToX < thresh && distToX <= distToY && distToX <= distToZ) return GizmoAxis.X;
-            if (distToY < thresh && distToY <= distToX && distToY <= distToZ) return GizmoAxis.Y;
-            if (distToZ < thresh && distToZ <= distToX && distToZ <= distToY) return GizmoAxis.Z;
-        } else if (currentGizmoMode == GizmoMode.ROTATE) {
-            double currentMouseAngle = Math.atan2(ndcY - p0[1], ndcX - p0[0]);
-
-            // Balanced 28px hit threshold for 1:1 screen-matched 2D rotate arcs
-            double hitThreshold = 28.0;
-
-            GizmoAxis grabbed = GizmoAxis.NONE;
-            double bestDist = hitThreshold;
-
-            float uiCx = p0[0];
-            float uiCy = p0[1];
-
-            // 1. X-Axis (Pitch, Red): 0.05x, 0.14y (-90° to 90°)
-            double distToX = getArcDistance(refX, refY, uiCx, uiCy, 0.05f, 0.14f, -90.0f, 90.0f, 32);
-            if (distToX < bestDist) {
-                grabbed = GizmoAxis.X;
-                bestDist = distToX;
-            }
-
-            // 2. Y-Axis (Yaw, Green): 0.14x, 0.05y (0° to 180°)
-            double distToY = getArcDistance(refX, refY, uiCx, uiCy, 0.14f, 0.05f, 0.0f, 180.0f, 32);
-            if (distToY < bestDist) {
-                grabbed = GizmoAxis.Y;
-                bestDist = distToY;
-            }
-
-            // 3. Z-Axis (Roll, Blue): 0.14x, 0.14y (0° to 360°)
-            double distToZ = getArcDistance(refX, refY, uiCx, uiCy, 0.14f, 0.14f, 0.0f, 360.0f, 32);
-            if (distToZ < bestDist) {
-                grabbed = GizmoAxis.Z;
-                bestDist = distToZ;
-            }
-
-            if (grabbed != GizmoAxis.NONE) {
-                lastRotateAngle = currentMouseAngle;
-                return grabbed;
-            }
-        }
-        return GizmoAxis.NONE;
+        return pickGizmoAxis(refX, refY, selectedEntity, tc.posX, tc.posY, tc.posZ, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw, currentGizmoMode);
     }
 
-    private static double getArcDistance(double refX, double refY, float uiCx, float uiCy, float rxNdc, float ryNdc, float startDeg, float endDeg, int numSamples) {
-        double minDistance = Double.MAX_VALUE;
-        double prevX = 0, prevY = 0;
+    public static GizmoAxis pickGizmoAxis(double refX, double refY, SceneEntity selectedEntity, ViewportCameraController cameraController, double camPanX, double camPanY, double camZoom, double camPitch, double camYaw, GizmoMode currentGizmoMode) {
+        return pickGizmoAxis(refX, refY, selectedEntity, cameraController, (float) camPanX, (float) camPanY, (float) camZoom, (float) camPitch, (float) camYaw, currentGizmoMode);
+    }
 
-        for (int i = 0; i <= numSamples; i++) {
-            double deg = startDeg + (endDeg - startDeg) * ((double) i / numSamples);
-            double rad = Math.toRadians(deg);
-
-            float sampleUiX = uiCx + rxNdc * (float) Math.cos(rad);
-            float sampleUiY = uiCy + ryNdc * (float) Math.sin(rad);
-
-            double screenX = ((sampleUiX + 1.0) / 2.0) * 1280.0;
-            double screenY = ((1.0 - sampleUiY) / 2.0) * 720.0;
-
-            if (i > 0) {
-                double dist = pointToSegmentDistance(refX, refY, prevX, prevY, screenX, screenY);
-                if (dist < minDistance) {
-                    minDistance = dist;
-                }
-            }
-            prevX = screenX;
-            prevY = screenY;
+    public static GizmoAxis pickGizmoAxis(double refX, double refY, SceneEntity selectedEntity, SceneManager sceneManager, ViewportCameraController cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw, GizmoMode currentGizmoMode) {
+        if (selectedEntity == null) return GizmoAxis.NONE;
+        if (sceneManager != null) {
+            SceneManager.WorldTransform wt = sceneManager.getComputedWorldTransform(selectedEntity);
+            return pickGizmoAxis(refX, refY, selectedEntity, wt.px(), wt.py(), wt.pz(), cameraController, camPanX, camPanY, camZoom, camPitch, camYaw, currentGizmoMode);
         }
-        return minDistance;
+        return pickGizmoAxis(refX, refY, selectedEntity, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw, currentGizmoMode);
     }
 
     public static GizmoAxis pickGizmoAxis(double refX, double refY, SceneEntity selectedEntity, EditorPanelManager manager, GizmoMode currentGizmoMode) {
         if (manager == null) return GizmoAxis.NONE;
-        return pickGizmoAxis(refX, refY, selectedEntity, manager.getCameraController(), 0.0f, 0.25f, -5.0f, 0.0f, 0.0f, currentGizmoMode);
+        return pickGizmoAxis(refX, refY, selectedEntity, manager.getSceneManager(), manager.getCameraController(), 0.0f, 0.25f, -5.0f, 0.0f, 0.0f, currentGizmoMode);
     }
 
-    public static boolean handleGizmoDrag(double deltaX, double deltaY, double refX, double refY, GizmoAxis activeGizmoAxis, GizmoMode currentGizmoMode, SceneEntity selectedEntity, ViewportCameraController cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
+    // --- Handle Gizmo Drag Overloads ---
+
+    public static boolean handleGizmoDrag(double deltaX, double deltaY, double refX, double refY, GizmoAxis activeGizmoAxis, GizmoMode currentGizmoMode, SceneEntity selectedEntity, float wx, float wy, float wz, ViewportCameraController cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
         if (activeGizmoAxis == GizmoAxis.NONE || selectedEntity == null) return false;
         TransformComponent tc = selectedEntity.getTransform();
         if (tc == null) return false;
 
         if (currentGizmoMode == GizmoMode.TRANSLATE) {
-            float[] p0 = projectWorldToNdc(tc.posX, tc.posY, tc.posZ, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+            float[] p0 = projectWorldToNdc(wx, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
             float axisLen = 1.0f;
-            float[] pX = projectWorldToNdc(tc.posX + axisLen, tc.posY, tc.posZ, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
-            float[] pY = projectWorldToNdc(tc.posX, tc.posY + axisLen, tc.posZ, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
-            float[] pZ = projectWorldToNdc(tc.posX, tc.posY, tc.posZ + axisLen, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+            float[] pX = projectWorldToNdc(wx + axisLen, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+            float[] pY = projectWorldToNdc(wx, wy + axisLen, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+            float[] pZ = projectWorldToNdc(wx, wy, wz + axisLen, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
 
             float uXX = pX[0] - p0[0], uXY = pX[1] - p0[1];
             float uYX = pY[0] - p0[0], uYY = pY[1] - p0[1];
@@ -219,7 +171,7 @@ public class GizmoInteractor {
             else if (activeGizmoAxis == GizmoAxis.Z) tc.scaleZ = Math.max(0.01f, tc.scaleZ + ds);
             return true;
         } else if (currentGizmoMode == GizmoMode.ROTATE) {
-            float[] p0 = projectWorldToNdc(tc.posX, tc.posY, tc.posZ, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+            float[] p0 = projectWorldToNdc(wx, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
             float ndcX = (float) (refX / 1280.0 * 2.0 - 1.0);
             float ndcY = (float) (1.0 - refY / 720.0 * 2.0);
             double currentAngle = Math.atan2(ndcY - p0[1], ndcX - p0[0]);
@@ -238,17 +190,54 @@ public class GizmoInteractor {
         return false;
     }
 
+    public static boolean handleGizmoDrag(double deltaX, double deltaY, double refX, double refY, GizmoAxis activeGizmoAxis, GizmoMode currentGizmoMode, SceneEntity selectedEntity, ViewportCameraController cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
+        if (selectedEntity == null) return false;
+        TransformComponent tc = selectedEntity.getTransform();
+        if (tc == null) return false;
+        return handleGizmoDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, selectedEntity, tc.posX, tc.posY, tc.posZ, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+    }
+
+    public static boolean handleGizmoDrag(double deltaX, double deltaY, double refX, double refY, GizmoAxis activeGizmoAxis, GizmoMode currentGizmoMode, SceneEntity selectedEntity, ViewportCameraController cameraController, double camPanX, double camPanY, double camZoom, double camPitch, double camYaw) {
+        return handleGizmoDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, selectedEntity, cameraController, (float) camPanX, (float) camPanY, (float) camZoom, (float) camPitch, (float) camYaw);
+    }
+
+    public static boolean handleGizmoDrag(double deltaX, double deltaY, double refX, double refY, GizmoAxis activeGizmoAxis, GizmoMode currentGizmoMode, SceneEntity selectedEntity, SceneManager sceneManager, ViewportCameraController cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
+        if (selectedEntity == null) return false;
+        if (sceneManager != null) {
+            SceneManager.WorldTransform wt = sceneManager.getComputedWorldTransform(selectedEntity);
+            return handleGizmoDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, selectedEntity, wt.px(), wt.py(), wt.pz(), cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+        }
+        return handleGizmoDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, selectedEntity, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+    }
+
     public static boolean handleGizmoDrag(double deltaX, double deltaY, double refX, double refY, GizmoAxis activeGizmoAxis, GizmoMode currentGizmoMode, SceneEntity selectedEntity, EditorPanelManager manager) {
         if (manager == null) return false;
-        return handleGizmoDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, selectedEntity, manager.getCameraController(), 0.0f, 0.25f, -5.0f, 0.0f, 0.0f);
+        return handleGizmoDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, selectedEntity, manager.getSceneManager(), manager.getCameraController(), 0.0f, 0.25f, -5.0f, 0.0f, 0.0f);
     }
+
+    // --- Render Gizmos Overloads ---
 
     public static void render3DGizmos(List<Float> verts, SceneEntity entity, GizmoMode mode, GizmoAxis activeAxis, ViewportCameraController cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
         TransformComponent tc = entity.getTransform();
         if (tc == null) return;
+        render3DGizmosAtWorldPosition(verts, tc.posX, tc.posY, tc.posZ, mode, activeAxis, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+    }
 
-        float px = tc.posX, py = tc.posY, pz = tc.posZ;
+    public static void render3DGizmos(List<Float> verts, SceneEntity entity, GizmoMode mode, GizmoAxis activeAxis, ViewportCameraController cameraController, double camPanX, double camPanY, double camZoom, double camPitch, double camYaw) {
+        render3DGizmos(verts, entity, mode, activeAxis, cameraController, (float) camPanX, (float) camPanY, (float) camZoom, (float) camPitch, (float) camYaw);
+    }
 
+    public static void render3DGizmos(List<Float> verts, SceneEntity entity, SceneManager sceneManager, GizmoMode mode, GizmoAxis activeAxis, ViewportCameraController cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
+        if (entity == null) return;
+        if (sceneManager != null) {
+            SceneManager.WorldTransform wt = sceneManager.getComputedWorldTransform(entity);
+            render3DGizmosAtWorldPosition(verts, wt.px(), wt.py(), wt.pz(), mode, activeAxis, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+        } else {
+            render3DGizmos(verts, entity, mode, activeAxis, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+        }
+    }
+
+    public static void render3DGizmosAtWorldPosition(List<Float> verts, float px, float py, float pz, GizmoMode mode, GizmoAxis activeAxis, ViewportCameraController cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
         float[] p0 = projectWorldToNdc(px, py, pz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
         float cx = p0[0], cy = p0[1];
 
@@ -329,11 +318,6 @@ public class GizmoInteractor {
             UIBatchBuilder.addArcRing(verts, cx, cy, 0.14f, 0.14f, 0.0f, 360.0f, lineThick + 0.002f, bx, bg, bb, 1.0f);
             UIBatchBuilder.addBoundedText(verts, "Z:ROLL", cx - 0.18f, cy - 0.12f, cx - 0.02f, 1.0f, bx, bg, bb, 1.0f);
         }
-    }
-
-    public static void render3DGizmos(List<Float> verts, SceneEntity entity, GizmoMode mode, GizmoAxis activeAxis, EditorPanelManager manager) {
-        if (manager == null) return;
-        render3DGizmos(verts, entity, mode, activeAxis, manager.getCameraController(), 0.0f, 0.25f, -5.0f, 0.0f, 0.0f);
     }
 
     private static double pointToSegmentDistance(double px, double py, double x1, double y1, double x2, double y2) {

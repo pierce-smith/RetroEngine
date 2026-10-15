@@ -1,13 +1,69 @@
 package com.retro.engine.editor.ui;
 
 import com.retro.engine.ecs.SceneEntity;
+
+import java.util.ArrayList;
 import java.util.List;
 
 /**
- * SceneHierarchyPanel handles rendering the Left Panel (Scene Manager & Entity Tree).
- * Target JDK: JDK 25 / macOS
+ * SceneHierarchyPanel handles rendering the Left Panel (Scene Manager & Indented Scene Graph Tree).
  */
 public class SceneHierarchyPanel {
+
+    public static class HierarchyNode {
+        public final SceneEntity entity;
+        public final int depth;
+        public final boolean hasChildren;
+
+        public HierarchyNode(SceneEntity entity, int depth, boolean hasChildren) {
+            this.entity = entity;
+            this.depth = depth;
+            this.hasChildren = hasChildren;
+        }
+    }
+
+    public static List<HierarchyNode> buildFlattenedTree(List<SceneEntity> sceneEntities) {
+        List<HierarchyNode> visibleTree = new ArrayList<>();
+        if (sceneEntities == null || sceneEntities.isEmpty()) return visibleTree;
+
+        // Collect top-level entities
+        for (SceneEntity entity : sceneEntities) {
+            if (entity.parentId == null || entity.parentId.trim().isEmpty() || findEntity(sceneEntities, entity.parentId) == null) {
+                appendNodeAndVisibleChildren(entity, 0, sceneEntities, visibleTree);
+            }
+        }
+        return visibleTree;
+    }
+
+    private static void appendNodeAndVisibleChildren(SceneEntity entity, int depth, List<SceneEntity> allEntities, List<HierarchyNode> result) {
+        List<SceneEntity> children = getChildrenOf(entity, allEntities);
+        boolean hasChildren = !children.isEmpty();
+
+        result.add(new HierarchyNode(entity, depth, hasChildren));
+
+        if (hasChildren && entity.expandedInHierarchy) {
+            for (SceneEntity child : children) {
+                appendNodeAndVisibleChildren(child, depth + 1, allEntities, result);
+            }
+        }
+    }
+
+    private static List<SceneEntity> getChildrenOf(SceneEntity parent, List<SceneEntity> allEntities) {
+        List<SceneEntity> list = new ArrayList<>();
+        for (SceneEntity e : allEntities) {
+            if (parent.id.equalsIgnoreCase(e.parentId)) {
+                list.add(e);
+            }
+        }
+        return list;
+    }
+
+    private static SceneEntity findEntity(List<SceneEntity> allEntities, String id) {
+        for (SceneEntity e : allEntities) {
+            if (e.id.equalsIgnoreCase(id)) return e;
+        }
+        return null;
+    }
 
     public static void render(List<Float> verts, List<SceneEntity> sceneEntities) {
         UIBatchBuilder.addQuad(verts, -1.0f, -0.5f, -0.55f, 1.0f, 0.08f, 0.08f, 0.10f, 1.0f);
@@ -15,19 +71,39 @@ public class SceneHierarchyPanel {
         UIBatchBuilder.addFrameBorder(verts, -1.0f, -0.5f, -0.55f, 1.0f, 0.003f, 0.25f, 0.25f, 0.32f, 1.0f);
         UIBatchBuilder.addBoundedText(verts, "SCENE MANAGER", -0.96f, 0.95f, -0.57f, 1.6f, 1.0f, 1.0f, 1.0f, 1.0f);
 
-        if (sceneEntities == null || sceneEntities.isEmpty()) {
+        List<HierarchyNode> visibleTree = buildFlattenedTree(sceneEntities);
+
+        if (visibleTree.isEmpty()) {
             UIBatchBuilder.addBoundedText(verts, "NO ENTITIES IN SCENE", -0.95f, 0.80f, -0.58f, 1.2f, 0.5f, 0.5f, 0.5f, 1.0f);
-            UIBatchBuilder.addBoundedText(verts, "CLICK 3D ASSET CARD", -0.95f, 0.72f, -0.58f, 1.1f, 0.3f, 0.7f, 0.9f, 1.0f);
-            UIBatchBuilder.addBoundedText(verts, "BELOW TO SPAWN", -0.95f, 0.65f, -0.58f, 1.1f, 0.3f, 0.7f, 0.9f, 1.0f);
+            UIBatchBuilder.addBoundedText(verts, "RIGHT-CLICK OR SPAWN", -0.95f, 0.72f, -0.58f, 1.1f, 0.3f, 0.7f, 0.9f, 1.0f);
+            UIBatchBuilder.addBoundedText(verts, "3D MESH TO START", -0.95f, 0.65f, -0.58f, 1.1f, 0.3f, 0.7f, 0.9f, 1.0f);
         } else {
             float itemY = 0.80f;
-            for (SceneEntity entity : sceneEntities) {
+            for (HierarchyNode node : visibleTree) {
+                if (itemY < -0.45f) break;
+
+                SceneEntity entity = node.entity;
+                float indentX = -0.96f + (node.depth * 0.04f);
+                if (indentX > -0.65f) indentX = -0.65f;
+
+                String prefix = "";
+                if (node.hasChildren) {
+                    prefix = entity.expandedInHierarchy ? "v " : "> ";
+                } else if (node.depth > 0) {
+                    prefix = "• ";
+                } else {
+                    prefix = "  ";
+                }
+
+                String label = prefix + entity.name;
+
                 if (entity.selected) {
                     UIBatchBuilder.addQuad(verts, -0.98f, itemY - 0.02f, -0.57f, itemY + 0.05f, 0.0f, 0.35f, 0.70f, 1.0f);
-                    UIBatchBuilder.addBoundedText(verts, "> " + entity.name, -0.95f, itemY + 0.03f, -0.58f, 1.3f, 1.0f, 1.0f, 1.0f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, label, indentX, itemY + 0.03f, -0.58f, 1.3f, 1.0f, 1.0f, 1.0f, 1.0f);
                 } else {
-                    UIBatchBuilder.addBoundedText(verts, "  " + entity.name, -0.95f, itemY + 0.03f, -0.58f, 1.3f, 0.7f, 0.7f, 0.7f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, label, indentX, itemY + 0.03f, -0.58f, 1.3f, 0.8f, 0.8f, 0.8f, 1.0f);
                 }
+
                 itemY -= 0.08f;
             }
         }
