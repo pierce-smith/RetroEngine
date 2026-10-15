@@ -40,6 +40,20 @@ public class EditorPanelManager {
     private ModalState activeModal = ModalState.NONE;
     private AssetType pickerFilterType = AssetType.TEXTURE;
 
+    private boolean contextMenuVisible = false;
+    private float contextMenuNdcX = 0.0f;
+    private float contextMenuNdcY = 0.0f;
+    private final List<ContextMenuItem> contextMenuItems = new ArrayList<>();
+
+    private boolean isRightMouseDown = false;
+    private double rightClickPressX = 0.0;
+    private double rightClickPressY = 0.0;
+    private float rightClickPressNdcX = 0.0f;
+    private float rightClickPressNdcY = 0.0f;
+    private double rightClickDragDistance = 0.0;
+    private float pressCamPitch = 0.0f, pressCamYaw = 0.0f, pressCamPanX = 0.0f, pressCamPanY = 0.0f, pressCamZoom = 0.0f;
+    private long lastOrbitTime = 0L;
+
     private boolean show3DGrid = true;
     private float[] cached3DGridVertices = null;
     private float[] cachedUiVertices = null;
@@ -152,14 +166,26 @@ public class EditorPanelManager {
         }
     }
 
-    private void addAssetDirectoryIfNotExists(String absolutePath, AssetType type) {
+        private void addAssetDirectoryIfNotExists(String absolutePath, AssetType type) {
         if (absolutePath == null || absolutePath.trim().isEmpty()) return;
+        File file = new File(absolutePath);
+        if (type == AssetType.UNKNOWN || type == null) {
+            String ext = getFileExtension(file.getName()).toLowerCase();
+            type = switch (ext) {
+                case "obj", "fbx", "gltf", "glb" -> AssetType.MESH_3D;
+                case "png", "jpg", "jpeg", "tga" -> AssetType.TEXTURE;
+                case "scene" -> AssetType.SCENE;
+                default -> AssetType.UNKNOWN;
+            };
+        }
         for (AssetEntry entry : assetDirectory) {
             if (entry.absolutePath != null && entry.absolutePath.equalsIgnoreCase(absolutePath)) {
+                if (entry.type == AssetType.UNKNOWN && type != AssetType.UNKNOWN) {
+                    entry.type = type;
+                }
                 return;
             }
         }
-        File file = new File(absolutePath);
         assetDirectory.add(new AssetEntry(file.getName(), absolutePath, type));
     }
     public void deleteSelectedEntity() { sceneManager.deleteSelectedEntity(); }
@@ -187,15 +213,28 @@ public class EditorPanelManager {
     public void closeModal() { this.activeModal = ModalState.NONE; }
     public List<AssetEntry> getAssetDirectory() { return Collections.unmodifiableList(assetDirectory); }
 
+    public boolean isContextMenuVisible() { return contextMenuVisible; }
+    public void closeContextMenu() { this.contextMenuVisible = false; this.contextMenuItems.clear(); }
+    public void openContextMenu(float ndcX, float ndcY, List<ContextMenuItem> items) {
+        this.contextMenuNdcX = ndcX;
+        this.contextMenuNdcY = ndcY;
+        this.contextMenuItems.clear();
+        if (items != null) this.contextMenuItems.addAll(items);
+        this.contextMenuVisible = true;
+    }
+
     public boolean is3DGridVisible() { return show3DGrid; }
     public void toggle3DGrid() { this.show3DGrid = !this.show3DGrid; cached3DGridVertices = null; }
 
     public void setCameraState(float panX, float panY, float zoom, float pitch, float yaw) {
+        if (Math.abs(this.camPitch - pitch) > 0.05f || Math.abs(this.camYaw - yaw) > 0.05f || Math.abs(this.camPanX - panX) > 0.01f || Math.abs(this.camPanY - panY) > 0.01f) {
+            this.lastOrbitTime = System.currentTimeMillis();
+        }
         this.camPanX = panX; this.camPanY = panY; this.camZoom = zoom; this.camPitch = pitch; this.camYaw = yaw;
     }
 
     public void handleMouseClick(double rawX, double rawY, int button, int action) {
-        if (button != 0) return;
+        if (button != 0 && button != 1) return;
 
         updateWindowDimensionsFromGlfw();
 
@@ -205,9 +244,37 @@ public class EditorPanelManager {
         double refX = (rawX / (double) windowWidth) * 1280.0;
         double refY = (rawY / (double) windowHeight) * 720.0;
 
-        if (action == 1) {
+        if (action == 1) { // Press
             this.lastMouseX = refX;
             this.lastMouseY = refY;
+
+            // Handle Right Click Press (button == 1)
+            if (button == 1) {
+                if (contextMenuVisible) closeContextMenu();
+                activeDropdownMenu = DropdownMenu.NONE;
+                closeModal();
+
+                this.isRightMouseDown = true;
+                this.rightClickPressX = refX;
+                this.rightClickPressY = refY;
+                this.rightClickPressNdcX = ndcX;
+                this.rightClickPressNdcY = ndcY;
+                this.rightClickDragDistance = 0.0;
+
+                this.pressCamPitch = (cameraController != null) ? cameraController.getPitch() : camPitch;
+                this.pressCamYaw = (cameraController != null) ? cameraController.getYaw() : camYaw;
+                this.pressCamPanX = (cameraController != null) ? cameraController.getPanX() : camPanX;
+                this.pressCamPanY = (cameraController != null) ? cameraController.getPanY() : camPanY;
+                this.pressCamZoom = (cameraController != null) ? cameraController.getZoom() : camZoom;
+                return;
+            }
+
+            // Handle Left Click (button == 0)
+            if (contextMenuVisible) {
+                boolean consumed = ContextMenuOverlayManager.processClick(ndcX, ndcY, contextMenuNdcX, contextMenuNdcY, contextMenuItems);
+                closeContextMenu();
+                if (consumed) return;
+            }
 
             if (activeModal == ModalState.ASSET_PICKER) {
                 TopBarInteractor.processModalClick(ndcX, ndcY, this);
@@ -234,8 +301,35 @@ public class EditorPanelManager {
                     processViewportGizmoClick(refX, refY);
                 }
             }
-        } else if (action == 0) {
-            if (activeGizmoAxis != GizmoAxis.NONE && getSelectedEntity() != null) {
+        } else if (action == 0) { // Release
+            if (button == 1) { // Right Click Release
+                if (isRightMouseDown) {
+                    isRightMouseDown = false;
+
+                    double directDragDist = Math.hypot(refX - rightClickPressX, refY - rightClickPressY);
+
+                    float currentPitch = (cameraController != null) ? cameraController.getPitch() : camPitch;
+                    float currentYaw = (cameraController != null) ? cameraController.getYaw() : camYaw;
+                    float currentPanX = (cameraController != null) ? cameraController.getPanX() : camPanX;
+                    float currentPanY = (cameraController != null) ? cameraController.getPanY() : camPanY;
+                    float currentZoom = (cameraController != null) ? cameraController.getZoom() : camZoom;
+
+                    boolean cameraMoved = Math.abs(currentPitch - pressCamPitch) > 0.1f ||
+                                          Math.abs(currentYaw - pressCamYaw) > 0.1f ||
+                                          Math.abs(currentPanX - pressCamPanX) > 0.01f ||
+                                          Math.abs(currentPanY - pressCamPanY) > 0.01f ||
+                                          Math.abs(currentZoom - pressCamZoom) > 0.01f;
+
+                    boolean recentOrbit = (System.currentTimeMillis() - lastOrbitTime) < 350;
+
+                    if (!cameraMoved && !recentOrbit && rightClickDragDistance < 12.0 && directDragDist < 12.0) {
+                        buildAndShowContextMenu(rightClickPressNdcX, rightClickPressNdcY, rightClickPressX, rightClickPressY);
+                    }
+                }
+                return;
+            }
+
+            if (button == 0 && activeGizmoAxis != GizmoAxis.NONE && getSelectedEntity() != null) {
                 TransformComponent tc = getSelectedEntity().getTransform();
                 if (tc != null) {
                     if (tc.posX != dragStartPx || tc.posY != dragStartPy || tc.posZ != dragStartPz ||
@@ -259,6 +353,81 @@ public class EditorPanelManager {
         }
     }
 
+    private void buildAndShowContextMenu(float ndcX, float ndcY, double refX, double refY) {
+        List<ContextMenuItem> items = new ArrayList<>();
+
+        if (ndcY >= 0.92f) {
+            items.add(new ContextMenuItem("New Scene", this::newScene));
+            items.add(new ContextMenuItem("Open Scene... (Cmd+O)", this::promptOpenSceneWithNativeDialog));
+            items.add(new ContextMenuItem("Save Scene... (Cmd+S)", this::promptSaveSceneWithNativeDialog));
+        } else if (ndcY <= -0.42f) {
+            items.add(new ContextMenuItem("+ Import Asset...", this::promptImportAssetForDirectory));
+            items.add(new ContextMenuItem("+ Import Texture...", this::promptImportTexture));
+            items.add(new ContextMenuItem("+ Import 3D Mesh...", this::promptImportMesh));
+            items.add(new ContextMenuItem("Clear Asset List", () -> this.assetDirectory.clear()));
+        } else if (ndcX <= -0.55f) {
+            List<SceneEntity> entities = getSceneEntities();
+            int index = (int) ((0.85f - ndcY) / 0.08f);
+            if (index >= 0 && index < entities.size()) {
+                selectEntity(entities.get(index));
+                items.add(new ContextMenuItem("Duplicate Entity (Cmd+D)", this::duplicateSelectedEntity));
+                items.add(new ContextMenuItem("Delete Entity (Del)", this::deleteSelectedEntity));
+                items.add(new ContextMenuItem("+ Spawn 3D Cube", this::spawnDefaultCube));
+                items.add(new ContextMenuItem("+ Spawn Light Source", this::spawnLightSource));
+                items.add(new ContextMenuItem("+ Spawn Camera", this::spawnCameraEntity));
+                items.add(new ContextMenuItem("Deselect All", () -> selectEntity(null)));
+            } else {
+                items.add(new ContextMenuItem("+ Spawn 3D Cube", this::spawnDefaultCube));
+                items.add(new ContextMenuItem("+ Spawn Light Source", this::spawnLightSource));
+                items.add(new ContextMenuItem("+ Spawn Camera", this::spawnCameraEntity));
+                items.add(new ContextMenuItem("New Scene", this::newScene));
+            }
+        } else if (ndcX >= 0.55f) {
+            if (getSelectedEntity() != null) {
+                items.add(new ContextMenuItem("Duplicate Entity (Cmd+D)", this::duplicateSelectedEntity));
+                items.add(new ContextMenuItem("Delete Entity (Del)", this::deleteSelectedEntity));
+            }
+            items.add(new ContextMenuItem("+ Import Asset...", this::promptImportAssetForDirectory));
+        } else {
+            SceneEntity bestEntity = null;
+            double minDistance = 60.0;
+
+            for (SceneEntity entity : getSceneEntities()) {
+                TransformComponent tc = entity.getTransform();
+                if (tc == null) continue;
+
+                float[] p0 = GizmoInteractor.projectWorldToNdc(tc.posX, tc.posY, tc.posZ, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+                double cx = ((p0[0] + 1.0) / 2.0) * 1280.0;
+                double cy = ((1.0 - p0[1]) / 2.0) * 720.0;
+
+                double dist = Math.hypot(refX - cx, refY - cy);
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    bestEntity = entity;
+                }
+            }
+
+            if (bestEntity != null) {
+                selectEntity(bestEntity);
+                items.add(new ContextMenuItem("Duplicate Object (Cmd+D)", this::duplicateSelectedEntity));
+                items.add(new ContextMenuItem("Delete Object (Del)", this::deleteSelectedEntity));
+                items.add(new ContextMenuItem("Reset Position", () -> {
+                    if (getSelectedEntity() != null && getSelectedEntity().getTransform() != null) {
+                        TransformComponent tc = getSelectedEntity().getTransform();
+                        tc.posX = 0.0f; tc.posY = 0.0f; tc.posZ = 0.0f;
+                    }
+                }));
+            } else {
+                items.add(new ContextMenuItem("+ Spawn 3D Cube", this::spawnDefaultCube));
+                items.add(new ContextMenuItem("+ Spawn Light Source", this::spawnLightSource));
+                items.add(new ContextMenuItem("+ Spawn Camera", this::spawnCameraEntity));
+                items.add(new ContextMenuItem("Toggle 3D Grid", this::toggle3DGrid));
+            }
+        }
+
+        openContextMenu(ndcX, ndcY, items);
+    }
+
     public boolean onCursorPos(double rawX, double rawY) {
         updateWindowDimensionsFromGlfw();
 
@@ -269,6 +438,11 @@ public class EditorPanelManager {
         double deltaY = refY - lastMouseY;
         this.lastMouseX = refX;
         this.lastMouseY = refY;
+
+        if (isRightMouseDown) {
+            this.rightClickDragDistance += Math.hypot(deltaX, deltaY);
+            this.lastOrbitTime = System.currentTimeMillis();
+        }
 
         if (activeGizmoAxis != GizmoAxis.NONE && getSelectedEntity() != null) {
             return GizmoInteractor.handleGizmoDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, getSelectedEntity(), cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
@@ -358,18 +532,20 @@ public class EditorPanelManager {
 
     public float[] projectWorldToNdc(float wx, float wy, float wz) { return GizmoInteractor.projectWorldToNdc(wx, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw); }
 
-    public void onFilesDropped(List<String> filePaths) {
+        public void onFilesDropped(List<String> filePaths) {
+        if (filePaths == null) return;
         for (String path : filePaths) {
+            if (path == null || path.trim().isEmpty()) continue;
             File file = new File(path);
             String name = file.getName();
             String ext = getFileExtension(name).toLowerCase();
             AssetType type = switch (ext) {
                 case "obj", "fbx", "gltf", "glb" -> AssetType.MESH_3D;
-                case "png", "jpg", "tga" -> AssetType.TEXTURE;
+                case "png", "jpg", "jpeg", "tga" -> AssetType.TEXTURE;
                 case "scene" -> AssetType.SCENE;
                 default -> AssetType.UNKNOWN;
             };
-            assetDirectory.add(new AssetEntry(name, path, type));
+            addAssetDirectoryIfNotExists(path, type);
         }
     }
 
@@ -411,6 +587,10 @@ public class EditorPanelManager {
 
         if (activeModal == ModalState.ASSET_PICKER) {
             ModalOverlayManager.renderAssetPickerModal(verts, pickerFilterType, assetDirectory);
+        }
+
+        if (contextMenuVisible) {
+            ContextMenuOverlayManager.render(verts, contextMenuNdcX, contextMenuNdcY, contextMenuItems);
         }
 
         float[] array = new float[verts.size()];

@@ -7,9 +7,6 @@ import com.retro.engine.editor.assets.AssetType;
 
 import java.util.List;
 
-/**
- * PanelInteractor handles Scene Hierarchy panel entity selections and Asset Directory card/import interactions.
- */
 public class PanelInteractor {
 
     public static void processHierarchyClick(float ndcY, EditorPanelManager manager) {
@@ -25,22 +22,18 @@ public class PanelInteractor {
     }
 
     public static void processAssetDirectoryClick(float ndcX, float ndcY, EditorPanelManager manager) {
-        // 1. [+ IMPORT ASSET] Header Button
+        // 1. [+ IMPORT ASSET] Header Button ONLY
         if (ndcX >= 0.65f && ndcX <= 0.98f && ndcY >= -0.50f && ndcY <= -0.42f) {
             InspectorInteractor.promptImportAssetForDirectory(manager);
             return;
         }
 
         List<AssetEntry> assetDirectory = manager.getAssetDirectory();
-
-        // 2. Asset Cards or Empty State Click
-        if (assetDirectory.isEmpty()) {
-            if (ndcY >= -0.92f && ndcY <= -0.42f) {
-                InspectorInteractor.promptImportAssetForDirectory(manager);
-            }
+        if (assetDirectory == null || assetDirectory.isEmpty()) {
             return;
         }
 
+        // 2. Click specific Asset Cards
         float cardX = -0.95f;
         for (AssetEntry asset : assetDirectory) {
             if (cardX + 0.35f > 0.95f) break;

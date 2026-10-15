@@ -13,7 +13,6 @@ import com.retro.engine.editor.assets.AssetType;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 
 import java.io.File;
-import java.util.ArrayList;
 import java.util.List;
 
 public class InspectorInteractor {
@@ -28,17 +27,12 @@ public class InspectorInteractor {
         for (Component comp : entity.getAllComponents()) {
             if (curY < -0.45f) break;
 
-            // Header line
-            curY -= 0.06f;
+            curY -= 0.06f; // Header line
 
             if (comp instanceof TransformComponent) {
-                // POS: curY -= 0.05f
-                // ROT: curY -= 0.05f
-                // SCL: curY -= 0.07f
                 curY -= 0.17f;
 
             } else if (comp instanceof MeshRendererComponent) {
-                // MESH Row: [curY - 0.04f, curY + 0.02f]
                 if (ndcY >= curY - 0.04f && ndcY <= curY + 0.02f) {
                     if (ndcX >= 0.80f && ndcX <= 0.88f) {
                         manager.openAssetPicker(AssetType.MESH_3D);
@@ -52,7 +46,6 @@ public class InspectorInteractor {
 
             } else if (comp instanceof MaterialComponent) {
                 curY -= 0.05f; // SHADER line
-                // TEX Row: [curY - 0.04f, curY + 0.02f]
                 if (ndcY >= curY - 0.04f && ndcY <= curY + 0.02f) {
                     if (ndcX >= 0.80f && ndcX <= 0.88f) {
                         manager.openAssetPicker(AssetType.TEXTURE);
@@ -65,21 +58,18 @@ public class InspectorInteractor {
                 curY -= 0.09f;
 
             } else if (comp instanceof LightComponent lc) {
-                // TYPE Row: [curY - 0.03f, curY + 0.02f]
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f && ndcX >= 0.84f && ndcX <= 0.98f) {
                     lc.cycleType();
                     return;
                 }
                 curY -= 0.06f;
 
-                // INTENSITY Row: [curY - 0.03f, curY + 0.02f]
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
                     if (ndcX >= 0.84f && ndcX <= 0.90f) { lc.intensity = Math.max(0.0f, lc.intensity - 0.5f); return; }
                     if (ndcX >= 0.91f && ndcX <= 0.97f) { lc.intensity += 0.5f; return; }
                 }
                 curY -= 0.06f;
 
-                // COLOR Row: [curY - 0.03f, curY + 0.02f]
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
                     if (ndcX >= 0.84f && ndcX <= 0.88f) { lc.r = (lc.r > 0.5f) ? 0.2f : 1.0f; return; }
                     if (ndcX >= 0.89f && ndcX <= 0.93f) { lc.g = (lc.g > 0.5f) ? 0.2f : 1.0f; return; }
@@ -88,17 +78,14 @@ public class InspectorInteractor {
                 curY -= 0.08f;
 
             } else if (comp instanceof CameraComponent cc) {
-                // FOV Row: [curY - 0.03f, curY + 0.02f]
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
                     if (ndcX >= 0.84f && ndcX <= 0.90f) { cc.fov = Math.max(10.0f, cc.fov - 5.0f); return; }
                     if (ndcX >= 0.91f && ndcX <= 0.97f) { cc.fov = Math.min(170.0f, cc.fov + 5.0f); return; }
                 }
                 curY -= 0.06f;
 
-                // NEAR/FAR line
-                curY -= 0.05f;
+                curY -= 0.05f; // NEAR/FAR line
 
-                // PRIMARY Row: [curY - 0.03f, curY + 0.02f]
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f && ndcX >= 0.58f && ndcX <= 0.85f) {
                     cc.isPrimary = !cc.isPrimary;
                     return;
@@ -112,27 +99,39 @@ public class InspectorInteractor {
     }
 
     public static void promptImportTexture(EditorPanelManager manager) {
-        String importedPath = NativeFileDialog.openFileDialog("Select Texture Asset", "", "Texture Images (*.png, *.jpg, *.tga)", "png", "jpg", "tga");
-        if (importedPath != null && !importedPath.trim().isEmpty() && manager != null) {
-            File file = new File(importedPath);
-            manager.assignTextureToSelectedEntity(new AssetEntry(file.getName(), importedPath, AssetType.TEXTURE));
+        if (manager == null) return;
+        List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
+            "Select Texture Asset(s)", "", "Texture Images (*.png, *.jpg, *.jpeg, *.tga)", "png", "jpg", "jpeg", "tga"
+        );
+        if (importedPaths != null && !importedPaths.isEmpty()) {
+            manager.onFilesDropped(importedPaths);
+            String primaryPath = importedPaths.get(0);
+            File file = new File(primaryPath);
+            manager.assignTextureToSelectedEntity(new AssetEntry(file.getName(), primaryPath, AssetType.TEXTURE));
         }
     }
 
     public static void promptImportMesh(EditorPanelManager manager) {
-        String importedPath = NativeFileDialog.openFileDialog("Select 3D Mesh Asset", "", "3D Models (*.obj, *.fbx, *.gltf)", "obj", "fbx", "gltf", "glb");
-        if (importedPath != null && !importedPath.trim().isEmpty() && manager != null) {
-            File file = new File(importedPath);
-            manager.assignMeshToSelectedEntity(new AssetEntry(file.getName(), importedPath, AssetType.MESH_3D));
+        if (manager == null) return;
+        List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
+            "Select 3D Mesh Asset(s)", "", "3D Models (*.obj, *.fbx, *.gltf, *.glb)", "obj", "fbx", "gltf", "glb"
+        );
+        if (importedPaths != null && !importedPaths.isEmpty()) {
+            manager.onFilesDropped(importedPaths);
+            String primaryPath = importedPaths.get(0);
+            File file = new File(primaryPath);
+            manager.assignMeshToSelectedEntity(new AssetEntry(file.getName(), primaryPath, AssetType.MESH_3D));
         }
     }
 
     public static void promptImportAssetForDirectory(EditorPanelManager manager) {
-        String importedPath = NativeFileDialog.openFileDialog("Import Asset", "", "All Assets (*.obj, *.fbx, *.png, *.jpg, *.scene)", "obj", "fbx", "png", "jpg", "scene");
-        if (importedPath != null && !importedPath.trim().isEmpty() && manager != null) {
-            List<String> list = new ArrayList<>();
-            list.add(importedPath);
-            manager.onFilesDropped(list);
+        if (manager == null) return;
+        List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
+            "Import Asset(s) into Project", "", "All Supported Assets (*.obj, *.fbx, *.gltf, *.glb, *.png, *.jpg, *.jpeg, *.tga, *.scene)",
+            "obj", "fbx", "gltf", "glb", "png", "jpg", "jpeg", "tga", "scene"
+        );
+        if (importedPaths != null && !importedPaths.isEmpty()) {
+            manager.onFilesDropped(importedPaths);
         }
     }
 }
