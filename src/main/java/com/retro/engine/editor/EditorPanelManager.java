@@ -194,6 +194,11 @@ public class EditorPanelManager {
     public void closeContextMenu() { overlayManager.closeContextMenu(); }
     public void openContextMenu(float ndcX, float ndcY, List<ContextMenuItem> items) { overlayManager.openContextMenu(ndcX, ndcY, items); }
 
+    // --- REGIONAL HIT-TESTING ---
+    public PanelRegion getRegionAt(float ndcX, float ndcY) {
+        return PanelRegion.getRegionAt(ndcX, ndcY, overlayManager);
+    }
+
     // --- ENTITY MANIPULATION & COMMANDS ---
     public void deleteSelectedEntity() { if (getSelectedEntity() != null) { sceneManager.deleteSelectedEntity(); UISoundManager.play(UISound.DELETE); } }
     public void duplicateSelectedEntity() { if (getSelectedEntity() != null) { sceneManager.duplicateSelectedEntity(); UISoundManager.play(UISound.DUPLICATE); } }
@@ -248,8 +253,8 @@ public class EditorPanelManager {
     public void promptImportAudio() { InspectorInteractor.promptImportAudio(this); }
 
     // --- INPUT ROUTING & CLICK HANDLING ---
-    public void handleMouseClick(double rawX, double rawY, int button, int action) {
-        if (button != 0 && button != 1) return;
+    public boolean handleMouseClick(double rawX, double rawY, int button, int action) {
+        if (button != 0 && button != 1) return false;
         updateWindowDimensionsFromGlfw();
 
         float ndcX = (float) ((rawX / (double) windowWidth) * 2.0 - 1.0);
@@ -257,52 +262,69 @@ public class EditorPanelManager {
         double refX = (rawX / (double) windowWidth) * 1280.0;
         double refY = (rawY / (double) windowHeight) * 720.0;
 
+        PanelRegion region = getRegionAt(ndcX, ndcY);
+
         if (action == 1) { // Press
             if (button == 1) {
                 overlayManager.onRightClickPress(refX, refY, ndcX, ndcY, cameraController, gizmoStateController.getCamPitch(), gizmoStateController.getCamYaw(), gizmoStateController.getCamPanX(), gizmoStateController.getCamPanY(), gizmoStateController.getCamZoom());
-                return;
+                return true;
             }
 
             if (overlayManager.isContextMenuVisible()) {
                 boolean consumed = ContextMenuOverlayManager.processClick(ndcX, ndcY, overlayManager.getContextMenuNdcX(), overlayManager.getContextMenuNdcY(), overlayManager.getContextMenuItems());
                 closeContextMenu();
-                if (consumed) return;
+                return true;
             }
 
             if (overlayManager.getActiveModal() == ModalState.ASSET_PICKER) {
                 TopBarInteractor.processModalClick(ndcX, ndcY, this);
-                return;
+                return true;
             }
 
             if (overlayManager.getActiveModal() == ModalState.PARENT_PICKER) {
                 overlayManager.processParentPickerModalClick(ndcX, ndcY, this);
-                return;
+                return true;
             }
 
             if (overlayManager.getActiveDropdownMenu() != DropdownMenu.NONE) {
                 if (TopBarInteractor.processDropdownOverlayClick(ndcX, ndcY, this)) {
                     setActiveDropdownMenu(DropdownMenu.NONE);
-                    return;
                 }
+                return true;
             }
 
-            if (ndcY >= 0.92f) {
-                TopBarInteractor.processTopBarClick(ndcX, this);
-            } else if (ndcY <= -0.42f) {
-                PanelInteractor.processAssetDirectoryClick(ndcX, ndcY, this);
-            } else if (ndcX <= -0.55f) {
-                PanelInteractor.processHierarchyClick(ndcY, this);
-            } else if (ndcX >= 0.55f) {
-                InspectorInteractor.processInspectorClick(ndcX, ndcY, this);
-            } else {
-                if (!gizmoStateController.processViewportToolbarClick(ndcX, ndcY)) {
+            switch (region) {
+                case TOP_BAR -> {
+                    TopBarInteractor.processTopBarClick(ndcX, this);
+                    return true;
+                }
+                case ASSET_DIRECTORY -> {
+                    PanelInteractor.processAssetDirectoryClick(ndcX, ndcY, this);
+                    return true;
+                }
+                case SCENE_HIERARCHY -> {
+                    PanelInteractor.processHierarchyClick(ndcY, this);
+                    return true;
+                }
+                case INSPECTOR -> {
+                    InspectorInteractor.processInspectorClick(ndcX, ndcY, this);
+                    return true;
+                }
+                case VIEWPORT -> {
+                    if (gizmoStateController.processViewportToolbarClick(ndcX, ndcY)) {
+                        return true;
+                    }
                     gizmoStateController.processViewportGizmoClick(refX, refY, this);
+                    return gizmoStateController.getActiveAxis() != GizmoAxis.NONE;
+                }
+                default -> {
+                    return false;
                 }
             }
         } else if (action == 0) { // Release
             if (button == 1) {
                 overlayManager.onRightClickRelease(refX, refY, this, cameraController, gizmoStateController.getCamPitch(), gizmoStateController.getCamYaw(), gizmoStateController.getCamPanX(), gizmoStateController.getCamPanY(), gizmoStateController.getCamZoom(), gizmoStateController.getLastOrbitTime());
-                return;
+                return true;
             }
 
             if (button == 0 && getActiveGizmoAxis() != GizmoAxis.NONE && getSelectedEntity() != null) {
@@ -325,8 +347,10 @@ public class EditorPanelManager {
                     }
                 }
                 setActiveGizmoAxis(GizmoAxis.NONE);
+                return true;
             }
         }
+        return false;
     }
 
     public boolean onCursorPos(double rawX, double rawY) {

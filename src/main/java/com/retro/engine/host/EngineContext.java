@@ -67,13 +67,18 @@ public class EngineContext {
         });
 
         window.setOnMouseClickListener((mouseX, mouseY, button, action) -> {
-            selectionController.handleMouseClick(mouseX, mouseY, button, action, editorManager);
-            cameraController.onMouseButton(button, action, mouseX, mouseY);
+            boolean handled = selectionController.handleMouseClick(mouseX, mouseY, button, action, editorManager);
+            boolean inViewport = selectionController.isCursorInViewport(mouseX, mouseY, editorManager);
+            
+            // Forward to camera controller if not handled by UI, OR if right-clicking inside the 3D viewport
+            if (!handled || (button == 1 && inViewport)) {
+                cameraController.onMouseButton(button, action, mouseX, mouseY);
+            }
         });
 
         window.setOnCursorPosListener((x, y) -> {
             boolean handledByGizmo = selectionController.onCursorPos(x, y, editorManager);
-            if (!handledByGizmo) {
+            if (!handledByGizmo && selectionController.isCursorInViewport(x, y, editorManager)) {
                 boolean isShiftDown = window.isKeyDown(GLFW.GLFW_KEY_LEFT_SHIFT) || window.isKeyDown(GLFW.GLFW_KEY_RIGHT_SHIFT);
                 boolean isAltDown = window.isKeyDown(GLFW.GLFW_KEY_LEFT_ALT) || window.isKeyDown(GLFW.GLFW_KEY_RIGHT_ALT);
                 cameraController.onCursorPos(x, y, isShiftDown, isAltDown);

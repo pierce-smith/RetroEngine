@@ -12,6 +12,7 @@ import static org.lwjgl.system.macosx.ObjCRuntime.*;
 /**
  * Delegate managing off-heap ring-buffered uniform streaming (triple buffering)
  * and 4x4 matrix calculations (View, Model, Projection, MVP).
+ * Optimized with reusable matrix scratchpads to eliminate per-frame JVM GC pressure.
  */
 public class MetalUniformStreamer {
 
@@ -24,6 +25,18 @@ public class MetalUniformStreamer {
     private long streamingUniformBuffer = 0L;
     private long uniformBufferIdentity = 0L;
     private int frameIndex = 0;
+
+    // Pre-allocated matrix scratchpads for zero per-frame heap allocations
+    private final float[] matP = new float[16];
+    private final float[] matV = new float[16];
+    private final float[] matM = new float[16];
+    private final float[] matVM = new float[16];
+    private final float[] matMVP = new float[16];
+    private final float[] matRotX = new float[16];
+    private final float[] matRotY = new float[16];
+    private final float[] matRotZ = new float[16];
+    private final float[] matR = new float[16];
+    private final float[] matTempR = new float[16];
 
     public void initialize(MetalDevice device) {
         long d = device.getDevice();
@@ -63,7 +76,7 @@ public class MetalUniformStreamer {
         return frameIndex * FRAME_SLOT_SIZE;
     }
 
-    // --- Matrix Math Calculations ---
+    // --- Zero-Allocation Matrix Math Calculations ---
     public float[] createCameraViewMatrix(float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
         float radYaw = (float) Math.toRadians(camYaw);
         float radPitch = (float) Math.toRadians(camPitch);
@@ -71,12 +84,12 @@ public class MetalUniformStreamer {
         float cy = (float) Math.cos(radYaw), sy = (float) Math.sin(radYaw);
         float cp = (float) Math.cos(radPitch), sp = (float) Math.sin(radPitch);
 
-        return new float[] {
-            cy, sy * sp, sy * cp, 0.0f,
-            0.0f, cp, -sp, 0.0f,
-            -sy, cy * sp, cy * cp, 0.0f,
-            camPanX, camPanY, camZoom, 1.0f
-        };
+        matV[0] = cy;        matV[1] = sy * sp;   matV[2] = sy * cp;   matV[3] = 0.0f;
+        matV[4] = 0.0f;      matV[5] = cp;        matV[6] = -sp;       matV[7] = 0.0f;
+        matV[8] = -sy;       matV[9] = cy * sp;   matV[10] = cy * cp;  matV[11] = 0.0f;
+        matV[12] = camPanX;  matV[13] = camPanY;  matV[14] = camZoom;  matV[15] = 1.0f;
+
+        return matV;
     }
 
     public float[] createModelMatrix(float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
@@ -88,33 +101,42 @@ public class MetalUniformStreamer {
         float cy = (float) Math.cos(radRy), syM = (float) Math.sin(radRy);
         float cz = (float) Math.cos(radRz), szM = (float) Math.sin(radRz);
 
-        float[] rotX = { 1, 0, 0, 0,  0, cx, -sxM, 0,  0, sxM, cx, 0,  0, 0, 0, 1 };
-        float[] rotY = { cy, 0, syM, 0,  0, 1, 0, 0,  -syM, 0, cy, 0,  0, 0, 0, 1 };
-        float[] rotZ = { cz, -szM, 0, 0,  szM, cz, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1 };
+        matRotX[0]=1; matRotX[1]=0;   matRotX[2]=0;    matRotX[3]=0;
+        matRotX[4]=0; matRotX[5]=cx;  matRotX[6]=-sxM; matRotX[7]=0;
+        matRotX[8]=0; matRotX[9]=sxM; matRotX[10]=cx;  matRotX[11]=0;
+        matRotX[12]=0;matRotX[13]=0;  matRotX[14]=0;   matRotX[15]=1;
 
-        float[] R = multiplyMat4(rotZ, multiplyMat4(rotY, rotX));
+        matRotY[0]=cy;  matRotY[1]=0; matRotY[2]=syM; matRotY[3]=0;
+        matRotY[4]=0;   matRotY[5]=1; matRotY[6]=0;   matRotY[7]=0;
+        matRotY[8]=-syM;matRotY[9]=0; matRotY[10]=cy; matRotY[11]=0;
+        matRotY[12]=0;  matRotY[13]=0;matRotY[14]=0;  matRotY[15]=1;
 
-        float[] M = new float[16];
-        M[0] = R[0] * sx; M[1] = R[1] * sx; M[2] = R[2] * sx; M[3] = 0.0f;
-        M[4] = R[4] * sy; M[5] = R[5] * sy; M[6] = R[6] * sy; M[7] = 0.0f;
-        M[8] = R[8] * sz; M[9] = R[9] * sz; M[10] = R[10] * sz; M[11] = 0.0f;
-        M[12] = px; M[13] = py; M[14] = pz; M[15] = 1.0f;
+        matRotZ[0]=cz;  matRotZ[1]=-szM;matRotZ[2]=0; matRotZ[3]=0;
+        matRotZ[4]=szM; matRotZ[5]=cz;  matRotZ[6]=0; matRotZ[7]=0;
+        matRotZ[8]=0;   matRotZ[9]=0;   matRotZ[10]=1;matRotZ[11]=0;
+        matRotZ[12]=0;  matRotZ[13]=0;  matRotZ[14]=0;matRotZ[15]=1;
 
-        return M;
+        multiplyMat4(matRotY, matRotX, matTempR);
+        multiplyMat4(matRotZ, matTempR, matR);
+
+        matM[0] = matR[0] * sx;  matM[1] = matR[1] * sx;  matM[2] = matR[2] * sx;  matM[3] = 0.0f;
+        matM[4] = matR[4] * sy;  matM[5] = matR[5] * sy;  matM[6] = matR[6] * sy;  matM[7] = 0.0f;
+        matM[8] = matR[8] * sz;  matM[9] = matR[9] * sz;  matM[10] = matR[10] * sz;matM[11] = 0.0f;
+        matM[12] = px;           matM[13] = py;           matM[14] = pz;           matM[15] = 1.0f;
+
+        return matM;
     }
 
-    public float[] multiplyMat4(float[] A, float[] B) {
-        float[] C = new float[16];
+    public void multiplyMat4(float[] A, float[] B, float[] out) {
         for (int col = 0; col < 4; col++) {
             for (int row = 0; row < 4; row++) {
                 float sum = 0.0f;
                 for (int k = 0; k < 4; k++) {
                     sum += A[row + k * 4] * B[k + col * 4];
                 }
-                C[row + col * 4] = sum;
+                out[row + col * 4] = sum;
             }
         }
-        return C;
     }
 
     public float[] createPerspectiveMatrix(float aspect) {
@@ -127,25 +149,27 @@ public class MetalUniformStreamer {
         float p22 = zFar / (zNear - zFar);
         float p23 = (zNear * zFar) / (zNear - zFar);
 
-        return new float[] {
-            p00, 0.0f, 0.0f, 0.0f,
-            0.0f, p11, 0.0f, 0.0f,
-            0.0f, 0.0f, p22, -1.0f,
-            0.0f, 0.0f, p23, 0.0f
-        };
+        matP[0] = p00;  matP[1] = 0.0f; matP[2] = 0.0f; matP[3] = 0.0f;
+        matP[4] = 0.0f; matP[5] = p11;  matP[6] = 0.0f; matP[7] = 0.0f;
+        matP[8] = 0.0f; matP[9] = 0.0f; matP[10] = p22;matP[11] = -1.0f;
+        matP[12] = 0.0f;matP[13] = 0.0f;matP[14] = p23;matP[15] = 0.0f;
+
+        return matP;
     }
 
     public float[] createGridMVPMatrix(float aspect, float panX, float panY, float zoom, float pitch, float yaw) {
-        float[] P = createPerspectiveMatrix(aspect);
-        float[] V = createCameraViewMatrix(panX, panY, zoom, pitch, yaw);
-        return multiplyMat4(P, V);
+        createPerspectiveMatrix(aspect);
+        createCameraViewMatrix(panX, panY, zoom, pitch, yaw);
+        multiplyMat4(matP, matV, matMVP);
+        return matMVP;
     }
 
     public float[] create3DMVPMatrix(float aspect, float panX, float panY, float zoom, float pitch, float yaw, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
-        float[] P = createPerspectiveMatrix(aspect);
-        float[] V = createCameraViewMatrix(panX, panY, zoom, pitch, yaw);
-        float[] M = createModelMatrix(px, py, pz, rx, ry, rz, sx, sy, sz);
-        float[] VM = multiplyMat4(V, M);
-        return multiplyMat4(P, VM);
+        createPerspectiveMatrix(aspect);
+        createCameraViewMatrix(panX, panY, zoom, pitch, yaw);
+        createModelMatrix(px, py, pz, rx, ry, rz, sx, sy, sz);
+        multiplyMat4(matV, matM, matVM);
+        multiplyMat4(matP, matVM, matMVP);
+        return matMVP;
     }
 }

@@ -1,7 +1,6 @@
 package com.retro.engine.ecs.delegates;
 
 import com.retro.engine.ecs.SceneEntity;
-import com.retro.engine.ecs.SceneManager;
 import com.retro.engine.ecs.SceneManager.WorldTransform;
 import com.retro.engine.ecs.components.TransformComponent;
 
@@ -12,8 +11,12 @@ import java.util.Set;
 /**
  * Delegate managing recursive parent-child scene graph matrix propagation,
  * vector rotations, and cycle detection.
+ * Optimized with reusable scratchpad arrays to eliminate per-frame GC pressure.
  */
 public class SceneGraphEvaluator {
+
+    // Pre-allocated scratchpad vector for zero per-frame array allocations
+    private final float[] rotScratch = new float[3];
 
     public WorldTransform getComputedWorldTransform(SceneEntity entity, List<SceneEntity> sceneEntities) {
         if (entity == null) return new WorldTransform(0,0,0, 0,0,0, 1,1,1);
@@ -57,11 +60,11 @@ public class SceneGraphEvaluator {
         float scaledLy = tc.posY * parentWt.sy();
         float scaledLz = tc.posZ * parentWt.sz();
 
-        float[] rot = rotateVector(scaledLx, scaledLy, scaledLz, parentWt.rx(), parentWt.ry(), parentWt.rz());
+        rotateVector(scaledLx, scaledLy, scaledLz, parentWt.rx(), parentWt.ry(), parentWt.rz(), rotScratch);
 
-        float px = parentWt.px() + rot[0];
-        float py = parentWt.py() + rot[1];
-        float pz = parentWt.pz() + rot[2];
+        float px = parentWt.px() + rotScratch[0];
+        float py = parentWt.py() + rotScratch[1];
+        float pz = parentWt.pz() + rotScratch[2];
 
         WorldTransform wt = new WorldTransform(px, py, pz, rx, ry, rz, sx, sy, sz);
         assert (!Float.isNaN(wt.px()) && !Float.isInfinite(wt.px()) &&
@@ -74,6 +77,10 @@ public class SceneGraphEvaluator {
     }
 
     public float[] rotateVector(float x, float y, float z, float pitchDeg, float yawDeg, float rollDeg) {
+        return rotateVector(x, y, z, pitchDeg, yawDeg, rollDeg, rotScratch);
+    }
+
+    public float[] rotateVector(float x, float y, float z, float pitchDeg, float yawDeg, float rollDeg, float[] out) {
         float radPitch = (float) Math.toRadians(pitchDeg);
         float radYaw = (float) Math.toRadians(yawDeg);
         float radRoll = (float) Math.toRadians(rollDeg);
@@ -94,7 +101,10 @@ public class SceneGraphEvaluator {
         float y3 = y2;
         float z3 = -sy * x2 + cy * z2;
 
-        return new float[]{x3, y3, z3};
+        out[0] = x3;
+        out[1] = y3;
+        out[2] = z3;
+        return out;
     }
 
     public boolean hasHierarchyCycle(SceneEntity startEntity, List<SceneEntity> sceneEntities) {
