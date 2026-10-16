@@ -1,7 +1,6 @@
 package com.retro.engine.scene;
 
 import com.retro.engine.scene.components.Component;
-
 import com.retro.engine.scene.components.Light;
 import com.retro.engine.scene.components.Material;
 import com.retro.engine.scene.components.MeshFilter;
@@ -12,9 +11,11 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Standalone Entity domain class with parent-child scene graph hierarchy support.
+ * Standalone Entity domain class with 64-bit Generational Entity Handle support
+ * and parent-child scene graph hierarchy capabilities.
  */
 public class Entity {
+    public EntityHandle handle = EntityHandle.NULL;
     public String id;
     public String name;
     public boolean selected = false;
@@ -32,6 +33,9 @@ public class Entity {
             addComponent(new Material());
         }
     }
+
+    public EntityHandle getHandle() { return handle; }
+    public void setHandle(EntityHandle handle) { this.handle = (handle != null) ? handle : EntityHandle.NULL; }
 
     public void addComponent(Component component) {
         if (component != null) {

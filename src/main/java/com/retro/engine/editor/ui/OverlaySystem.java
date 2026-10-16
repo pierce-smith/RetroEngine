@@ -45,9 +45,13 @@ public class OverlaySystem {
     private float pressCamPitch = 0.0f, pressCamYaw = 0.0f, pressCamPanX = 0.0f, pressCamPanY = 0.0f, pressCamZoom = 0.0f;
 
     public DropdownMenu getActiveDropdownMenu() { return activeDropdownMenu; }
+    public DropdownMenu getActiveDropdown() { return activeDropdownMenu; }
+
     public void setActiveDropdownMenu(DropdownMenu menu) { this.activeDropdownMenu = menu; }
+    public void setActiveDropdown(DropdownMenu menu) { this.activeDropdownMenu = menu; }
 
     public ModalState getActiveModal() { return activeModal; }
+    public void setActiveModal(ModalState modal) { this.activeModal = modal; }
 
     public AssetType getPickerFilterType() { return pickerFilterType; }
 
@@ -55,6 +59,7 @@ public class OverlaySystem {
         this.pickerFilterType = filterType;
         this.activeModal = ModalState.ASSET_PICKER;
     }
+    public void openAssetPickerModal(AssetType filterType) { openAssetPicker(filterType); }
 
     public void closeModal() {
         this.activeModal = ModalState.NONE;
@@ -68,6 +73,7 @@ public class OverlaySystem {
             this.activeModal = ModalState.PARENT_PICKER;
         }
     }
+    public void openParentPickerModal(Entity target) { openParentPicker(target); }
 
     public boolean isContextMenuVisible() { return contextMenuVisible; }
     public float getContextMenuNdcX() { return contextMenuNdcX; }
@@ -78,6 +84,7 @@ public class OverlaySystem {
         this.contextMenuVisible = false;
         this.contextMenuItems.clear();
     }
+    public void hideContextMenu() { closeContextMenu(); }
 
     public void openContextMenu(float ndcX, float ndcY, List<MenuItem> items) {
         this.contextMenuNdcX = ndcX;
@@ -86,6 +93,7 @@ public class OverlaySystem {
         if (items != null) this.contextMenuItems.addAll(items);
         this.contextMenuVisible = true;
     }
+    public void showContextMenu(float ndcX, float ndcY, List<MenuItem> items) { openContextMenu(ndcX, ndcY, items); }
 
     public boolean isRightMouseDown() { return isRightMouseDown; }
 

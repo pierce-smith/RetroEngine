@@ -19,6 +19,7 @@ import com.retro.engine.scene.components.MeshFilter;
 import com.retro.engine.scene.components.Transform;
 
 import com.retro.engine.scene.Entity;
+import com.retro.engine.scene.EntityHandle;
 import com.retro.engine.scene.SceneWorld;
 import com.retro.engine.scene.SceneWorld.PlayState;
 import com.retro.engine.assets.AssetMeta;
@@ -124,6 +125,13 @@ public class EditorWorkspace {
     public List<Entity> getSceneEntities() { return sceneManager.getSceneEntities(); }
     public Entity getSelectedEntity() { return sceneManager.getSelectedEntity(); }
     public void selectEntity(Entity entity) { sceneManager.selectEntity(entity); }
+
+    // --- GENERATIONAL HANDLE SAFETY (PHASE 4) ---
+    public EntityHandle getSelectedEntityHandle() { return sceneManager.getSelectedEntityHandle(); }
+    public void selectEntityByHandle(EntityHandle handle) { sceneManager.selectEntityByHandle(handle); }
+    public Entity getEntityByHandle(EntityHandle handle) { return sceneManager.getEntityByHandle(handle); }
+    public boolean isValidEntityHandle(EntityHandle handle) { return sceneManager.isValidHandle(handle); }
+
     public String getActiveScenePath() { return sceneManager.getActiveScenePath(); }
 
     public void newScene() {
@@ -185,6 +193,10 @@ public class EditorWorkspace {
     public void deleteFolder(AssetMeta folder) { assetDirectoryManager.deleteFolder(folder); }
     public void removeAssetFromDirectory(AssetMeta asset) { assetDirectoryManager.removeAssetFromDirectory(asset); }
     public void onFilesDropped(List<String> filePaths) { assetDirectoryManager.onFilesDropped(filePaths); }
+    public void scanDirectory(String path) { assetDirectoryManager.addAssetDirectoryIfNotExists(path, null); }
+    public void scanDirectory() { scanDirectory("Assets"); }
+    public void clearAssetDirectory() { assetDirectoryManager.clear(); }
+    public void addAssetDirectoryIfNotExists(String path, AssetType type) { assetDirectoryManager.addAssetDirectoryIfNotExists(path, type); }
 
     // --- DELEGATED GIZMO & VIEWPORT STATE ---
     public GizmoMode getCurrentGizmoMode() { return gizmoStateController.getGizmoMode(); }
@@ -202,16 +214,27 @@ public class EditorWorkspace {
 
     // --- DELEGATED OVERLAY & MODAL OPERATIONS ---
     public DropdownMenu getActiveDropdownMenu() { return overlayManager.getActiveDropdownMenu(); }
+    public DropdownMenu getActiveDropdown() { return overlayManager.getActiveDropdownMenu(); }
     public void setActiveDropdownMenu(DropdownMenu menu) { overlayManager.setActiveDropdownMenu(menu); }
+    public void setActiveDropdown(DropdownMenu menu) { overlayManager.setActiveDropdownMenu(menu); }
+
     public ModalState getActiveModal() { return overlayManager.getActiveModal(); }
+    public void setActiveModal(ModalState modal) { overlayManager.closeModal(); if (modal != ModalState.NONE) { if (modal == ModalState.ASSET_PICKER) openAssetPicker(AssetType.TEXTURE); } }
+
     public AssetType getPickerFilterType() { return overlayManager.getPickerFilterType(); }
     public void openAssetPicker(AssetType filterType) { overlayManager.openAssetPicker(filterType); }
+    public void openAssetPickerModal(AssetType filterType) { overlayManager.openAssetPicker(filterType); }
+
     public void closeModal() { overlayManager.closeModal(); }
     public Entity getParentPickerTargetEntity() { return overlayManager.getParentPickerTargetEntity(); }
     public void openParentPicker(Entity target) { overlayManager.openParentPicker(target); }
+    public void openParentPickerModal(Entity target) { overlayManager.openParentPicker(target); }
+
     public boolean isContextMenuVisible() { return overlayManager.isContextMenuVisible(); }
     public void closeContextMenu() { overlayManager.closeContextMenu(); }
+    public void hideContextMenu() { overlayManager.closeContextMenu(); }
     public void openContextMenu(float ndcX, float ndcY, List<MenuItem> items) { overlayManager.openContextMenu(ndcX, ndcY, items); }
+    public void showContextMenu(float ndcX, float ndcY, List<MenuItem> items) { overlayManager.openContextMenu(ndcX, ndcX, items); }
 
     // --- REGIONAL HIT-TESTING ---
     public PanelRegion getRegionAt(float ndcX, float ndcY) {
