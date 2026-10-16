@@ -154,9 +154,8 @@ public class GizmoStateController {
             }
         }
 
-        if (bestEntity != null) {
-            manager.selectEntity(bestEntity);
-        }
+        // Always update selection: selects bestEntity if clicked near an object, or deselects (null) if blank space clicked
+        manager.selectEntity(bestEntity);
     }
 
     public boolean onCursorPos(double rawX, double rawY, EditorPanelManager manager, EditorOverlayManager overlayManager) {
