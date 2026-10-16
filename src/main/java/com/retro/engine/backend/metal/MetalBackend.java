@@ -48,7 +48,8 @@ public class MetalBackend implements IRenderBackend {
     private float camYaw = 0.0f;
 
     // Multi-entity Batch Queue
-    private final List<MetalPassEncoder.RenderEntity> sceneQueue = new ArrayList<>();
+    private final List<MetalPassEncoder.RenderEntity> sceneQueuePool = new ArrayList<>();
+    private int activeSceneQueueCount = 0;
 
     @Override
     public boolean initialize(ViewportSpec windowInfo) {
@@ -81,7 +82,11 @@ public class MetalBackend implements IRenderBackend {
         resourceCache.updateUiMesh(metalDevice, vertices, count);
     }
 
-    @Override public void clearSceneQueue() { sceneQueue.clear(); }
+    @Override public void clearSceneQueue() { activeSceneQueueCount = 0; }
+
+    public List<MetalPassEncoder.RenderEntity> getActiveSceneQueue() {
+        return sceneQueuePool.subList(0, activeSceneQueueCount);
+    }
 
     @Override
     public void submitEntity(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
@@ -96,7 +101,15 @@ public class MetalBackend implements IRenderBackend {
             hasTex = (texHandle != 0L);
         }
 
-        MetalPassEncoder.RenderEntity item = new MetalPassEncoder.RenderEntity();
+        MetalPassEncoder.RenderEntity item;
+        if (activeSceneQueueCount < sceneQueuePool.size()) {
+            item = sceneQueuePool.get(activeSceneQueueCount);
+        } else {
+            item = new MetalPassEncoder.RenderEntity();
+            sceneQueuePool.add(item);
+        }
+        activeSceneQueueCount++;
+
         item.vertexBufferHandle = vbo;
         item.vertexCount = vertexCount;
         item.textureHandle = texHandle;
@@ -104,8 +117,6 @@ public class MetalBackend implements IRenderBackend {
         item.px = px; item.py = py; item.pz = pz;
         item.rx = rx; item.ry = ry; item.rz = rz;
         item.sx = sx; item.sy = sy; item.sz = sz;
-
-        sceneQueue.add(item);
     }
 
     @Override
@@ -127,7 +138,7 @@ public class MetalBackend implements IRenderBackend {
         passEncoder.encodeOffscreen3DPass(
             currentCommandBuffer, metalDevice, metalPipeline, metalTexture,
             framebuffer, resourceCache, uniformStreamer,
-            sceneQueue, camPanX, camPanY, camZoom, camPitch, camYaw
+            getActiveSceneQueue(), camPanX, camPanY, camZoom, camPitch, camYaw
         );
 
         // Pass 2: Window Composition Pass

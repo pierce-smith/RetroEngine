@@ -72,6 +72,7 @@ public class EditorWorkspace {
     private int windowWidth = 1280;
     private int windowHeight = 720;
     private float[] cachedUiVertices = null;
+    private final UIGeometryBatch.Buffer uiGeometryBuffer = new UIGeometryBatch.Buffer(16384);
 
     public EditorWorkspace() { this(new SceneWorld()); }
 
@@ -388,38 +389,37 @@ public class EditorWorkspace {
     }
 
     public float[] generateUiVertices() {
-        List<Float> verts = new ArrayList<>();
-        ViewportPanel.renderFraming(verts);
-        ViewportPanel.renderToolbar(verts, getCurrentGizmoMode());
+        uiGeometryBuffer.reset();
+        ViewportPanel.renderFraming(uiGeometryBuffer);
+        ViewportPanel.renderToolbar(uiGeometryBuffer, getCurrentGizmoMode());
 
         Entity selected = getSelectedEntity();
         if (selected != null && getActiveModal() == ModalState.NONE) {
             SceneWorld.WorldTransform wt = sceneManager.getComputedWorldTransform(selected);
-            GizmoSystem.render3DGizmosAtWorldPosition(verts, wt.px(), wt.py(), wt.pz(), getCurrentGizmoMode(), getActiveGizmoAxis(), cameraController, gizmoStateController.getCamPanX(), gizmoStateController.getCamPanY(), gizmoStateController.getCamZoom(), gizmoStateController.getCamPitch(), gizmoStateController.getCamYaw());
+            GizmoSystem.render3DGizmosAtWorldPosition(uiGeometryBuffer, wt.px(), wt.py(), wt.pz(), getCurrentGizmoMode(), getActiveGizmoAxis(), cameraController, gizmoStateController.getCamPanX(), gizmoStateController.getCamPanY(), gizmoStateController.getCamZoom(), gizmoStateController.getCamPitch(), gizmoStateController.getCamYaw());
         }
 
-        HierarchyPanel.render(verts, getSceneEntities());
-        InspectorPanel.render(verts, getSelectedEntity(), getAssetDirectory());
-        AssetBrowserPanel.render(verts, getAssetDirectory(), getCurrentFolderPath());
+        HierarchyPanel.render(uiGeometryBuffer, getSceneEntities());
+        InspectorPanel.render(uiGeometryBuffer, getSelectedEntity(), getAssetDirectory());
+        AssetBrowserPanel.render(uiGeometryBuffer, getAssetDirectory(), getCurrentFolderPath());
 
-        MainMenuBar.render(verts, getActiveDropdownMenu(), getActiveScenePath(), getPlayState());
+        MainMenuBar.render(uiGeometryBuffer, getActiveDropdownMenu(), getActiveScenePath(), getPlayState());
 
         if (getActiveDropdownMenu() != DropdownMenu.NONE) {
-            MainMenuBar.renderDropdownMenuOverlay(verts, getActiveDropdownMenu(), commandHistory, is3DGridVisible());
+            MainMenuBar.renderDropdownMenuOverlay(uiGeometryBuffer, getActiveDropdownMenu(), commandHistory, is3DGridVisible());
         }
 
         if (getActiveModal() == ModalState.ASSET_PICKER) {
-            ModalDialogOverlay.renderAssetPickerModal(verts, getPickerFilterType(), getAssetDirectory());
+            ModalDialogOverlay.renderAssetPickerModal(uiGeometryBuffer, getPickerFilterType(), getAssetDirectory());
         } else if (getActiveModal() == ModalState.PARENT_PICKER && getParentPickerTargetEntity() != null) {
-            ModalDialogOverlay.renderEntityParentPickerModal(verts, getParentPickerTargetEntity(), getSceneEntities());
+            ModalDialogOverlay.renderEntityParentPickerModal(uiGeometryBuffer, getParentPickerTargetEntity(), getSceneEntities());
         }
 
         if (isContextMenuVisible()) {
-            ContextMenuOverlay.render(verts, overlayManager.getContextMenuNdcX(), overlayManager.getContextMenuNdcY(), overlayManager.getContextMenuItems());
+            ContextMenuOverlay.render(uiGeometryBuffer, overlayManager.getContextMenuNdcX(), overlayManager.getContextMenuNdcY(), overlayManager.getContextMenuItems());
         }
 
-        float[] array = new float[verts.size()];
-        for (int i = 0; i < verts.size(); i++) array[i] = verts.get(i);
-        return array;
+        this.cachedUiVertices = uiGeometryBuffer.toFloatArray();
+        return this.cachedUiVertices;
     }
 }

@@ -65,18 +65,18 @@ public class HierarchyPanel {
         return null;
     }
 
-    public static void render(List<Float> verts, List<Entity> sceneEntities) {
-        UIGeometryBatch.addQuad(verts, -1.0f, -0.5f, -0.55f, 1.0f, 0.08f, 0.08f, 0.10f, 1.0f);
-        UIGeometryBatch.addQuad(verts, -1.0f, 0.88f, -0.55f, 1.0f, 0.14f, 0.14f, 0.18f, 1.0f);
-        UIGeometryBatch.addFrameBorder(verts, -1.0f, -0.5f, -0.55f, 1.0f, 0.003f, 0.25f, 0.25f, 0.32f, 1.0f);
-        UIGeometryBatch.addBoundedText(verts, "SCENE MANAGER", -0.96f, 0.95f, -0.57f, 1.6f, 1.0f, 1.0f, 1.0f, 1.0f);
+    public static void render(UIGeometryBatch.Buffer buffer, List<Entity> sceneEntities) {
+        UIGeometryBatch.addQuad(buffer, -1.0f, -0.5f, -0.55f, 1.0f, 0.08f, 0.08f, 0.10f, 1.0f);
+        UIGeometryBatch.addQuad(buffer, -1.0f, 0.88f, -0.55f, 1.0f, 0.14f, 0.14f, 0.18f, 1.0f);
+        UIGeometryBatch.addFrameBorder(buffer, -1.0f, -0.5f, -0.55f, 1.0f, 0.003f, 0.25f, 0.25f, 0.32f, 1.0f);
+        UIGeometryBatch.addBoundedText(buffer, "SCENE MANAGER", -0.96f, 0.95f, -0.57f, 1.6f, 1.0f, 1.0f, 1.0f, 1.0f);
 
         List<HierarchyNode> visibleTree = buildFlattenedTree(sceneEntities);
 
         if (visibleTree.isEmpty()) {
-            UIGeometryBatch.addBoundedText(verts, "NO ENTITIES IN SCENE", -0.95f, 0.80f, -0.58f, 1.2f, 0.5f, 0.5f, 0.5f, 1.0f);
-            UIGeometryBatch.addBoundedText(verts, "RIGHT-CLICK OR SPAWN", -0.95f, 0.72f, -0.58f, 1.1f, 0.3f, 0.7f, 0.9f, 1.0f);
-            UIGeometryBatch.addBoundedText(verts, "3D MESH TO START", -0.95f, 0.65f, -0.58f, 1.1f, 0.3f, 0.7f, 0.9f, 1.0f);
+            UIGeometryBatch.addBoundedText(buffer, "NO ENTITIES IN SCENE", -0.95f, 0.80f, -0.58f, 1.2f, 0.5f, 0.5f, 0.5f, 1.0f);
+            UIGeometryBatch.addBoundedText(buffer, "RIGHT-CLICK OR SPAWN", -0.95f, 0.72f, -0.58f, 1.1f, 0.3f, 0.7f, 0.9f, 1.0f);
+            UIGeometryBatch.addBoundedText(buffer, "3D MESH TO START", -0.95f, 0.65f, -0.58f, 1.1f, 0.3f, 0.7f, 0.9f, 1.0f);
         } else {
             float itemY = 0.80f;
             for (HierarchyNode node : visibleTree) {
@@ -98,14 +98,19 @@ public class HierarchyPanel {
                 String label = prefix + entity.name;
 
                 if (entity.selected) {
-                    UIGeometryBatch.addQuad(verts, -0.98f, itemY - 0.02f, -0.57f, itemY + 0.05f, 0.0f, 0.35f, 0.70f, 1.0f);
-                    UIGeometryBatch.addBoundedText(verts, label, indentX, itemY + 0.03f, -0.58f, 1.3f, 1.0f, 1.0f, 1.0f, 1.0f);
+                    UIGeometryBatch.addQuad(buffer, -0.98f, itemY - 0.02f, -0.57f, itemY + 0.05f, 0.0f, 0.35f, 0.70f, 1.0f);
+                    UIGeometryBatch.addBoundedText(buffer, label, indentX, itemY + 0.03f, -0.58f, 1.3f, 1.0f, 1.0f, 1.0f, 1.0f);
                 } else {
-                    UIGeometryBatch.addBoundedText(verts, label, indentX, itemY + 0.03f, -0.58f, 1.3f, 0.8f, 0.8f, 0.8f, 1.0f);
+                    UIGeometryBatch.addBoundedText(buffer, label, indentX, itemY + 0.03f, -0.58f, 1.3f, 0.8f, 0.8f, 0.8f, 1.0f);
                 }
 
                 itemY -= 0.08f;
             }
         }
+    }
+    public static void render(List<Float> verts, List<Entity> sceneEntities) {
+        UIGeometryBatch.Buffer tempBuf = new UIGeometryBatch.Buffer();
+        render(tempBuf, sceneEntities);
+        for (int idx = 0; idx < tempBuf.getSize(); idx++) verts.add(tempBuf.getArray()[idx]);
     }
 }

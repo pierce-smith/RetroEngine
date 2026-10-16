@@ -22,6 +22,12 @@ import static org.lwjgl.system.macosx.ObjCRuntime.*;
  */
 public class MetalPassEncoder {
 
+    private static final java.util.Comparator<RenderEntity> BATCH_COMPARATOR = (a, b) -> {
+        int cmp = Long.compare(a.vertexBufferHandle, b.vertexBufferHandle);
+        if (cmp != 0) return cmp;
+        return Long.compare(a.textureHandle, b.textureHandle);
+    };
+
     public static class RenderEntity {
         public long vertexBufferHandle;
         public int vertexCount;
@@ -104,34 +110,36 @@ public class MetalPassEncoder {
             invokePPPPPP(encoder3D, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 1L, 0L, (long) resourceCache.getGridVertexCount(), send);
         }
 
-        // 1B. Instanced & Batched 3D Models
-        Map<BatchGroupKey, List<RenderEntity>> batches = new LinkedHashMap<>();
-        for (RenderEntity entity : sceneQueue) {
-            BatchGroupKey key = new BatchGroupKey(entity.vertexBufferHandle, entity.textureHandle);
-            batches.computeIfAbsent(key, k -> new ArrayList<>()).add(entity);
-        }
+        // 1B. Instanced & Batched 3D Models (Zero-Allocation Batching)
+        if (sceneQueue != null && !sceneQueue.isEmpty()) {
+            sceneQueue.sort(BATCH_COMPARATOR);
 
-        int entityIndex = 0;
-        long pBufferContents = invokePPP(streamingUniformBuffer, sel_registerName("contents"), send);
-        invokePPPP(encoder3D, sel_registerName("setRenderPipelineState:"), pipeline.getPipelineState3D(), send);
-        invokePPPP(encoder3D, sel_registerName("setDepthStencilState:"), pipeline.getDepthStencilState3D(), send);
+            int entityIndex = 0;
+            long pBufferContents = invokePPP(streamingUniformBuffer, sel_registerName("contents"), send);
+            invokePPPP(encoder3D, sel_registerName("setRenderPipelineState:"), pipeline.getPipelineState3D(), send);
+            invokePPPP(encoder3D, sel_registerName("setDepthStencilState:"), pipeline.getDepthStencilState3D(), send);
 
-        for (Map.Entry<BatchGroupKey, List<RenderEntity>> entry : batches.entrySet()) {
-            BatchGroupKey key = entry.getKey();
-            List<RenderEntity> groupEntities = entry.getValue();
-            if (groupEntities.isEmpty()) continue;
+            long lastVbo = -1L;
+            long lastTexture = -1L;
 
-            RenderEntity firstEntity = groupEntities.get(0);
-            long texToBind = (firstEntity.hasTexture && key.texture != 0L) ? key.texture : texture.getBindableTexture();
-            invokePPPPP(encoder3D, sel_registerName("setFragmentTexture:atIndex:"), texToBind, 0L, send);
-            if (texture.getSamplerStateHandle() != 0L) {
-                invokePPPPP(encoder3D, sel_registerName("setFragmentSamplerState:atIndex:"), texture.getSamplerStateHandle(), 0L, send);
-            }
-
-            invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), key.vbo, 0L, 0L, send);
-
-            for (RenderEntity item : groupEntities) {
+            for (RenderEntity item : sceneQueue) {
                 if (entityIndex >= MetalUniformStream.MAX_ENTITIES_PER_FRAME) break;
+
+                long currentVbo = item.vertexBufferHandle;
+                long currentTex = (item.hasTexture && item.textureHandle != 0L) ? item.textureHandle : texture.getBindableTexture();
+
+                if (currentVbo != lastVbo) {
+                    invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), currentVbo, 0L, 0L, send);
+                    lastVbo = currentVbo;
+                }
+
+                if (currentTex != lastTexture) {
+                    invokePPPPP(encoder3D, sel_registerName("setFragmentTexture:atIndex:"), currentTex, 0L, send);
+                    if (texture.getSamplerStateHandle() != 0L) {
+                        invokePPPPP(encoder3D, sel_registerName("setFragmentSamplerState:atIndex:"), texture.getSamplerStateHandle(), 0L, send);
+                    }
+                    lastTexture = currentTex;
+                }
 
                 long entityUniformOffset = currentSlotOffset + MetalUniformStream.UNIFORM_STRIDE * (1 + entityIndex);
                 float[] mvpModel = streamer.create3DMVPMatrix(aspect, camPanX, camPanY, camZoom, camPitch, camYaw, item.px, item.py, item.pz, item.rx, item.ry, item.rz, item.sx, item.sy, item.sz);

@@ -219,27 +219,42 @@ public class GizmoSystem {
     }
 
     // --- Render Gizmos Overloads ---
-    public static void render3DGizmos(List<Float> verts, Entity entity, GizmoMode mode, GizmoAxis activeAxis, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
+    public static void render3DGizmos(UIGeometryBatch.Buffer buffer, Entity entity, GizmoMode mode, GizmoAxis activeAxis, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
         Transform tc = entity.getTransform();
         if (tc == null) return;
-        render3DGizmosAtWorldPosition(verts, tc.posX, tc.posY, tc.posZ, mode, activeAxis, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+        render3DGizmosAtWorldPosition(buffer, tc.posX, tc.posY, tc.posZ, mode, activeAxis, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+    }
+    public static void render3DGizmos(List<Float> verts, Entity entity, GizmoMode mode, GizmoAxis activeAxis, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
+        UIGeometryBatch.Buffer tempBuf = new UIGeometryBatch.Buffer();
+        render3DGizmos(tempBuf, entity, mode, activeAxis, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+        for (int idx = 0; idx < tempBuf.getSize(); idx++) verts.add(tempBuf.getArray()[idx]);
     }
 
+    public static void render3DGizmos(UIGeometryBatch.Buffer buffer, Entity entity, GizmoMode mode, GizmoAxis activeAxis, ViewportCamera cameraController, double camPanX, double camPanY, double camZoom, double camPitch, double camYaw) {
+        render3DGizmos(buffer, entity, mode, activeAxis, cameraController, (float) camPanX, (float) camPanY, (float) camZoom, (float) camPitch, (float) camYaw);
+    }
     public static void render3DGizmos(List<Float> verts, Entity entity, GizmoMode mode, GizmoAxis activeAxis, ViewportCamera cameraController, double camPanX, double camPanY, double camZoom, double camPitch, double camYaw) {
-        render3DGizmos(verts, entity, mode, activeAxis, cameraController, (float) camPanX, (float) camPanY, (float) camZoom, (float) camPitch, (float) camYaw);
+        UIGeometryBatch.Buffer tempBuf = new UIGeometryBatch.Buffer();
+        render3DGizmos(tempBuf, entity, mode, activeAxis, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+        for (int idx = 0; idx < tempBuf.getSize(); idx++) verts.add(tempBuf.getArray()[idx]);
     }
 
-    public static void render3DGizmos(List<Float> verts, Entity entity, SceneWorld sceneManager, GizmoMode mode, GizmoAxis activeAxis, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
+    public static void render3DGizmos(UIGeometryBatch.Buffer buffer, Entity entity, SceneWorld sceneManager, GizmoMode mode, GizmoAxis activeAxis, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
         if (entity == null) return;
         if (sceneManager != null) {
             SceneWorld.WorldTransform wt = sceneManager.getComputedWorldTransform(entity);
-            render3DGizmosAtWorldPosition(verts, wt.px(), wt.py(), wt.pz(), mode, activeAxis, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+            render3DGizmosAtWorldPosition(buffer, wt.px(), wt.py(), wt.pz(), mode, activeAxis, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
         } else {
-            render3DGizmos(verts, entity, mode, activeAxis, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+            render3DGizmos(buffer, entity, mode, activeAxis, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
         }
     }
+    public static void render3DGizmos(List<Float> verts, Entity entity, SceneWorld sceneManager, GizmoMode mode, GizmoAxis activeAxis, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
+        UIGeometryBatch.Buffer tempBuf = new UIGeometryBatch.Buffer();
+        render3DGizmos(tempBuf, entity, sceneManager, mode, activeAxis, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+        for (int idx = 0; idx < tempBuf.getSize(); idx++) verts.add(tempBuf.getArray()[idx]);
+    }
 
-    public static void render3DGizmosAtWorldPosition(List<Float> verts, float px, float py, float pz, GizmoMode mode, GizmoAxis activeAxis, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
+    public static void render3DGizmosAtWorldPosition(UIGeometryBatch.Buffer buffer, float px, float py, float pz, GizmoMode mode, GizmoAxis activeAxis, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
         float[] p0 = projectWorldToNdc(px, py, pz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
         float cx = p0[0], cy = p0[1];
 
@@ -278,7 +293,7 @@ public class GizmoSystem {
 
         float lineThick = 0.006f;
 
-        UIGeometryBatch.addSquareEnd(verts, cx, cy, 0.02f, 0.9f, 0.9f, 0.9f, 1.0f);
+        UIGeometryBatch.addSquareEnd(buffer, cx, cy, 0.02f, 0.9f, 0.9f, 0.9f, 1.0f);
 
         float rx = 1.0f, rg = 0.25f, rb = 0.25f;
         float gx = 0.25f, gg = 1.0f, gb = 0.25f;
@@ -289,41 +304,46 @@ public class GizmoSystem {
         if (activeAxis == GizmoAxis.Z) { bx = 0.9f; bg = 0.2f; bb = 1.0f; }
 
         if (mode == GizmoMode.TRANSLATE) {
-            UIGeometryBatch.addLineSegment(verts, cx, cy, xTipX, xTipY, lineThick, rx, rg, rb, 1.0f);
-            UIGeometryBatch.addArrowhead(verts, xTipX + uXX * 0.02f, xTipY + uXY * 0.02f, uXX, uXY, 0.03f, 0.015f, rx, rg, rb, 1.0f);
-            UIGeometryBatch.addBoundedText(verts, "X", xTipX + uXX * 0.03f, xTipY + uXY * 0.03f, xTipX + uXX * 0.08f, 1.1f, rx, rg, rb, 1.0f);
+            UIGeometryBatch.addLineSegment(buffer, cx, cy, xTipX, xTipY, lineThick, rx, rg, rb, 1.0f);
+            UIGeometryBatch.addArrowhead(buffer, xTipX + uXX * 0.02f, xTipY + uXY * 0.02f, uXX, uXY, 0.03f, 0.015f, rx, rg, rb, 1.0f);
+            UIGeometryBatch.addBoundedText(buffer, "X", xTipX + uXX * 0.03f, xTipY + uXY * 0.03f, xTipX + uXX * 0.08f, 1.1f, rx, rg, rb, 1.0f);
 
-            UIGeometryBatch.addLineSegment(verts, cx, cy, yTipX, yTipY, lineThick, gx, gg, gb, 1.0f);
-            UIGeometryBatch.addArrowhead(verts, yTipX + uYX * 0.02f, yTipY + uYY * 0.02f, uYX, uYY, 0.03f, 0.015f, gx, gg, gb, 1.0f);
-            UIGeometryBatch.addBoundedText(verts, "Y", yTipX + uYX * 0.03f, yTipY + uYY * 0.03f, yTipX + uYX * 0.08f, 1.1f, gx, gg, gb, 1.0f);
+            UIGeometryBatch.addLineSegment(buffer, cx, cy, yTipX, yTipY, lineThick, gx, gg, gb, 1.0f);
+            UIGeometryBatch.addArrowhead(buffer, yTipX + uYX * 0.02f, yTipY + uYY * 0.02f, uYX, uYY, 0.03f, 0.015f, gx, gg, gb, 1.0f);
+            UIGeometryBatch.addBoundedText(buffer, "Y", yTipX + uYX * 0.03f, yTipY + uYY * 0.03f, yTipX + uYX * 0.08f, 1.1f, gx, gg, gb, 1.0f);
 
-            UIGeometryBatch.addLineSegment(verts, cx, cy, zTipX, zTipY, lineThick, bx, bg, bb, 1.0f);
-            UIGeometryBatch.addArrowhead(verts, zTipX + uZX * 0.02f, zTipY + uZY * 0.02f, uZX, uZY, 0.03f, 0.015f, bx, bg, bb, 1.0f);
-            UIGeometryBatch.addBoundedText(verts, "Z", zTipX + uZX * 0.03f, zTipY + uZY * 0.03f, zTipX + uZX * 0.08f, 1.1f, bx, bg, bb, 1.0f);
+            UIGeometryBatch.addLineSegment(buffer, cx, cy, zTipX, zTipY, lineThick, bx, bg, bb, 1.0f);
+            UIGeometryBatch.addArrowhead(buffer, zTipX + uZX * 0.02f, zTipY + uZY * 0.02f, uZX, uZY, 0.03f, 0.015f, bx, bg, bb, 1.0f);
+            UIGeometryBatch.addBoundedText(buffer, "Z", zTipX + uZX * 0.03f, zTipY + uZY * 0.03f, zTipX + uZX * 0.08f, 1.1f, bx, bg, bb, 1.0f);
 
         } else if (mode == GizmoMode.SCALE) {
-            UIGeometryBatch.addLineSegment(verts, cx, cy, xTipX, xTipY, lineThick, rx, rg, rb, 1.0f);
-            UIGeometryBatch.addSquareEnd(verts, xTipX, xTipY, 0.024f, rx, rg, rb, 1.0f);
-            UIGeometryBatch.addBoundedText(verts, "X", xTipX + uXX * 0.03f, xTipY + uXY * 0.03f, xTipX + uXX * 0.08f, 1.1f, rx, rg, rb, 1.0f);
+            UIGeometryBatch.addLineSegment(buffer, cx, cy, xTipX, xTipY, lineThick, rx, rg, rb, 1.0f);
+            UIGeometryBatch.addSquareEnd(buffer, xTipX, xTipY, 0.024f, rx, rg, rb, 1.0f);
+            UIGeometryBatch.addBoundedText(buffer, "X", xTipX + uXX * 0.03f, xTipY + uXY * 0.03f, xTipX + uXX * 0.08f, 1.1f, rx, rg, rb, 1.0f);
 
-            UIGeometryBatch.addLineSegment(verts, cx, cy, yTipX, yTipY, lineThick, gx, gg, gb, 1.0f);
-            UIGeometryBatch.addSquareEnd(verts, yTipX, yTipY, 0.024f, gx, gg, gb, 1.0f);
-            UIGeometryBatch.addBoundedText(verts, "Y", yTipX + uYX * 0.03f, yTipY + uYY * 0.03f, yTipX + uYX * 0.08f, 1.1f, gx, gg, gb, 1.0f);
+            UIGeometryBatch.addLineSegment(buffer, cx, cy, yTipX, yTipY, lineThick, gx, gg, gb, 1.0f);
+            UIGeometryBatch.addSquareEnd(buffer, yTipX, yTipY, 0.024f, gx, gg, gb, 1.0f);
+            UIGeometryBatch.addBoundedText(buffer, "Y", yTipX + uYX * 0.03f, yTipY + uYY * 0.03f, yTipX + uYX * 0.08f, 1.1f, gx, gg, gb, 1.0f);
 
-            UIGeometryBatch.addLineSegment(verts, cx, cy, zTipX, zTipY, lineThick, bx, bg, bb, 1.0f);
-            UIGeometryBatch.addSquareEnd(verts, zTipX, zTipY, 0.024f, bx, bg, bb, 1.0f);
-            UIGeometryBatch.addBoundedText(verts, "Z", zTipX + uZX * 0.03f, zTipY + uZY * 0.03f, zTipX + uZX * 0.08f, 1.1f, bx, bg, bb, 1.0f);
+            UIGeometryBatch.addLineSegment(buffer, cx, cy, zTipX, zTipY, lineThick, bx, bg, bb, 1.0f);
+            UIGeometryBatch.addSquareEnd(buffer, zTipX, zTipY, 0.024f, bx, bg, bb, 1.0f);
+            UIGeometryBatch.addBoundedText(buffer, "Z", zTipX + uZX * 0.03f, zTipY + uZY * 0.03f, zTipX + uZX * 0.08f, 1.1f, bx, bg, bb, 1.0f);
 
         } else if (mode == GizmoMode.ROTATE) {
-            UIGeometryBatch.addArcRing(verts, cx, cy, 0.05f, 0.14f, -90.0f, 90.0f, lineThick, rx, rg, rb, 1.0f);
-            UIGeometryBatch.addBoundedText(verts, "X:PITCH", cx + 0.06f, cy + 0.08f, cx + 0.20f, 1.0f, rx, rg, rb, 1.0f);
+            UIGeometryBatch.addArcRing(buffer, cx, cy, 0.05f, 0.14f, -90.0f, 90.0f, lineThick, rx, rg, rb, 1.0f);
+            UIGeometryBatch.addBoundedText(buffer, "X:PITCH", cx + 0.06f, cy + 0.08f, cx + 0.20f, 1.0f, rx, rg, rb, 1.0f);
 
-            UIGeometryBatch.addArcRing(verts, cx, cy, 0.14f, 0.05f, 0.0f, 180.0f, lineThick, gx, gg, gb, 1.0f);
-            UIGeometryBatch.addBoundedText(verts, "Y:YAW", cx - 0.05f, cy + 0.08f, cx + 0.08f, 1.0f, gx, gg, gb, 1.0f);
+            UIGeometryBatch.addArcRing(buffer, cx, cy, 0.14f, 0.05f, 0.0f, 180.0f, lineThick, gx, gg, gb, 1.0f);
+            UIGeometryBatch.addBoundedText(buffer, "Y:YAW", cx - 0.05f, cy + 0.08f, cx + 0.08f, 1.0f, gx, gg, gb, 1.0f);
 
-            UIGeometryBatch.addArcRing(verts, cx, cy, 0.14f, 0.14f, 0.0f, 360.0f, lineThick + 0.002f, bx, bg, bb, 1.0f);
-            UIGeometryBatch.addBoundedText(verts, "Z:ROLL", cx - 0.18f, cy - 0.12f, cx - 0.02f, 1.0f, bx, bg, bb, 1.0f);
+            UIGeometryBatch.addArcRing(buffer, cx, cy, 0.14f, 0.14f, 0.0f, 360.0f, lineThick + 0.002f, bx, bg, bb, 1.0f);
+            UIGeometryBatch.addBoundedText(buffer, "Z:ROLL", cx - 0.18f, cy - 0.12f, cx - 0.02f, 1.0f, bx, bg, bb, 1.0f);
         }
+    }
+    public static void render3DGizmosAtWorldPosition(List<Float> verts, float px, float py, float pz, GizmoMode mode, GizmoAxis activeAxis, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
+        UIGeometryBatch.Buffer tempBuf = new UIGeometryBatch.Buffer();
+        render3DGizmosAtWorldPosition(tempBuf, px, py, pz, mode, activeAxis, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+        for (int idx = 0; idx < tempBuf.getSize(); idx++) verts.add(tempBuf.getArray()[idx]);
     }
 
     private static double pointToSegmentDistance(double px, double py, double x1, double y1, double x2, double y2) {

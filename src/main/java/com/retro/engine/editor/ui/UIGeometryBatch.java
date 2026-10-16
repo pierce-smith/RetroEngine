@@ -5,9 +5,55 @@ import java.util.List;
 /**
  * UIGeometryBatch provides high-performance 2D UI vertex batching routines
  * for quads, borders, lines, circles, arrowheads, and bitmap font text.
- * Target JDK: JDK 25 / macOS
+ * Target JDK: JDK 25 / macOS (Zero-allocation primitive buffer support)
  */
 public class UIGeometryBatch {
+
+    public static class Buffer {
+        private float[] data;
+        private int size;
+
+        public Buffer() {
+            this(16384);
+        }
+
+        public Buffer(int initialCapacity) {
+            this.data = new float[initialCapacity];
+            this.size = 0;
+        }
+
+        public void reset() {
+            this.size = 0;
+        }
+
+        public void ensureCapacity(int minCapacity) {
+            if (minCapacity > data.length) {
+                int newCap = Math.max(data.length * 2, minCapacity);
+                float[] newData = new float[newCap];
+                System.arraycopy(data, 0, newData, 0, size);
+                data = newData;
+            }
+        }
+
+        public void add(float val) {
+            ensureCapacity(size + 1);
+            data[size++] = val;
+        }
+
+        public float[] getArray() {
+            return data;
+        }
+
+        public int getSize() {
+            return size;
+        }
+
+        public float[] toFloatArray() {
+            float[] copy = new float[size];
+            System.arraycopy(data, 0, copy, 0, size);
+            return copy;
+        }
+    }
 
     private static final long[] FONT = new long[128];
     static {
@@ -30,6 +76,120 @@ public class UIGeometryBatch {
         FONT['>'] = 0x2010081020L; FONT['<'] = 0x0810201008L; FONT['='] = 0x003e003e00L;
     }
 
+    // --- Primitive Buffer Overloads (Zero Allocation) ---
+    public static void addVert(Buffer buffer, float x, float y, float r, float g, float b, float a) {
+        buffer.add(x); buffer.add(y);
+        buffer.add(r); buffer.add(g); buffer.add(b); buffer.add(a);
+    }
+
+    public static void addQuad(Buffer buffer, float x1, float y1, float x2, float y2, float r, float g, float b, float a) {
+        addVert(buffer, x1, y1, r, g, b, a); addVert(buffer, x2, y1, r, g, b, a); addVert(buffer, x1, y2, r, g, b, a);
+        addVert(buffer, x2, y1, r, g, b, a); addVert(buffer, x2, y2, r, g, b, a); addVert(buffer, x1, y2, r, g, b, a);
+    }
+
+    public static void addFrameBorder(Buffer buffer, float x1, float y1, float x2, float y2, float t, float r, float g, float b, float a) {
+        addQuad(buffer, x1, y2 - t, x2, y2, r, g, b, a);
+        addQuad(buffer, x1, y1, x2, y1 + t, r, g, b, a);
+        addQuad(buffer, x1, y1, x1 + t, y2, r, g, b, a);
+        addQuad(buffer, x2 - t, y1, x2, y2, r, g, b, a);
+    }
+
+    public static void addTriangle(Buffer buffer, float x1, float y1, float x2, float y2, float x3, float y3, float r, float g, float b, float a) {
+        addVert(buffer, x1, y1, r, g, b, a);
+        addVert(buffer, x2, y2, r, g, b, a);
+        addVert(buffer, x3, y3, r, g, b, a);
+    }
+
+    public static void addLineSegment(Buffer buffer, float x1, float y1, float x2, float y2, float thickness, float r, float g, float b, float a) {
+        float dx = x2 - x1;
+        float dy = y2 - y1;
+        float len = (float) Math.sqrt(dx * dx + dy * dy);
+        if (len == 0.0f) return;
+
+        float nx = -dy / len * (thickness * 0.5f);
+        float ny = dx / len * (thickness * 0.5f);
+
+        addVert(buffer, x1 + nx, y1 + ny, r, g, b, a);
+        addVert(buffer, x2 + nx, y2 + ny, r, g, b, a);
+        addVert(buffer, x1 - nx, y1 - ny, r, g, b, a);
+
+        addVert(buffer, x2 + nx, y2 + ny, r, g, b, a);
+        addVert(buffer, x2 - nx, y2 - ny, r, g, b, a);
+        addVert(buffer, x1 - nx, y1 - ny, r, g, b, a);
+    }
+
+    public static void addArrowhead(Buffer buffer, float tipX, float tipY, float dirX, float dirY, float length, float width, float r, float g, float b, float a) {
+        float len = (float) Math.sqrt(dirX * dirX + dirY * dirY);
+        if (len == 0.0f) return;
+        float ux = dirX / len;
+        float uy = dirY / len;
+
+        float perpX = -uy * width;
+        float perpY = ux * width;
+
+        float baseX = tipX - ux * length;
+        float baseY = tipY - uy * length;
+
+        addTriangle(buffer, tipX, tipY, baseX + perpX, baseY + perpY, baseX - perpX, baseY - perpY, r, g, b, a);
+    }
+
+    public static void addSquareEnd(Buffer buffer, float centerX, float centerY, float size, float r, float g, float b, float a) {
+        float h = size * 0.5f;
+        addQuad(buffer, centerX - h, centerY - h, centerX + h, centerY + h, r, g, b, a);
+    }
+
+    public static void addArcRing(Buffer buffer, float cx, float cy, float rx, float ry, float startAngle, float endAngle, float thickness, float r, float g, float b, float a) {
+        int segments = 24;
+        float startRad = (float) Math.toRadians(startAngle);
+        float endRad = (float) Math.toRadians(endAngle);
+        float step = (endRad - startRad) / segments;
+
+        float prevX = cx + rx * (float) Math.cos(startRad);
+        float prevY = cy + ry * (float) Math.sin(startRad);
+
+        for (int i = 1; i <= segments; i++) {
+            float angle = startRad + i * step;
+            float currX = cx + rx * (float) Math.cos(angle);
+            float currY = cy + ry * (float) Math.sin(angle);
+
+            addLineSegment(buffer, prevX, prevY, currX, currY, thickness, r, g, b, a);
+            prevX = currX;
+            prevY = currY;
+        }
+    }
+
+    public static void addBoundedText(Buffer buffer, String text, float startX, float startY, float maxX, float size, float r, float g, float b, float a) {
+        if (text == null) return;
+        float charW = size * 0.010f;
+        float charH = size * 0.018f;
+        float pixelW = charW / 6.0f;
+        float pixelH = charH / 6.0f;
+
+        String upper = text.toUpperCase();
+        for (int i = 0; i < upper.length(); i++) {
+            float cx = startX + i * (charW + pixelW * 1.2f);
+            if (cx + charW > maxX) break;
+
+            char c = upper.charAt(i);
+            if (c >= 0 && c < FONT.length) {
+                long mask = FONT[c];
+                if (mask != 0L) {
+                    for (int row = 0; row < 5; row++) {
+                        for (int col = 0; col < 6; col++) {
+                            int shift = (4 - row) * 8 + (5 - col);
+                            if (((mask >> shift) & 1L) != 0L) {
+                                float px1 = cx + col * pixelW;
+                                float py1 = startY - row * pixelH;
+                                addQuad(buffer, px1, py1 - pixelH, px1 + pixelW, py1, r, g, b, a);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Backward Compatible List<Float> Overloads ---
     public static void addVert(List<Float> verts, float x, float y, float r, float g, float b, float a) {
         verts.add(x); verts.add(y);
         verts.add(r); verts.add(g); verts.add(b); verts.add(a);
@@ -112,6 +272,7 @@ public class UIGeometryBatch {
     }
 
     public static void addBoundedText(List<Float> verts, String text, float startX, float startY, float maxX, float size, float r, float g, float b, float a) {
+        if (text == null) return;
         float charW = size * 0.010f;
         float charH = size * 0.018f;
         float pixelW = charW / 6.0f;
