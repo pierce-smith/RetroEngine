@@ -38,19 +38,13 @@ import com.retro.engine.editor.ui.AssetBrowserInputDelegate;
 import com.retro.engine.editor.ui.MainMenuBarInputDelegate;
 import com.retro.engine.editor.ui.*;
 
-import org.lwjgl.system.MemoryStack;
-
 import java.io.File;
-import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.lwjgl.glfw.GLFW.glfwGetWindowSize;
-
 /**
  * Ultra-lean EditorWorkspace acting as a Backwards-Compatible Facade Bridge.
- * All domain responsibilities are fully delegated to AssetDatabase,
- * GizmoState, and OverlaySystem.
+ * Zero per-frame native allocations or GLFW window queries in hot input paths.
  */
 @SuppressWarnings("unused")
 public class EditorWorkspace {
@@ -84,27 +78,12 @@ public class EditorWorkspace {
     // --- WINDOW MANAGEMENT ---
     public void setWindowHandle(long handle) {
         this.windowHandle = handle;
-        updateWindowDimensionsFromGlfw();
     }
 
     public void setWindowDimensions(int width, int height) {
         if (width > 0 && height > 0) {
             this.windowWidth = width;
             this.windowHeight = height;
-        }
-    }
-
-    private void updateWindowDimensionsFromGlfw() {
-        if (windowHandle != 0L) {
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                IntBuffer w = stack.mallocInt(1);
-                IntBuffer h = stack.mallocInt(1);
-                glfwGetWindowSize(windowHandle, w, h);
-                if (w.get(0) > 0 && h.get(0) > 0) {
-                    this.windowWidth = w.get(0);
-                    this.windowHeight = h.get(0);
-                }
-            } catch (Exception ignored) {}
         }
     }
 
@@ -297,7 +276,6 @@ public class EditorWorkspace {
     // --- INPUT ROUTING & CLICK HANDLING ---
     public boolean handleMouseClick(double rawX, double rawY, int button, int action) {
         if (button != 0 && button != 1) return false;
-        updateWindowDimensionsFromGlfw();
 
         float ndcX = (float) ((rawX / (double) windowWidth) * 2.0 - 1.0);
         float ndcY = (float) (1.0 - (rawY / (double) windowHeight) * 2.0);
@@ -329,7 +307,10 @@ public class EditorWorkspace {
             }
 
             if (overlayManager.getActiveDropdownMenu() != DropdownMenu.NONE) {
-                if (MainMenuBarInputDelegate.processDropdownOverlayClick(ndcX, ndcY, this)) {
+                if (ndcY >= 0.92f) {
+                    MainMenuBarInputDelegate.processTopBarClick(ndcX, this);
+                } else {
+                    MainMenuBarInputDelegate.processDropdownOverlayClick(ndcX, ndcY, this);
                     setActiveDropdownMenu(DropdownMenu.NONE);
                 }
                 return true;
@@ -396,7 +377,6 @@ public class EditorWorkspace {
     }
 
     public boolean onCursorPos(double rawX, double rawY) {
-        updateWindowDimensionsFromGlfw();
         return gizmoStateController.onCursorPos(rawX, rawY, this, overlayManager);
     }
 

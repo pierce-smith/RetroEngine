@@ -28,13 +28,18 @@ public class MainMenuBarInputDelegate {
             manager.setActiveDropdownMenu((manager.getActiveDropdownMenu() == DropdownMenu.VIEW) ? DropdownMenu.NONE : DropdownMenu.VIEW);
         } else if (ndcX >= -0.14f && ndcX <= -0.02f) {
             UISoundPlayer.play(UISound.TOGGLE);
+            manager.setActiveDropdownMenu(DropdownMenu.NONE);
             manager.play();
         } else if (ndcX >= -0.01f && ndcX <= 0.11f) {
             UISoundPlayer.play(UISound.TOGGLE);
+            manager.setActiveDropdownMenu(DropdownMenu.NONE);
             manager.pause();
         } else if (ndcX >= 0.12f && ndcX <= 0.23f) {
             UISoundPlayer.play(UISound.TOGGLE);
+            manager.setActiveDropdownMenu(DropdownMenu.NONE);
             manager.stop();
+        } else {
+            manager.setActiveDropdownMenu(DropdownMenu.NONE);
         }
     }
 
