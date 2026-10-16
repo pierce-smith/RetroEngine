@@ -2,6 +2,7 @@ package com.retro.engine.editor.input;
 
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.SceneEntity;
+import com.retro.engine.ecs.components.AudioSourceComponent;
 import com.retro.engine.ecs.components.CameraComponent;
 import com.retro.engine.ecs.components.LightComponent;
 import com.retro.engine.ecs.components.MaterialComponent;
@@ -92,9 +93,64 @@ public class InspectorInteractor {
                 }
                 curY -= 0.08f;
 
+            } else if (comp instanceof AudioSourceComponent ac) {
+                // Line 1: Clip Picker / Import
+                if (ndcY >= curY - 0.04f && ndcY <= curY + 0.02f) {
+                    if (ndcX >= 0.80f && ndcX <= 0.88f) {
+                        manager.openAssetPicker(AssetType.AUDIO);
+                        return;
+                    } else if (ndcX >= 0.89f && ndcX <= 0.98f) {
+                        promptImportAudio(manager);
+                        return;
+                    }
+                }
+                curY -= 0.08f;
+
+                // Line 2: Volume Adjust [-] [+]
+                if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
+                    if (ndcX >= 0.84f && ndcX <= 0.90f) { ac.setVolume(ac.volume - 0.1f); return; }
+                    if (ndcX >= 0.91f && ndcX <= 0.97f) { ac.setVolume(ac.volume + 0.1f); return; }
+                }
+                curY -= 0.06f;
+
+                // Line 3: Pitch Adjust [-] [+]
+                if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
+                    if (ndcX >= 0.84f && ndcX <= 0.90f) { ac.setPitch(ac.pitch - 0.1f); return; }
+                    if (ndcX >= 0.91f && ndcX <= 0.97f) { ac.setPitch(ac.pitch + 0.1f); return; }
+                }
+                curY -= 0.06f;
+
+                // Line 4: Transport Play / Pause / Stop
+                if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
+                    if (ndcX >= 0.58f && ndcX <= 0.70f) { ac.play(); return; }
+                    if (ndcX >= 0.72f && ndcX <= 0.84f) { ac.pause(); return; }
+                    if (ndcX >= 0.86f && ndcX <= 0.98f) { ac.stop(); return; }
+                }
+                curY -= 0.06f;
+
+                // Line 5: Loop Toggle
+                if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f && ndcX >= 0.58f && ndcX <= 0.85f) {
+                    ac.loop = !ac.loop;
+                    return;
+                }
+                curY -= 0.08f;
+
             } else {
                 curY -= 0.07f;
             }
+        }
+    }
+
+    public static void promptImportAudio(EditorPanelManager manager) {
+        if (manager == null) return;
+        List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
+            "Select Audio Clip(s)", "", "Audio Clips (*.wav, *.mp3, *.ogg)", "wav", "mp3", "ogg"
+        );
+        if (importedPaths != null && !importedPaths.isEmpty()) {
+            manager.onFilesDropped(importedPaths);
+            String primaryPath = importedPaths.get(0);
+            File file = new File(primaryPath);
+            manager.assignAudioToSelectedEntity(new AssetEntry(file.getName(), primaryPath, AssetType.AUDIO));
         }
     }
 

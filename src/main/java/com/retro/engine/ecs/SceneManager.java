@@ -1,5 +1,6 @@
 package com.retro.engine.ecs;
 
+import com.retro.engine.ecs.components.AudioSourceComponent;
 import com.retro.engine.ecs.components.CameraComponent;
 import com.retro.engine.ecs.components.LightComponent;
 import com.retro.engine.ecs.components.MaterialComponent;
@@ -264,6 +265,18 @@ public class SceneManager {
                 cloneCc.farPlane = origCc.farPlane; cloneCc.isPrimary = origCc.isPrimary;
             }
 
+            AudioSourceComponent origAc = orig.getComponent(AudioSourceComponent.class);
+            if (origAc != null) {
+                AudioSourceComponent cloneAc = new AudioSourceComponent(origAc.audioAssetPath);
+                cloneAc.setVolume(origAc.volume);
+                cloneAc.setPitch(origAc.pitch);
+                cloneAc.loop = origAc.loop;
+                cloneAc.setDistances(origAc.minDistance, origAc.maxDistance);
+                cloneAc.attenuation = origAc.attenuation;
+                cloneAc.state = origAc.state;
+                cloned.addComponent(cloneAc);
+            }
+
             copy.add(cloned);
         }
         return copy;
@@ -373,6 +386,18 @@ public class SceneManager {
             copy.addComponent(copyCc);
         }
 
+        AudioSourceComponent origAc = selectedEntity.getComponent(AudioSourceComponent.class);
+        if (origAc != null) {
+            AudioSourceComponent copyAc = new AudioSourceComponent(origAc.audioAssetPath);
+            copyAc.setVolume(origAc.volume);
+            copyAc.setPitch(origAc.pitch);
+            copyAc.loop = origAc.loop;
+            copyAc.setDistances(origAc.minDistance, origAc.maxDistance);
+            copyAc.attenuation = origAc.attenuation;
+            copyAc.state = origAc.state;
+            copy.addComponent(copyAc);
+        }
+
         sceneEntities.add(copy);
         selectEntity(copy);
     }
@@ -390,6 +415,15 @@ public class SceneManager {
         String name = "DirectionalLight_" + (sceneEntities.size() + 1);
         SceneEntity entity = new SceneEntity(entityId, name, null);
         entity.addComponent(new LightComponent());
+        sceneEntities.add(entity);
+        selectEntity(entity);
+    }
+
+    public void spawnAudioSource() {
+        String entityId = "audio_" + (sceneEntities.size() + 1);
+        String name = "AudioSource_" + (sceneEntities.size() + 1);
+        SceneEntity entity = new SceneEntity(entityId, name, null);
+        entity.addComponent(new AudioSourceComponent());
         sceneEntities.add(entity);
         selectEntity(entity);
     }
@@ -420,5 +454,15 @@ public class SceneManager {
     public void assignMeshToSelectedEntity(AssetEntry meshAsset) {
         if (selectedEntity == null || meshAsset == null || meshAsset.type != AssetType.MESH_3D) return;
         selectedEntity.setMeshAssetPath(meshAsset.absolutePath);
+    }
+
+    public void assignAudioToSelectedEntity(AssetEntry audioAsset) {
+        if (selectedEntity == null || audioAsset == null || audioAsset.type != AssetType.AUDIO) return;
+        AudioSourceComponent ac = selectedEntity.getComponent(AudioSourceComponent.class);
+        if (ac == null) {
+            ac = new AudioSourceComponent();
+            selectedEntity.addComponent(ac);
+        }
+        ac.audioAssetPath = audioAsset.absolutePath;
     }
 }

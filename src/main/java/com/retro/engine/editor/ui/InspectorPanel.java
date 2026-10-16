@@ -2,6 +2,7 @@ package com.retro.engine.editor.ui;
 
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.SceneEntity;
+import com.retro.engine.ecs.components.AudioSourceComponent;
 import com.retro.engine.ecs.components.CameraComponent;
 import com.retro.engine.ecs.components.LightComponent;
 import com.retro.engine.ecs.components.MaterialComponent;
@@ -13,7 +14,7 @@ import java.util.List;
 
 /**
  * InspectorPanel handles rendering the Right Panel (Dynamic Component Readout & Inspector Mutation).
- * Supports LightComponent & CameraComponent live property controls.
+ * Supports LightComponent, CameraComponent & AudioSourceComponent live property controls.
  */
 public class InspectorPanel {
 
@@ -110,6 +111,58 @@ public class InspectorPanel {
                     UIBatchBuilder.addBoundedText(verts, "G", 0.90f, curY - 0.01f, 0.92f, 0.90f, 1.0f, 1.0f, 1.0f, 1.0f);
                     UIBatchBuilder.addQuad(verts, 0.94f, curY - 0.03f, 0.98f, curY + 0.02f, 0.1f, 0.1f, 0.5f, 1.0f);
                     UIBatchBuilder.addBoundedText(verts, "B", 0.95f, curY - 0.01f, 0.97f, 0.90f, 1.0f, 1.0f, 1.0f, 1.0f);
+                    curY -= 0.08f;
+
+                } else if (comp instanceof AudioSourceComponent ac) {
+                    String clipName = (ac.audioAssetPath != null && !ac.audioAssetPath.isEmpty())
+                            ? new java.io.File(ac.audioAssetPath).getName() : "NONE";
+
+                    UIBatchBuilder.addQuad(verts, 0.58f, curY - 0.04f, 0.79f, curY + 0.02f, 0.12f, 0.16f, 0.22f, 1.0f);
+                    UIBatchBuilder.addFrameBorder(verts, 0.58f, curY - 0.04f, 0.79f, curY + 0.02f, 0.002f, 0.0f, 0.45f, 0.70f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, "CLIP: " + clipName, 0.59f, curY - 0.01f, 0.78f, 0.95f, 0.4f, 0.8f, 1.0f, 1.0f);
+
+                    UIBatchBuilder.addQuad(verts, 0.80f, curY - 0.04f, 0.88f, curY + 0.02f, 0.20f, 0.35f, 0.55f, 1.0f);
+                    UIBatchBuilder.addFrameBorder(verts, 0.80f, curY - 0.04f, 0.88f, curY + 0.02f, 0.002f, 0.4f, 0.7f, 1.0f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, "PICK", 0.81f, curY - 0.01f, 0.87f, 0.95f, 1.0f, 1.0f, 1.0f, 1.0f);
+
+                    UIBatchBuilder.addQuad(verts, 0.89f, curY - 0.04f, 0.98f, curY + 0.02f, 0.15f, 0.45f, 0.30f, 1.0f);
+                    UIBatchBuilder.addFrameBorder(verts, 0.89f, curY - 0.04f, 0.98f, curY + 0.02f, 0.002f, 0.3f, 0.9f, 0.5f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, "IMPORT", 0.895f, curY - 0.01f, 0.975f, 0.90f, 1.0f, 1.0f, 1.0f, 1.0f);
+                    curY -= 0.08f;
+
+                    // Volume Control
+                    UIBatchBuilder.addBoundedText(verts, String.format("VOL: %.0f%%", ac.volume * 100.0f), 0.58f, curY, 0.82f, 1.0f, 0.9f, 0.9f, 0.9f, 1.0f);
+                    UIBatchBuilder.addQuad(verts, 0.84f, curY - 0.03f, 0.90f, curY + 0.02f, 0.20f, 0.20f, 0.25f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, "[-]", 0.85f, curY - 0.01f, 0.89f, 0.90f, 1.0f, 0.4f, 0.4f, 1.0f);
+                    UIBatchBuilder.addQuad(verts, 0.91f, curY - 0.03f, 0.97f, curY + 0.02f, 0.20f, 0.20f, 0.25f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, "[+]", 0.92f, curY - 0.01f, 0.96f, 0.90f, 0.4f, 1.0f, 0.4f, 1.0f);
+                    curY -= 0.06f;
+
+                    // Pitch Control
+                    UIBatchBuilder.addBoundedText(verts, String.format("PITCH: %.1fx", ac.pitch), 0.58f, curY, 0.82f, 1.0f, 0.9f, 0.9f, 0.9f, 1.0f);
+                    UIBatchBuilder.addQuad(verts, 0.84f, curY - 0.03f, 0.90f, curY + 0.02f, 0.20f, 0.20f, 0.25f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, "[-]", 0.85f, curY - 0.01f, 0.89f, 0.90f, 1.0f, 0.4f, 0.4f, 1.0f);
+                    UIBatchBuilder.addQuad(verts, 0.91f, curY - 0.03f, 0.97f, curY + 0.02f, 0.20f, 0.20f, 0.25f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, "[+]", 0.92f, curY - 0.01f, 0.96f, 0.90f, 0.4f, 1.0f, 0.4f, 1.0f);
+                    curY -= 0.06f;
+
+                    // Playback Transport Controls (PLAY, PAUSE, STOP)
+                    String playLabel = (ac.state == AudioSourceComponent.PlaybackState.PLAYING) ? "[PLAYING]" : "[PLAY]";
+                    UIBatchBuilder.addQuad(verts, 0.58f, curY - 0.03f, 0.70f, curY + 0.02f, 0.15f, 0.45f, 0.20f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, playLabel, 0.59f, curY - 0.01f, 0.69f, 0.85f, 1.0f, 1.0f, 1.0f, 1.0f);
+
+                    UIBatchBuilder.addQuad(verts, 0.71f, curY - 0.03f, 0.83f, curY + 0.02f, 0.45f, 0.35f, 0.15f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, "[PAUSE]", 0.72f, curY - 0.01f, 0.82f, 0.85f, 1.0f, 1.0f, 1.0f, 1.0f);
+
+                    UIBatchBuilder.addQuad(verts, 0.84f, curY - 0.03f, 0.98f, curY + 0.02f, 0.45f, 0.15f, 0.15f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, "[STOP]", 0.85f, curY - 0.01f, 0.97f, 0.85f, 1.0f, 1.0f, 1.0f, 1.0f);
+                    curY -= 0.06f;
+
+                    // Loop Toggle Button
+                    String loopText = ac.loop ? "[LOOP: ON]" : "[LOOP: OFF]";
+                    UIBatchBuilder.addQuad(verts, 0.58f, curY - 0.03f, 0.85f, curY + 0.02f, 0.20f, 0.25f, 0.35f, 1.0f);
+                    UIBatchBuilder.addFrameBorder(verts, 0.58f, curY - 0.03f, 0.85f, curY + 0.02f, 0.002f, 0.4f, 0.5f, 0.8f, 1.0f);
+                    UIBatchBuilder.addBoundedText(verts, loopText, 0.59f, curY - 0.01f, 0.84f, 0.90f, 1.0f, 1.0f, 1.0f, 1.0f);
                     curY -= 0.08f;
 
                 } else if (comp instanceof CameraComponent cc) {

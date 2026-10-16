@@ -82,6 +82,11 @@ public class SceneSerializer {
                         json.append("          \"lightType\": \"").append(lc.type.name()).append("\",\n");
                         json.append(String.format("          \"intensity\": %.4f,\n", lc.intensity));
                         json.append(String.format("          \"r\": %.4f, \"g\": %.4f, \"b\": %.4f\n", lc.r, lc.g, lc.b));
+                    } else if (comp instanceof AudioSourceComponent ac) {
+                        json.append("          \"audioAssetPath\": \"").append(escapeJson(ac.audioAssetPath)).append("\",\n");
+                        json.append(String.format("          \"volume\": %.4f, \"pitch\": %.4f,\n", ac.volume, ac.pitch));
+                        json.append(String.format("          \"loop\": %b, \"minDistance\": %.4f, \"maxDistance\": %.4f, \"attenuation\": %.4f,\n", ac.loop, ac.minDistance, ac.maxDistance, ac.attenuation));
+                        json.append("          \"state\": \"").append(ac.state.name()).append("\"\n");
                     } else if (comp instanceof CameraComponent cc) {
                         json.append(String.format("          \"fov\": %.4f,\n", cc.fov));
                         json.append(String.format("          \"nearPlane\": %.4f, \"farPlane\": %.4f,\n", cc.nearPlane, cc.farPlane));
@@ -227,6 +232,26 @@ public class SceneSerializer {
                                     lc.intensity = intensity;
                                     lc.r = r; lc.g = g; lc.b = b;
                                     entity.addComponent(lc);
+                                } else if ("AudioSourceComponent".equalsIgnoreCase(typeStr)) {
+                                    String audioPath = parseJsonString(compStr, "audioAssetPath");
+                                    float volume = parseJsonFloat(compStr, "volume", 1.0f);
+                                    float pitch = parseJsonFloat(compStr, "pitch", 1.0f);
+                                    boolean loop = compStr.contains("\"loop\": true");
+                                    float minDistance = parseJsonFloat(compStr, "minDistance", 1.0f);
+                                    float maxDistance = parseJsonFloat(compStr, "maxDistance", 25.0f);
+                                    float attenuation = parseJsonFloat(compStr, "attenuation", 1.0f);
+                                    String stateStr = parseJsonString(compStr, "state");
+
+                                    AudioSourceComponent ac = new AudioSourceComponent(audioPath);
+                                    ac.setVolume(volume);
+                                    ac.setPitch(pitch);
+                                    ac.loop = loop;
+                                    ac.setDistances(minDistance, maxDistance);
+                                    ac.attenuation = Math.max(0.0f, attenuation);
+                                    if (stateStr != null) {
+                                        try { ac.state = AudioSourceComponent.PlaybackState.valueOf(stateStr); } catch (Exception ignored) {}
+                                    }
+                                    entity.addComponent(ac);
                                 } else if ("CameraComponent".equalsIgnoreCase(typeStr)) {
                                     float fov = parseJsonFloat(compStr, "fov", 50.0f);
                                     float nearPlane = parseJsonFloat(compStr, "nearPlane", 0.1f);

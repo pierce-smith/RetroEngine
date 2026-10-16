@@ -212,6 +212,7 @@ public class EditorPanelManager {
             type = switch (ext) {
                 case "obj", "fbx", "gltf", "glb" -> AssetType.MESH_3D;
                 case "png", "jpg", "jpeg", "tga" -> AssetType.TEXTURE;
+                case "wav", "mp3", "ogg" -> AssetType.AUDIO;
                 case "scene" -> AssetType.SCENE;
                 default -> AssetType.UNKNOWN;
             };
@@ -235,6 +236,8 @@ public class EditorPanelManager {
     public void spawnEntityFromAsset(AssetEntry meshAsset) { sceneManager.spawnEntityFromAsset(meshAsset); }
     public void assignTextureToSelectedEntity(AssetEntry textureAsset) { sceneManager.assignTextureToSelectedEntity(textureAsset); }
     public void assignMeshToSelectedEntity(AssetEntry meshAsset) { sceneManager.assignMeshToSelectedEntity(meshAsset); }
+    public void spawnAudioSource() { sceneManager.spawnAudioSource(); }
+    public void assignAudioToSelectedEntity(AssetEntry audioAsset) { sceneManager.assignAudioToSelectedEntity(audioAsset); }
 
     public void setParentEntity(SceneEntity child, SceneEntity parent) { sceneManager.setParent(child, parent); }
     public void unparentEntity(SceneEntity child) { sceneManager.setParent(child, null); }
@@ -491,6 +494,8 @@ public class EditorPanelManager {
                         items.add(new ContextMenuItem("Spawn Mesh Entity", () -> spawnEntityFromAsset(targetAsset)));
                     } else if (targetAsset.type == AssetType.TEXTURE) {
                         items.add(new ContextMenuItem("Link Texture to Selected", () -> assignTextureToSelectedEntity(targetAsset)));
+                    } else if (targetAsset.type == AssetType.AUDIO) {
+                        items.add(new ContextMenuItem("Link Audio to Selected", () -> assignAudioToSelectedEntity(targetAsset)));
                     }
                     items.add(new ContextMenuItem("Rename Asset", () -> promptRenameAsset(targetAsset)));
                     items.add(new ContextMenuItem("Remove Asset from Directory", () -> removeAssetFromDirectory(targetAsset)));
@@ -500,6 +505,7 @@ public class EditorPanelManager {
                 items.add(new ContextMenuItem("+ Import Asset...", this::promptImportAssetForDirectory));
                 items.add(new ContextMenuItem("+ Import Texture...", this::promptImportTexture));
                 items.add(new ContextMenuItem("+ Import 3D Mesh...", this::promptImportMesh));
+                items.add(new ContextMenuItem("+ Import Audio...", this::promptImportAudio));
                 if (!currentFolderPath.isEmpty()) {
                     items.add(new ContextMenuItem(".. Up Level (" + currentFolderPath + ")", this::navigateUpFolder));
                 }
@@ -533,6 +539,7 @@ public class EditorPanelManager {
                 items.add(new ContextMenuItem("+ Spawn 3D Cube", this::spawnDefaultCube));
                 items.add(new ContextMenuItem("+ Spawn Light Source", this::spawnLightSource));
                 items.add(new ContextMenuItem("+ Spawn Camera", this::spawnCameraEntity));
+                items.add(new ContextMenuItem("+ Spawn Audio Source", this::spawnAudioSource));
                 items.add(new ContextMenuItem("New Scene", this::newScene));
             }
         } else if (ndcX >= 0.55f) {
@@ -583,6 +590,7 @@ public class EditorPanelManager {
                 items.add(new ContextMenuItem("+ Spawn 3D Cube", this::spawnDefaultCube));
                 items.add(new ContextMenuItem("+ Spawn Light Source", this::spawnLightSource));
                 items.add(new ContextMenuItem("+ Spawn Camera", this::spawnCameraEntity));
+                items.add(new ContextMenuItem("+ Spawn Audio Source", this::spawnAudioSource));
                 items.add(new ContextMenuItem("Toggle 3D Grid", this::toggle3DGrid));
             }
         }
@@ -752,6 +760,7 @@ public class EditorPanelManager {
             AssetType type = switch (ext) {
                 case "obj", "fbx", "gltf", "glb" -> AssetType.MESH_3D;
                 case "png", "jpg", "jpeg", "tga" -> AssetType.TEXTURE;
+                case "wav", "mp3", "ogg" -> AssetType.AUDIO;
                 case "scene" -> AssetType.SCENE;
                 default -> AssetType.UNKNOWN;
             };
@@ -767,6 +776,7 @@ public class EditorPanelManager {
     public void promptImportTexture() { InspectorInteractor.promptImportTexture(this); }
     public void promptImportMesh() { InspectorInteractor.promptImportMesh(this); }
     public void promptImportAssetForDirectory() { InspectorInteractor.promptImportAssetForDirectory(this); }
+    public void promptImportAudio() { InspectorInteractor.promptImportAudio(this); }
 
     public float[] getUiVertices() {
         this.cachedUiVertices = generateUiVertices();

@@ -1,6 +1,7 @@
 package com.retro.engine.editor.input;
 
 import com.retro.engine.ecs.SceneEntity;
+import com.retro.engine.ecs.components.AudioSourceComponent;
 import com.retro.engine.editor.EditorPanelManager;
 import com.retro.engine.editor.EditorPanelManager.DropdownMenu;
 import com.retro.engine.editor.assets.AssetEntry;
@@ -84,6 +85,10 @@ public class TopBarInteractor {
             if (selected != null) {
                 if (pickerFilterType == AssetType.TEXTURE) selected.setTextureAsset(null, "DEFAULT_CHECKER");
                 else if (pickerFilterType == AssetType.MESH_3D) selected.setMeshAssetPath(null);
+                else if (pickerFilterType == AssetType.AUDIO) {
+                    AudioSourceComponent ac = selected.getComponent(AudioSourceComponent.class);
+                    if (ac != null) ac.audioAssetPath = "";
+                }
             }
             manager.closeModal();
             return;
@@ -93,6 +98,7 @@ public class TopBarInteractor {
             manager.closeModal();
             if (pickerFilterType == AssetType.TEXTURE) InspectorInteractor.promptImportTexture(manager);
             else if (pickerFilterType == AssetType.MESH_3D) InspectorInteractor.promptImportMesh(manager);
+            else if (pickerFilterType == AssetType.AUDIO) InspectorInteractor.promptImportAudio(manager);
             return;
         }
 
@@ -103,6 +109,7 @@ public class TopBarInteractor {
             if (ndcY >= listY - 0.05f && ndcY <= listY + 0.03f) {
                 if (pickerFilterType == AssetType.TEXTURE) manager.assignTextureToSelectedEntity(asset);
                 else if (pickerFilterType == AssetType.MESH_3D) manager.assignMeshToSelectedEntity(asset);
+                else if (pickerFilterType == AssetType.AUDIO) manager.assignAudioToSelectedEntity(asset);
                 manager.closeModal();
                 return;
             }

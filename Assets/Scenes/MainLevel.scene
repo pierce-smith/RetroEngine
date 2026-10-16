@@ -8,39 +8,50 @@
       "parentFolderPath": ""
     },
     {
-      "name": "meshes",
-      "absolutePath": "assets/meshes",
+      "name": "mesh",
+      "absolutePath": "assets/mesh",
       "type": "FOLDER",
       "parentFolderPath": "assets"
+    },
+    {
+      "name": "texture",
+      "absolutePath": "assets/texture",
+      "type": "FOLDER",
+      "parentFolderPath": "assets"
+    },
+    {
+      "name": "audio",
+      "absolutePath": "assets/audio",
+      "type": "FOLDER",
+      "parentFolderPath": "assets"
+    },
+    {
+      "name": "open_001.ogg",
+      "absolutePath": "/Users/piercesmith/Downloads/kenney_interface-sounds/Audio/open_001.ogg",
+      "type": "AUDIO",
+      "parentFolderPath": "assets/audio"
     },
     {
       "name": "indoor plant_02_+2.fbx",
       "absolutePath": "/Users/piercesmith/Downloads/indoor plant_02_+2.fbx",
       "type": "MESH_3D",
-      "parentFolderPath": "assets/meshes"
-    },
-    {
-      "name": "textures",
-      "absolutePath": "assets/textures",
-      "type": "FOLDER",
-      "parentFolderPath": "assets"
+      "parentFolderPath": "assets/mesh"
     },
     {
       "name": "indoor plant_2_NOR.jpg",
       "absolutePath": "/Users/piercesmith/Downloads/indoor plant_2_NOR.jpg",
       "type": "TEXTURE",
-      "parentFolderPath": "assets/textures"
+      "parentFolderPath": "assets/texture"
     }
   ],
   "entities": [
     {
       "id": "entity_1",
       "name": "indoor plant_02_+2",
-      "parentId": "entity_2",
       "components": [
         {
           "type": "TransformComponent",
-          "posX": 7.7277, "posY": 1.0242, "posZ": -2.5863,
+          "posX": 4.6162, "posY": 0.0000, "posZ": -2.2569,
           "rotX": 0.0000, "rotY": 0.0000, "rotZ": 0.0000,
           "scaleX": 1.0000, "scaleY": 1.0000, "scaleZ": 1.0000
         },
@@ -63,7 +74,7 @@
       "components": [
         {
           "type": "TransformComponent",
-          "posX": 0.0000, "posY": 0.0000, "posZ": -5.6635,
+          "posX": -2.9294, "posY": 0.0000, "posZ": -4.0687,
           "rotX": 0.0000, "rotY": 0.0000, "rotZ": 0.0000,
           "scaleX": 1.0000, "scaleY": 1.0000, "scaleZ": 1.0000
         },
@@ -74,61 +85,37 @@
         },
         {
           "type": "MaterialComponent",
-          "textureAssetPath": "",
-          "textureName": "DEFAULT_CHECKER",
+          "textureAssetPath": "/Users/piercesmith/Downloads/indoor plant_2_NOR.jpg",
+          "textureName": "indoor plant_2_NOR.jpg",
           "shaderName": "RETRO_MSL_3D"
         }
       ]
     },
     {
-      "id": "entity_3",
-      "name": "indoor plant_02_+2",
-      "parentId": "entity_1",
+      "id": "light_3",
+      "name": "DirectionalLight_3",
       "components": [
         {
           "type": "TransformComponent",
-          "posX": -2.7601, "posY": 0.6128, "posZ": 0.0000,
-          "rotX": 0.0000, "rotY": 0.0000, "rotZ": 0.0000,
-          "scaleX": 1.0000, "scaleY": 1.0000, "scaleZ": 1.0000
-        },
-        {
-          "type": "MeshRendererComponent",
-          "meshAssetPath": "/Users/piercesmith/Downloads/indoor plant_02_+2.fbx",
-          "isVisible": true
-        },
-        {
-          "type": "MaterialComponent",
-          "textureAssetPath": "",
-          "textureName": "DEFAULT_CHECKER",
-          "shaderName": "RETRO_MSL_3D"
-        }
-      ]
-    },
-    {
-      "id": "light_4",
-      "name": "DirectionalLight_4",
-      "components": [
-        {
-          "type": "TransformComponent",
-          "posX": 2.5785, "posY": 2.6041, "posZ": 0.0000,
+          "posX": 0.0000, "posY": 3.9095, "posZ": 0.0000,
           "rotX": 0.0000, "rotY": 0.0000, "rotZ": 0.0000,
           "scaleX": 1.0000, "scaleY": 1.0000, "scaleZ": 1.0000
         },
         {
           "type": "LightComponent",
-          "lightType": "DIRECTIONAL",
-          "intensity": 3.0000,
+          "lightType": "POINT",
+          "intensity": 1.0000,
           "r": 1.0000, "g": 1.0000, "b": 0.2000
         }
       ]
     },
     {
-      "id": "camera_5",
-      "name": "Main Camera_5",
+      "id": "camera_4",
+      "name": "Main Camera_4",
       "components": [
         {
           "type": "TransformComponent",
-          "posX": 0.0000, "posY": 2.1502, "posZ": 13.3405,
+          "posX": 0.7414, "posY": 1.4319, "posZ": 0.0000,
           "rotX": 0.0000, "rotY": 0.0000, "rotZ": 0.0000,
           "scaleX": 1.0000, "scaleY": 1.0000, "scaleZ": 1.0000
         },
@@ -137,6 +124,26 @@
           "fov": 90.0000,
           "nearPlane": 0.1000, "farPlane": 1000.0000,
           "isPrimary": false
+        }
+      ]
+    },
+    {
+      "id": "audio_5",
+      "name": "AudioSource_5",
+      "parentId": "entity_2",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "posX": 1.4331, "posY": 1.5505, "posZ": 1.8612,
+          "rotX": 0.0000, "rotY": 0.0000, "rotZ": 0.0000,
+          "scaleX": 1.0000, "scaleY": 1.0000, "scaleZ": 1.0000
+        },
+        {
+          "type": "AudioSourceComponent",
+          "audioAssetPath": "/Users/piercesmith/Downloads/kenney_interface-sounds/Audio/open_001.ogg",
+          "volume": 1.0000, "pitch": 1.0000,
+          "loop": false, "minDistance": 1.0000, "maxDistance": 25.0000, "attenuation": 1.0000,
+          "state": "STOPPED"
         }
       ]
     }
