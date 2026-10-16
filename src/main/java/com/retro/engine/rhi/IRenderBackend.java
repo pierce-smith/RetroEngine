@@ -5,7 +5,7 @@ package com.retro.engine.rhi;
  * Extended with Offscreen Viewport Render Target support.
  */
 public interface IRenderBackend {
-    boolean initialize(WindowInfo windowInfo);
+    boolean initialize(ViewportSpec windowInfo);
     void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw);
     void updateGridMesh(float[] vertices, int count);
     void updateUiMesh(float[] vertices, int count);
@@ -20,9 +20,9 @@ public interface IRenderBackend {
     long getOffscreenViewportTexture();
     void resizeViewport(int width, int height);
 
-    long createBuffer(BufferCreateInfo createInfo);
+    long createBuffer(BufferDesc createInfo);
     void destroyBuffer(long handle);
-    long createTexture(TextureCreateInfo createInfo);
+    long createTexture(TextureDesc createInfo);
     void destroyTexture(long handle);
     GraphicsAPI getAPI();
     String getDeviceName();

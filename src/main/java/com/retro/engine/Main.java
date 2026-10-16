@@ -1,7 +1,7 @@
 package com.retro.engine;
 
-import com.retro.engine.host.EngineContext;
-import com.retro.engine.host.EngineLoop;
+import com.retro.engine.core.EngineContext;
+import com.retro.engine.core.EngineLoop;
 
 /**
  * Main Engine Entry Point.

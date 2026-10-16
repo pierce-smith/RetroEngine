@@ -1,5 +1,11 @@
 package com.retro.engine.backend.vulkan;
 
+import com.retro.engine.rhi.BufferDesc;
+import com.retro.engine.rhi.GraphicsAPI;
+import com.retro.engine.rhi.IRenderBackend;
+import com.retro.engine.rhi.TextureDesc;
+import com.retro.engine.rhi.ViewportSpec;
+
 import com.retro.engine.rhi.*;
 
 /**
@@ -9,7 +15,7 @@ import com.retro.engine.rhi.*;
 public class VulkanBackend implements IRenderBackend {
 
     @Override
-    public boolean initialize(WindowInfo windowInfo) {
+    public boolean initialize(ViewportSpec windowInfo) {
         System.out.println("[VulkanBackend] Initializing Vulkan 1.3 Driver Context...");
         return true;
     }
@@ -56,7 +62,7 @@ public class VulkanBackend implements IRenderBackend {
     public void resizeViewport(int width, int height) {}
 
     @Override
-    public long createBuffer(BufferCreateInfo createInfo) {
+    public long createBuffer(BufferDesc createInfo) {
         return 101L;
     }
 
@@ -64,7 +70,7 @@ public class VulkanBackend implements IRenderBackend {
     public void destroyBuffer(long handle) {}
 
     @Override
-    public long createTexture(TextureCreateInfo createInfo) {
+    public long createTexture(TextureDesc createInfo) {
         return 201L;
     }
 

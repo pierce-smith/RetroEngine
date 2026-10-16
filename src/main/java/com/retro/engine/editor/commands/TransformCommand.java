@@ -1,13 +1,13 @@
 package com.retro.engine.editor.commands;
 
-import com.retro.engine.ecs.SceneEntity;
-import com.retro.engine.ecs.components.TransformComponent;
+import com.retro.engine.scene.Entity;
+import com.retro.engine.scene.components.Transform;
 
 /**
  * Encapsulates 3D transform edits (translation, rotation, scale) for Undo/Redo.
  */
-public class TransformCommand implements EditorCommand {
-    private final SceneEntity entity;
+public class TransformCommand implements ICommand {
+    private final Entity entity;
     private final float oldPx, oldPy, oldPz;
     private final float oldRx, oldRy, oldRz;
     private final float oldSx, oldSy, oldSz;
@@ -16,7 +16,7 @@ public class TransformCommand implements EditorCommand {
     private final float newRx, newRy, newRz;
     private final float newSx, newSy, newSz;
 
-    public TransformCommand(SceneEntity entity,
+    public TransformCommand(Entity entity,
                             float oldPx, float oldPy, float oldPz,
                             float oldRx, float oldRy, float oldRz,
                             float oldSx, float oldSy, float oldSz,
@@ -36,7 +36,7 @@ public class TransformCommand implements EditorCommand {
     @Override
     public void execute() {
         if (entity == null) return;
-        TransformComponent tc = entity.getTransform();
+        Transform tc = entity.getTransform();
         tc.posX = newPx; tc.posY = newPy; tc.posZ = newPz;
         tc.rotX = newRx; tc.rotY = newRy; tc.rotZ = newRz;
         tc.scaleX = newSx; tc.scaleY = newSy; tc.scaleZ = newSz;
@@ -45,7 +45,7 @@ public class TransformCommand implements EditorCommand {
     @Override
     public void undo() {
         if (entity == null) return;
-        TransformComponent tc = entity.getTransform();
+        Transform tc = entity.getTransform();
         tc.posX = oldPx; tc.posY = oldPy; tc.posZ = oldPz;
         tc.rotX = oldRx; tc.rotY = oldRy; tc.rotZ = oldRz;
         tc.scaleX = oldSx; tc.scaleY = oldSy; tc.scaleZ = oldSz;

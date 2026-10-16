@@ -1,7 +1,10 @@
 package com.retro.engine.editor.ui;
 
-import com.retro.engine.editor.EditorPanelManager;
-import com.retro.engine.editor.delegates.EditorOverlayManager;
+import com.retro.engine.editor.EditorWorkspace.DropdownMenu;
+import com.retro.engine.editor.EditorWorkspace.ModalState;
+
+import com.retro.engine.editor.EditorWorkspace;
+import com.retro.engine.editor.ui.OverlaySystem;
 
 /**
  * PanelRegion defines explicit screen-space NDC bounds for all editor panels,
@@ -19,10 +22,10 @@ public enum PanelRegion {
     /**
      * Determines which panel region contains the given NDC coordinate (X, Y in [-1.0, 1.0]).
      */
-    public static PanelRegion getRegionAt(float ndcX, float ndcY, EditorOverlayManager overlayManager) {
+    public static PanelRegion getRegionAt(float ndcX, float ndcY, OverlaySystem overlayManager) {
         if (overlayManager != null) {
-            if (overlayManager.getActiveModal() != EditorPanelManager.ModalState.NONE ||
-                overlayManager.getActiveDropdownMenu() != EditorPanelManager.DropdownMenu.NONE ||
+            if (overlayManager.getActiveModal() != EditorWorkspace.ModalState.NONE ||
+                overlayManager.getActiveDropdownMenu() != EditorWorkspace.DropdownMenu.NONE ||
                 overlayManager.isContextMenuVisible()) {
                 return OVERLAY_MODAL;
             }

@@ -1,9 +1,17 @@
 package com.retro.engine.backend.metal;
 
-import com.retro.engine.backend.metal.delegates.MetalFramebuffer;
-import com.retro.engine.backend.metal.delegates.MetalRenderPassEncoder;
-import com.retro.engine.backend.metal.delegates.MetalResourceCache;
-import com.retro.engine.backend.metal.delegates.MetalUniformStreamer;
+import com.retro.engine.rhi.BufferDesc;
+import com.retro.engine.rhi.GraphicsAPI;
+import com.retro.engine.rhi.IRenderBackend;
+import com.retro.engine.rhi.TextureDesc;
+import com.retro.engine.rhi.ViewportSpec;
+import com.retro.engine.scene.components.Camera;
+import com.retro.engine.scene.components.Transform;
+
+import com.retro.engine.backend.metal.MetalTargetPass;
+import com.retro.engine.backend.metal.MetalPassEncoder;
+import com.retro.engine.backend.metal.MetalGpuCache;
+import com.retro.engine.backend.metal.MetalUniformStream;
 import com.retro.engine.rhi.*;
 
 import java.util.ArrayList;
@@ -24,10 +32,10 @@ public class MetalBackend implements IRenderBackend {
     private final MetalPipeline metalPipeline = new MetalPipeline();
 
     // RHI Subsystem Delegates
-    private final MetalFramebuffer framebuffer = new MetalFramebuffer();
-    private final MetalResourceCache resourceCache = new MetalResourceCache();
-    private final MetalUniformStreamer uniformStreamer = new MetalUniformStreamer();
-    private final MetalRenderPassEncoder passEncoder = new MetalRenderPassEncoder();
+    private final MetalTargetPass framebuffer = new MetalTargetPass();
+    private final MetalGpuCache resourceCache = new MetalGpuCache();
+    private final MetalUniformStream uniformStreamer = new MetalUniformStream();
+    private final MetalPassEncoder passEncoder = new MetalPassEncoder();
 
     private long currentDrawable = 0L;
     private long currentCommandBuffer = 0L;
@@ -40,10 +48,10 @@ public class MetalBackend implements IRenderBackend {
     private float camYaw = 0.0f;
 
     // Multi-entity Batch Queue
-    private final List<MetalRenderPassEncoder.RenderEntity> sceneQueue = new ArrayList<>();
+    private final List<MetalPassEncoder.RenderEntity> sceneQueue = new ArrayList<>();
 
     @Override
-    public boolean initialize(WindowInfo windowInfo) {
+    public boolean initialize(ViewportSpec windowInfo) {
         if (!metalDevice.initialize(windowInfo)) return false;
         if (!metalPipeline.initialize(metalDevice)) return false;
 
@@ -88,7 +96,7 @@ public class MetalBackend implements IRenderBackend {
             hasTex = (texHandle != 0L);
         }
 
-        MetalRenderPassEncoder.RenderEntity item = new MetalRenderPassEncoder.RenderEntity();
+        MetalPassEncoder.RenderEntity item = new MetalPassEncoder.RenderEntity();
         item.vertexBufferHandle = vbo;
         item.vertexCount = vertexCount;
         item.textureHandle = texHandle;
@@ -145,9 +153,9 @@ public class MetalBackend implements IRenderBackend {
     }
 
     @Override public void shutdown() { System.out.println("[MetalBackend] Releasing Metal offscreen and pipeline resources..."); }
-    @Override public long createBuffer(BufferCreateInfo createInfo) { return 102L; }
+    @Override public long createBuffer(BufferDesc createInfo) { return 102L; }
     @Override public void destroyBuffer(long handle) {}
-    @Override public long createTexture(TextureCreateInfo createInfo) { return 201L; }
+    @Override public long createTexture(TextureDesc createInfo) { return 201L; }
     @Override public void destroyTexture(long handle) {}
     @Override public GraphicsAPI getAPI() { return GraphicsAPI.METAL; }
     @Override public String getDeviceName() { return "Native Apple Metal Driver (Modular Phase 2 Active)"; }

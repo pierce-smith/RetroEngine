@@ -1,6 +1,6 @@
 package com.retro.engine.backend.metal;
 
-import com.retro.engine.rhi.WindowInfo;
+import com.retro.engine.rhi.ViewportSpec;
 import org.lwjgl.glfw.GLFWNativeCocoa;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.macosx.DynamicLinkLoader;
@@ -18,7 +18,7 @@ public class MetalDevice {
     private long metalLayer = 0L;
     private long objc_msgSend = 0L;
 
-    public boolean initialize(WindowInfo windowInfo) {
+    public boolean initialize(ViewportSpec windowInfo) {
         System.out.println("[MetalDevice] Initializing Native Apple Metal Device & Command Queue...");
 
         long nsWindow = GLFWNativeCocoa.glfwGetCocoaWindow(windowInfo.nativeWindowHandle());
