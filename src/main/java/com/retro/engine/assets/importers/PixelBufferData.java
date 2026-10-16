@@ -1,6 +1,8 @@
 package com.retro.engine.assets.importers;
 
 public class PixelBufferData {
+    public static final PixelBufferData EMPTY_FALLBACK = new PixelBufferData("EMPTY_FALLBACK", "", 1, 1, 4, new byte[]{(byte) 255, (byte) 255, (byte) 255, (byte) 255});
+
     public final String name;
     public final String path;
     public final int width;

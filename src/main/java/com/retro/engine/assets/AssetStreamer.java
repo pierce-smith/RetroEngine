@@ -39,7 +39,7 @@ public class AssetStreamer {
      * Requests non-blocking async loading of a 3D model on a JVM Virtual Thread.
      */
     public void requestModelAsync(String meshPath) {
-        if (meshPath == null || meshCache.containsKey(meshPath)) return;
+        if (meshPath == null || meshPath.trim().isEmpty() || meshCache.containsKey(meshPath)) return;
 
         if (loadingStatus.putIfAbsent("mesh:" + meshPath, Boolean.TRUE) == null) {
             virtualExecutor.submit(() -> {
@@ -64,18 +64,20 @@ public class AssetStreamer {
      * Requests non-blocking async loading of a 2D texture on a JVM Virtual Thread.
      */
     public void requestTextureAsync(String texturePath) {
-        if (texturePath == null || textureCache.containsKey(texturePath)) return;
+        if (texturePath == null || texturePath.trim().isEmpty() || textureCache.containsKey(texturePath)) return;
 
         if (loadingStatus.putIfAbsent("tex:" + texturePath, Boolean.TRUE) == null) {
             virtualExecutor.submit(() -> {
                 try {
                     System.out.println("[VirtualThread] Streaming 2D Texture in background: " + texturePath);
                     PixelBufferData data = TextureImporter.loadTexture(texturePath);
-                    if (data != null) {
-                        pendingTextures.add(new PendingTextureResult(texturePath, data));
+                    if (data == null) {
+                        data = PixelBufferData.EMPTY_FALLBACK;
                     }
+                    pendingTextures.add(new PendingTextureResult(texturePath, data));
                 } catch (Exception e) {
                     System.err.println("[VirtualThread] Failed to stream 2D texture: " + e.getMessage());
+                    pendingTextures.add(new PendingTextureResult(texturePath, PixelBufferData.EMPTY_FALLBACK));
                 } finally {
                     loadingStatus.remove("tex:" + texturePath);
                 }
