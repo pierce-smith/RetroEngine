@@ -11,6 +11,8 @@ import com.retro.engine.ecs.components.TransformComponent;
 import com.retro.engine.editor.EditorPanelManager;
 import com.retro.engine.editor.assets.AssetEntry;
 import com.retro.engine.editor.assets.AssetType;
+import com.retro.engine.editor.audio.UISoundManager;
+import com.retro.engine.editor.audio.UISoundManager.UISound;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 
 import java.io.File;
@@ -36,9 +38,11 @@ public class InspectorInteractor {
             } else if (comp instanceof MeshRendererComponent) {
                 if (ndcY >= curY - 0.04f && ndcY <= curY + 0.02f) {
                     if (ndcX >= 0.80f && ndcX <= 0.88f) {
+                        UISoundManager.play(UISound.OPEN_MODAL);
                         manager.openAssetPicker(AssetType.MESH_3D);
                         return;
                     } else if (ndcX >= 0.89f && ndcX <= 0.98f) {
+                        UISoundManager.play(UISound.OPEN_MODAL);
                         promptImportMesh(manager);
                         return;
                     }
@@ -49,9 +53,11 @@ public class InspectorInteractor {
                 curY -= 0.05f; // SHADER line
                 if (ndcY >= curY - 0.04f && ndcY <= curY + 0.02f) {
                     if (ndcX >= 0.80f && ndcX <= 0.88f) {
+                        UISoundManager.play(UISound.OPEN_MODAL);
                         manager.openAssetPicker(AssetType.TEXTURE);
                         return;
                     } else if (ndcX >= 0.89f && ndcX <= 0.98f) {
+                        UISoundManager.play(UISound.OPEN_MODAL);
                         promptImportTexture(manager);
                         return;
                     }
@@ -60,34 +66,36 @@ public class InspectorInteractor {
 
             } else if (comp instanceof LightComponent lc) {
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f && ndcX >= 0.84f && ndcX <= 0.98f) {
+                    UISoundManager.play(UISound.TOGGLE);
                     lc.cycleType();
                     return;
                 }
                 curY -= 0.06f;
 
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.84f && ndcX <= 0.90f) { lc.intensity = Math.max(0.0f, lc.intensity - 0.5f); return; }
-                    if (ndcX >= 0.91f && ndcX <= 0.97f) { lc.intensity += 0.5f; return; }
+                    if (ndcX >= 0.84f && ndcX <= 0.90f) { UISoundManager.play(UISound.CLICK); lc.intensity = Math.max(0.0f, lc.intensity - 0.5f); return; }
+                    if (ndcX >= 0.91f && ndcX <= 0.97f) { UISoundManager.play(UISound.CLICK); lc.intensity += 0.5f; return; }
                 }
                 curY -= 0.06f;
 
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.84f && ndcX <= 0.88f) { lc.r = (lc.r > 0.5f) ? 0.2f : 1.0f; return; }
-                    if (ndcX >= 0.89f && ndcX <= 0.93f) { lc.g = (lc.g > 0.5f) ? 0.2f : 1.0f; return; }
-                    if (ndcX >= 0.94f && ndcX <= 0.98f) { lc.b = (lc.b > 0.5f) ? 0.2f : 1.0f; return; }
+                    if (ndcX >= 0.84f && ndcX <= 0.88f) { UISoundManager.play(UISound.CLICK); lc.r = (lc.r > 0.5f) ? 0.2f : 1.0f; return; }
+                    if (ndcX >= 0.89f && ndcX <= 0.93f) { UISoundManager.play(UISound.CLICK); lc.g = (lc.g > 0.5f) ? 0.2f : 1.0f; return; }
+                    if (ndcX >= 0.94f && ndcX <= 0.98f) { UISoundManager.play(UISound.CLICK); lc.b = (lc.b > 0.5f) ? 0.2f : 1.0f; return; }
                 }
                 curY -= 0.08f;
 
             } else if (comp instanceof CameraComponent cc) {
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.84f && ndcX <= 0.90f) { cc.fov = Math.max(10.0f, cc.fov - 5.0f); return; }
-                    if (ndcX >= 0.91f && ndcX <= 0.97f) { cc.fov = Math.min(170.0f, cc.fov + 5.0f); return; }
+                    if (ndcX >= 0.84f && ndcX <= 0.90f) { UISoundManager.play(UISound.CLICK); cc.fov = Math.max(10.0f, cc.fov - 5.0f); return; }
+                    if (ndcX >= 0.91f && ndcX <= 0.97f) { UISoundManager.play(UISound.CLICK); cc.fov = Math.min(170.0f, cc.fov + 5.0f); return; }
                 }
                 curY -= 0.06f;
 
                 curY -= 0.05f; // NEAR/FAR line
 
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f && ndcX >= 0.58f && ndcX <= 0.85f) {
+                    UISoundManager.play(UISound.TOGGLE);
                     cc.isPrimary = !cc.isPrimary;
                     return;
                 }
@@ -97,9 +105,11 @@ public class InspectorInteractor {
                 // Line 1: Clip Picker / Import
                 if (ndcY >= curY - 0.04f && ndcY <= curY + 0.02f) {
                     if (ndcX >= 0.80f && ndcX <= 0.88f) {
+                        UISoundManager.play(UISound.OPEN_MODAL);
                         manager.openAssetPicker(AssetType.AUDIO);
                         return;
                     } else if (ndcX >= 0.89f && ndcX <= 0.98f) {
+                        UISoundManager.play(UISound.OPEN_MODAL);
                         promptImportAudio(manager);
                         return;
                     }
@@ -108,28 +118,29 @@ public class InspectorInteractor {
 
                 // Line 2: Volume Adjust [-] [+]
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.84f && ndcX <= 0.90f) { ac.setVolume(ac.volume - 0.1f); return; }
-                    if (ndcX >= 0.91f && ndcX <= 0.97f) { ac.setVolume(ac.volume + 0.1f); return; }
+                    if (ndcX >= 0.84f && ndcX <= 0.90f) { UISoundManager.play(UISound.CLICK); ac.setVolume(ac.volume - 0.1f); return; }
+                    if (ndcX >= 0.91f && ndcX <= 0.97f) { UISoundManager.play(UISound.CLICK); ac.setVolume(ac.volume + 0.1f); return; }
                 }
                 curY -= 0.06f;
 
                 // Line 3: Pitch Adjust [-] [+]
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.84f && ndcX <= 0.90f) { ac.setPitch(ac.pitch - 0.1f); return; }
-                    if (ndcX >= 0.91f && ndcX <= 0.97f) { ac.setPitch(ac.pitch + 0.1f); return; }
+                    if (ndcX >= 0.84f && ndcX <= 0.90f) { UISoundManager.play(UISound.CLICK); ac.setPitch(ac.pitch - 0.1f); return; }
+                    if (ndcX >= 0.91f && ndcX <= 0.97f) { UISoundManager.play(UISound.CLICK); ac.setPitch(ac.pitch + 0.1f); return; }
                 }
                 curY -= 0.06f;
 
                 // Line 4: Transport Play / Pause / Stop
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.58f && ndcX <= 0.70f) { ac.play(); return; }
-                    if (ndcX >= 0.72f && ndcX <= 0.84f) { ac.pause(); return; }
-                    if (ndcX >= 0.86f && ndcX <= 0.98f) { ac.stop(); return; }
+                    if (ndcX >= 0.58f && ndcX <= 0.70f) { UISoundManager.play(UISound.TOGGLE); ac.play(); return; }
+                    if (ndcX >= 0.72f && ndcX <= 0.84f) { UISoundManager.play(UISound.TOGGLE); ac.pause(); return; }
+                    if (ndcX >= 0.86f && ndcX <= 0.98f) { UISoundManager.play(UISound.TOGGLE); ac.stop(); return; }
                 }
                 curY -= 0.06f;
 
                 // Line 5: Loop Toggle
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f && ndcX >= 0.58f && ndcX <= 0.85f) {
+                    UISoundManager.play(UISound.TOGGLE);
                     ac.loop = !ac.loop;
                     return;
                 }
@@ -147,10 +158,13 @@ public class InspectorInteractor {
             "Select Audio Clip(s)", "", "Audio Clips (*.wav, *.mp3, *.ogg)", "wav", "mp3", "ogg"
         );
         if (importedPaths != null && !importedPaths.isEmpty()) {
+            UISoundManager.play(UISound.SPAWN);
             manager.onFilesDropped(importedPaths);
             String primaryPath = importedPaths.get(0);
             File file = new File(primaryPath);
             manager.assignAudioToSelectedEntity(new AssetEntry(file.getName(), primaryPath, AssetType.AUDIO));
+        } else {
+            UISoundManager.play(UISound.CLOSE_MODAL);
         }
     }
 
@@ -160,10 +174,13 @@ public class InspectorInteractor {
             "Select Texture Asset(s)", "", "Texture Images (*.png, *.jpg, *.jpeg, *.tga)", "png", "jpg", "jpeg", "tga"
         );
         if (importedPaths != null && !importedPaths.isEmpty()) {
+            UISoundManager.play(UISound.SPAWN);
             manager.onFilesDropped(importedPaths);
             String primaryPath = importedPaths.get(0);
             File file = new File(primaryPath);
             manager.assignTextureToSelectedEntity(new AssetEntry(file.getName(), primaryPath, AssetType.TEXTURE));
+        } else {
+            UISoundManager.play(UISound.CLOSE_MODAL);
         }
     }
 
@@ -173,10 +190,13 @@ public class InspectorInteractor {
             "Select 3D Mesh Asset(s)", "", "3D Models (*.obj, *.fbx, *.gltf, *.glb)", "obj", "fbx", "gltf", "glb"
         );
         if (importedPaths != null && !importedPaths.isEmpty()) {
+            UISoundManager.play(UISound.SPAWN);
             manager.onFilesDropped(importedPaths);
             String primaryPath = importedPaths.get(0);
             File file = new File(primaryPath);
             manager.assignMeshToSelectedEntity(new AssetEntry(file.getName(), primaryPath, AssetType.MESH_3D));
+        } else {
+            UISoundManager.play(UISound.CLOSE_MODAL);
         }
     }
 
@@ -187,7 +207,10 @@ public class InspectorInteractor {
             "obj", "fbx", "gltf", "glb", "png", "jpg", "jpeg", "tga", "scene"
         );
         if (importedPaths != null && !importedPaths.isEmpty()) {
+            UISoundManager.play(UISound.SPAWN);
             manager.onFilesDropped(importedPaths);
+        } else {
+            UISoundManager.play(UISound.CLOSE_MODAL);
         }
     }
 }

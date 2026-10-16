@@ -2,6 +2,8 @@ package com.retro.engine.editor.input;
 
 import com.retro.engine.editor.EditorPanelManager;
 import com.retro.engine.editor.ViewportCameraController;
+import com.retro.engine.editor.audio.UISoundManager;
+import com.retro.engine.editor.audio.UISoundManager.UISound;
 import com.retro.engine.host.GlfwWindow;
 
 import static org.lwjgl.glfw.GLFW.*;
@@ -47,6 +49,7 @@ public class EditorHotkeyHandler {
                 } else {
                     editorManager.undo();
                 }
+                UISoundManager.play(UISound.TOGGLE);
                 undoKeyPressedLastFrame = true;
             }
         } else {
@@ -56,6 +59,7 @@ public class EditorHotkeyHandler {
         // Cmd+S / Ctrl+S: Save Scene
         if (isCtrlDown && isS) {
             if (!saveKeyPressedLastFrame) {
+                UISoundManager.play(UISound.OPEN_MODAL);
                 editorManager.promptSaveSceneWithNativeDialog();
                 saveKeyPressedLastFrame = true;
             }
@@ -66,6 +70,7 @@ public class EditorHotkeyHandler {
         // Cmd+O / Ctrl+O: Load Scene
         if (isCtrlDown && isO) {
             if (!loadKeyPressedLastFrame) {
+                UISoundManager.play(UISound.OPEN_MODAL);
                 editorManager.promptOpenSceneWithNativeDialog();
                 loadKeyPressedLastFrame = true;
             }
@@ -76,7 +81,7 @@ public class EditorHotkeyHandler {
         // Cmd+D / Ctrl+D: Duplicate Selected Entity
         if (isCtrlDown && isD) {
             if (!duplicateKeyPressedLastFrame) {
-                editorManager.duplicateSelectedEntity();
+                editorManager.duplicateSelectedEntity(); // EditorPanelManager plays UISound.DUPLICATE
                 duplicateKeyPressedLastFrame = true;
             }
         } else {
@@ -86,7 +91,7 @@ public class EditorHotkeyHandler {
         // Delete / Backspace: Remove Selected Entity
         if (isDelete) {
             if (!deleteKeyPressedLastFrame) {
-                editorManager.deleteSelectedEntity();
+                editorManager.deleteSelectedEntity(); // EditorPanelManager plays UISound.DELETE
                 deleteKeyPressedLastFrame = true;
             }
         } else {

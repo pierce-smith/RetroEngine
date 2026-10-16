@@ -9,6 +9,8 @@ import com.retro.engine.ecs.components.TransformComponent;
 import com.retro.engine.editor.assets.AssetEntry;
 import com.retro.engine.editor.assets.AssetType;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
+import com.retro.engine.editor.audio.UISoundManager;
+import com.retro.engine.editor.audio.UISoundManager.UISound;
 import com.retro.engine.serialization.SceneSerializer;
 
 import java.io.File;
@@ -293,7 +295,10 @@ public class SceneManager {
         String defaultDir = new File("Assets/Scenes").getAbsolutePath();
         String importedPath = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.scene)", "scene");
         if (importedPath != null && !importedPath.trim().isEmpty()) {
+            UISoundManager.play(UISound.SPAWN);
             loadSceneFromFile(importedPath);
+        } else {
+            UISoundManager.play(UISound.CLOSE_MODAL);
         }
     }
 
@@ -301,7 +306,10 @@ public class SceneManager {
         String defaultDir = new File("Assets/Scenes").getAbsolutePath();
         String targetPath = NativeFileDialog.saveFileDialog("Save Scene File", defaultDir, "Retro Scene (*.scene)", "scene");
         if (targetPath != null && !targetPath.trim().isEmpty()) {
+            UISoundManager.play(UISound.SPAWN);
             saveActiveScene(targetPath, assetDirectory);
+        } else {
+            UISoundManager.play(UISound.CLOSE_MODAL);
         }
     }
 

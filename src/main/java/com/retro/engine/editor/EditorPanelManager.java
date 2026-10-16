@@ -7,6 +7,8 @@ import com.retro.engine.ecs.SceneManager.PlayState;
 import com.retro.engine.ecs.components.TransformComponent;
 import com.retro.engine.editor.assets.AssetEntry;
 import com.retro.engine.editor.assets.AssetType;
+import com.retro.engine.editor.audio.UISoundManager;
+import com.retro.engine.editor.audio.UISoundManager.UISound;
 import com.retro.engine.editor.commands.CommandHistory;
 import com.retro.engine.editor.commands.TransformCommand;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
@@ -129,15 +131,20 @@ public class EditorPanelManager {
         this.assetDirectory.clear();
     }
     public void promptOpenSceneWithNativeDialog() {
+        UISoundManager.play(UISound.OPEN_MODAL);
         String defaultDir = new File("Assets/Scenes").getAbsolutePath();
         String importedPath = NativeFileDialog.openFileDialog(
             "Open Scene File", defaultDir, "Retro Scene (*.scene)", "scene"
         );
         if (importedPath != null && !importedPath.trim().isEmpty()) {
+            UISoundManager.play(UISound.SPAWN);
             loadSceneFromFile(importedPath);
+        } else {
+            UISoundManager.play(UISound.CLOSE_MODAL);
         }
     }
     public void promptSaveSceneWithNativeDialog() {
+        UISoundManager.play(UISound.OPEN_MODAL);
         sceneManager.promptSaveSceneWithNativeDialog(assetDirectory);
     }
     public void saveActiveScene() {
@@ -228,15 +235,40 @@ public class EditorPanelManager {
         assetDirectory.add(new AssetEntry(file.getName(), absolutePath, type, currentFolderPath));
     }
 
-    public void deleteSelectedEntity() { sceneManager.deleteSelectedEntity(); }
-    public void duplicateSelectedEntity() { sceneManager.duplicateSelectedEntity(); }
-    public void spawnDefaultCube() { sceneManager.spawnDefaultCube(); }
-    public void spawnLightSource() { sceneManager.spawnLightSource(); }
-    public void spawnCameraEntity() { sceneManager.spawnCameraEntity(); }
-    public void spawnEntityFromAsset(AssetEntry meshAsset) { sceneManager.spawnEntityFromAsset(meshAsset); }
+    public void deleteSelectedEntity() {
+        if (getSelectedEntity() != null) {
+            sceneManager.deleteSelectedEntity();
+            UISoundManager.play(UISound.DELETE);
+        }
+    }
+    public void duplicateSelectedEntity() {
+        if (getSelectedEntity() != null) {
+            sceneManager.duplicateSelectedEntity();
+            UISoundManager.play(UISound.DUPLICATE);
+        }
+    }
+    public void spawnDefaultCube() {
+        sceneManager.spawnDefaultCube();
+        UISoundManager.play(UISound.SPAWN);
+    }
+    public void spawnLightSource() {
+        sceneManager.spawnLightSource();
+        UISoundManager.play(UISound.SPAWN);
+    }
+    public void spawnCameraEntity() {
+        sceneManager.spawnCameraEntity();
+        UISoundManager.play(UISound.SPAWN);
+    }
+    public void spawnEntityFromAsset(AssetEntry meshAsset) {
+        sceneManager.spawnEntityFromAsset(meshAsset);
+        UISoundManager.play(UISound.SPAWN);
+    }
     public void assignTextureToSelectedEntity(AssetEntry textureAsset) { sceneManager.assignTextureToSelectedEntity(textureAsset); }
     public void assignMeshToSelectedEntity(AssetEntry meshAsset) { sceneManager.assignMeshToSelectedEntity(meshAsset); }
-    public void spawnAudioSource() { sceneManager.spawnAudioSource(); }
+    public void spawnAudioSource() {
+        sceneManager.spawnAudioSource();
+        UISoundManager.play(UISound.SPAWN);
+    }
     public void assignAudioToSelectedEntity(AssetEntry audioAsset) { sceneManager.assignAudioToSelectedEntity(audioAsset); }
 
     public void setParentEntity(SceneEntity child, SceneEntity parent) { sceneManager.setParent(child, parent); }
@@ -260,6 +292,7 @@ public class EditorPanelManager {
 
         getSceneEntities().add(child);
         selectEntity(child);
+        UISoundManager.play(UISound.SPAWN);
     }
 
     public void spawnChildLight(SceneEntity parent) {
@@ -274,6 +307,7 @@ public class EditorPanelManager {
 
         getSceneEntities().add(child);
         selectEntity(child);
+        UISoundManager.play(UISound.SPAWN);
     }
 
     public CommandHistory getCommandHistory() { return commandHistory; }

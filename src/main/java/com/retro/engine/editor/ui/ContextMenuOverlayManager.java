@@ -1,5 +1,8 @@
 package com.retro.engine.editor.ui;
 
+import com.retro.engine.editor.audio.UISoundManager;
+import com.retro.engine.editor.audio.UISoundManager.UISound;
+
 import java.util.List;
 
 public class ContextMenuOverlayManager {
@@ -80,6 +83,12 @@ public class ContextMenuOverlayManager {
             if (index >= 0 && index < items.size()) {
                 ContextMenuItem clicked = items.get(index);
                 if (clicked.action() != null) {
+                    String label = (clicked.label() != null) ? clicked.label().toLowerCase() : "";
+                    if (!label.contains("spawn") && !label.contains("delete") && !label.contains("duplicate") &&
+                        !label.contains("open scene") && !label.contains("save scene") && !label.contains("import") &&
+                        !label.contains("folder") && !label.contains("parent")) {
+                        UISoundManager.play(UISound.CLICK);
+                    }
                     clicked.action().run();
                 }
             }
