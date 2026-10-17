@@ -17,8 +17,8 @@ import java.util.concurrent.Executors;
  * Offloads heavy Assimp 3D model parsing and ImageIO 2D texture decoding onto lightweight
  * JVM Virtual Threads (Executors.newVirtualThreadPerTaskExecutor()).
  *
- * Completed assets are pushed to a thread-safe staging queue and uploaded to GPU VRAM
- * on the main render thread, eliminating disk/parse frame hitches.
+ * Hardened against thread churn: missing or un-decoded textures now cache PixelBufferData.EMPTY_FALLBACK,
+ * preventing continuous Virtual Thread spawning on broken paths.
  */
 public class AssetStreamer {
 
@@ -66,11 +66,7 @@ public class AssetStreamer {
     public void requestTextureAsync(String texturePath) {
         if (texturePath == null || texturePath.trim().isEmpty()) return;
 
-        PixelBufferData existing = textureCache.get(texturePath);
-        if (existing == PixelBufferData.EMPTY_FALLBACK) {
-            textureCache.remove(texturePath);
-        }
-
+        // Fast-path exit if already cached (valid texture or EMPTY_FALLBACK sentinel)
         if (textureCache.containsKey(texturePath)) return;
 
         if (loadingStatus.putIfAbsent("tex:" + texturePath, Boolean.TRUE) == null) {
@@ -81,10 +77,12 @@ public class AssetStreamer {
                     if (data != null) {
                         pendingTextures.add(new PendingTextureResult(texturePath, data));
                     } else {
-                        System.err.println("[VirtualThread] Texture missing or not decoded yet: " + texturePath);
+                        System.err.println("[VirtualThread] Texture missing or failed to decode; setting EMPTY_FALLBACK: " + texturePath);
+                        pendingTextures.add(new PendingTextureResult(texturePath, PixelBufferData.EMPTY_FALLBACK));
                     }
                 } catch (Exception e) {
-                    System.err.println("[VirtualThread] Failed to stream 2D texture: " + e.getMessage());
+                    System.err.println("[VirtualThread] Exception streaming 2D texture: " + e.getMessage());
+                    pendingTextures.add(new PendingTextureResult(texturePath, PixelBufferData.EMPTY_FALLBACK));
                 } finally {
                     loadingStatus.remove("tex:" + texturePath);
                 }

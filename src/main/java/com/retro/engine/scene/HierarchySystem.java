@@ -4,14 +4,18 @@ import com.retro.engine.scene.Entity;
 import com.retro.engine.scene.SceneWorld.WorldTransform;
 import com.retro.engine.scene.components.Transform;
 
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
  * Delegate managing recursive parent-child scene graph matrix propagation,
  * vector rotations, and cycle detection.
- * Optimized with reusable scratchpad arrays to eliminate per-frame GC pressure.
+ *
+ * Optimized with reusable scratchpad arrays and O(1) Map lookups to eliminate
+ * per-frame array allocations and O(N^2) linear string search overhead.
  */
 public class HierarchySystem {
 
@@ -19,6 +23,26 @@ public class HierarchySystem {
     private final float[] rotScratch = new float[3];
 
     public WorldTransform getComputedWorldTransform(Entity entity, List<Entity> sceneEntities) {
+        if (entity == null) return new WorldTransform(0,0,0, 0,0,0, 1,1,1);
+        Transform tc = entity.getTransform();
+        if (tc == null) return new WorldTransform(0,0,0, 0,0,0, 1,1,1);
+
+        if (sceneEntities == null || sceneEntities.isEmpty()) {
+            return new WorldTransform(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ);
+        }
+
+        // Build ephemeral O(1) lookup table for current frame evaluation
+        Map<String, Entity> entityMap = new HashMap<>(sceneEntities.size());
+        for (Entity e : sceneEntities) {
+            if (e != null && e.id != null) {
+                entityMap.put(e.id.toLowerCase(), e);
+            }
+        }
+
+        return getComputedWorldTransformIndexed(entity, entityMap);
+    }
+
+    private WorldTransform getComputedWorldTransformIndexed(Entity entity, Map<String, Entity> entityMap) {
         if (entity == null) return new WorldTransform(0,0,0, 0,0,0, 1,1,1);
         Transform tc = entity.getTransform();
         if (tc == null) return new WorldTransform(0,0,0, 0,0,0, 1,1,1);
@@ -34,7 +58,7 @@ public class HierarchySystem {
             return wt;
         }
 
-        Entity parent = findEntityById(entity.parentId, sceneEntities);
+        Entity parent = entityMap.get(entity.parentId.toLowerCase());
         if (parent == null || parent == entity) {
             WorldTransform wt = new WorldTransform(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ);
             assert (!Float.isNaN(wt.px()) && !Float.isInfinite(wt.px()) &&
@@ -46,7 +70,7 @@ public class HierarchySystem {
             return wt;
         }
 
-        WorldTransform parentWt = getComputedWorldTransform(parent, sceneEntities);
+        WorldTransform parentWt = getComputedWorldTransformIndexed(parent, entityMap);
 
         float sx = parentWt.sx() * tc.scaleX;
         float sy = parentWt.sy() * tc.scaleY;

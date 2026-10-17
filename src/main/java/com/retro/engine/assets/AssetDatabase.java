@@ -11,19 +11,21 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Registry managing decoupled virtual asset directory entries, 128-bit UUID indirection mappings,
  * and .rmeta sidecar file synchronization without modifying physical disk directories.
+ *
+ * Hardened with CopyOnWriteArrayList to prevent ConcurrentModificationException during async directory scans.
  */
 public class AssetDatabase {
 
-    private final List<AssetMeta> assetDirectory = new ArrayList<>();
+    private final List<AssetMeta> assetDirectory = new CopyOnWriteArrayList<>();
     private final Map<String, AssetMeta> uuidToAssetMap = new ConcurrentHashMap<>();
     private final Map<String, String> pathToUuidMap = new ConcurrentHashMap<>();
 

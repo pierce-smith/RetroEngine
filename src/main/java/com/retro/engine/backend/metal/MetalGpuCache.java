@@ -15,6 +15,8 @@ import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 /**
  * Delegate managing GPU mesh VRAM buffer caches, texture handle caches, and ring-buffered vertex mesh state
  * (grid, UI overlays, viewport quad) with zero per-frame native GPU allocations and triple-buffered GPU memory isolation.
+ *
+ * Hardened with explicit Objective-C release dispatch during clearCaches() to prevent VRAM memory leaks.
  */
 public class MetalGpuCache {
 
@@ -173,6 +175,26 @@ public class MetalGpuCache {
     }
 
     public void clearCaches() {
+        gpuMeshCache.clear();
+        gpuTextureCache.clear();
+    }
+
+    public void clearCaches(MetalDevice metalDevice) {
+        if (metalDevice != null && metalDevice.getObjcMsgSend() != 0L) {
+            long send = metalDevice.getObjcMsgSend();
+            long selRelease = sel_registerName("release");
+
+            for (Long handle : gpuMeshCache.values()) {
+                if (handle != null && handle != 0L) {
+                    invokePPP(handle, selRelease, send);
+                }
+            }
+            for (Long handle : gpuTextureCache.values()) {
+                if (handle != null && handle != 0L) {
+                    invokePPP(handle, selRelease, send);
+                }
+            }
+        }
         gpuMeshCache.clear();
         gpuTextureCache.clear();
     }
