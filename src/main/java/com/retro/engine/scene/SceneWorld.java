@@ -4,6 +4,7 @@ import com.retro.engine.scene.SceneSerializer.SceneLoadData;
 import com.retro.engine.scene.EntitySpawner;
 import com.retro.engine.scene.HierarchySystem;
 import com.retro.engine.scene.SimulationSystem;
+import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.editor.audio.UISoundPlayer;
@@ -39,7 +40,7 @@ public class SceneWorld {
     private EntityHandle selectedHandle = EntityHandle.NULL;
     private Entity selectedEntity = null;
 
-    private String activeScenePath = "Assets/Scenes/Default.scene";
+    private String activeScenePath = "Assets/Scenes/Default.rscene";
 
     // ECS Subsystem Delegates
     private final HierarchySystem graphEvaluator = new HierarchySystem();
@@ -281,41 +282,51 @@ public class SceneWorld {
     public void newScene() {
         stop();
         clearRegistryAndRebind(new ArrayList<>());
-        this.activeScenePath = "Assets/Scenes/Untitled.scene";
+        this.activeScenePath = "Assets/Scenes/Untitled.rscene";
     }
 
     public void promptOpenSceneWithNativeDialog() {
         String defaultDir = new File("Assets/Scenes").getAbsolutePath();
-        String importedPath = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.scene)", "scene");
+        String importedPath = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.rscene)", "rscene");
         if (importedPath != null && !importedPath.trim().isEmpty()) {
             UISoundPlayer.play(UISound.SPAWN);
-            loadSceneFromFile(importedPath);
+            loadSceneFromFile(importedPath, null);
         } else {
             UISoundPlayer.play(UISound.CLOSE_MODAL);
         }
     }
 
-    public void promptSaveSceneWithNativeDialog(List<AssetMeta> assetDirectory) {
+    public void promptSaveSceneWithNativeDialog(List<AssetMeta> assetDirectory, AssetDatabase assetDb) {
         String defaultDir = new File("Assets/Scenes").getAbsolutePath();
-        String targetPath = NativeFileDialog.saveFileDialog("Save Scene File", defaultDir, "Retro Scene (*.scene)", "scene");
+        String targetPath = NativeFileDialog.saveFileDialog("Save Scene File", defaultDir, "Retro Scene (*.rscene)", "rscene");
         if (targetPath != null && !targetPath.trim().isEmpty()) {
             UISoundPlayer.play(UISound.SPAWN);
-            saveActiveScene(targetPath, assetDirectory);
+            saveActiveScene(targetPath, assetDirectory, assetDb);
         } else {
             UISoundPlayer.play(UISound.CLOSE_MODAL);
         }
     }
 
     public void saveActiveScene(String filePath, List<AssetMeta> assetDirectory) {
+        saveActiveScene(filePath, assetDirectory, null);
+    }
+
+    public void saveActiveScene(String filePath, List<AssetMeta> assetDirectory, AssetDatabase assetDb) {
         if (filePath == null || filePath.trim().isEmpty()) return;
-        SceneSerializer.saveScene(filePath, sceneEntities, assetDirectory);
-        this.activeScenePath = filePath;
+        String sanitized = SceneSerializer.sanitizeScenePath(filePath);
+        SceneSerializer.saveScene(sanitized, sceneEntities, assetDirectory, assetDb);
+        this.activeScenePath = sanitized;
     }
 
     public SceneSerializer.SceneLoadData loadSceneFromFile(String filePath) {
+        return loadSceneFromFile(filePath, null);
+    }
+
+    public SceneSerializer.SceneLoadData loadSceneFromFile(String filePath, AssetDatabase assetDb) {
         stop();
-        this.activeScenePath = filePath;
-        SceneSerializer.SceneLoadData data = SceneSerializer.loadSceneData(filePath);
+        String sanitized = SceneSerializer.sanitizeScenePath(filePath);
+        this.activeScenePath = sanitized;
+        SceneSerializer.SceneLoadData data = SceneSerializer.loadSceneData(sanitized, assetDb);
         List<Entity> loadedEntities = (data != null && data.entities() != null) ? data.entities() : new ArrayList<>();
         clearRegistryAndRebind(loadedEntities);
         if (!sceneEntities.isEmpty()) {

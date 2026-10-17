@@ -46,3 +46,6 @@ bin/
 *.pak
 *.bin
 Thumbs.db
+
+### Ignore engine asset metadata sidecars
+*.rmeta

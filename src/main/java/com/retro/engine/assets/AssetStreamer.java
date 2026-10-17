@@ -64,20 +64,27 @@ public class AssetStreamer {
      * Requests non-blocking async loading of a 2D texture on a JVM Virtual Thread.
      */
     public void requestTextureAsync(String texturePath) {
-        if (texturePath == null || texturePath.trim().isEmpty() || textureCache.containsKey(texturePath)) return;
+        if (texturePath == null || texturePath.trim().isEmpty()) return;
+
+        PixelBufferData existing = textureCache.get(texturePath);
+        if (existing == PixelBufferData.EMPTY_FALLBACK) {
+            textureCache.remove(texturePath);
+        }
+
+        if (textureCache.containsKey(texturePath)) return;
 
         if (loadingStatus.putIfAbsent("tex:" + texturePath, Boolean.TRUE) == null) {
             virtualExecutor.submit(() -> {
                 try {
                     System.out.println("[VirtualThread] Streaming 2D Texture in background: " + texturePath);
                     PixelBufferData data = TextureImporter.loadTexture(texturePath);
-                    if (data == null) {
-                        data = PixelBufferData.EMPTY_FALLBACK;
+                    if (data != null) {
+                        pendingTextures.add(new PendingTextureResult(texturePath, data));
+                    } else {
+                        System.err.println("[VirtualThread] Texture missing or not decoded yet: " + texturePath);
                     }
-                    pendingTextures.add(new PendingTextureResult(texturePath, data));
                 } catch (Exception e) {
                     System.err.println("[VirtualThread] Failed to stream 2D texture: " + e.getMessage());
-                    pendingTextures.add(new PendingTextureResult(texturePath, PixelBufferData.EMPTY_FALLBACK));
                 } finally {
                     loadingStatus.remove("tex:" + texturePath);
                 }
@@ -116,6 +123,13 @@ public class AssetStreamer {
 
     public boolean isTextureLoaded(String path) {
         return textureCache.containsKey(path);
+    }
+
+    public void invalidateTexture(String path) {
+        if (path != null) {
+            textureCache.remove(path);
+            loadingStatus.remove("tex:" + path);
+        }
     }
 
     public void shutdown() {

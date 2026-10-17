@@ -1,42 +1,26 @@
 package com.retro.engine.editor;
 
+import com.retro.engine.editor.audio.UISoundPlayer;
+import com.retro.engine.editor.audio.UISoundPlayer.UISound;
+import com.retro.engine.editor.commands.CommandStack;
+import com.retro.engine.editor.commands.TransformCommand;
+import com.retro.engine.editor.gizmos.GizmoState;
+import com.retro.engine.editor.gizmos.GizmoSystem;
 import com.retro.engine.editor.gizmos.ViewportCamera;
-import com.retro.engine.editor.ui.AssetBrowserPanel;
-import com.retro.engine.editor.ui.ContextMenuOverlay;
-import com.retro.engine.editor.ui.HierarchyPanel;
-import com.retro.engine.editor.ui.InspectorPanel;
-import com.retro.engine.editor.ui.MainMenuBar;
-import com.retro.engine.editor.ui.MenuItem;
-import com.retro.engine.editor.ui.ModalDialogOverlay;
-import com.retro.engine.editor.ui.PanelRegion;
-import com.retro.engine.editor.ui.ViewportPanel;
-import com.retro.engine.scene.SceneSerializer.SceneLoadData;
-import com.retro.engine.scene.SceneSerializer;
+import com.retro.engine.editor.ui.*;
+import com.retro.engine.scene.Entity;
+import com.retro.engine.scene.EntityHandle;
+import com.retro.engine.scene.SceneWorld;
+import com.retro.engine.scene.SceneWorld.PlayState;
 import com.retro.engine.scene.SceneWorld.WorldTransform;
 import com.retro.engine.scene.components.Light;
 import com.retro.engine.scene.components.Material;
 import com.retro.engine.scene.components.MeshFilter;
 import com.retro.engine.scene.components.Transform;
-
-import com.retro.engine.scene.Entity;
-import com.retro.engine.scene.EntityHandle;
-import com.retro.engine.scene.SceneWorld;
-import com.retro.engine.scene.SceneWorld.PlayState;
+import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
-import com.retro.engine.editor.audio.UISoundPlayer;
-import com.retro.engine.editor.audio.UISoundPlayer.UISound;
-import com.retro.engine.editor.commands.CommandStack;
-import com.retro.engine.editor.commands.TransformCommand;
-import com.retro.engine.assets.AssetDatabase;
-import com.retro.engine.editor.ui.OverlaySystem;
-import com.retro.engine.editor.gizmos.GizmoState;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
-import com.retro.engine.editor.gizmos.GizmoSystem;
-import com.retro.engine.editor.ui.InspectorInputDelegate;
-import com.retro.engine.editor.ui.AssetBrowserInputDelegate;
-import com.retro.engine.editor.ui.MainMenuBarInputDelegate;
-import com.retro.engine.editor.ui.*;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -116,12 +100,13 @@ public class EditorWorkspace {
     public void newScene() {
         sceneManager.newScene();
         assetDirectoryManager.clear();
+        assetDirectoryManager.scanWorkspaceDirectory("Assets");
     }
 
     public void promptOpenSceneWithNativeDialog() {
         UISoundPlayer.play(UISound.OPEN_MODAL);
         String defaultDir = new File("Assets/Scenes").getAbsolutePath();
-        String importedPath = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.scene)", "scene");
+        String importedPath = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.rscene)", "rscene");
         if (importedPath != null && !importedPath.trim().isEmpty()) {
             UISoundPlayer.play(UISound.SPAWN);
             loadSceneFromFile(importedPath);
@@ -132,15 +117,17 @@ public class EditorWorkspace {
 
     public void promptSaveSceneWithNativeDialog() {
         UISoundPlayer.play(UISound.OPEN_MODAL);
-        sceneManager.promptSaveSceneWithNativeDialog(assetDirectoryManager.getMutableAssetDirectory());
+        sceneManager.promptSaveSceneWithNativeDialog(assetDirectoryManager.getMutableAssetDirectory(), assetDirectoryManager);
     }
 
-    public void saveActiveScene() { sceneManager.saveActiveScene(getActiveScenePath(), assetDirectoryManager.getMutableAssetDirectory()); }
-    public void saveActiveScene(String filePath) { sceneManager.saveActiveScene(filePath, assetDirectoryManager.getMutableAssetDirectory()); }
+    public void saveActiveScene() { sceneManager.saveActiveScene(getActiveScenePath(), assetDirectoryManager.getMutableAssetDirectory(), assetDirectoryManager); }
+    public void saveActiveScene(String filePath) { sceneManager.saveActiveScene(filePath, assetDirectoryManager.getMutableAssetDirectory(), assetDirectoryManager); }
 
     public void loadSceneFromFile(String filePath) {
-        com.retro.engine.scene.SceneSerializer.SceneLoadData data = sceneManager.loadSceneFromFile(filePath);
         assetDirectoryManager.clear();
+        assetDirectoryManager.scanWorkspaceDirectory("Assets");
+        com.retro.engine.scene.SceneSerializer.SceneLoadData data = sceneManager.loadSceneFromFile(filePath, assetDirectoryManager);
+
         if (data != null) {
             if (data.assetDirectory() != null && !data.assetDirectory().isEmpty()) {
                 assetDirectoryManager.restoreAssetDirectory(data.assetDirectory());
@@ -196,6 +183,7 @@ public class EditorWorkspace {
     public DropdownMenu getActiveDropdown() { return overlayManager.getActiveDropdownMenu(); }
     public void setActiveDropdownMenu(DropdownMenu menu) { overlayManager.setActiveDropdownMenu(menu); }
     public void setActiveDropdown(DropdownMenu menu) { overlayManager.setActiveDropdownMenu(menu); }
+    public void closeDropdownMenu() { overlayManager.closeDropdownMenu(); }
 
     public ModalState getActiveModal() { return overlayManager.getActiveModal(); }
     public void setActiveModal(ModalState modal) { overlayManager.closeModal(); if (modal != ModalState.NONE) { if (modal == ModalState.ASSET_PICKER) openAssetPicker(AssetType.TEXTURE); } }
@@ -213,7 +201,7 @@ public class EditorWorkspace {
     public void closeContextMenu() { overlayManager.closeContextMenu(); }
     public void hideContextMenu() { overlayManager.closeContextMenu(); }
     public void openContextMenu(float ndcX, float ndcY, List<MenuItem> items) { overlayManager.openContextMenu(ndcX, ndcY, items); }
-    public void showContextMenu(float ndcX, float ndcY, List<MenuItem> items) { overlayManager.openContextMenu(ndcX, ndcX, items); }
+    public void showContextMenu(float ndcX, float ndcY, List<MenuItem> items) { overlayManager.openContextMenu(ndcX, ndcY, items); }
 
     // --- REGIONAL HIT-TESTING ---
     public PanelRegion getRegionAt(float ndcX, float ndcY) {
@@ -378,6 +366,18 @@ public class EditorWorkspace {
 
     public boolean onCursorPos(double rawX, double rawY) {
         return gizmoStateController.onCursorPos(rawX, rawY, this, overlayManager);
+    }
+
+    public boolean handleCursorPos(double rawX, double rawY) {
+        return onCursorPos(rawX, rawY);
+    }
+
+    public boolean handleScroll(double yOffset) {
+        if (cameraController != null) {
+            cameraController.onScroll(yOffset);
+            return true;
+        }
+        return false;
     }
 
     // --- UI BATCH GENERATION ---

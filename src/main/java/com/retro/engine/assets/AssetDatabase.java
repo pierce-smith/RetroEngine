@@ -2,21 +2,33 @@ package com.retro.engine.assets;
 
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
+import com.retro.engine.assets.importers.TextureImporter;
+import com.retro.engine.assets.importers.MeshImporter;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
+import com.retro.engine.scene.SceneSerializer;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Delegate managing virtual asset directory entries, folder creation/renaming/deletion,
- * and asset drop operations with parentFolderPath preservation.
+ * Registry managing decoupled virtual asset directory entries, 128-bit UUID indirection mappings,
+ * and .rmeta sidecar file synchronization without modifying physical disk directories.
  */
 public class AssetDatabase {
 
     private final List<AssetMeta> assetDirectory = new ArrayList<>();
+    private final Map<String, AssetMeta> uuidToAssetMap = new ConcurrentHashMap<>();
+    private final Map<String, String> pathToUuidMap = new ConcurrentHashMap<>();
+
     private String currentFolderPath = "";
+    private String activeProjectPath = "";
 
     public List<AssetMeta> getAssetDirectory() {
         return Collections.unmodifiableList(assetDirectory);
@@ -30,11 +42,90 @@ public class AssetDatabase {
         return currentFolderPath;
     }
 
+    public String getActiveProjectPath() {
+        return activeProjectPath;
+    }
+
     public void setCurrentFolderPath(String path) {
         String cleanPath = (path != null) ? path.trim() : "";
         assert (cleanPath.isEmpty() || assetDirectory.stream().anyMatch(a -> a.type == AssetType.FOLDER && a.absolutePath.equalsIgnoreCase(cleanPath))) : "[FATAL] AssetDatabase currentFolderPath set to non-existent virtual folder: " + cleanPath;
         this.currentFolderPath = cleanPath;
     }
+
+    // --- 128-BIT UUID REGISTRY LOOKUPS ---
+
+    public AssetMeta getAssetByUuid(String uuid) {
+        if (uuid == null || uuid.trim().isEmpty()) return null;
+        return uuidToAssetMap.get(uuid.trim());
+    }
+
+    public String resolvePathByUuid(String uuid) {
+        AssetMeta meta = getAssetByUuid(uuid);
+        if (meta == null) return null;
+        if (meta.absolutePath != null && new File(meta.absolutePath).exists()) {
+            return meta.absolutePath;
+        }
+        File resolvedTex = TextureImporter.resolveTextureFile(meta.absolutePath != null ? meta.absolutePath : meta.name);
+        if (resolvedTex != null && resolvedTex.exists()) {
+            return resolvedTex.getAbsolutePath();
+        }
+        File resolvedMesh = MeshImporter.resolveModelFile(meta.absolutePath != null ? meta.absolutePath : meta.name);
+        if (resolvedMesh != null && resolvedMesh.exists()) {
+            return resolvedMesh.getAbsolutePath();
+        }
+        return meta.absolutePath;
+    }
+
+    public String resolveUuidByPath(String path) {
+        if (path == null || path.trim().isEmpty()) return null;
+        String norm = normalizePath(path).toLowerCase();
+        String uuid = pathToUuidMap.get(norm);
+        if (uuid != null) return uuid;
+
+        String sanitized = SceneSerializer.sanitizeAssetPath(path).toLowerCase();
+        if (!sanitized.isEmpty()) {
+            uuid = pathToUuidMap.get(sanitized);
+            if (uuid != null) return uuid;
+        }
+
+        String fileName = new File(norm).getName().toLowerCase();
+        if (!fileName.isEmpty()) {
+            uuid = pathToUuidMap.get(fileName);
+            if (uuid != null) return uuid;
+        }
+
+        return null;
+    }
+
+    public void registerAssetUuid(AssetMeta asset) {
+        if (asset == null || asset.uuid == null || asset.uuid.trim().isEmpty()) return;
+
+        asset.ensureMetaSidecar();
+
+        uuidToAssetMap.put(asset.uuid, asset);
+        if (asset.absolutePath != null && !asset.absolutePath.trim().isEmpty()) {
+            String norm = normalizePath(asset.absolutePath).toLowerCase();
+            pathToUuidMap.put(norm, asset.uuid);
+
+            String sanitized = SceneSerializer.sanitizeAssetPath(asset.absolutePath).toLowerCase();
+            if (!sanitized.isEmpty()) {
+                pathToUuidMap.put(sanitized, asset.uuid);
+            }
+
+            String fileName = new File(norm).getName().toLowerCase();
+            if (!fileName.isEmpty()) {
+                pathToUuidMap.put(fileName, asset.uuid);
+            }
+        }
+    }
+
+    public void unregisterAssetUuid(AssetMeta asset) {
+        if (asset == null) return;
+        if (asset.uuid != null) uuidToAssetMap.remove(asset.uuid);
+        if (asset.absolutePath != null) pathToUuidMap.remove(normalizePath(asset.absolutePath).toLowerCase());
+    }
+
+    // --- DECOUPLED VIRTUAL DIRECTORY & WORKSPACE MANAGEMENT ---
 
     public void navigateUpFolder() {
         if (currentFolderPath == null || currentFolderPath.isEmpty()) return;
@@ -59,8 +150,10 @@ public class AssetDatabase {
         String folderName = !inputName.trim().isEmpty() ? inputName.trim() : defaultName;
 
         String virtualPath = currentFolderPath.isEmpty() ? folderName : currentFolderPath + "/" + folderName;
-        assetDirectory.add(new AssetMeta(folderName, virtualPath, AssetType.FOLDER, currentFolderPath));
-        System.out.println("[AssetDatabase] Created new folder: " + folderName + " in " + (currentFolderPath.isEmpty() ? "Assets" : currentFolderPath));
+        AssetMeta folderMeta = new AssetMeta(folderName, virtualPath, AssetType.FOLDER, currentFolderPath);
+        assetDirectory.add(folderMeta);
+        registerAssetUuid(folderMeta);
+        System.out.println("[AssetDatabase] Created new virtual folder: " + folderName + " in " + (currentFolderPath.isEmpty() ? "Assets" : currentFolderPath));
     }
 
     public void restoreAssetDirectory(List<AssetMeta> entries) {
@@ -73,16 +166,22 @@ public class AssetDatabase {
             );
             if (!exists) {
                 assetDirectory.add(entry);
+                registerAssetUuid(entry);
             }
         }
     }
 
     public void addAssetDirectoryIfNotExists(String absolutePath, AssetType type) {
+        addAssetDirectoryIfNotExists(absolutePath, type, currentFolderPath);
+    }
+
+    public void addAssetDirectoryIfNotExists(String absolutePath, AssetType type, String parentFolder) {
         if (absolutePath == null || absolutePath.trim().isEmpty()) return;
 
         String cleanPath = normalizePath(absolutePath);
         File file = new File(cleanPath);
         String fileName = file.getName();
+        String parentPath = (parentFolder != null) ? parentFolder : "";
 
         if (type == AssetType.UNKNOWN || type == null) {
             String ext = getFileExtension(fileName).toLowerCase();
@@ -90,7 +189,7 @@ public class AssetDatabase {
                 case "obj", "fbx", "gltf", "glb" -> AssetType.MESH_3D;
                 case "png", "jpg", "jpeg", "tga" -> AssetType.TEXTURE;
                 case "wav", "mp3", "ogg" -> AssetType.AUDIO;
-                case "scene" -> AssetType.SCENE;
+                case "rscene", "scene" -> AssetType.SCENE;
                 default -> AssetType.UNKNOWN;
             };
         }
@@ -101,15 +200,70 @@ public class AssetDatabase {
                 if (entryClean.equalsIgnoreCase(cleanPath) ||
                     entryClean.endsWith("/" + cleanPath) ||
                     cleanPath.endsWith("/" + entryClean) ||
-                    (entry.name != null && entry.name.equalsIgnoreCase(fileName) && entry.type == type)) {
+                    (entry.name != null && entry.name.equalsIgnoreCase(fileName) && entry.type == type && entry.parentFolderPath.equalsIgnoreCase(parentPath))) {
                     if (entry.type == AssetType.UNKNOWN && type != AssetType.UNKNOWN) {
                         entry.type = type;
                     }
+                    registerAssetUuid(entry);
                     return;
                 }
             }
         }
-        assetDirectory.add(new AssetMeta(fileName, absolutePath, type, currentFolderPath));
+        AssetMeta newAsset = new AssetMeta(fileName, absolutePath, type, parentPath);
+        assetDirectory.add(newAsset);
+        registerAssetUuid(newAsset);
+    }
+
+    public void scanWorkspaceDirectory(String rootDirPath) {
+        if (rootDirPath == null || rootDirPath.trim().isEmpty()) return;
+        File rootDir = new File(rootDirPath);
+        if (!rootDir.exists() || !rootDir.isDirectory()) return;
+
+        this.activeProjectPath = normalizePath(rootDirPath);
+        System.out.println("[AssetDatabase] Scanning workspace directory for raw assets & .rmeta sidecars: " + activeProjectPath);
+
+        try {
+            Path rootPath = rootDir.toPath();
+            Files.walk(rootPath)
+                .filter(Files::isRegularFile)
+                .forEach(path -> {
+                    String relPath = normalizePath(rootPath.relativize(path).toString());
+                    String lowerRel = relPath.toLowerCase();
+
+                    // Filter out internal sidecars, git, and engine/editor internals
+                    if (lowerRel.endsWith(".rmeta") || lowerRel.endsWith(".meta") ||
+                        lowerRel.startsWith(".git") || lowerRel.contains("/.git") ||
+                        lowerRel.startsWith("editor/") || lowerRel.contains("/editor/") ||
+                        lowerRel.startsWith("engine/") || lowerRel.contains("/engine/")) {
+                        return;
+                    }
+
+                    registerDiscoveredFile(path, relPath);
+                });
+        } catch (IOException e) {
+            System.err.println("[AssetDatabase] Workspace scan failed: " + e.getMessage());
+        }
+    }
+
+    private void registerDiscoveredFile(Path filePath, String relPath) {
+        String absPath = filePath.toAbsolutePath().toString();
+        String name = filePath.getFileName().toString();
+        String ext = getFileExtension(name).toLowerCase();
+
+        int lastSlash = relPath.lastIndexOf('/');
+        String parentFolder = (lastSlash != -1) ? relPath.substring(0, lastSlash) : "";
+
+        AssetType type = switch (ext) {
+            case "obj", "fbx", "gltf", "glb" -> AssetType.MESH_3D;
+            case "png", "jpg", "jpeg", "tga" -> AssetType.TEXTURE;
+            case "wav", "mp3", "ogg" -> AssetType.AUDIO;
+            case "rscene", "scene" -> AssetType.SCENE;
+            default -> AssetType.UNKNOWN;
+        };
+
+        if (type != AssetType.UNKNOWN) {
+            addAssetDirectoryIfNotExists(absPath, type, parentFolder);
+        }
     }
 
     public void renameFolder(AssetMeta folder, String newName) {
@@ -141,7 +295,7 @@ public class AssetDatabase {
         } else if (currentFolderPath.toLowerCase().startsWith(oldVirtualPath.toLowerCase() + "/")) {
             currentFolderPath = newVirtualPath + currentFolderPath.substring(oldVirtualPath.length());
         }
-        System.out.println("[AssetDatabase] Renamed folder '" + oldFolderName + "' to '" + cleanNewName + "'");
+        System.out.println("[AssetDatabase] Renamed virtual folder '" + oldFolderName + "' to '" + cleanNewName + "'");
     }
 
     public void promptRenameFolder(AssetMeta folder) {
@@ -157,7 +311,7 @@ public class AssetDatabase {
         String input = NativeFileDialog.promptInput("Rename Asset", "Enter new asset name:", asset.name);
         if (input != null && !input.trim().isEmpty()) {
             asset.name = input.trim();
-            System.out.println("[AssetDatabase] Renamed asset to '" + asset.name + "'");
+            System.out.println("[AssetDatabase] Renamed virtual asset entry to '" + asset.name + "'");
         }
     }
 
@@ -173,18 +327,20 @@ public class AssetDatabase {
             }
         }
 
+        unregisterAssetUuid(folder);
         assetDirectory.remove(folder);
 
         if (currentFolderPath.equalsIgnoreCase(folderVirtualPath)) {
             currentFolderPath = parentPath;
         }
-        System.out.println("[AssetDatabase] Deleted folder '" + folder.name + "' (reparented contents to '" + (parentPath.isEmpty() ? "Assets" : parentPath) + "')");
+        System.out.println("[AssetDatabase] Deleted virtual folder '" + folder.name + "' (reparented contents to '" + (parentPath.isEmpty() ? "Assets" : parentPath) + "')");
     }
 
     public void removeAssetFromDirectory(AssetMeta asset) {
         if (asset != null) {
+            unregisterAssetUuid(asset);
             assetDirectory.remove(asset);
-            System.out.println("[AssetDatabase] Removed asset '" + asset.name + "' from directory.");
+            System.out.println("[AssetDatabase] Removed asset '" + asset.name + "' from virtual directory.");
         }
     }
 
@@ -199,7 +355,7 @@ public class AssetDatabase {
                 case "obj", "fbx", "gltf", "glb" -> AssetType.MESH_3D;
                 case "png", "jpg", "jpeg", "tga" -> AssetType.TEXTURE;
                 case "wav", "mp3", "ogg" -> AssetType.AUDIO;
-                case "scene" -> AssetType.SCENE;
+                case "rscene", "scene" -> AssetType.SCENE;
                 default -> AssetType.UNKNOWN;
             };
             addAssetDirectoryIfNotExists(path, type);
@@ -208,7 +364,10 @@ public class AssetDatabase {
 
     public void clear() {
         this.assetDirectory.clear();
+        this.uuidToAssetMap.clear();
+        this.pathToUuidMap.clear();
         this.currentFolderPath = "";
+        this.activeProjectPath = "";
     }
 
     private String normalizePath(String path) {

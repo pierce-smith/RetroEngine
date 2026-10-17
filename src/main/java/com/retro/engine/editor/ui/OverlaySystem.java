@@ -49,6 +49,7 @@ public class OverlaySystem {
 
     public void setActiveDropdownMenu(DropdownMenu menu) { this.activeDropdownMenu = menu; }
     public void setActiveDropdown(DropdownMenu menu) { this.activeDropdownMenu = menu; }
+    public void closeDropdownMenu() { this.activeDropdownMenu = DropdownMenu.NONE; }
 
     public ModalState getActiveModal() { return activeModal; }
     public void setActiveModal(ModalState modal) { this.activeModal = modal; }
