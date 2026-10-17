@@ -19,11 +19,14 @@ import java.util.List;
 
 import static org.lwjgl.system.JNI.invokePPP;
 import static org.lwjgl.system.JNI.invokePPPP;
+import static org.lwjgl.system.macosx.ObjCRuntime.objc_getClass;
 import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 
 /**
  * MetalBackend implements IRenderBackend as a lightweight Facade Bridge.
  * Delegates framebuffer targets, VRAM caching, uniform streaming, and pass encoding.
+ * Hardened against native Objective-C memory leaks by wrapping every render frame in a
+ * managed NSAutoreleasePool.
  */
 public class MetalBackend implements IRenderBackend {
 
@@ -39,6 +42,7 @@ public class MetalBackend implements IRenderBackend {
 
     private long currentDrawable = 0L;
     private long currentCommandBuffer = 0L;
+    private long currentAutoreleasePool = 0L;
 
     // Camera Transform State
     private float camPanX = 0.0f;
@@ -127,10 +131,23 @@ public class MetalBackend implements IRenderBackend {
 
         if (metalLayer == 0L || commandQueue == 0L || metalPipeline.getPipelineState3D() == 0L) return;
 
+        // Allocate per-frame NSAutoreleasePool to prevent native Cocoa object leaks
+        long poolClass = objc_getClass("NSAutoreleasePool");
+        if (poolClass != 0L && send != 0L) {
+            long alloc = invokePPP(poolClass, sel_registerName("alloc"), send);
+            currentAutoreleasePool = invokePPP(alloc, sel_registerName("init"), send);
+        }
+
         uniformStreamer.advanceFrameIndex();
 
         currentDrawable = invokePPP(metalLayer, sel_registerName("nextDrawable"), send);
-        if (currentDrawable == 0L) return;
+        if (currentDrawable == 0L) {
+            if (currentAutoreleasePool != 0L && send != 0L) {
+                invokePPP(currentAutoreleasePool, sel_registerName("drain"), send);
+                currentAutoreleasePool = 0L;
+            }
+            return;
+        }
 
         currentCommandBuffer = invokePPP(commandQueue, sel_registerName("commandBuffer"), send);
 
@@ -157,10 +174,19 @@ public class MetalBackend implements IRenderBackend {
 
     @Override
     public void present() {
-        if (currentCommandBuffer == 0L) return;
-        invokePPP(currentCommandBuffer, sel_registerName("commit"), metalDevice.getObjcMsgSend());
-        currentCommandBuffer = 0L;
-        currentDrawable = 0L;
+        long send = metalDevice.getObjcMsgSend();
+
+        if (currentCommandBuffer != 0L && send != 0L) {
+            invokePPP(currentCommandBuffer, sel_registerName("commit"), send);
+            currentCommandBuffer = 0L;
+            currentDrawable = 0L;
+        }
+
+        // Drain per-frame NSAutoreleasePool to reclaim temporary Metal descriptors
+        if (currentAutoreleasePool != 0L && send != 0L) {
+            invokePPP(currentAutoreleasePool, sel_registerName("drain"), send);
+            currentAutoreleasePool = 0L;
+        }
     }
 
     @Override public void shutdown() { System.out.println("[MetalBackend] Releasing Metal offscreen and pipeline resources..."); }
