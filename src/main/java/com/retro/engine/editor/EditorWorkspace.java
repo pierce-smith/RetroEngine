@@ -6,24 +6,17 @@ import com.retro.engine.editor.commands.CommandStack;
 import com.retro.engine.editor.commands.TransformCommand;
 import com.retro.engine.editor.gizmos.GizmoState;
 import com.retro.engine.editor.gizmos.GizmoSystem;
-import com.retro.engine.editor.gizmos.ViewportCamera;
 import com.retro.engine.editor.ui.*;
 import com.retro.engine.scene.Entity;
 import com.retro.engine.scene.EntityHandle;
 import com.retro.engine.scene.SceneWorld;
 import com.retro.engine.scene.SceneWorld.PlayState;
-import com.retro.engine.scene.SceneWorld.WorldTransform;
-import com.retro.engine.scene.components.Light;
-import com.retro.engine.scene.components.Material;
-import com.retro.engine.scene.components.MeshFilter;
-import com.retro.engine.scene.components.Transform;
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 
 import java.io.File;
-import java.util.ArrayList;
 import java.util.List;
 
 /**

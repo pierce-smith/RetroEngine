@@ -1,10 +1,7 @@
 package com.retro.engine.editor.input;
 
-import com.retro.engine.editor.EditorWorkspace.GizmoMode;
-import com.retro.engine.scene.Entity;
-
 import com.retro.engine.editor.EditorWorkspace;
-import com.retro.engine.editor.gizmos.ViewportCamera;
+import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
 import com.retro.engine.core.WindowHost;

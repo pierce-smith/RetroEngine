@@ -1,10 +1,8 @@
 package com.retro.engine.core;
 
-import com.retro.engine.scene.components.Camera;
-
 import com.retro.engine.assets.AssetStreamer;
 import com.retro.engine.editor.EditorWorkspace;
-import com.retro.engine.editor.gizmos.ViewportCamera;
+import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.input.HotkeyRouter;
 import com.retro.engine.editor.render.SceneRenderPipeline;
 import com.retro.engine.rhi.IRenderBackend;

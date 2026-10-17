@@ -1,7 +1,5 @@
 package com.retro.engine.editor;
 
-import com.retro.engine.editor.gizmos.ViewportCamera;
-
 import com.retro.engine.editor.ui.PanelRegion;
 
 /**

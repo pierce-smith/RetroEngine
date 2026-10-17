@@ -1,6 +1,4 @@
-package com.retro.engine.editor.gizmos;
-
-import com.retro.engine.scene.components.Camera;
+package com.retro.engine.editor;
 
 /**
  * ViewportCamera provides Unity-style camera navigation in the 3D Viewport:

@@ -1,21 +1,15 @@
 package com.retro.engine.editor.ui;
 
-import com.retro.engine.scene.SceneWorld.WorldTransform;
-import com.retro.engine.scene.components.Camera;
-import com.retro.engine.scene.components.Light;
-
 import com.retro.engine.scene.Entity;
 import com.retro.engine.scene.SceneWorld;
 import com.retro.engine.scene.components.Transform;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.EditorWorkspace.DropdownMenu;
 import com.retro.engine.editor.EditorWorkspace.ModalState;
-import com.retro.engine.editor.gizmos.ViewportCamera;
+import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.gizmos.GizmoSystem;
-import com.retro.engine.editor.ui.MenuItem;
-import com.retro.engine.editor.ui.HierarchyPanel;
 
 import java.util.ArrayList;
 import java.util.List;

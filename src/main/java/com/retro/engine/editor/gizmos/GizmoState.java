@@ -3,6 +3,7 @@ package com.retro.engine.editor.gizmos;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.EditorWorkspace.GizmoAxis;
 import com.retro.engine.editor.EditorWorkspace.GizmoMode;
+import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.ui.OverlaySystem;
 import com.retro.engine.scene.Entity;
 import com.retro.engine.scene.SceneWorld;
