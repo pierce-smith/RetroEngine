@@ -6,8 +6,11 @@ import com.retro.engine.backend.metal.MetalTexture;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.FloatBuffer;
-import java.util.HashMap;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 import static org.lwjgl.system.JNI.invokePPP;
 import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
@@ -16,14 +19,20 @@ import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
  * Delegate managing GPU mesh VRAM buffer caches, texture handle caches, and ring-buffered vertex mesh state
  * (grid, UI overlays, viewport quad) with zero per-frame native GPU allocations and triple-buffered GPU memory isolation.
  *
- * Hardened with explicit Objective-C release dispatch during clearCaches() to prevent VRAM memory leaks.
+ * Hardened with access-ordered LinkedHashMap containers, LRU VRAM capacity eviction, and explicit Objective-C
+ * release dispatch during cache purges to prevent VRAM memory leaks.
  */
 public class MetalGpuCache {
 
     private static final int RING_SLOTS = 3;
+    private static final int DEFAULT_MAX_CACHE_ENTRIES = 128;
 
-    private final Map<String, Long> gpuMeshCache = new HashMap<>();
-    private final Map<String, Long> gpuTextureCache = new HashMap<>();
+    private final int maxMeshCacheSize;
+    private final int maxTextureCacheSize;
+
+    // Access-ordered LinkedHashMap containers for LRU tracking
+    private final Map<String, Long> gpuMeshCache;
+    private final Map<String, Long> gpuTextureCache;
 
     // Triple-buffered (Ring) Grid Mesh Buffers
     private final long[] gridVertexBufferRing = new long[RING_SLOTS];
@@ -38,6 +47,22 @@ public class MetalGpuCache {
     private int uiVertexCount = 0;
 
     private long viewportQuadBuffer = 0L;
+
+    public MetalGpuCache() {
+        this(DEFAULT_MAX_CACHE_ENTRIES, DEFAULT_MAX_CACHE_ENTRIES);
+    }
+
+    public MetalGpuCache(int maxMeshCacheSize, int maxTextureCacheSize) {
+        this.maxMeshCacheSize = Math.max(8, maxMeshCacheSize);
+        this.maxTextureCacheSize = Math.max(8, maxTextureCacheSize);
+
+        this.gpuMeshCache = Collections.synchronizedMap(
+                new LinkedHashMap<String, Long>(16, 0.75f, true)
+        );
+        this.gpuTextureCache = Collections.synchronizedMap(
+                new LinkedHashMap<String, Long>(16, 0.75f, true)
+        );
+    }
 
     public long getGridVertexBuffer() {
         return gridVertexBufferRing[gridRingIndex];
@@ -159,19 +184,103 @@ public class MetalGpuCache {
 
     public long getOrCreateMeshBuffer(MetalDevice metalDevice, String meshPath, float[] vertices) {
         if (meshPath == null || vertices == null) return 0L;
-        return gpuMeshCache.computeIfAbsent(meshPath, k -> {
-            MetalBuffer buf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), vertices, 9);
-            return buf.getHandle();
-        });
+
+        Long existing = gpuMeshCache.get(meshPath);
+        if (existing != null) return existing;
+
+        evictLruMeshesIfNeeded(metalDevice);
+
+        MetalBuffer buf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), vertices, 9);
+        long handle = buf.getHandle();
+        if (handle != 0L) {
+            gpuMeshCache.put(meshPath, handle);
+        }
+        return handle;
     }
 
     public long getOrCreateTexture(MetalDevice metalDevice, String texturePath, byte[] pixels, int texW, int texH) {
         if (texturePath == null || pixels == null || pixels.length == 0) return 0L;
-        return gpuTextureCache.computeIfAbsent(texturePath, k -> {
-            MetalTexture tex = new MetalTexture();
-            tex.uploadTexture(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), pixels, texW, texH);
-            return tex.getBindableTexture();
-        });
+
+        Long existing = gpuTextureCache.get(texturePath);
+        if (existing != null) return existing;
+
+        evictLruTexturesIfNeeded(metalDevice);
+
+        MetalTexture tex = new MetalTexture();
+        tex.uploadTexture(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), pixels, texW, texH);
+        long handle = tex.getBindableTexture();
+        if (handle != 0L) {
+            gpuTextureCache.put(texturePath, handle);
+        }
+        return handle;
+    }
+
+    private void evictLruMeshesIfNeeded(MetalDevice metalDevice) {
+        synchronized (gpuMeshCache) {
+            while (gpuMeshCache.size() >= maxMeshCacheSize) {
+                Iterator<Map.Entry<String, Long>> it = gpuMeshCache.entrySet().iterator();
+                if (!it.hasNext()) break;
+
+                Map.Entry<String, Long> lru = it.next();
+                Long handle = lru.getValue();
+                it.remove();
+
+                if (handle != null && handle != 0L && metalDevice != null && metalDevice.getObjcMsgSend() != 0L) {
+                    invokePPP(handle, sel_registerName("release"), metalDevice.getObjcMsgSend());
+                }
+            }
+        }
+    }
+
+    private void evictLruTexturesIfNeeded(MetalDevice metalDevice) {
+        synchronized (gpuTextureCache) {
+            while (gpuTextureCache.size() >= maxTextureCacheSize) {
+                Iterator<Map.Entry<String, Long>> it = gpuTextureCache.entrySet().iterator();
+                if (!it.hasNext()) break;
+
+                Map.Entry<String, Long> lru = it.next();
+                Long handle = lru.getValue();
+                it.remove();
+
+                if (handle != null && handle != 0L && metalDevice != null && metalDevice.getObjcMsgSend() != 0L) {
+                    invokePPP(handle, sel_registerName("release"), metalDevice.getObjcMsgSend());
+                }
+            }
+        }
+    }
+
+    public void purgeUnusedCaches(MetalDevice metalDevice, Set<String> activeMeshPaths, Set<String> activeTexturePaths) {
+        if (metalDevice == null || metalDevice.getObjcMsgSend() == 0L) return;
+        long send = metalDevice.getObjcMsgSend();
+        long selRelease = sel_registerName("release");
+
+        synchronized (gpuMeshCache) {
+            Iterator<Map.Entry<String, Long>> it = gpuMeshCache.entrySet().iterator();
+            while (it.hasNext()) {
+                Map.Entry<String, Long> entry = it.next();
+                if (activeMeshPaths == null || !activeMeshPaths.contains(entry.getKey())) {
+                    Long handle = entry.getValue();
+                    if (handle != null && handle != 0L) {
+                        invokePPP(handle, selRelease, send);
+                    }
+                    it.remove();
+                }
+            }
+        }
+
+        synchronized (gpuTextureCache) {
+            Iterator<Map.Entry<String, Long>> it = gpuTextureCache.entrySet().iterator();
+            while (it.hasNext()) {
+                Map.Entry<String, Long> entry = it.next();
+                if (activeTexturePaths == null || !activeTexturePaths.contains(entry.getKey())) {
+                    Long handle = entry.getValue();
+                    if (handle != null && handle != 0L) {
+                        invokePPP(handle, selRelease, send);
+                    }
+                    it.remove();
+                }
+            }
+        }
     }
 
     public void clearCaches() {
@@ -184,18 +293,26 @@ public class MetalGpuCache {
             long send = metalDevice.getObjcMsgSend();
             long selRelease = sel_registerName("release");
 
-            for (Long handle : gpuMeshCache.values()) {
-                if (handle != null && handle != 0L) {
-                    invokePPP(handle, selRelease, send);
+            synchronized (gpuMeshCache) {
+                for (Long handle : gpuMeshCache.values()) {
+                    if (handle != null && handle != 0L) {
+                        invokePPP(handle, selRelease, send);
+                    }
                 }
+                gpuMeshCache.clear();
             }
-            for (Long handle : gpuTextureCache.values()) {
-                if (handle != null && handle != 0L) {
-                    invokePPP(handle, selRelease, send);
+
+            synchronized (gpuTextureCache) {
+                for (Long handle : gpuTextureCache.values()) {
+                    if (handle != null && handle != 0L) {
+                        invokePPP(handle, selRelease, send);
+                    }
                 }
+                gpuTextureCache.clear();
             }
+        } else {
+            gpuMeshCache.clear();
+            gpuTextureCache.clear();
         }
-        gpuMeshCache.clear();
-        gpuTextureCache.clear();
     }
 }

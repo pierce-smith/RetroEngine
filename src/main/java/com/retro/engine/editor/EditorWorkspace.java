@@ -209,7 +209,15 @@ public class EditorWorkspace {
     }
 
     // --- ENTITY MANIPULATION & COMMANDS ---
-    public void deleteSelectedEntity() { if (getSelectedEntity() != null) { sceneManager.deleteSelectedEntity(); UISoundPlayer.play(UISound.DELETE); } }
+    public void deleteSelectedEntity() {
+        if (getSelectedEntity() != null) {
+            String entityName = getSelectedEntity().name;
+            sceneManager.deleteSelectedEntity();
+            UISoundPlayer.play(UISound.DELETE);
+            EngineConsolePanel.log(EngineConsolePanel.LogLevel.INFO, "[Scene] Deleted entity '" + entityName + "'.");
+        }
+    }
+
     public void duplicateSelectedEntity() { if (getSelectedEntity() != null) { sceneManager.duplicateSelectedEntity(); UISoundPlayer.play(UISound.DUPLICATE); } }
     public void spawnDefaultCube() { sceneManager.spawnDefaultCube(); UISoundPlayer.play(UISound.SPAWN); }
     public void spawnLightSource() { sceneManager.spawnLightSource(); UISoundPlayer.play(UISound.SPAWN); }
@@ -407,7 +415,7 @@ public class EditorWorkspace {
         MainMenuBar.render(uiGeometryBuffer, getActiveDropdownMenu(), getActiveScenePath(), getPlayState());
 
         // Render Stage 1.3 System Console & Real-time Telemetry HUD
-        EngineConsolePanel.renderProfilerHUD(uiGeometryBuffer, lastDeltaTime, 14, getSceneEntities().size() * 36);
+        EngineConsolePanel.renderProfilerHUD(uiGeometryBuffer, lastDeltaTime);
         if (EngineConsolePanel.isConsoleVisible()) {
             EngineConsolePanel.renderConsole(uiGeometryBuffer);
         }

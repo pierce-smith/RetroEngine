@@ -28,6 +28,10 @@ public class EngineConsolePanel {
     private static PrintStream originalErr;
     private static boolean redirected = false;
 
+    // Live Telemetry Counters from SceneRenderPipeline & RHI
+    private static int liveDrawCalls = 0;
+    private static int liveActiveVertices = 0;
+
     // Static zero-allocation formatting buffers for Profiler HUD
     private static final StringBuilder fpsSb = new StringBuilder(64);
     private static final StringBuilder statsSb = new StringBuilder(64);
@@ -36,6 +40,14 @@ public class EngineConsolePanel {
     public static boolean isConsoleVisible() { return consoleVisible; }
     public static void setConsoleVisible(boolean visible) { consoleVisible = visible; }
     public static void toggleConsole() { consoleVisible = !consoleVisible; }
+
+    public static void updateTelemetry(int drawCalls, int activeVertices) {
+        liveDrawCalls = Math.max(0, drawCalls);
+        liveActiveVertices = Math.max(0, activeVertices);
+    }
+
+    public static int getLiveDrawCalls() { return liveDrawCalls; }
+    public static int getLiveActiveVertices() { return liveActiveVertices; }
 
     public static synchronized void installConsoleRedirect() {
         if (redirected) return;
@@ -93,6 +105,10 @@ public class EngineConsolePanel {
             UIGeometryBatch.addBoundedText(buffer, lineText, minX + 0.02f, lineY, maxX - 0.02f, 0.95f, r, g, b, 1.0f);
             lineY -= 0.07f;
         }
+    }
+
+    public static void renderProfilerHUD(UIGeometryBatch.Buffer buffer, float deltaTime) {
+        renderProfilerHUD(buffer, deltaTime, liveDrawCalls, liveActiveVertices);
     }
 
     public static void renderProfilerHUD(UIGeometryBatch.Buffer buffer, float deltaTime, int drawCalls, int activeVertices) {

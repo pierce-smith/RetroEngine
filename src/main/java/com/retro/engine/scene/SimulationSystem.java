@@ -100,11 +100,10 @@ public class SimulationSystem {
 
                 AudioSource audioSource = entity.getComponent(AudioSource.class);
                 if (audioSource != null && tc != null) {
-                    float gain = audioSource.calculateSpatialGain(
+                    audioSource.applySpatialGain(
                         listenerX, listenerY, listenerZ,
                         tc.posX, tc.posY, tc.posZ
                     );
-                    audioSource.setVolume(gain);
                 }
             }
         }

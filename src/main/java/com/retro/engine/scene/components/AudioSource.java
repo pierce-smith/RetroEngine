@@ -14,13 +14,13 @@ import java.nio.ShortBuffer;
 /**
  * Encapsulates spatial 3D audio playback parameters, attenuation state,
  * and hardware audio streaming driver (supporting both .wav and .ogg Vorbis clips).
- * Updated with C-heap STBVorbis buffer cleanup and explicit hardware line disposal.
+ * Updated with non-destructive spatial gain calculation and STBVorbis buffer cleanup.
  */
 public class AudioSource implements Component {
     public enum PlaybackState { PLAYING, PAUSED, STOPPED }
 
     public String audioAssetPath = "";
-    public float volume = 1.0f;       // 0.0f to 1.0f
+    public float volume = 1.0f;       // User-configured base volume (0.0f to 1.0f)
     public float pitch = 1.0f;        // 0.5f to 2.0f
     public boolean loop = false;
     public float minDistance = 1.0f;  // Distance at which sound is at full volume
@@ -49,7 +49,7 @@ public class AudioSource implements Component {
             }
 
             if (audioClip != null) {
-                updateClipVolume();
+                updateClipGain(this.volume);
                 if (loop) {
                     audioClip.loop(Clip.LOOP_CONTINUOUSLY);
                 } else {
@@ -96,7 +96,7 @@ public class AudioSource implements Component {
         this.volume = Math.max(0.0f, Math.min(1.0f, volume));
         assert (!Float.isNaN(this.volume) && !Float.isInfinite(this.volume))
             : "[FATAL] Invalid volume assigned to AudioSource: " + volume;
-        updateClipVolume();
+        updateClipGain(this.volume);
     }
 
     public void setPitch(float pitch) {
@@ -112,14 +112,61 @@ public class AudioSource implements Component {
             : "[FATAL] AudioSource maxDistance (" + this.maxDistance + ") cannot be less than minDistance (" + this.minDistance + ")";
     }
 
-    private void updateClipVolume() {
+    /**
+     * Updates hardware audio clip gain without modifying base user-configured volume.
+     */
+    public void updateClipGain(float effectiveVolume) {
         if (audioClip != null && audioClip.isControlSupported(FloatControl.Type.MASTER_GAIN)) {
             FloatControl gainControl = (FloatControl) audioClip.getControl(FloatControl.Type.MASTER_GAIN);
-            float targetGain = Math.max(0.0001f, Math.min(1.0f, volume));
+            float targetGain = Math.max(0.0001f, Math.min(1.0f, effectiveVolume));
             float dB = (float) (Math.log10(targetGain) * 20.0);
             dB = Math.max(gainControl.getMinimum(), Math.min(gainControl.getMaximum(), dB));
             gainControl.setValue(dB);
         }
+    }
+
+    /**
+     * Evaluates spatial gain based on distance to active listener and applies it to hardware clip.
+     */
+    public void applySpatialGain(float listenerX, float listenerY, float listenerZ,
+                                 float sourceX, float sourceY, float sourceZ) {
+        float effectiveGain = calculateSpatialGain(listenerX, listenerY, listenerZ, sourceX, sourceY, sourceZ);
+        updateClipGain(effectiveGain);
+    }
+
+    /**
+     * Calculates spatial audio gain based on Euclidean distance to the active listener.
+     */
+    public float calculateSpatialGain(float listenerX, float listenerY, float listenerZ,
+                                      float sourceX, float sourceY, float sourceZ) {
+        assert (!Float.isNaN(listenerX) && !Float.isInfinite(listenerX) &&
+                !Float.isNaN(listenerY) && !Float.isInfinite(listenerY) &&
+                !Float.isNaN(listenerZ) && !Float.isInfinite(listenerZ) &&
+                !Float.isNaN(sourceX) && !Float.isInfinite(sourceX) &&
+                !Float.isNaN(sourceY) && !Float.isInfinite(sourceY) &&
+                !Float.isNaN(sourceZ) && !Float.isInfinite(sourceZ))
+            : "[FATAL] NaN or Infinity detected in spatial audio listener/source coordinates";
+
+        float dx = sourceX - listenerX;
+        float dy = sourceY - listenerY;
+        float dz = sourceZ - listenerZ;
+        float dist = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+        if (dist <= minDistance) {
+            return volume;
+        }
+        if (dist >= maxDistance) {
+            return 0.0f;
+        }
+
+        float factor = 1.0f + attenuation * (dist - minDistance);
+        float gain = (factor > 0.0001f) ? (volume / factor) : 0.0f;
+        gain = Math.max(0.0f, Math.min(1.0f, gain));
+
+        assert (!Float.isNaN(gain) && !Float.isInfinite(gain) && gain >= 0.0f && gain <= 1.0f)
+            : "[FATAL] Degenerate spatial audio gain calculated: " + gain;
+
+        return gain;
     }
 
     private boolean loadAudioClip(String filePath) {
@@ -181,41 +228,6 @@ public class AudioSource implements Component {
                 MemoryUtil.memFree(rawAudio);
             }
         }
-    }
-
-    /**
-     * Calculates spatial audio gain based on Euclidean distance to the active listener.
-     */
-    public float calculateSpatialGain(float listenerX, float listenerY, float listenerZ,
-                                      float sourceX, float sourceY, float sourceZ) {
-        assert (!Float.isNaN(listenerX) && !Float.isInfinite(listenerX) &&
-                !Float.isNaN(listenerY) && !Float.isInfinite(listenerY) &&
-                !Float.isNaN(listenerZ) && !Float.isInfinite(listenerZ) &&
-                !Float.isNaN(sourceX) && !Float.isInfinite(sourceX) &&
-                !Float.isNaN(sourceY) && !Float.isInfinite(sourceY) &&
-                !Float.isNaN(sourceZ) && !Float.isInfinite(sourceZ))
-            : "[FATAL] NaN or Infinity detected in spatial audio listener/source coordinates";
-
-        float dx = sourceX - listenerX;
-        float dy = sourceY - listenerY;
-        float dz = sourceZ - listenerZ;
-        float dist = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-        if (dist <= minDistance) {
-            return volume;
-        }
-        if (dist >= maxDistance) {
-            return 0.0f;
-        }
-
-        float factor = 1.0f + attenuation * (dist - minDistance);
-        float gain = (factor > 0.0001f) ? (volume / factor) : 0.0f;
-        gain = Math.max(0.0f, Math.min(1.0f, gain));
-
-        assert (!Float.isNaN(gain) && !Float.isInfinite(gain) && gain >= 0.0f && gain <= 1.0f)
-            : "[FATAL] Degenerate spatial audio gain calculated: " + gain;
-
-        return gain;
     }
 
     @Override
