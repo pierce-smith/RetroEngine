@@ -4,6 +4,7 @@ import com.retro.engine.scene.SceneSerializer.SceneLoadData;
 import com.retro.engine.scene.EntitySpawner;
 import com.retro.engine.scene.HierarchySystem;
 import com.retro.engine.scene.SimulationSystem;
+import com.retro.engine.scene.components.AudioSource;
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
@@ -21,6 +22,7 @@ import java.util.List;
  * Coordinates entity storage, 64-bit generational entity handle lifecycle management,
  * selection state, and scene file path state while delegating matrix evaluation,
  * simulation state machine, and entity instantiation.
+ * Hardened with hardware audio clip disposal on entity deletion and scene unloads.
  */
 public class SceneWorld {
 
@@ -167,6 +169,14 @@ public class SceneWorld {
     }
 
     private void clearRegistryAndRebind(List<Entity> newEntities) {
+        // Dispose hardware audio resources for all active entities before clearing
+        for (Entity e : sceneEntities) {
+            if (e != null) {
+                AudioSource ac = e.getComponent(AudioSource.class);
+                if (ac != null) ac.dispose();
+            }
+        }
+
         // Increment generations for all active slots
         for (int i = 0; i < entitySlots.size(); i++) {
             if (entitySlots.get(i) != null) {
@@ -221,6 +231,9 @@ public class SceneWorld {
     public void deleteSelectedEntity() {
         Entity target = getSelectedEntity();
         if (target != null) {
+            AudioSource ac = target.getComponent(AudioSource.class);
+            if (ac != null) ac.dispose();
+
             unregisterEntityHandle(target);
             entityFactory.deleteEntity(target, sceneEntities);
             selectEntity((Entity) null);

@@ -23,6 +23,7 @@ import java.util.List;
 /**
  * Delegate managing dropdown menu overlays, asset/parent picker modal dialogs,
  * dynamic context menus, and right-click popup tracking.
+ * Refactored to eliminate stream allocations during immediate-mode UI render passes.
  */
 public class OverlaySystem {
 
@@ -157,9 +158,16 @@ public class OverlaySystem {
             items.add(new MenuItem("Save Scene... (Cmd+S)", manager::promptSaveSceneWithNativeDialog));
         } else if (ndcY <= -0.42f) {
             String activePath = manager.getCurrentFolderPath();
-            List<AssetMeta> visibleAssets = manager.getAssetDirectory().stream()
-                    .filter(a -> a.parentFolderPath != null && a.parentFolderPath.equalsIgnoreCase(activePath))
-                    .toList();
+            List<AssetMeta> allDirectoryAssets = manager.getAssetDirectory();
+            List<AssetMeta> visibleAssets = new ArrayList<>();
+            if (allDirectoryAssets != null) {
+                for (int i = 0; i < allDirectoryAssets.size(); i++) {
+                    AssetMeta a = allDirectoryAssets.get(i);
+                    if (a != null && a.parentFolderPath != null && a.parentFolderPath.equalsIgnoreCase(activePath)) {
+                        visibleAssets.add(a);
+                    }
+                }
+            }
 
             boolean hasUpLevel = !activePath.isEmpty();
             float cardX = -0.95f;
@@ -254,19 +262,24 @@ public class OverlaySystem {
             Entity bestEntity = null;
             double minDistance = 60.0;
 
-            for (Entity entity : manager.getSceneEntities()) {
-                Transform tc = entity.getTransform();
-                if (tc == null) continue;
+            List<Entity> sceneEntities = manager.getSceneEntities();
+            if (sceneEntities != null) {
+                for (int i = 0; i < sceneEntities.size(); i++) {
+                    Entity entity = sceneEntities.get(i);
+                    if (entity == null) continue;
+                    Transform tc = entity.getTransform();
+                    if (tc == null) continue;
 
-                SceneWorld.WorldTransform wt = manager.getSceneManager().getComputedWorldTransform(entity);
-                float[] p0 = GizmoSystem.projectWorldToNdc(wt.px(), wt.py(), wt.pz(), manager.getCameraController(), 0.0f, 0.25f, -5.0f, 0.0f, 0.0f);
-                double cx = ((p0[0] + 1.0) / 2.0) * 1280.0;
-                double cy = ((1.0 - p0[1]) / 2.0) * 720.0;
+                    SceneWorld.WorldTransform wt = manager.getSceneManager().getComputedWorldTransform(entity);
+                    float[] p0 = GizmoSystem.projectWorldToNdc(wt.px(), wt.py(), wt.pz(), manager.getCameraController(), 0.0f, 0.25f, -5.0f, 0.0f, 0.0f);
+                    double cx = ((p0[0] + 1.0) / 2.0) * 1280.0;
+                    double cy = ((1.0 - p0[1]) / 2.0) * 720.0;
 
-                double dist = Math.hypot(refX - cx, refY - cy);
-                if (dist < minDistance) {
-                    minDistance = dist;
-                    bestEntity = entity;
+                    double dist = Math.hypot(refX - cx, refY - cy);
+                    if (dist < minDistance) {
+                        minDistance = dist;
+                        bestEntity = entity;
+                    }
                 }
             }
 
@@ -324,9 +337,16 @@ public class OverlaySystem {
             return;
         }
 
-        List<Entity> candidates = manager.getSceneEntities().stream()
-                .filter(e -> !e.id.equalsIgnoreCase(parentPickerTargetEntity.id) && !e.isDescendantOf(parentPickerTargetEntity, manager.getSceneEntities()))
-                .toList();
+        List<Entity> allEntities = manager.getSceneEntities();
+        List<Entity> candidates = new ArrayList<>();
+        if (allEntities != null) {
+            for (int i = 0; i < allEntities.size(); i++) {
+                Entity e = allEntities.get(i);
+                if (e != null && !e.id.equalsIgnoreCase(parentPickerTargetEntity.id) && !e.isDescendantOf(parentPickerTargetEntity, manager.getSceneEntities())) {
+                    candidates.add(e);
+                }
+            }
+        }
 
         float listY = cardMaxY - 0.24f;
         for (Entity parentCandidate : candidates) {

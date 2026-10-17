@@ -2,6 +2,7 @@ package com.retro.engine.editor.audio;
 
 import org.lwjgl.stb.STBVorbis;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 
 import javax.sound.sampled.*;
 import java.io.ByteArrayInputStream;
@@ -14,6 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Non-blocking fire-and-forget UI Sound Manager for editor button presses,
  * dialog transitions, entity spawning, entity duplication, deletion, and context menus.
+ * Hardened with native C-heap memory free for decoded STBVorbis audio buffers.
  */
 public class UISoundPlayer {
 
@@ -134,11 +136,12 @@ public class UISoundPlayer {
     }
 
     private static AudioInputStream loadOggVorbisStream(String filePath) {
+        ShortBuffer rawAudio = null;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             IntBuffer channelsBuffer = stack.mallocInt(1);
             IntBuffer sampleRateBuffer = stack.mallocInt(1);
 
-            ShortBuffer rawAudio = STBVorbis.stb_vorbis_decode_filename(filePath, channelsBuffer, sampleRateBuffer);
+            rawAudio = STBVorbis.stb_vorbis_decode_filename(filePath, channelsBuffer, sampleRateBuffer);
             if (rawAudio == null) return null;
 
             int channels = channelsBuffer.get(0);
@@ -157,6 +160,10 @@ public class UISoundPlayer {
             return new AudioInputStream(bais, format, pcmBytes.length / format.getFrameSize());
         } catch (Exception e) {
             return null;
+        } finally {
+            if (rawAudio != null) {
+                MemoryUtil.memFree(rawAudio);
+            }
         }
     }
 

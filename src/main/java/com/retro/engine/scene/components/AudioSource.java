@@ -3,6 +3,7 @@ package com.retro.engine.scene.components;
 import com.retro.engine.scene.components.Component;
 import org.lwjgl.stb.STBVorbis;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 
 import javax.sound.sampled.*;
 import java.io.ByteArrayInputStream;
@@ -13,6 +14,7 @@ import java.nio.ShortBuffer;
 /**
  * Encapsulates spatial 3D audio playback parameters, attenuation state,
  * and hardware audio streaming driver (supporting both .wav and .ogg Vorbis clips).
+ * Updated with C-heap STBVorbis buffer cleanup and explicit hardware line disposal.
  */
 public class AudioSource implements Component {
     public enum PlaybackState { PLAYING, PAUSED, STOPPED }
@@ -77,6 +79,19 @@ public class AudioSource implements Component {
         this.state = PlaybackState.STOPPED;
     }
 
+    public void dispose() {
+        if (audioClip != null) {
+            try {
+                if (audioClip.isRunning()) {
+                    audioClip.stop();
+                }
+                audioClip.close();
+            } catch (Exception ignored) {}
+            audioClip = null;
+        }
+        this.state = PlaybackState.STOPPED;
+    }
+
     public void setVolume(float volume) {
         this.volume = Math.max(0.0f, Math.min(1.0f, volume));
         assert (!Float.isNaN(this.volume) && !Float.isInfinite(this.volume))
@@ -133,11 +148,12 @@ public class AudioSource implements Component {
     }
 
     private AudioInputStream loadOggVorbisStream(String filePath) {
+        ShortBuffer rawAudio = null;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             IntBuffer channelsBuffer = stack.mallocInt(1);
             IntBuffer sampleRateBuffer = stack.mallocInt(1);
 
-            ShortBuffer rawAudio = STBVorbis.stb_vorbis_decode_filename(filePath, channelsBuffer, sampleRateBuffer);
+            rawAudio = STBVorbis.stb_vorbis_decode_filename(filePath, channelsBuffer, sampleRateBuffer);
             if (rawAudio == null) {
                 System.err.println("[AudioSource] STBVorbis failed to decode .ogg file: " + filePath);
                 return null;
@@ -160,6 +176,10 @@ public class AudioSource implements Component {
         } catch (Exception e) {
             e.printStackTrace();
             return null;
+        } finally {
+            if (rawAudio != null) {
+                MemoryUtil.memFree(rawAudio);
+            }
         }
     }
 
