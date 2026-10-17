@@ -69,6 +69,7 @@ public class GizmoState {
         this.dragStartPx = tc.posX; this.dragStartPy = tc.posY; this.dragStartPz = tc.posZ;
         this.dragStartRx = tc.rotX; this.dragStartRy = tc.rotY; this.dragStartRz = tc.rotZ;
         this.dragStartSx = tc.scaleX; this.dragStartSy = tc.scaleY; this.dragStartSz = tc.scaleZ;
+        GizmoInteractor.startDrag(tc);
     }
 
     public boolean is3DGridVisible() { return show3DGrid; }
@@ -188,7 +189,7 @@ public class GizmoState {
 
         if (activeGizmoAxis != GizmoAxis.NONE && manager.getSelectedEntity() != null) {
             SceneWorld.WorldTransform wt = manager.getSceneManager().getComputedWorldTransform(manager.getSelectedEntity());
-            return GizmoSystem.handleGizmoDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, manager.getSelectedEntity(), wt.px(), wt.py(), wt.pz(), manager.getCameraController(), camPanX, camPanY, camZoom, camPitch, camYaw);
+            return GizmoInteractor.handleGizmoDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, manager.getSelectedEntity(), wt.px(), wt.py(), wt.pz(), manager.getCameraController(), camPanX, camPanY, camZoom, camPitch, camYaw);
         }
         return false;
     }

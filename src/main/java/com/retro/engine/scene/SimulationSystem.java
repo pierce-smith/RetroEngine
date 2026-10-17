@@ -13,7 +13,8 @@ import java.util.List;
 
 /**
  * Delegate managing runtime PlayState simulation lifecycle (EDITING, SIMULATING, PAUSED),
- * taking scene snapshot clones on Play, and restoring state on Stop.
+ * taking scene snapshot clones on Play, restoring state on Stop, and evaluating 60 Hz
+ * spatial audio 3D Euclidean distance attenuation during runtime tick.
  */
 public class SimulationSystem {
 
@@ -57,10 +58,53 @@ public class SimulationSystem {
 
     public void update(float deltaTime, List<Entity> activeEntities) {
         if (playState == PlayState.SIMULATING && activeEntities != null) {
+            // Find active listener position (Primary Camera or default origin)
+            float listenerX = 0.0f, listenerY = 0.0f, listenerZ = 0.0f;
+            boolean listenerFound = false;
+
+            for (Entity entity : activeEntities) {
+                Camera cam = entity.getComponent(Camera.class);
+                if (cam != null && cam.isPrimary) {
+                    Transform tc = entity.getTransform();
+                    if (tc != null) {
+                        listenerX = tc.posX;
+                        listenerY = tc.posY;
+                        listenerZ = tc.posZ;
+                        listenerFound = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!listenerFound) {
+                for (Entity entity : activeEntities) {
+                    Camera cam = entity.getComponent(Camera.class);
+                    if (cam != null) {
+                        Transform tc = entity.getTransform();
+                        if (tc != null) {
+                            listenerX = tc.posX;
+                            listenerY = tc.posY;
+                            listenerZ = tc.posZ;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Continuous 3D Spatial Audio Attenuation Tick & Rotational Simulation
             for (Entity entity : activeEntities) {
                 Transform tc = entity.getTransform();
                 if (tc != null) {
                     tc.rotY = (tc.rotY + 45.0f * deltaTime) % 360.0f;
+                }
+
+                AudioSource audioSource = entity.getComponent(AudioSource.class);
+                if (audioSource != null && tc != null) {
+                    float gain = audioSource.calculateSpatialGain(
+                        listenerX, listenerY, listenerZ,
+                        tc.posX, tc.posY, tc.posZ
+                    );
+                    audioSource.setVolume(gain);
                 }
             }
         }

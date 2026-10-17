@@ -49,6 +49,8 @@ application {
     mainClass.set("com.retro.engine.Main")
     applicationDefaultJvmArgs = listOf(
         "-XstartOnFirstThread",
+        "-Xms256m",
+        "-Xmx512m",
         "--enable-native-access=ALL-UNNAMED"
     )
 }

@@ -43,13 +43,17 @@ public class EditorWorkspace {
     private long windowHandle = 0L;
     private int windowWidth = 1280;
     private int windowHeight = 720;
-    private float[] cachedUiVertices = null;
-    private final UIGeometryBatch.Buffer uiGeometryBuffer = new UIGeometryBatch.Buffer(16384);
+    private float lastDeltaTime = 0.016f;
+
+    private float[] cachedUiVertices = new float[16384 * 6];
+    private int cachedUiVertexCount = 0;
+    private final UIGeometryBatch.Buffer uiGeometryBuffer = new UIGeometryBatch.Buffer(16384 * 6);
 
     public EditorWorkspace() { this(new SceneWorld()); }
 
     public EditorWorkspace(SceneWorld sceneManager) {
         this.sceneManager = (sceneManager != null) ? sceneManager : new SceneWorld();
+        EngineConsolePanel.installConsoleRedirect();
     }
 
     // --- WINDOW MANAGEMENT ---
@@ -76,7 +80,10 @@ public class EditorWorkspace {
     public void play() { sceneManager.play(); }
     public void pause() { sceneManager.pause(); }
     public void stop() { sceneManager.stop(); }
-    public void update(float deltaTime) { sceneManager.update(deltaTime); }
+    public void update(float deltaTime) { 
+        this.lastDeltaTime = deltaTime;
+        sceneManager.update(deltaTime); 
+    }
 
     public List<Entity> getSceneEntities() { return sceneManager.getSceneEntities(); }
     public Entity getSelectedEntity() { return sceneManager.getSelectedEntity(); }
@@ -375,13 +382,11 @@ public class EditorWorkspace {
 
     // --- UI BATCH GENERATION ---
     public float[] getUiVertices() {
-        this.cachedUiVertices = generateUiVertices();
-        return this.cachedUiVertices;
+        return generateUiVertices();
     }
 
     public int getUiVertexCount() {
-        if (cachedUiVertices == null) getUiVertices();
-        return cachedUiVertices.length / 6;
+        return this.cachedUiVertexCount;
     }
 
     public float[] generateUiVertices() {
@@ -401,6 +406,12 @@ public class EditorWorkspace {
 
         MainMenuBar.render(uiGeometryBuffer, getActiveDropdownMenu(), getActiveScenePath(), getPlayState());
 
+        // Render Stage 1.3 System Console & Real-time Telemetry HUD
+        EngineConsolePanel.renderProfilerHUD(uiGeometryBuffer, lastDeltaTime, 14, getSceneEntities().size() * 36);
+        if (EngineConsolePanel.isConsoleVisible()) {
+            EngineConsolePanel.renderConsole(uiGeometryBuffer);
+        }
+
         if (getActiveDropdownMenu() != DropdownMenu.NONE) {
             MainMenuBar.renderDropdownMenuOverlay(uiGeometryBuffer, getActiveDropdownMenu(), commandHistory, is3DGridVisible());
         }
@@ -415,7 +426,13 @@ public class EditorWorkspace {
             ContextMenuOverlay.render(uiGeometryBuffer, overlayManager.getContextMenuNdcX(), overlayManager.getContextMenuNdcY(), overlayManager.getContextMenuItems());
         }
 
-        this.cachedUiVertices = uiGeometryBuffer.toFloatArray();
+        int size = uiGeometryBuffer.getSize();
+        if (cachedUiVertices.length < size) {
+            cachedUiVertices = new float[size * 2];
+        }
+        System.arraycopy(uiGeometryBuffer.getArray(), 0, cachedUiVertices, 0, size);
+        this.cachedUiVertexCount = size / 6;
+
         return this.cachedUiVertices;
     }
 }

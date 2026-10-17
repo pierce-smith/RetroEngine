@@ -13,6 +13,8 @@ import com.retro.engine.rhi.IRenderBackend;
  */
 public class EngineLoop {
 
+    private static final float MAX_FRAME_TIME = 0.1f; // Sanity cap (100ms) to prevent giant time spikes
+
     public void run(EngineContext context) {
         WindowHost window = context.getWindow();
         EditorWorkspace editorManager = context.getEditorManager();
@@ -28,8 +30,11 @@ public class EngineLoop {
             window.pollEvents();
 
             long currentTime = System.nanoTime();
-            float deltaTime = (currentTime - lastTime) / 1_000_000_000.0f;
+            float rawDeltaTime = (currentTime - lastTime) / 1_000_000_000.0f;
             lastTime = currentTime;
+
+            // Clamp delta time to protect against window gestures or focus spikes
+            float deltaTime = Math.min(Math.max(rawDeltaTime, 0.0001f), MAX_FRAME_TIME);
 
             // Process Keyboard Hotkeys, Gizmo Snapping, and Flying Camera State
             hotkeyHandler.processInput(window, editorManager, cameraController, deltaTime);
@@ -50,6 +55,7 @@ public class EngineLoop {
                     cameraController.getYaw()
             );
 
+            // Per-frame smooth delta update for simulation & viewport telemetry
             editorManager.update(deltaTime);
 
             // 1-Line Scene Graph & Virtual Thread Streaming Render Pass

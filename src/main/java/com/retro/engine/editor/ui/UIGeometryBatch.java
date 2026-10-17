@@ -74,6 +74,7 @@ public class UIGeometryBatch {
         FONT['['] = 0x1c1010101cL; FONT[']'] = 0x1c0404041cL; FONT['('] = 0x0810101008L;
         FONT[')'] = 0x1008080810L; FONT['_'] = 0x000000003eL; FONT['/'] = 0x0204081020L;
         FONT['>'] = 0x2010081020L; FONT['<'] = 0x0810201008L; FONT['='] = 0x003e003e00L;
+        FONT['|'] = 0x0808080808L; FONT['%'] = 0x2408102024L; FONT['~'] = 0x000a150a00L;
     }
 
     // --- Primitive Buffer Overloads (Zero Allocation) ---
@@ -159,18 +160,25 @@ public class UIGeometryBatch {
     }
 
     public static void addBoundedText(Buffer buffer, String text, float startX, float startY, float maxX, float size, float r, float g, float b, float a) {
+        addBoundedText(buffer, (CharSequence) text, startX, startY, maxX, size, r, g, b, a);
+    }
+
+    public static void addBoundedText(Buffer buffer, CharSequence text, float startX, float startY, float maxX, float size, float r, float g, float b, float a) {
         if (text == null) return;
         float charW = size * 0.010f;
         float charH = size * 0.018f;
         float pixelW = charW / 6.0f;
         float pixelH = charH / 6.0f;
 
-        String upper = text.toUpperCase();
-        for (int i = 0; i < upper.length(); i++) {
+        int len = text.length();
+        for (int i = 0; i < len; i++) {
             float cx = startX + i * (charW + pixelW * 1.2f);
             if (cx + charW > maxX) break;
 
-            char c = upper.charAt(i);
+            char c = text.charAt(i);
+            if (c >= 'a' && c <= 'z') {
+                c = (char) (c - 32);
+            }
             if (c >= 0 && c < FONT.length) {
                 long mask = FONT[c];
                 if (mask != 0L) {
@@ -272,18 +280,25 @@ public class UIGeometryBatch {
     }
 
     public static void addBoundedText(List<Float> verts, String text, float startX, float startY, float maxX, float size, float r, float g, float b, float a) {
+        addBoundedText(verts, (CharSequence) text, startX, startY, maxX, size, r, g, b, a);
+    }
+
+    public static void addBoundedText(List<Float> verts, CharSequence text, float startX, float startY, float maxX, float size, float r, float g, float b, float a) {
         if (text == null) return;
         float charW = size * 0.010f;
         float charH = size * 0.018f;
         float pixelW = charW / 6.0f;
         float pixelH = charH / 6.0f;
 
-        String upper = text.toUpperCase();
-        for (int i = 0; i < upper.length(); i++) {
+        int len = text.length();
+        for (int i = 0; i < len; i++) {
             float cx = startX + i * (charW + pixelW * 1.2f);
             if (cx + charW > maxX) break;
 
-            char c = upper.charAt(i);
+            char c = text.charAt(i);
+            if (c >= 'a' && c <= 'z') {
+                c = (char) (c - 32);
+            }
             if (c >= 0 && c < FONT.length) {
                 long mask = FONT[c];
                 if (mask != 0L) {

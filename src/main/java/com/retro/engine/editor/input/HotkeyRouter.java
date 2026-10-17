@@ -5,11 +5,14 @@ import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
 import com.retro.engine.core.WindowHost;
+import com.retro.engine.editor.gizmos.GizmoInteractor;
+import com.retro.engine.editor.ui.EngineConsolePanel;
 
 import static org.lwjgl.glfw.GLFW.*;
 
 /**
- * Encapsulates keyboard hotkeys, debouncing, and shortcuts for Editor operations.
+ * Encapsulates keyboard hotkeys, debouncing, gizmo snap modifiers,
+ * engine console shortcuts, and viewport camera controls.
  */
 public class HotkeyRouter {
 
@@ -18,12 +21,16 @@ public class HotkeyRouter {
     private boolean undoKeyPressedLastFrame = false;
     private boolean duplicateKeyPressedLastFrame = false;
     private boolean deleteKeyPressedLastFrame = false;
+    private boolean graveKeyPressedLastFrame = false;
 
     public void processInput(WindowHost window, EditorWorkspace editorManager, ViewportCamera cameraController, float deltaTime) {
         if (window == null || editorManager == null) return;
 
         boolean isCtrlDown = window.isKeyDown(GLFW_KEY_LEFT_CONTROL) || window.isKeyDown(GLFW_KEY_RIGHT_CONTROL) || window.isKeyDown(GLFW_KEY_LEFT_SUPER) || window.isKeyDown(GLFW_KEY_RIGHT_SUPER);
         boolean isShiftDown = window.isKeyDown(GLFW_KEY_LEFT_SHIFT) || window.isKeyDown(GLFW_KEY_RIGHT_SHIFT);
+
+        // Snapping is DEFAULT (!isCtrlDown). Holding Cmd/Ctrl disables snapping for free movement.
+        GizmoInteractor.setSnapEnabled(!isCtrlDown);
 
         boolean is1 = window.isKeyDown(GLFW_KEY_1);
         boolean is2 = window.isKeyDown(GLFW_KEY_2);
@@ -37,7 +44,19 @@ public class HotkeyRouter {
         boolean isR = window.isKeyDown(GLFW_KEY_R);
         boolean isO = window.isKeyDown(GLFW_KEY_O);
         boolean isZ = window.isKeyDown(GLFW_KEY_Z);
+        boolean isGrave = window.isKeyDown(GLFW_KEY_GRAVE_ACCENT); // Tilde key (~)
         boolean isDelete = window.isKeyDown(GLFW_KEY_DELETE) || window.isKeyDown(GLFW_KEY_BACKSPACE);
+
+        // Cmd + ~ / Grave Accent: Toggle Engine Console & Profiler Overlay
+        if (isGrave) {
+            if (!graveKeyPressedLastFrame) {
+                EngineConsolePanel.toggleConsole();
+                UISoundPlayer.play(UISound.TOGGLE);
+                graveKeyPressedLastFrame = true;
+            }
+        } else {
+            graveKeyPressedLastFrame = false;
+        }
 
         if (window.isKeyDown(GLFW_KEY_F) && cameraController != null) cameraController.reset();
 
@@ -81,7 +100,7 @@ public class HotkeyRouter {
         // Cmd+D / Ctrl+D: Duplicate Selected Entity
         if (isCtrlDown && isD) {
             if (!duplicateKeyPressedLastFrame) {
-                editorManager.duplicateSelectedEntity(); // EditorWorkspace plays UISound.DUPLICATE
+                editorManager.duplicateSelectedEntity(); // EditorWorkspace plays UISound.DUPLICATE;
                 duplicateKeyPressedLastFrame = true;
             }
         } else {
