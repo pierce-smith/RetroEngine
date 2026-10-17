@@ -2,8 +2,7 @@ package com.retro.engine.editor;
 
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
-import com.retro.engine.editor.commands.CommandStack;
-import com.retro.engine.editor.commands.TransformCommand;
+import com.retro.engine.editor.commands.*;
 import com.retro.engine.editor.gizmos.GizmoState;
 import com.retro.engine.editor.gizmos.GizmoSystem;
 import com.retro.engine.editor.ui.*;
@@ -15,13 +14,14 @@ import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
+import com.retro.engine.scene.components.AudioSource;
 
 import java.io.File;
 import java.util.List;
 
 /**
  * Ultra-lean EditorWorkspace acting as a Backwards-Compatible Facade Bridge.
- * Zero per-frame native allocations or GLFW window queries in hot input paths.
+ * Command History integrated for universal Undo/Redo across transform, texture, mesh, entity spawn/delete, and rename actions.
  */
 @SuppressWarnings("unused")
 public class EditorWorkspace {
@@ -89,7 +89,10 @@ public class EditorWorkspace {
     public Entity getSelectedEntity() { return sceneManager.getSelectedEntity(); }
     public void selectEntity(Entity entity) { sceneManager.selectEntity(entity); }
 
-    // --- GENERATIONAL HANDLE SAFETY (PHASE 4) ---
+    public void deleteEntity(Entity entity) { if (entity != null) sceneManager.deleteEntity(entity); }
+    public void addEntity(Entity entity, int index) { if (entity != null) sceneManager.addEntity(entity, index); }
+
+    // --- GENERATIONAL HANDLE SAFETY ---
     public EntityHandle getSelectedEntityHandle() { return sceneManager.getSelectedEntityHandle(); }
     public void selectEntityByHandle(EntityHandle handle) { sceneManager.selectEntityByHandle(handle); }
     public Entity getEntityByHandle(EntityHandle handle) { return sceneManager.getEntityByHandle(handle); }
@@ -209,26 +212,137 @@ public class EditorWorkspace {
     }
 
     // --- ENTITY MANIPULATION & COMMANDS ---
+    public void promptRenameEntity(Entity entity) {
+        if (entity == null) return;
+        String input = NativeFileDialog.promptInput("Rename Entity", "Enter new entity name:", entity.name);
+        if (input != null && !input.trim().isEmpty() && !input.trim().equalsIgnoreCase(entity.name)) {
+            String newName = input.trim();
+            EntityRenameCommand cmd = new EntityRenameCommand(entity, entity.name, newName);
+            commandHistory.executeCommand(cmd);
+            EngineConsolePanel.log(EngineConsolePanel.LogLevel.INFO, "[Scene] Renamed entity to '" + newName + "'");
+        }
+    }
+
     public void deleteSelectedEntity() {
-        if (getSelectedEntity() != null) {
-            String entityName = getSelectedEntity().name;
-            sceneManager.deleteSelectedEntity();
+        Entity selected = getSelectedEntity();
+        if (selected != null) {
+            String entityName = selected.name;
+            EntityDeleteCommand cmd = new EntityDeleteCommand(this, selected);
+            commandHistory.executeCommand(cmd);
             UISoundPlayer.play(UISound.DELETE);
             EngineConsolePanel.log(EngineConsolePanel.LogLevel.INFO, "[Scene] Deleted entity '" + entityName + "'.");
         }
     }
 
-    public void duplicateSelectedEntity() { if (getSelectedEntity() != null) { sceneManager.duplicateSelectedEntity(); UISoundPlayer.play(UISound.DUPLICATE); } }
-    public void spawnDefaultCube() { sceneManager.spawnDefaultCube(); UISoundPlayer.play(UISound.SPAWN); }
-    public void spawnLightSource() { sceneManager.spawnLightSource(); UISoundPlayer.play(UISound.SPAWN); }
-    public void spawnCameraEntity() { sceneManager.spawnCameraEntity(); UISoundPlayer.play(UISound.SPAWN); }
-    public void spawnEntityFromAsset(AssetMeta meshAsset) { sceneManager.spawnEntityFromAsset(meshAsset); UISoundPlayer.play(UISound.SPAWN); }
-    public void assignTextureToSelectedEntity(AssetMeta textureAsset) { sceneManager.assignTextureToSelectedEntity(textureAsset); }
-    public void assignMeshToSelectedEntity(AssetMeta meshAsset) { sceneManager.assignMeshToSelectedEntity(meshAsset); }
-    public void spawnAudioSource() { sceneManager.spawnAudioSource(); UISoundPlayer.play(UISound.SPAWN); }
-    public void assignAudioToSelectedEntity(AssetMeta audioAsset) { sceneManager.assignAudioToSelectedEntity(audioAsset); }
-    public void setParentEntity(Entity child, Entity parent) { sceneManager.setParent(child, parent); }
-    public void unparentEntity(Entity child) { sceneManager.setParent(child, null); }
+    public void duplicateSelectedEntity() {
+        if (getSelectedEntity() != null) {
+            sceneManager.duplicateSelectedEntity();
+            Entity newlySpawned = getSelectedEntity();
+            if (newlySpawned != null) {
+                EntitySpawnCommand cmd = new EntitySpawnCommand(this, newlySpawned);
+                commandHistory.executeCommand(cmd);
+            }
+            UISoundPlayer.play(UISound.DUPLICATE);
+        }
+    }
+
+    public void spawnDefaultCube() {
+        sceneManager.spawnDefaultCube();
+        Entity newlySpawned = getSelectedEntity();
+        if (newlySpawned != null) {
+            EntitySpawnCommand cmd = new EntitySpawnCommand(this, newlySpawned);
+            commandHistory.executeCommand(cmd);
+        }
+        UISoundPlayer.play(UISound.SPAWN);
+    }
+
+    public void spawnLightSource() {
+        sceneManager.spawnLightSource();
+        Entity newlySpawned = getSelectedEntity();
+        if (newlySpawned != null) {
+            EntitySpawnCommand cmd = new EntitySpawnCommand(this, newlySpawned);
+            commandHistory.executeCommand(cmd);
+        }
+        UISoundPlayer.play(UISound.SPAWN);
+    }
+
+    public void spawnCameraEntity() {
+        sceneManager.spawnCameraEntity();
+        Entity newlySpawned = getSelectedEntity();
+        if (newlySpawned != null) {
+            EntitySpawnCommand cmd = new EntitySpawnCommand(this, newlySpawned);
+            commandHistory.executeCommand(cmd);
+        }
+        UISoundPlayer.play(UISound.SPAWN);
+    }
+
+    public void spawnEntityFromAsset(AssetMeta meshAsset) {
+        sceneManager.spawnEntityFromAsset(meshAsset);
+        Entity newlySpawned = getSelectedEntity();
+        if (newlySpawned != null) {
+            EntitySpawnCommand cmd = new EntitySpawnCommand(this, newlySpawned);
+            commandHistory.executeCommand(cmd);
+        }
+        UISoundPlayer.play(UISound.SPAWN);
+    }
+
+    public void assignTextureToSelectedEntity(AssetMeta textureAsset) {
+        Entity selected = getSelectedEntity();
+        if (selected == null || textureAsset == null) return;
+        com.retro.engine.scene.components.Material mat = selected.getComponent(com.retro.engine.scene.components.Material.class);
+        String oldPath = (mat != null) ? mat.textureAssetPath : null;
+        String oldName = (mat != null) ? mat.textureName : null;
+        TextureAssignCommand cmd = new TextureAssignCommand(selected, oldPath, oldName, textureAsset.absolutePath, textureAsset.name);
+        commandHistory.executeCommand(cmd);
+    }
+
+    public void assignMeshToSelectedEntity(AssetMeta meshAsset) {
+        Entity selected = getSelectedEntity();
+        if (selected == null || meshAsset == null) return;
+        com.retro.engine.scene.components.MeshFilter mc = selected.getComponent(com.retro.engine.scene.components.MeshFilter.class);
+        String oldPath = (mc != null) ? mc.meshAssetPath : null;
+        MeshAssignCommand cmd = new MeshAssignCommand(selected, oldPath, meshAsset.absolutePath);
+        commandHistory.executeCommand(cmd);
+    }
+
+    public void spawnAudioSource() {
+        sceneManager.spawnAudioSource();
+        Entity newlySpawned = getSelectedEntity();
+        if (newlySpawned != null) {
+            EntitySpawnCommand cmd = new EntitySpawnCommand(this, newlySpawned);
+            commandHistory.executeCommand(cmd);
+        }
+        UISoundPlayer.play(UISound.SPAWN);
+    }
+
+    public void assignAudioToSelectedEntity(AssetMeta audioAsset) {
+        Entity selected = getSelectedEntity();
+        if (selected == null || audioAsset == null) return;
+        AudioSource ac = selected.getComponent(AudioSource.class);
+        String oldPath = (ac != null) ? ac.audioAssetPath : null;
+        float vol = (ac != null) ? ac.volume : 1.0f;
+        float pitch = (ac != null) ? ac.pitch : 1.0f;
+        boolean loop = (ac != null) ? ac.loop : false;
+        AudioPropertyCommand cmd = new AudioPropertyCommand(selected, oldPath, audioAsset.absolutePath, vol, vol, pitch, pitch, loop, loop);
+        commandHistory.executeCommand(cmd);
+    }
+
+    public void setParentEntity(Entity child, Entity parent) {
+        if (child == null) return;
+        Entity oldParent = null;
+        if (child.parentId != null && !child.parentId.isEmpty()) {
+            for (Entity e : getSceneEntities()) {
+                if (e.id.equalsIgnoreCase(child.parentId)) {
+                    oldParent = e;
+                    break;
+                }
+            }
+        }
+        ParentChangeCommand cmd = new ParentChangeCommand(this, child, oldParent, parent);
+        commandHistory.executeCommand(cmd);
+    }
+
+    public void unparentEntity(Entity child) { setParentEntity(child, null); }
 
     public void spawnChildEntity(Entity parent, String namePrefix, String meshAssetPath) {
         if (parent == null) return;
@@ -240,8 +354,8 @@ public class EditorWorkspace {
         parent.expandedInHierarchy = true;
         com.retro.engine.scene.components.Transform tc = child.getTransform();
         if (tc != null) { tc.posX = 1.0f; tc.posY = 0.0f; tc.posZ = 0.0f; }
-        getSceneEntities().add(child);
-        selectEntity(child);
+        EntitySpawnCommand cmd = new EntitySpawnCommand(this, child);
+        commandHistory.executeCommand(cmd);
         UISoundPlayer.play(UISound.SPAWN);
     }
 
@@ -254,8 +368,8 @@ public class EditorWorkspace {
         child.parentId = parent.id;
         parent.addChildId(child.id);
         parent.expandedInHierarchy = true;
-        getSceneEntities().add(child);
-        selectEntity(child);
+        EntitySpawnCommand cmd = new EntitySpawnCommand(this, child);
+        commandHistory.executeCommand(cmd);
         UISoundPlayer.play(UISound.SPAWN);
     }
 
@@ -414,7 +528,7 @@ public class EditorWorkspace {
 
         MainMenuBar.render(uiGeometryBuffer, getActiveDropdownMenu(), getActiveScenePath(), getPlayState());
 
-        // Render Stage 1.3 System Console & Real-time Telemetry HUD
+        // Render System Console & Real-time Telemetry HUD
         EngineConsolePanel.renderProfilerHUD(uiGeometryBuffer, lastDeltaTime);
         if (EngineConsolePanel.isConsoleVisible()) {
             EngineConsolePanel.renderConsole(uiGeometryBuffer);

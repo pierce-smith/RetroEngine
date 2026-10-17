@@ -23,8 +23,28 @@ public class EngineContext {
     private AssetStreamer streamingService;
     private SceneRenderPipeline renderSubmitter;
     private IRenderBackend rhi;
+    private boolean headlessMode = false;
+    private boolean runtimeOnlyMode = false;
 
     public boolean initialize(int width, int height, String title) {
+        return initialize(width, height, title, false);
+    }
+
+    public boolean initializeHeadless() {
+        this.headlessMode = true;
+        this.runtimeOnlyMode = true;
+        this.editorManager = new EditorWorkspace();
+        this.cameraController = new ViewportCamera();
+        this.hotkeyHandler = new HotkeyRouter();
+        this.streamingService = new AssetStreamer();
+        this.renderSubmitter = new SceneRenderPipeline();
+
+        System.out.println("[EngineContext] Headless Dedicated Server Context Bootstrapped (No GLFW/GPU).");
+        return true;
+    }
+
+    public boolean initialize(int width, int height, String title, boolean isRuntimeOnly) {
+        this.runtimeOnlyMode = isRuntimeOnly;
         window = new WindowHost(width, height, title);
         if (!window.create()) {
             System.err.println("[Fatal] Could not create GLFW window. Halting.");
@@ -66,26 +86,28 @@ public class EngineContext {
             System.out.println("[Asset Directory] Ingested " + filePaths.size() + " asset(s).");
         });
 
-        window.setOnMouseClickListener((mouseX, mouseY, button, action) -> {
-            boolean handled = selectionController.handleMouseClick(mouseX, mouseY, button, action, editorManager);
-            boolean inViewport = selectionController.isCursorInViewport(mouseX, mouseY, editorManager);
-            
-            // Forward to camera controller if not handled by UI, OR if right-clicking inside the 3D viewport
-            if (!handled || (button == 1 && inViewport)) {
-                cameraController.onMouseButton(button, action, mouseX, mouseY);
-            }
-        });
+        if (!isRuntimeOnly) {
+            window.setOnMouseClickListener((mouseX, mouseY, button, action) -> {
+                boolean handled = selectionController.handleMouseClick(mouseX, mouseY, button, action, editorManager);
+                boolean inViewport = selectionController.isCursorInViewport(mouseX, mouseY, editorManager);
+                
+                // Forward to camera controller if not handled by UI, OR if right-clicking inside the 3D viewport
+                if (!handled || (button == 1 && inViewport)) {
+                    cameraController.onMouseButton(button, action, mouseX, mouseY);
+                }
+            });
 
-        window.setOnCursorPosListener((x, y) -> {
-            boolean handledByGizmo = selectionController.onCursorPos(x, y, editorManager);
-            if (!handledByGizmo && selectionController.isCursorInViewport(x, y, editorManager)) {
-                boolean isShiftDown = window.isKeyDown(GLFW.GLFW_KEY_LEFT_SHIFT) || window.isKeyDown(GLFW.GLFW_KEY_RIGHT_SHIFT);
-                boolean isAltDown = window.isKeyDown(GLFW.GLFW_KEY_LEFT_ALT) || window.isKeyDown(GLFW.GLFW_KEY_RIGHT_ALT);
-                cameraController.onCursorPos(x, y, isShiftDown, isAltDown);
-            }
-        });
+            window.setOnCursorPosListener((x, y) -> {
+                boolean handledByGizmo = selectionController.onCursorPos(x, y, editorManager);
+                if (!handledByGizmo && selectionController.isCursorInViewport(x, y, editorManager)) {
+                    boolean isShiftDown = window.isKeyDown(GLFW.GLFW_KEY_LEFT_SHIFT) || window.isKeyDown(GLFW.GLFW_KEY_RIGHT_SHIFT);
+                    boolean isAltDown = window.isKeyDown(GLFW.GLFW_KEY_LEFT_ALT) || window.isKeyDown(GLFW.GLFW_KEY_RIGHT_ALT);
+                    cameraController.onCursorPos(x, y, isShiftDown, isAltDown);
+                }
+            });
 
-        window.setOnScrollListener((xoffset, yoffset) -> cameraController.onScroll(yoffset));
+            window.setOnScrollListener((xoffset, yoffset) -> cameraController.onScroll(yoffset));
+        }
 
         if (!rhi.initialize(window.getWindowInfo())) {
             System.err.println("[Fatal] Failed to initialize RHI backend.");
@@ -93,9 +115,12 @@ public class EngineContext {
             return false;
         }
 
-        System.out.println("[Engine] Running. Virtual Thread Asset Streaming & Hotkeys Active.");
+        System.out.println("[Engine] Running. Virtual Thread Asset Streaming Active (RuntimeOnly: " + isRuntimeOnly + ").");
         return true;
     }
+
+    public boolean isHeadlessMode() { return headlessMode; }
+    public boolean isRuntimeOnlyMode() { return runtimeOnlyMode; }
 
     public WindowHost getWindow() { return window; }
     public EditorWorkspace getEditorManager() { return editorManager; }

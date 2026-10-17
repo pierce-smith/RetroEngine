@@ -9,6 +9,8 @@ import com.retro.engine.scene.components.Material;
 import com.retro.engine.scene.components.MeshFilter;
 import com.retro.engine.scene.components.Transform;
 import com.retro.engine.editor.EditorWorkspace;
+import com.retro.engine.editor.commands.AudioPropertyCommand;
+import com.retro.engine.editor.commands.LightPropertyCommand;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.audio.UISoundPlayer;
@@ -67,21 +69,63 @@ public class InspectorInputDelegate {
             } else if (comp instanceof Light lc) {
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f && ndcX >= 0.84f && ndcX <= 0.98f) {
                     UISoundPlayer.play(UISound.TOGGLE);
-                    lc.cycleType();
+                    Light.LightType oldType = lc.type;
+                    Light.LightType nextType = switch (oldType) {
+                        case DIRECTIONAL -> Light.LightType.POINT;
+                        case POINT -> Light.LightType.SPOT;
+                        case SPOT -> Light.LightType.DIRECTIONAL;
+                    };
+                    LightPropertyCommand cmd = new LightPropertyCommand(entity, oldType, nextType, lc.intensity, lc.intensity, lc.r, lc.r, lc.g, lc.g, lc.b, lc.b);
+                    manager.getCommandHistory().executeCommand(cmd);
                     return;
                 }
                 curY -= 0.06f;
 
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.84f && ndcX <= 0.90f) { UISoundPlayer.play(UISound.CLICK); lc.intensity = Math.max(0.0f, lc.intensity - 0.5f); return; }
-                    if (ndcX >= 0.91f && ndcX <= 0.97f) { UISoundPlayer.play(UISound.CLICK); lc.intensity += 0.5f; return; }
+                    if (ndcX >= 0.84f && ndcX <= 0.90f) {
+                        UISoundPlayer.play(UISound.CLICK);
+                        float oldVal = lc.intensity;
+                        float newVal = Math.max(0.0f, oldVal - 0.5f);
+                        LightPropertyCommand cmd = new LightPropertyCommand(entity, lc.type, lc.type, oldVal, newVal, lc.r, lc.r, lc.g, lc.g, lc.b, lc.b);
+                        manager.getCommandHistory().executeCommand(cmd);
+                        return;
+                    }
+                    if (ndcX >= 0.91f && ndcX <= 0.97f) {
+                        UISoundPlayer.play(UISound.CLICK);
+                        float oldVal = lc.intensity;
+                        float newVal = oldVal + 0.5f;
+                        LightPropertyCommand cmd = new LightPropertyCommand(entity, lc.type, lc.type, oldVal, newVal, lc.r, lc.r, lc.g, lc.g, lc.b, lc.b);
+                        manager.getCommandHistory().executeCommand(cmd);
+                        return;
+                    }
                 }
                 curY -= 0.06f;
 
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.84f && ndcX <= 0.88f) { UISoundPlayer.play(UISound.CLICK); lc.r = (lc.r > 0.5f) ? 0.2f : 1.0f; return; }
-                    if (ndcX >= 0.89f && ndcX <= 0.93f) { UISoundPlayer.play(UISound.CLICK); lc.g = (lc.g > 0.5f) ? 0.2f : 1.0f; return; }
-                    if (ndcX >= 0.94f && ndcX <= 0.98f) { UISoundPlayer.play(UISound.CLICK); lc.b = (lc.b > 0.5f) ? 0.2f : 1.0f; return; }
+                    if (ndcX >= 0.84f && ndcX <= 0.88f) {
+                        UISoundPlayer.play(UISound.CLICK);
+                        float oldR = lc.r;
+                        float newR = (oldR > 0.5f) ? 0.2f : 1.0f;
+                        LightPropertyCommand cmd = new LightPropertyCommand(entity, lc.type, lc.type, lc.intensity, lc.intensity, oldR, newR, lc.g, lc.g, lc.b, lc.b);
+                        manager.getCommandHistory().executeCommand(cmd);
+                        return;
+                    }
+                    if (ndcX >= 0.89f && ndcX <= 0.93f) {
+                        UISoundPlayer.play(UISound.CLICK);
+                        float oldG = lc.g;
+                        float newG = (oldG > 0.5f) ? 0.2f : 1.0f;
+                        LightPropertyCommand cmd = new LightPropertyCommand(entity, lc.type, lc.type, lc.intensity, lc.intensity, lc.r, lc.r, oldG, newG, lc.b, lc.b);
+                        manager.getCommandHistory().executeCommand(cmd);
+                        return;
+                    }
+                    if (ndcX >= 0.94f && ndcX <= 0.98f) {
+                        UISoundPlayer.play(UISound.CLICK);
+                        float oldB = lc.b;
+                        float newB = (oldB > 0.5f) ? 0.2f : 1.0f;
+                        LightPropertyCommand cmd = new LightPropertyCommand(entity, lc.type, lc.type, lc.intensity, lc.intensity, lc.r, lc.r, lc.g, lc.g, oldB, newB);
+                        manager.getCommandHistory().executeCommand(cmd);
+                        return;
+                    }
                 }
                 curY -= 0.08f;
 
@@ -118,15 +162,43 @@ public class InspectorInputDelegate {
 
                 // Line 2: Volume Adjust [-] [+]
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.84f && ndcX <= 0.90f) { UISoundPlayer.play(UISound.CLICK); ac.setVolume(ac.volume - 0.1f); return; }
-                    if (ndcX >= 0.91f && ndcX <= 0.97f) { UISoundPlayer.play(UISound.CLICK); ac.setVolume(ac.volume + 0.1f); return; }
+                    if (ndcX >= 0.84f && ndcX <= 0.90f) {
+                        UISoundPlayer.play(UISound.CLICK);
+                        float oldVol = ac.volume;
+                        float newVol = Math.max(0.0f, oldVol - 0.1f);
+                        AudioPropertyCommand cmd = new AudioPropertyCommand(entity, ac.audioAssetPath, ac.audioAssetPath, oldVol, newVol, ac.pitch, ac.pitch, ac.loop, ac.loop);
+                        manager.getCommandHistory().executeCommand(cmd);
+                        return;
+                    }
+                    if (ndcX >= 0.91f && ndcX <= 0.97f) {
+                        UISoundPlayer.play(UISound.CLICK);
+                        float oldVol = ac.volume;
+                        float newVol = Math.min(2.0f, oldVol + 0.1f);
+                        AudioPropertyCommand cmd = new AudioPropertyCommand(entity, ac.audioAssetPath, ac.audioAssetPath, oldVol, newVol, ac.pitch, ac.pitch, ac.loop, ac.loop);
+                        manager.getCommandHistory().executeCommand(cmd);
+                        return;
+                    }
                 }
                 curY -= 0.06f;
 
                 // Line 3: Pitch Adjust [-] [+]
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.84f && ndcX <= 0.90f) { UISoundPlayer.play(UISound.CLICK); ac.setPitch(ac.pitch - 0.1f); return; }
-                    if (ndcX >= 0.91f && ndcX <= 0.97f) { UISoundPlayer.play(UISound.CLICK); ac.setPitch(ac.pitch + 0.1f); return; }
+                    if (ndcX >= 0.84f && ndcX <= 0.90f) {
+                        UISoundPlayer.play(UISound.CLICK);
+                        float oldPitch = ac.pitch;
+                        float newPitch = Math.max(0.1f, oldPitch - 0.1f);
+                        AudioPropertyCommand cmd = new AudioPropertyCommand(entity, ac.audioAssetPath, ac.audioAssetPath, ac.volume, ac.volume, oldPitch, newPitch, ac.loop, ac.loop);
+                        manager.getCommandHistory().executeCommand(cmd);
+                        return;
+                    }
+                    if (ndcX >= 0.91f && ndcX <= 0.97f) {
+                        UISoundPlayer.play(UISound.CLICK);
+                        float oldPitch = ac.pitch;
+                        float newPitch = Math.min(3.0f, oldPitch + 0.1f);
+                        AudioPropertyCommand cmd = new AudioPropertyCommand(entity, ac.audioAssetPath, ac.audioAssetPath, ac.volume, ac.volume, oldPitch, newPitch, ac.loop, ac.loop);
+                        manager.getCommandHistory().executeCommand(cmd);
+                        return;
+                    }
                 }
                 curY -= 0.06f;
 
@@ -141,7 +213,10 @@ public class InspectorInputDelegate {
                 // Line 5: Loop Toggle
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f && ndcX >= 0.58f && ndcX <= 0.85f) {
                     UISoundPlayer.play(UISound.TOGGLE);
-                    ac.loop = !ac.loop;
+                    boolean oldLoop = ac.loop;
+                    boolean newLoop = !oldLoop;
+                    AudioPropertyCommand cmd = new AudioPropertyCommand(entity, ac.audioAssetPath, ac.audioAssetPath, ac.volume, ac.volume, ac.pitch, ac.pitch, oldLoop, newLoop);
+                    manager.getCommandHistory().executeCommand(cmd);
                     return;
                 }
                 curY -= 0.08f;

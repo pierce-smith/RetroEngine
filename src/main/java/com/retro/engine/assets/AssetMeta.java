@@ -9,6 +9,8 @@ import java.util.UUID;
 /**
  * Metadata record for a project asset, holding virtual folder organization
  * and a persistent 128-bit UUID stored via adjacent .rmeta sidecar files.
+ *
+ * Fully compliant with Phase 2 UUID indirection standards.
  */
 public class AssetMeta {
     public String uuid;
@@ -27,9 +29,9 @@ public class AssetMeta {
 
     public AssetMeta(String uuid, String name, String absolutePath, AssetType type, String parentFolderPath) {
         this.uuid = (uuid != null && !uuid.trim().isEmpty()) ? uuid.trim() : UUID.randomUUID().toString();
-        this.name = name;
-        this.absolutePath = absolutePath;
-        this.type = type;
+        this.name = (name != null) ? name : "";
+        this.absolutePath = (absolutePath != null) ? absolutePath : "";
+        this.type = (type != null) ? type : AssetType.UNKNOWN;
         this.parentFolderPath = (parentFolderPath != null) ? parentFolderPath : "";
     }
 
@@ -57,6 +59,11 @@ public class AssetMeta {
                         if (!loadedUuid.isEmpty()) {
                             this.uuid = loadedUuid;
                         }
+                    } else if (line.startsWith("type=") && this.type == AssetType.UNKNOWN) {
+                        String loadedTypeStr = line.substring(5).trim();
+                        try {
+                            this.type = AssetType.valueOf(loadedTypeStr);
+                        } catch (IllegalArgumentException ignored) {}
                     }
                 }
             } catch (IOException e) {
@@ -75,6 +82,9 @@ public class AssetMeta {
 
         File metaFile = new File(absolutePath + ".rmeta");
         try {
+            if (metaFile.getParentFile() != null && !metaFile.getParentFile().exists()) {
+                metaFile.getParentFile().mkdirs();
+            }
             String content = "uuid=" + uuid + "\n" +
                              "type=" + type.name() + "\n";
             Files.writeString(metaFile.toPath(), content);

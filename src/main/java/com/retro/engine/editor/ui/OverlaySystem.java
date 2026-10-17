@@ -17,7 +17,6 @@ import java.util.List;
 /**
  * Delegate managing dropdown menu overlays, asset/parent picker modal dialogs,
  * dynamic context menus, and right-click popup tracking.
- * Refactored to eliminate stream allocations during immediate-mode UI render passes.
  */
 public class OverlaySystem {
 
@@ -228,6 +227,7 @@ public class OverlaySystem {
                 Entity hitEntity = visibleTree.get(index).entity;
                 manager.selectEntity(hitEntity);
 
+                items.add(new MenuItem("Rename Entity", () -> manager.promptRenameEntity(hitEntity)));
                 items.add(new MenuItem("Duplicate Entity (Cmd+D)", manager::duplicateSelectedEntity));
                 items.add(new MenuItem("Delete Entity (Del)", manager::deleteSelectedEntity));
                 items.add(new MenuItem("+ Add Child Cube", () -> manager.spawnChildEntity(hitEntity, "Cube", "Assets/Models/cube.obj")));
@@ -248,6 +248,7 @@ public class OverlaySystem {
             }
         } else if (ndcX >= 0.55f) {
             if (manager.getSelectedEntity() != null) {
+                items.add(new MenuItem("Rename Entity", () -> manager.promptRenameEntity(manager.getSelectedEntity())));
                 items.add(new MenuItem("Duplicate Entity (Cmd+D)", manager::duplicateSelectedEntity));
                 items.add(new MenuItem("Delete Entity (Del)", manager::deleteSelectedEntity));
             }
@@ -281,6 +282,7 @@ public class OverlaySystem {
                 manager.selectEntity(bestEntity);
                 Entity hitEntity = bestEntity;
 
+                items.add(new MenuItem("Rename Entity", () -> manager.promptRenameEntity(hitEntity)));
                 items.add(new MenuItem("Duplicate Object (Cmd+D)", manager::duplicateSelectedEntity));
                 items.add(new MenuItem("Delete Object (Del)", manager::deleteSelectedEntity));
                 items.add(new MenuItem("+ Add Child Cube", () -> manager.spawnChildEntity(hitEntity, "Cube", "Assets/Models/cube.obj")));

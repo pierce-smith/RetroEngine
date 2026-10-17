@@ -228,16 +228,41 @@ public class SceneWorld {
     }
 
     // --- DELEGATED ENTITY FACTORY OPERATIONS ---
-    public void deleteSelectedEntity() {
-        Entity target = getSelectedEntity();
+    public void deleteEntity(Entity target) {
         if (target != null) {
             AudioSource ac = target.getComponent(AudioSource.class);
             if (ac != null) ac.dispose();
 
             unregisterEntityHandle(target);
             entityFactory.deleteEntity(target, sceneEntities);
-            selectEntity((Entity) null);
+            if (selectedEntity == target) {
+                selectEntity((Entity) null);
+            }
         }
+    }
+
+    public void addEntity(Entity target, int index) {
+        if (target != null) {
+            if (!sceneEntities.contains(target)) {
+                if (index >= 0 && index <= sceneEntities.size()) {
+                    sceneEntities.add(index, target);
+                } else {
+                    sceneEntities.add(target);
+                }
+            }
+            registerEntityHandle(target);
+            if (target.parentId != null && !target.parentId.trim().isEmpty()) {
+                Entity parent = findEntityById(target.parentId);
+                if (parent != null) {
+                    parent.addChildId(target.id);
+                }
+            }
+            selectEntity(target);
+        }
+    }
+
+    public void deleteSelectedEntity() {
+        deleteEntity(getSelectedEntity());
     }
 
     public void duplicateSelectedEntity() {
