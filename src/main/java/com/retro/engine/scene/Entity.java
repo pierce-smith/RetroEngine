@@ -43,6 +43,11 @@ public class Entity {
         }
     }
 
+    public <T extends Component> boolean removeComponent(Class<T> componentClass) {
+        if (componentClass == null) return false;
+        return components.removeIf(componentClass::isInstance);
+    }
+
     @SuppressWarnings("unchecked")
     public <T extends Component> T getComponent(Class<T> componentClass) {
         for (Component c : components) {

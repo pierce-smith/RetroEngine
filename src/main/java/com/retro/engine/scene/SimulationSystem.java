@@ -7,6 +7,8 @@ import com.retro.engine.scene.components.Camera;
 import com.retro.engine.scene.components.Light;
 import com.retro.engine.scene.components.Material;
 import com.retro.engine.scene.components.Transform;
+import com.retro.engine.scene.components.ScriptComponent;
+import com.retro.engine.scripting.ScriptEngine;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,7 +16,7 @@ import java.util.List;
 /**
  * Delegate managing runtime PlayState simulation lifecycle (EDITING, SIMULATING, PAUSED),
  * taking scene snapshot clones on Play, restoring state on Stop, and evaluating 60 Hz
- * spatial audio 3D Euclidean distance attenuation during runtime tick.
+ * spatial audio 3D Euclidean distance attenuation and Gameplay Script ticks during runtime tick.
  */
 public class SimulationSystem {
 
@@ -29,7 +31,8 @@ public class SimulationSystem {
         if (playState == PlayState.EDITING) {
             this.sceneSnapshot = cloneSceneEntities(activeEntities);
             this.playState = PlayState.SIMULATING;
-            System.out.println("[SimulationSystem] Simulation started.");
+            ScriptEngine.initializeScripts(activeEntities, null);
+            System.out.println("[SimulationSystem] Simulation started; gameplay scripts initialized.");
         } else if (playState == PlayState.PAUSED) {
             this.playState = PlayState.SIMULATING;
         }
@@ -44,13 +47,14 @@ public class SimulationSystem {
 
     public List<Entity> stop(List<Entity> activeEntities) {
         if (playState == PlayState.SIMULATING || playState == PlayState.PAUSED) {
+            ScriptEngine.destroyScripts(activeEntities);
             List<Entity> restored = null;
             if (sceneSnapshot != null) {
                 restored = sceneSnapshot;
                 this.sceneSnapshot = null;
             }
             this.playState = PlayState.EDITING;
-            System.out.println("[SimulationSystem] Simulation stopped; state restored.");
+            System.out.println("[SimulationSystem] Simulation stopped; gameplay scripts destroyed and state restored.");
             return restored;
         }
         return null;
@@ -58,7 +62,10 @@ public class SimulationSystem {
 
     public void update(float deltaTime, List<Entity> activeEntities) {
         if (playState == PlayState.SIMULATING && activeEntities != null) {
-            // Find active listener position (Primary Camera or default origin)
+            // 1. Execute gameplay script frame ticks
+            ScriptEngine.updateScripts(activeEntities, deltaTime, null);
+
+            // 2. Find active listener position (Primary Camera or default origin)
             float listenerX = 0.0f, listenerY = 0.0f, listenerZ = 0.0f;
             boolean listenerFound = false;
 
@@ -91,13 +98,9 @@ public class SimulationSystem {
                 }
             }
 
-            // Continuous 3D Spatial Audio Attenuation Tick & Rotational Simulation
+            // 3. Continuous 3D Spatial Audio Attenuation Tick
             for (Entity entity : activeEntities) {
                 Transform tc = entity.getTransform();
-                if (tc != null) {
-                    tc.rotY = (tc.rotY + 45.0f * deltaTime) % 360.0f;
-                }
-
                 AudioSource audioSource = entity.getComponent(AudioSource.class);
                 if (audioSource != null && tc != null) {
                     audioSource.applySpatialGain(
@@ -162,6 +165,13 @@ public class SimulationSystem {
                 cloneAc.attenuation = origAc.attenuation;
                 cloneAc.state = origAc.state;
                 cloned.addComponent(cloneAc);
+            }
+
+            ScriptComponent origSc = orig.getComponent(ScriptComponent.class);
+            if (origSc != null) {
+                ScriptComponent cloneSc = new ScriptComponent(origSc.scriptAssetPath, origSc.scriptName);
+                cloneSc.enabled = origSc.enabled;
+                cloned.addComponent(cloneSc);
             }
 
             copy.add(cloned);

@@ -204,6 +204,8 @@ public class OverlaySystem {
                         items.add(new MenuItem("Link Texture to Selected", () -> manager.assignTextureToSelectedEntity(targetAsset)));
                     } else if (targetAsset.type == AssetType.AUDIO) {
                         items.add(new MenuItem("Link Audio to Selected", () -> manager.assignAudioToSelectedEntity(targetAsset)));
+                    } else if (targetAsset.type == AssetType.SCRIPT) {
+                        items.add(new MenuItem("Link Script to Selected", () -> manager.assignScriptToSelectedEntity(targetAsset)));
                     }
                     items.add(new MenuItem("Rename Asset", () -> manager.promptRenameAsset(targetAsset)));
                     items.add(new MenuItem("Remove Asset from Directory", () -> manager.removeAssetFromDirectory(targetAsset)));
@@ -214,6 +216,7 @@ public class OverlaySystem {
                 items.add(new MenuItem("+ Import Texture...", manager::promptImportTexture));
                 items.add(new MenuItem("+ Import 3D Mesh...", manager::promptImportMesh));
                 items.add(new MenuItem("+ Import Audio...", manager::promptImportAudio));
+                items.add(new MenuItem("+ Import Script...", manager::promptImportScript));
                 if (!manager.getCurrentFolderPath().isEmpty()) {
                     items.add(new MenuItem(".. Up Level (" + manager.getCurrentFolderPath() + ")", manager::navigateUpFolder));
                 }
@@ -230,6 +233,7 @@ public class OverlaySystem {
                 items.add(new MenuItem("Rename Entity", () -> manager.promptRenameEntity(hitEntity)));
                 items.add(new MenuItem("Duplicate Entity (Cmd+D)", manager::duplicateSelectedEntity));
                 items.add(new MenuItem("Delete Entity (Del)", manager::deleteSelectedEntity));
+                items.add(new MenuItem("+ Add Script Component", () -> manager.openAssetPicker(AssetType.SCRIPT)));
                 items.add(new MenuItem("+ Add Child Cube", () -> manager.spawnChildEntity(hitEntity, "Cube", "Assets/Models/cube.obj")));
                 items.add(new MenuItem("+ Add Child Light", () -> manager.spawnChildLight(hitEntity)));
 
@@ -251,6 +255,7 @@ public class OverlaySystem {
                 items.add(new MenuItem("Rename Entity", () -> manager.promptRenameEntity(manager.getSelectedEntity())));
                 items.add(new MenuItem("Duplicate Entity (Cmd+D)", manager::duplicateSelectedEntity));
                 items.add(new MenuItem("Delete Entity (Del)", manager::deleteSelectedEntity));
+                items.add(new MenuItem("+ Add Script Component", () -> manager.openAssetPicker(AssetType.SCRIPT)));
             }
             items.add(new MenuItem("+ Import Asset...", manager::promptImportAssetForDirectory));
         } else {
@@ -285,6 +290,7 @@ public class OverlaySystem {
                 items.add(new MenuItem("Rename Entity", () -> manager.promptRenameEntity(hitEntity)));
                 items.add(new MenuItem("Duplicate Object (Cmd+D)", manager::duplicateSelectedEntity));
                 items.add(new MenuItem("Delete Object (Del)", manager::deleteSelectedEntity));
+                items.add(new MenuItem("+ Add Script Component", () -> manager.openAssetPicker(AssetType.SCRIPT)));
                 items.add(new MenuItem("+ Add Child Cube", () -> manager.spawnChildEntity(hitEntity, "Cube", "Assets/Models/cube.obj")));
 
                 if (hitEntity.parentId != null && !hitEntity.parentId.isEmpty()) {

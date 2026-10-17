@@ -108,6 +108,13 @@ public class SceneSerializer {
                     String audioPath = sanitizeAssetPath(ac.audioAssetPath);
                     if (!audioPath.isEmpty() && !stringTable.contains(audioPath)) stringTable.add(audioPath);
                 }
+
+                ScriptComponent sc = e.getComponent(ScriptComponent.class);
+                if (sc != null) {
+                    String scriptPath = sanitizeAssetPath(sc.scriptAssetPath);
+                    if (!scriptPath.isEmpty() && !stringTable.contains(scriptPath)) stringTable.add(scriptPath);
+                    if (sc.scriptName != null && !stringTable.contains(sc.scriptName)) stringTable.add(sc.scriptName);
+                }
             }
 
             dos.writeInt(stringTable.size());
@@ -166,6 +173,13 @@ public class SceneSerializer {
                         dos.writeFloat(cc.nearPlane);
                         dos.writeFloat(cc.farPlane);
                         dos.writeBoolean(cc.isPrimary);
+                    } else if (comp instanceof ScriptComponent sc) {
+                        String uuid = (assetDb != null && sc.scriptAssetPath != null) ? assetDb.resolveUuidByPath(sc.scriptAssetPath) : null;
+                        writeUuidBinary(dos, uuid);
+                        String cleanPath = sanitizeAssetPath(sc.scriptAssetPath);
+                        dos.writeInt(stringTable.indexOf(cleanPath));
+                        dos.writeInt(stringTable.indexOf(sc.scriptName != null ? sc.scriptName : ""));
+                        dos.writeBoolean(sc.enabled);
                     }
                 }
             }
@@ -320,6 +334,21 @@ public class SceneSerializer {
                         Camera cc = new Camera(dis.readFloat(), dis.readFloat(), dis.readFloat());
                         cc.isPrimary = dis.readBoolean();
                         entity.addComponent(cc);
+                    } else if ("ScriptComponent".equalsIgnoreCase(typeName) || "Script".equalsIgnoreCase(typeName)) {
+                        String uuid = readUuidBinary(dis);
+                        int pathIdx = dis.readInt();
+                        int nameIdxSc = dis.readInt();
+                        boolean enabled = dis.readBoolean();
+
+                        String fallbackPath = (pathIdx >= 0 && pathIdx < stringCount) ? stringTable[pathIdx] : "";
+                        String scriptName = (nameIdxSc >= 0 && nameIdxSc < stringCount) ? stringTable[nameIdxSc] : "";
+
+                        String resolvedPath = (assetDb != null && uuid != null) ? assetDb.resolvePathByUuid(uuid) : null;
+                        if (resolvedPath == null || resolvedPath.isEmpty()) resolvedPath = fallbackPath;
+
+                        ScriptComponent sc = new ScriptComponent(resolvedPath, scriptName);
+                        sc.enabled = enabled;
+                        entity.addComponent(sc);
                     }
                 }
                 entities.add(entity);

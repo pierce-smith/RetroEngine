@@ -213,6 +213,7 @@ public class AssetDatabase {
                 case "png", "jpg", "jpeg", "tga" -> AssetType.TEXTURE;
                 case "wav", "mp3", "ogg" -> AssetType.AUDIO;
                 case "rscene", "scene" -> AssetType.SCENE;
+                case "java" -> AssetType.SCRIPT;
                 default -> AssetType.UNKNOWN;
             };
         }
@@ -281,6 +282,7 @@ public class AssetDatabase {
             case "png", "jpg", "jpeg", "tga" -> AssetType.TEXTURE;
             case "wav", "mp3", "ogg" -> AssetType.AUDIO;
             case "rscene", "scene" -> AssetType.SCENE;
+            case "java" -> AssetType.SCRIPT;
             default -> AssetType.UNKNOWN;
         };
 
@@ -383,6 +385,7 @@ public class AssetDatabase {
                 case "png", "jpg", "jpeg", "tga" -> AssetType.TEXTURE;
                 case "wav", "mp3", "ogg" -> AssetType.AUDIO;
                 case "rscene", "scene" -> AssetType.SCENE;
+                case "java" -> AssetType.SCRIPT;
                 default -> AssetType.UNKNOWN;
             };
             addAssetDirectoryIfNotExists(path, type);

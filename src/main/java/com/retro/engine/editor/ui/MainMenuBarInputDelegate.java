@@ -104,6 +104,8 @@ public class MainMenuBarInputDelegate {
                 else if (pickerFilterType == AssetType.AUDIO) {
                     AudioSource ac = selected.getComponent(AudioSource.class);
                     if (ac != null) ac.audioAssetPath = "";
+                } else if (pickerFilterType == AssetType.SCRIPT) {
+                    manager.assignScriptToSelectedEntity(null);
                 }
             }
             UISoundPlayer.play(UISound.DELETE);
@@ -117,6 +119,7 @@ public class MainMenuBarInputDelegate {
             if (pickerFilterType == AssetType.TEXTURE) InspectorInputDelegate.promptImportTexture(manager);
             else if (pickerFilterType == AssetType.MESH_3D) InspectorInputDelegate.promptImportMesh(manager);
             else if (pickerFilterType == AssetType.AUDIO) InspectorInputDelegate.promptImportAudio(manager);
+            else if (pickerFilterType == AssetType.SCRIPT) InspectorInputDelegate.promptImportScript(manager);
             return;
         }
 
@@ -129,6 +132,7 @@ public class MainMenuBarInputDelegate {
                 if (pickerFilterType == AssetType.TEXTURE) manager.assignTextureToSelectedEntity(asset);
                 else if (pickerFilterType == AssetType.MESH_3D) manager.assignMeshToSelectedEntity(asset);
                 else if (pickerFilterType == AssetType.AUDIO) manager.assignAudioToSelectedEntity(asset);
+                else if (pickerFilterType == AssetType.SCRIPT) manager.assignScriptToSelectedEntity(asset);
                 manager.closeModal();
                 return;
             }

@@ -10,13 +10,14 @@ import com.retro.engine.scene.components.Light;
 import com.retro.engine.scene.components.Material;
 import com.retro.engine.scene.components.MeshFilter;
 import com.retro.engine.scene.components.Transform;
+import com.retro.engine.scene.components.ScriptComponent;
 import com.retro.engine.assets.AssetMeta;
 
 import java.util.List;
 
 /**
  * InspectorPanel handles rendering the Right Panel (Dynamic Component Readout & Inspector Mutation).
- * Supports Light, Camera & AudioSource live property controls.
+ * Supports Light, Camera, AudioSource & ScriptComponent live property controls.
  */
 public class InspectorPanel {
 
@@ -90,6 +91,24 @@ public class InspectorPanel {
                     UIGeometryBatch.addBoundedText(buffer, "IMPORT", 0.895f, curY - 0.01f, 0.975f, 0.90f, 1.0f, 1.0f, 1.0f, 1.0f);
 
                     curY -= 0.09f;
+
+                } else if (comp instanceof ScriptComponent sc) {
+                    String scriptName = (sc.scriptName != null && !sc.scriptName.isEmpty())
+                            ? new java.io.File(sc.scriptName).getName() : "NONE";
+
+                    UIGeometryBatch.addQuad(buffer, 0.58f, curY - 0.04f, 0.79f, curY + 0.02f, 0.12f, 0.16f, 0.22f, 1.0f);
+                    UIGeometryBatch.addFrameBorder(buffer, 0.58f, curY - 0.04f, 0.79f, curY + 0.02f, 0.002f, 0.0f, 0.45f, 0.70f, 1.0f);
+                    UIGeometryBatch.addBoundedText(buffer, "SCRIPT: " + scriptName, 0.59f, curY - 0.01f, 0.78f, 0.95f, 0.4f, 0.8f, 1.0f, 1.0f);
+
+                    UIGeometryBatch.addQuad(buffer, 0.80f, curY - 0.04f, 0.88f, curY + 0.02f, 0.20f, 0.35f, 0.55f, 1.0f);
+                    UIGeometryBatch.addFrameBorder(buffer, 0.80f, curY - 0.04f, 0.88f, curY + 0.02f, 0.002f, 0.4f, 0.7f, 1.0f, 1.0f);
+                    UIGeometryBatch.addBoundedText(buffer, "PICK", 0.81f, curY - 0.01f, 0.87f, 0.95f, 1.0f, 1.0f, 1.0f, 1.0f);
+
+                    UIGeometryBatch.addQuad(buffer, 0.89f, curY - 0.04f, 0.98f, curY + 0.02f, 0.15f, 0.45f, 0.30f, 1.0f);
+                    UIGeometryBatch.addFrameBorder(buffer, 0.89f, curY - 0.04f, 0.98f, curY + 0.02f, 0.002f, 0.3f, 0.9f, 0.5f, 1.0f);
+                    UIGeometryBatch.addBoundedText(buffer, "IMPORT", 0.895f, curY - 0.01f, 0.975f, 0.90f, 1.0f, 1.0f, 1.0f, 1.0f);
+
+                    curY -= 0.08f;
 
                 } else if (comp instanceof Light lc) {
                     // Light Type & Cycle Button

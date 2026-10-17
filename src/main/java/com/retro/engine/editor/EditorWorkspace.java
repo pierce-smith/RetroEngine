@@ -21,7 +21,7 @@ import java.util.List;
 
 /**
  * Ultra-lean EditorWorkspace acting as a Backwards-Compatible Facade Bridge.
- * Command History integrated for universal Undo/Redo across transform, texture, mesh, entity spawn/delete, and rename actions.
+ * Command History integrated for universal Undo/Redo across transform, texture, mesh, script, entity spawn/delete, and rename actions.
  */
 @SuppressWarnings("unused")
 public class EditorWorkspace {
@@ -305,6 +305,18 @@ public class EditorWorkspace {
         commandHistory.executeCommand(cmd);
     }
 
+    public void assignScriptToSelectedEntity(AssetMeta scriptAsset) {
+        Entity selected = getSelectedEntity();
+        if (selected == null) return;
+        com.retro.engine.scene.components.ScriptComponent sc = selected.getComponent(com.retro.engine.scene.components.ScriptComponent.class);
+        String oldPath = (sc != null) ? sc.scriptAssetPath : null;
+        String oldName = (sc != null) ? sc.scriptName : null;
+        String newPath = (scriptAsset != null) ? scriptAsset.absolutePath : null;
+        String newName = (scriptAsset != null) ? scriptAsset.name : null;
+        ScriptAssignCommand cmd = new ScriptAssignCommand(selected, oldPath, oldName, newPath, newName);
+        commandHistory.executeCommand(cmd);
+    }
+
     public void spawnAudioSource() {
         sceneManager.spawnAudioSource();
         Entity newlySpawned = getSelectedEntity();
@@ -382,6 +394,7 @@ public class EditorWorkspace {
     public void promptImportMesh() { InspectorInputDelegate.promptImportMesh(this); }
     public void promptImportAssetForDirectory() { InspectorInputDelegate.promptImportAssetForDirectory(this); }
     public void promptImportAudio() { InspectorInputDelegate.promptImportAudio(this); }
+    public void promptImportScript() { InspectorInputDelegate.promptImportScript(this); }
 
     // --- INPUT ROUTING & CLICK HANDLING ---
     public boolean handleMouseClick(double rawX, double rawY, int button, int action) {

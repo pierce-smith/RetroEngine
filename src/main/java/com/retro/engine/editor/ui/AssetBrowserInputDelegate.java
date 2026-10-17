@@ -88,6 +88,9 @@ public class AssetBrowserInputDelegate {
                 } else if (asset.type == AssetType.TEXTURE) {
                     UISoundPlayer.play(UISound.CLICK);
                     manager.assignTextureToSelectedEntity(asset);
+                } else if (asset.type == AssetType.SCRIPT) {
+                    UISoundPlayer.play(UISound.CLICK);
+                    manager.assignScriptToSelectedEntity(asset);
                 }
                 break;
             }

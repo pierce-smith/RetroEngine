@@ -8,6 +8,7 @@ import com.retro.engine.scene.components.Light;
 import com.retro.engine.scene.components.Material;
 import com.retro.engine.scene.components.MeshFilter;
 import com.retro.engine.scene.components.Transform;
+import com.retro.engine.scene.components.ScriptComponent;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.commands.AudioPropertyCommand;
 import com.retro.engine.editor.commands.LightPropertyCommand;
@@ -65,6 +66,20 @@ public class InspectorInputDelegate {
                     }
                 }
                 curY -= 0.09f;
+
+            } else if (comp instanceof ScriptComponent) {
+                if (ndcY >= curY - 0.04f && ndcY <= curY + 0.02f) {
+                    if (ndcX >= 0.80f && ndcX <= 0.88f) {
+                        UISoundPlayer.play(UISound.OPEN_MODAL);
+                        manager.openAssetPicker(AssetType.SCRIPT);
+                        return;
+                    } else if (ndcX >= 0.89f && ndcX <= 0.98f) {
+                        UISoundPlayer.play(UISound.OPEN_MODAL);
+                        promptImportScript(manager);
+                        return;
+                    }
+                }
+                curY -= 0.08f;
 
             } else if (comp instanceof Light lc) {
                 if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f && ndcX >= 0.84f && ndcX <= 0.98f) {
@@ -227,6 +242,22 @@ public class InspectorInputDelegate {
         }
     }
 
+    public static void promptImportScript(EditorWorkspace manager) {
+        if (manager == null) return;
+        List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
+            "Select Gameplay Script(s)", "", "Java Scripts (*.java)", "java"
+        );
+        if (importedPaths != null && !importedPaths.isEmpty()) {
+            UISoundPlayer.play(UISound.SPAWN);
+            manager.onFilesDropped(importedPaths);
+            String primaryPath = importedPaths.get(0);
+            File file = new File(primaryPath);
+            manager.assignScriptToSelectedEntity(new AssetMeta(file.getName(), primaryPath, AssetType.SCRIPT));
+        } else {
+            UISoundPlayer.play(UISound.CLOSE_MODAL);
+        }
+    }
+
     public static void promptImportAudio(EditorWorkspace manager) {
         if (manager == null) return;
         List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
@@ -278,8 +309,8 @@ public class InspectorInputDelegate {
     public static void promptImportAssetForDirectory(EditorWorkspace manager) {
         if (manager == null) return;
         List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
-            "Import Asset(s) into Project", "", "All Supported Assets (*.obj, *.fbx, *.gltf, *.glb, *.png, *.jpg, *.jpeg, *.tga, *.scene)",
-            "obj", "fbx", "gltf", "glb", "png", "jpg", "jpeg", "tga", "scene"
+            "Import Asset(s) into Project", "", "All Supported Assets (*.obj, *.fbx, *.gltf, *.glb, *.png, *.jpg, *.jpeg, *.tga, *.scene, *.java)",
+            "obj", "fbx", "gltf", "glb", "png", "jpg", "jpeg", "tga", "scene", "java"
         );
         if (importedPaths != null && !importedPaths.isEmpty()) {
             UISoundPlayer.play(UISound.SPAWN);

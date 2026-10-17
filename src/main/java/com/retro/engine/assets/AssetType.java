@@ -5,6 +5,7 @@ public enum AssetType {
     TEXTURE,
     AUDIO,
     SCENE,
+    SCRIPT,
     FOLDER,
     UNKNOWN
 }
