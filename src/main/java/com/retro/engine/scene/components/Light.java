@@ -1,6 +1,7 @@
 package com.retro.engine.scene.components;
 
-import com.retro.engine.scene.components.Component;
+import com.retro.engine.editor.ui.InspectorProperty;
+import com.retro.engine.editor.ui.InspectorProperty.PropertyType;
 
 /**
  * Defines a directional or point light source in 3D world space.
@@ -8,9 +9,20 @@ import com.retro.engine.scene.components.Component;
 public class Light implements Component {
     public enum LightType { DIRECTIONAL, POINT, SPOT }
 
+    @InspectorProperty(label = "TYPE", type = PropertyType.BUTTON_GROUP)
     public LightType type = LightType.DIRECTIONAL;
+
+    @InspectorProperty(label = "INTENSITY", min = 0.0f, max = 100.0f, step = 0.5f)
     public float intensity = 1.0f;
-    public float r = 1.0f, g = 0.95f, b = 0.80f;
+
+    @InspectorProperty(label = "RED", min = 0.0f, max = 1.0f, step = 0.05f, type = PropertyType.COLOR)
+    public float r = 1.0f;
+
+    @InspectorProperty(label = "GREEN", min = 0.0f, max = 1.0f, step = 0.05f, type = PropertyType.COLOR)
+    public float g = 0.95f;
+
+    @InspectorProperty(label = "BLUE", min = 0.0f, max = 1.0f, step = 0.05f, type = PropertyType.COLOR)
+    public float b = 0.80f;
 
     public Light() {}
 

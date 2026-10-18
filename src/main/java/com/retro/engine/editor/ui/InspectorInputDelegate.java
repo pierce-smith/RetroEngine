@@ -1,17 +1,10 @@
 package com.retro.engine.editor.ui;
 
+import com.retro.engine.editor.ui.InspectorProperty.PropertyType;
 import com.retro.engine.scene.components.Component;
 import com.retro.engine.scene.Entity;
-import com.retro.engine.scene.components.AudioSource;
-import com.retro.engine.scene.components.Camera;
-import com.retro.engine.scene.components.Light;
-import com.retro.engine.scene.components.Material;
-import com.retro.engine.scene.components.MeshFilter;
-import com.retro.engine.scene.components.Transform;
-import com.retro.engine.scene.components.ScriptComponent;
 import com.retro.engine.editor.EditorWorkspace;
-import com.retro.engine.editor.commands.AudioPropertyCommand;
-import com.retro.engine.editor.commands.LightPropertyCommand;
+import com.retro.engine.editor.commands.ModifyPropertyCommand;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.audio.UISoundPlayer;
@@ -19,6 +12,7 @@ import com.retro.engine.editor.audio.UISoundPlayer.UISound;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 
 import java.io.File;
+import java.lang.reflect.Field;
 import java.util.List;
 
 public class InspectorInputDelegate {
@@ -35,210 +29,145 @@ public class InspectorInputDelegate {
 
             curY -= 0.06f; // Header line
 
-            if (comp instanceof Transform) {
-                curY -= 0.17f;
+            Field[] fields = comp.getClass().getDeclaredFields();
+            for (Field field : fields) {
+                if (curY < -0.45f) break;
+                if (!field.isAnnotationPresent(InspectorProperty.class)) continue;
 
-            } else if (comp instanceof MeshFilter) {
-                if (ndcY >= curY - 0.04f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.80f && ndcX <= 0.88f) {
-                        UISoundPlayer.play(UISound.OPEN_MODAL);
-                        manager.openAssetPicker(AssetType.MESH_3D);
-                        return;
-                    } else if (ndcX >= 0.89f && ndcX <= 0.98f) {
-                        UISoundPlayer.play(UISound.OPEN_MODAL);
-                        promptImportMesh(manager);
-                        return;
+                InspectorProperty prop = field.getAnnotation(InspectorProperty.class);
+                field.setAccessible(true);
+                String label = prop.label().isEmpty() ? field.getName() : prop.label();
+
+                try {
+                    Object val = field.get(comp);
+
+                    if (prop.type() == PropertyType.ASSET_PICKER) {
+                        if (ndcY >= curY - 0.04f && ndcY <= curY + 0.02f) {
+                            if (ndcX >= 0.80f && ndcX <= 0.88f) {
+                                UISoundPlayer.play(UISound.OPEN_MODAL);
+                                AssetType targetType = parseAssetType(prop.assetType());
+                                manager.openAssetPicker(targetType);
+                                return;
+                            } else if (ndcX >= 0.89f && ndcX <= 0.98f) {
+                                UISoundPlayer.play(UISound.OPEN_MODAL);
+                                promptImportAssetByKind(manager, prop.assetType());
+                                return;
+                            }
+                        }
+                        curY -= 0.08f;
+
+                    } else if (prop.type() == PropertyType.TOGGLE || field.getType() == boolean.class) {
+                        if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f && ndcX >= 0.58f && ndcX <= 0.85f) {
+                            UISoundPlayer.play(UISound.TOGGLE);
+                            boolean oldBool = (Boolean) val;
+                            boolean newBool = !oldBool;
+                            ModifyPropertyCommand cmd = new ModifyPropertyCommand(comp, field, oldBool, newBool, label);
+                            manager.getCommandHistory().executeCommand(cmd);
+                            return;
+                        }
+                        curY -= 0.06f;
+
+                    } else if (prop.type() == PropertyType.BUTTON_GROUP || field.getType().isEnum()) {
+                        if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f && ndcX >= 0.84f && ndcX <= 0.98f) {
+                            UISoundPlayer.play(UISound.TOGGLE);
+                            Object[] constants = field.getType().getEnumConstants();
+                            if (constants != null && constants.length > 0) {
+                                int idx = 0;
+                                for (int i = 0; i < constants.length; i++) {
+                                    if (constants[i].equals(val)) { idx = i; break; }
+                                }
+                                Object nextEnum = constants[(idx + 1) % constants.length];
+                                ModifyPropertyCommand cmd = new ModifyPropertyCommand(comp, field, val, nextEnum, label);
+                                manager.getCommandHistory().executeCommand(cmd);
+                                return;
+                            }
+                        }
+                        curY -= 0.06f;
+
+                    } else if (prop.type() == PropertyType.COLOR) {
+                        if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
+                            float floatVal = (Float) val;
+                            if (ndcX >= 0.84f && ndcX <= 0.90f) {
+                                UISoundPlayer.play(UISound.CLICK);
+                                float newVal = Math.max(prop.min(), floatVal - prop.step());
+                                ModifyPropertyCommand cmd = new ModifyPropertyCommand(comp, field, floatVal, newVal, label);
+                                manager.getCommandHistory().executeCommand(cmd);
+                                return;
+                            }
+                            if (ndcX >= 0.91f && ndcX <= 0.97f) {
+                                UISoundPlayer.play(UISound.CLICK);
+                                float newVal = Math.min(prop.max(), floatVal + prop.step());
+                                ModifyPropertyCommand cmd = new ModifyPropertyCommand(comp, field, floatVal, newVal, label);
+                                manager.getCommandHistory().executeCommand(cmd);
+                                return;
+                            }
+                        }
+                        curY -= 0.06f;
+
+                    } else if (field.getType() == float.class || field.getType() == Float.class) {
+                        if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
+                            float floatVal = (Float) val;
+                            if (ndcX >= 0.84f && ndcX <= 0.90f) {
+                                UISoundPlayer.play(UISound.CLICK);
+                                float newVal = Math.max(prop.min(), floatVal - prop.step());
+                                ModifyPropertyCommand cmd = new ModifyPropertyCommand(comp, field, floatVal, newVal, label);
+                                manager.getCommandHistory().executeCommand(cmd);
+                                return;
+                            }
+                            if (ndcX >= 0.91f && ndcX <= 0.97f) {
+                                UISoundPlayer.play(UISound.CLICK);
+                                float newVal = Math.min(prop.max(), floatVal + prop.step());
+                                ModifyPropertyCommand cmd = new ModifyPropertyCommand(comp, field, floatVal, newVal, label);
+                                manager.getCommandHistory().executeCommand(cmd);
+                                return;
+                            }
+                        }
+                        curY -= 0.06f;
+
+                    } else {
+                        curY -= 0.05f;
                     }
+                } catch (Exception e) {
+                    e.printStackTrace();
                 }
-                curY -= 0.08f;
-
-            } else if (comp instanceof Material) {
-                curY -= 0.05f; // SHADER line
-                if (ndcY >= curY - 0.04f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.80f && ndcX <= 0.88f) {
-                        UISoundPlayer.play(UISound.OPEN_MODAL);
-                        manager.openAssetPicker(AssetType.TEXTURE);
-                        return;
-                    } else if (ndcX >= 0.89f && ndcX <= 0.98f) {
-                        UISoundPlayer.play(UISound.OPEN_MODAL);
-                        promptImportTexture(manager);
-                        return;
-                    }
-                }
-                curY -= 0.09f;
-
-            } else if (comp instanceof ScriptComponent) {
-                if (ndcY >= curY - 0.04f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.80f && ndcX <= 0.88f) {
-                        UISoundPlayer.play(UISound.OPEN_MODAL);
-                        manager.openAssetPicker(AssetType.SCRIPT);
-                        return;
-                    } else if (ndcX >= 0.89f && ndcX <= 0.98f) {
-                        UISoundPlayer.play(UISound.OPEN_MODAL);
-                        promptImportScript(manager);
-                        return;
-                    }
-                }
-                curY -= 0.08f;
-
-            } else if (comp instanceof Light lc) {
-                if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f && ndcX >= 0.84f && ndcX <= 0.98f) {
-                    UISoundPlayer.play(UISound.TOGGLE);
-                    Light.LightType oldType = lc.type;
-                    Light.LightType nextType = switch (oldType) {
-                        case DIRECTIONAL -> Light.LightType.POINT;
-                        case POINT -> Light.LightType.SPOT;
-                        case SPOT -> Light.LightType.DIRECTIONAL;
-                    };
-                    LightPropertyCommand cmd = new LightPropertyCommand(entity, oldType, nextType, lc.intensity, lc.intensity, lc.r, lc.r, lc.g, lc.g, lc.b, lc.b);
-                    manager.getCommandHistory().executeCommand(cmd);
-                    return;
-                }
-                curY -= 0.06f;
-
-                if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.84f && ndcX <= 0.90f) {
-                        UISoundPlayer.play(UISound.CLICK);
-                        float oldVal = lc.intensity;
-                        float newVal = Math.max(0.0f, oldVal - 0.5f);
-                        LightPropertyCommand cmd = new LightPropertyCommand(entity, lc.type, lc.type, oldVal, newVal, lc.r, lc.r, lc.g, lc.g, lc.b, lc.b);
-                        manager.getCommandHistory().executeCommand(cmd);
-                        return;
-                    }
-                    if (ndcX >= 0.91f && ndcX <= 0.97f) {
-                        UISoundPlayer.play(UISound.CLICK);
-                        float oldVal = lc.intensity;
-                        float newVal = oldVal + 0.5f;
-                        LightPropertyCommand cmd = new LightPropertyCommand(entity, lc.type, lc.type, oldVal, newVal, lc.r, lc.r, lc.g, lc.g, lc.b, lc.b);
-                        manager.getCommandHistory().executeCommand(cmd);
-                        return;
-                    }
-                }
-                curY -= 0.06f;
-
-                if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.84f && ndcX <= 0.88f) {
-                        UISoundPlayer.play(UISound.CLICK);
-                        float oldR = lc.r;
-                        float newR = (oldR > 0.5f) ? 0.2f : 1.0f;
-                        LightPropertyCommand cmd = new LightPropertyCommand(entity, lc.type, lc.type, lc.intensity, lc.intensity, oldR, newR, lc.g, lc.g, lc.b, lc.b);
-                        manager.getCommandHistory().executeCommand(cmd);
-                        return;
-                    }
-                    if (ndcX >= 0.89f && ndcX <= 0.93f) {
-                        UISoundPlayer.play(UISound.CLICK);
-                        float oldG = lc.g;
-                        float newG = (oldG > 0.5f) ? 0.2f : 1.0f;
-                        LightPropertyCommand cmd = new LightPropertyCommand(entity, lc.type, lc.type, lc.intensity, lc.intensity, lc.r, lc.r, oldG, newG, lc.b, lc.b);
-                        manager.getCommandHistory().executeCommand(cmd);
-                        return;
-                    }
-                    if (ndcX >= 0.94f && ndcX <= 0.98f) {
-                        UISoundPlayer.play(UISound.CLICK);
-                        float oldB = lc.b;
-                        float newB = (oldB > 0.5f) ? 0.2f : 1.0f;
-                        LightPropertyCommand cmd = new LightPropertyCommand(entity, lc.type, lc.type, lc.intensity, lc.intensity, lc.r, lc.r, lc.g, lc.g, oldB, newB);
-                        manager.getCommandHistory().executeCommand(cmd);
-                        return;
-                    }
-                }
-                curY -= 0.08f;
-
-            } else if (comp instanceof Camera cc) {
-                if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.84f && ndcX <= 0.90f) { UISoundPlayer.play(UISound.CLICK); cc.fov = Math.max(10.0f, cc.fov - 5.0f); return; }
-                    if (ndcX >= 0.91f && ndcX <= 0.97f) { UISoundPlayer.play(UISound.CLICK); cc.fov = Math.min(170.0f, cc.fov + 5.0f); return; }
-                }
-                curY -= 0.06f;
-
-                curY -= 0.05f; // NEAR/FAR line
-
-                if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f && ndcX >= 0.58f && ndcX <= 0.85f) {
-                    UISoundPlayer.play(UISound.TOGGLE);
-                    cc.isPrimary = !cc.isPrimary;
-                    return;
-                }
-                curY -= 0.08f;
-
-            } else if (comp instanceof AudioSource ac) {
-                // Line 1: Clip Picker / Import
-                if (ndcY >= curY - 0.04f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.80f && ndcX <= 0.88f) {
-                        UISoundPlayer.play(UISound.OPEN_MODAL);
-                        manager.openAssetPicker(AssetType.AUDIO);
-                        return;
-                    } else if (ndcX >= 0.89f && ndcX <= 0.98f) {
-                        UISoundPlayer.play(UISound.OPEN_MODAL);
-                        promptImportAudio(manager);
-                        return;
-                    }
-                }
-                curY -= 0.08f;
-
-                // Line 2: Volume Adjust [-] [+]
-                if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.84f && ndcX <= 0.90f) {
-                        UISoundPlayer.play(UISound.CLICK);
-                        float oldVol = ac.volume;
-                        float newVol = Math.max(0.0f, oldVol - 0.1f);
-                        AudioPropertyCommand cmd = new AudioPropertyCommand(entity, ac.audioAssetPath, ac.audioAssetPath, oldVol, newVol, ac.pitch, ac.pitch, ac.loop, ac.loop);
-                        manager.getCommandHistory().executeCommand(cmd);
-                        return;
-                    }
-                    if (ndcX >= 0.91f && ndcX <= 0.97f) {
-                        UISoundPlayer.play(UISound.CLICK);
-                        float oldVol = ac.volume;
-                        float newVol = Math.min(2.0f, oldVol + 0.1f);
-                        AudioPropertyCommand cmd = new AudioPropertyCommand(entity, ac.audioAssetPath, ac.audioAssetPath, oldVol, newVol, ac.pitch, ac.pitch, ac.loop, ac.loop);
-                        manager.getCommandHistory().executeCommand(cmd);
-                        return;
-                    }
-                }
-                curY -= 0.06f;
-
-                // Line 3: Pitch Adjust [-] [+]
-                if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.84f && ndcX <= 0.90f) {
-                        UISoundPlayer.play(UISound.CLICK);
-                        float oldPitch = ac.pitch;
-                        float newPitch = Math.max(0.1f, oldPitch - 0.1f);
-                        AudioPropertyCommand cmd = new AudioPropertyCommand(entity, ac.audioAssetPath, ac.audioAssetPath, ac.volume, ac.volume, oldPitch, newPitch, ac.loop, ac.loop);
-                        manager.getCommandHistory().executeCommand(cmd);
-                        return;
-                    }
-                    if (ndcX >= 0.91f && ndcX <= 0.97f) {
-                        UISoundPlayer.play(UISound.CLICK);
-                        float oldPitch = ac.pitch;
-                        float newPitch = Math.min(3.0f, oldPitch + 0.1f);
-                        AudioPropertyCommand cmd = new AudioPropertyCommand(entity, ac.audioAssetPath, ac.audioAssetPath, ac.volume, ac.volume, oldPitch, newPitch, ac.loop, ac.loop);
-                        manager.getCommandHistory().executeCommand(cmd);
-                        return;
-                    }
-                }
-                curY -= 0.06f;
-
-                // Line 4: Transport Play / Pause / Stop
-                if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
-                    if (ndcX >= 0.58f && ndcX <= 0.70f) { UISoundPlayer.play(UISound.TOGGLE); ac.play(); return; }
-                    if (ndcX >= 0.72f && ndcX <= 0.84f) { UISoundPlayer.play(UISound.TOGGLE); ac.pause(); return; }
-                    if (ndcX >= 0.86f && ndcX <= 0.98f) { UISoundPlayer.play(UISound.TOGGLE); ac.stop(); return; }
-                }
-                curY -= 0.06f;
-
-                // Line 5: Loop Toggle
-                if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f && ndcX >= 0.58f && ndcX <= 0.85f) {
-                    UISoundPlayer.play(UISound.TOGGLE);
-                    boolean oldLoop = ac.loop;
-                    boolean newLoop = !oldLoop;
-                    AudioPropertyCommand cmd = new AudioPropertyCommand(entity, ac.audioAssetPath, ac.audioAssetPath, ac.volume, ac.volume, ac.pitch, ac.pitch, oldLoop, newLoop);
-                    manager.getCommandHistory().executeCommand(cmd);
-                    return;
-                }
-                curY -= 0.08f;
-
-            } else {
-                curY -= 0.07f;
             }
+            curY -= 0.02f;
+        }
+    }
+
+    private static AssetType parseAssetType(String assetTypeStr) {
+        if (assetTypeStr == null) return AssetType.MESH_3D;
+        return switch (assetTypeStr.toUpperCase()) {
+            case "TEXTURE" -> AssetType.TEXTURE;
+            case "AUDIO" -> AssetType.AUDIO;
+            case "SCRIPT" -> AssetType.SCRIPT;
+            default -> AssetType.MESH_3D;
+        };
+    }
+
+    private static void promptImportAssetByKind(EditorWorkspace manager, String assetKind) {
+        if ("TEXTURE".equalsIgnoreCase(assetKind)) {
+            promptImportTexture(manager);
+        } else if ("AUDIO".equalsIgnoreCase(assetKind)) {
+            promptImportAudio(manager);
+        } else if ("SCRIPT".equalsIgnoreCase(assetKind)) {
+            promptImportScript(manager);
+        } else {
+            promptImportMesh(manager);
+        }
+    }
+
+    public static void promptImportAssetForDirectory(EditorWorkspace manager) {
+        if (manager == null) return;
+        List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
+            "Import Asset(s) into Project", "", "All Supported Assets (*.obj, *.fbx, *.gltf, *.glb, *.png, *.jpg, *.jpeg, *.tga, *.scene, *.java)",
+            "obj", "fbx", "gltf", "glb", "png", "jpg", "jpeg", "tga", "scene", "java"
+        );
+        if (importedPaths != null && !importedPaths.isEmpty()) {
+            UISoundPlayer.play(UISound.SPAWN);
+            manager.onFilesDropped(importedPaths);
+        } else {
+            UISoundPlayer.play(UISound.CLOSE_MODAL);
         }
     }
 
@@ -301,20 +230,6 @@ public class InspectorInputDelegate {
             String primaryPath = importedPaths.get(0);
             File file = new File(primaryPath);
             manager.assignMeshToSelectedEntity(new AssetMeta(file.getName(), primaryPath, AssetType.MESH_3D));
-        } else {
-            UISoundPlayer.play(UISound.CLOSE_MODAL);
-        }
-    }
-
-    public static void promptImportAssetForDirectory(EditorWorkspace manager) {
-        if (manager == null) return;
-        List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
-            "Import Asset(s) into Project", "", "All Supported Assets (*.obj, *.fbx, *.gltf, *.glb, *.png, *.jpg, *.jpeg, *.tga, *.scene, *.java)",
-            "obj", "fbx", "gltf", "glb", "png", "jpg", "jpeg", "tga", "scene", "java"
-        );
-        if (importedPaths != null && !importedPaths.isEmpty()) {
-            UISoundPlayer.play(UISound.SPAWN);
-            manager.onFilesDropped(importedPaths);
         } else {
             UISoundPlayer.play(UISound.CLOSE_MODAL);
         }

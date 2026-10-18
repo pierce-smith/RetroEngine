@@ -14,14 +14,14 @@ import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
-import com.retro.engine.scene.components.AudioSource;
+import com.retro.engine.scene.components.*;
 
 import java.io.File;
+import java.lang.reflect.Field;
 import java.util.List;
 
 /**
  * Ultra-lean EditorWorkspace acting as a Backwards-Compatible Facade Bridge.
- * Command History integrated for universal Undo/Redo across transform, texture, mesh, script, entity spawn/delete, and rename actions.
  */
 @SuppressWarnings("unused")
 public class EditorWorkspace {
@@ -34,7 +34,6 @@ public class EditorWorkspace {
     private final SceneWorld sceneManager;
     private final CommandStack commandHistory = new CommandStack();
 
-    // Isolated Delegate Sub-Managers
     private final AssetDatabase assetDirectoryManager = new AssetDatabase();
     private final GizmoState gizmoStateController = new GizmoState();
     private final OverlaySystem overlayManager = new OverlaySystem();
@@ -56,10 +55,7 @@ public class EditorWorkspace {
         EngineConsolePanel.installConsoleRedirect();
     }
 
-    // --- WINDOW MANAGEMENT ---
-    public void setWindowHandle(long handle) {
-        this.windowHandle = handle;
-    }
+    public void setWindowHandle(long handle) { this.windowHandle = handle; }
 
     public void setWindowDimensions(int width, int height) {
         if (width > 0 && height > 0) {
@@ -75,7 +71,6 @@ public class EditorWorkspace {
     public ViewportCamera getCameraController() { return cameraController; }
     public SceneWorld getSceneManager() { return sceneManager; }
 
-    // --- SCENE & PLAYBACK LIFECYCLE ---
     public PlayState getPlayState() { return sceneManager.getPlayState(); }
     public void play() { sceneManager.play(); }
     public void pause() { sceneManager.pause(); }
@@ -92,7 +87,6 @@ public class EditorWorkspace {
     public void deleteEntity(Entity entity) { if (entity != null) sceneManager.deleteEntity(entity); }
     public void addEntity(Entity entity, int index) { if (entity != null) sceneManager.addEntity(entity, index); }
 
-    // --- GENERATIONAL HANDLE SAFETY ---
     public EntityHandle getSelectedEntityHandle() { return sceneManager.getSelectedEntityHandle(); }
     public void selectEntityByHandle(EntityHandle handle) { sceneManager.selectEntityByHandle(handle); }
     public Entity getEntityByHandle(EntityHandle handle) { return sceneManager.getEntityByHandle(handle); }
@@ -137,11 +131,11 @@ public class EditorWorkspace {
             }
             if (data.entities() != null) {
                 for (Entity entity : data.entities()) {
-                    com.retro.engine.scene.components.MeshFilter mc = entity.getComponent(com.retro.engine.scene.components.MeshFilter.class);
+                    MeshFilter mc = entity.getComponent(MeshFilter.class);
                     if (mc != null && mc.meshAssetPath != null && !mc.meshAssetPath.trim().isEmpty()) {
                         assetDirectoryManager.addAssetDirectoryIfNotExists(mc.meshAssetPath, AssetType.MESH_3D);
                     }
-                    com.retro.engine.scene.components.Material mat = entity.getComponent(com.retro.engine.scene.components.Material.class);
+                    Material mat = entity.getComponent(Material.class);
                     if (mat != null && mat.textureAssetPath != null && !mat.textureAssetPath.trim().isEmpty()) {
                         assetDirectoryManager.addAssetDirectoryIfNotExists(mat.textureAssetPath, AssetType.TEXTURE);
                     }
@@ -150,7 +144,6 @@ public class EditorWorkspace {
         }
     }
 
-    // --- DELEGATED ASSET DIRECTORY OPERATIONS ---
     public String getCurrentFolderPath() { return assetDirectoryManager.getCurrentFolderPath(); }
     public void setCurrentFolderPath(String path) { assetDirectoryManager.setCurrentFolderPath(path); }
     public void navigateUpFolder() { assetDirectoryManager.navigateUpFolder(); }
@@ -167,7 +160,6 @@ public class EditorWorkspace {
     public void clearAssetDirectory() { assetDirectoryManager.clear(); }
     public void addAssetDirectoryIfNotExists(String path, AssetType type) { assetDirectoryManager.addAssetDirectoryIfNotExists(path, type); }
 
-    // --- DELEGATED GIZMO & VIEWPORT STATE ---
     public GizmoMode getCurrentGizmoMode() { return gizmoStateController.getGizmoMode(); }
     public void setCurrentGizmoMode(GizmoMode mode) { gizmoStateController.setGizmoMode(mode); }
     public GizmoAxis getActiveGizmoAxis() { return gizmoStateController.getActiveAxis(); }
@@ -181,7 +173,6 @@ public class EditorWorkspace {
         return GizmoSystem.projectWorldToNdc(wx, wy, wz, cameraController, gizmoStateController.getCamPanX(), gizmoStateController.getCamPanY(), gizmoStateController.getCamZoom(), gizmoStateController.getCamPitch(), gizmoStateController.getCamYaw());
     }
 
-    // --- DELEGATED OVERLAY & MODAL OPERATIONS ---
     public DropdownMenu getActiveDropdownMenu() { return overlayManager.getActiveDropdownMenu(); }
     public DropdownMenu getActiveDropdown() { return overlayManager.getActiveDropdownMenu(); }
     public void setActiveDropdownMenu(DropdownMenu menu) { overlayManager.setActiveDropdownMenu(menu); }
@@ -206,12 +197,10 @@ public class EditorWorkspace {
     public void openContextMenu(float ndcX, float ndcY, List<MenuItem> items) { overlayManager.openContextMenu(ndcX, ndcY, items); }
     public void showContextMenu(float ndcX, float ndcY, List<MenuItem> items) { overlayManager.openContextMenu(ndcX, ndcY, items); }
 
-    // --- REGIONAL HIT-TESTING ---
     public PanelRegion getRegionAt(float ndcX, float ndcY) {
         return PanelRegion.getRegionAt(ndcX, ndcY, overlayManager);
     }
 
-    // --- ENTITY MANIPULATION & COMMANDS ---
     public void promptRenameEntity(Entity entity) {
         if (entity == null) return;
         String input = NativeFileDialog.promptInput("Rename Entity", "Enter new entity name:", entity.name);
@@ -289,32 +278,26 @@ public class EditorWorkspace {
     public void assignTextureToSelectedEntity(AssetMeta textureAsset) {
         Entity selected = getSelectedEntity();
         if (selected == null || textureAsset == null) return;
-        com.retro.engine.scene.components.Material mat = selected.getComponent(com.retro.engine.scene.components.Material.class);
-        String oldPath = (mat != null) ? mat.textureAssetPath : null;
-        String oldName = (mat != null) ? mat.textureName : null;
-        TextureAssignCommand cmd = new TextureAssignCommand(selected, oldPath, oldName, textureAsset.absolutePath, textureAsset.name);
-        commandHistory.executeCommand(cmd);
+        Material mat = selected.getComponent(Material.class);
+        if (mat == null) return;
+        modifyFieldViaCommand(mat, "textureAssetPath", mat.textureAssetPath, textureAsset.absolutePath, "TEXTURE");
     }
 
     public void assignMeshToSelectedEntity(AssetMeta meshAsset) {
         Entity selected = getSelectedEntity();
         if (selected == null || meshAsset == null) return;
-        com.retro.engine.scene.components.MeshFilter mc = selected.getComponent(com.retro.engine.scene.components.MeshFilter.class);
-        String oldPath = (mc != null) ? mc.meshAssetPath : null;
-        MeshAssignCommand cmd = new MeshAssignCommand(selected, oldPath, meshAsset.absolutePath);
-        commandHistory.executeCommand(cmd);
+        MeshFilter mc = selected.getComponent(MeshFilter.class);
+        if (mc == null) return;
+        modifyFieldViaCommand(mc, "meshAssetPath", mc.meshAssetPath, meshAsset.absolutePath, "MESH_3D");
     }
 
     public void assignScriptToSelectedEntity(AssetMeta scriptAsset) {
         Entity selected = getSelectedEntity();
         if (selected == null) return;
-        com.retro.engine.scene.components.ScriptComponent sc = selected.getComponent(com.retro.engine.scene.components.ScriptComponent.class);
-        String oldPath = (sc != null) ? sc.scriptAssetPath : null;
-        String oldName = (sc != null) ? sc.scriptName : null;
+        ScriptComponent sc = selected.getComponent(ScriptComponent.class);
+        if (sc == null) return;
         String newPath = (scriptAsset != null) ? scriptAsset.absolutePath : null;
-        String newName = (scriptAsset != null) ? scriptAsset.name : null;
-        ScriptAssignCommand cmd = new ScriptAssignCommand(selected, oldPath, oldName, newPath, newName);
-        commandHistory.executeCommand(cmd);
+        modifyFieldViaCommand(sc, "scriptAssetPath", sc.scriptAssetPath, newPath, "SCRIPT");
     }
 
     public void spawnAudioSource() {
@@ -331,12 +314,18 @@ public class EditorWorkspace {
         Entity selected = getSelectedEntity();
         if (selected == null || audioAsset == null) return;
         AudioSource ac = selected.getComponent(AudioSource.class);
-        String oldPath = (ac != null) ? ac.audioAssetPath : null;
-        float vol = (ac != null) ? ac.volume : 1.0f;
-        float pitch = (ac != null) ? ac.pitch : 1.0f;
-        boolean loop = (ac != null) ? ac.loop : false;
-        AudioPropertyCommand cmd = new AudioPropertyCommand(selected, oldPath, audioAsset.absolutePath, vol, vol, pitch, pitch, loop, loop);
-        commandHistory.executeCommand(cmd);
+        if (ac == null) return;
+        modifyFieldViaCommand(ac, "audioAssetPath", ac.audioAssetPath, audioAsset.absolutePath, "AUDIO");
+    }
+
+    private void modifyFieldViaCommand(Component comp, String fieldName, Object oldVal, Object newVal, String label) {
+        try {
+            Field field = comp.getClass().getDeclaredField(fieldName);
+            ModifyPropertyCommand cmd = new ModifyPropertyCommand(comp, field, oldVal, newVal, label);
+            commandHistory.executeCommand(cmd);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     public void setParentEntity(Entity child, Entity parent) {
@@ -364,7 +353,7 @@ public class EditorWorkspace {
         child.parentId = parent.id;
         parent.addChildId(child.id);
         parent.expandedInHierarchy = true;
-        com.retro.engine.scene.components.Transform tc = child.getTransform();
+        Transform tc = child.getTransform();
         if (tc != null) { tc.posX = 1.0f; tc.posY = 0.0f; tc.posZ = 0.0f; }
         EntitySpawnCommand cmd = new EntitySpawnCommand(this, child);
         commandHistory.executeCommand(cmd);
@@ -376,7 +365,7 @@ public class EditorWorkspace {
         String entityId = "light_" + (getSceneEntities().size() + 1);
         String name = "Light_" + (getSceneEntities().size() + 1);
         Entity child = new Entity(entityId, name, null);
-        child.addComponent(new com.retro.engine.scene.components.Light());
+        child.addComponent(new Light());
         child.parentId = parent.id;
         parent.addChildId(child.id);
         parent.expandedInHierarchy = true;
@@ -389,14 +378,12 @@ public class EditorWorkspace {
     public void undo() { commandHistory.undo(); }
     public void redo() { commandHistory.redo(); }
 
-    // --- DIALOG & IMPORT PASSTHROUGHS ---
     public void promptImportTexture() { InspectorInputDelegate.promptImportTexture(this); }
     public void promptImportMesh() { InspectorInputDelegate.promptImportMesh(this); }
     public void promptImportAssetForDirectory() { InspectorInputDelegate.promptImportAssetForDirectory(this); }
     public void promptImportAudio() { InspectorInputDelegate.promptImportAudio(this); }
     public void promptImportScript() { InspectorInputDelegate.promptImportScript(this); }
 
-    // --- INPUT ROUTING & CLICK HANDLING ---
     public boolean handleMouseClick(double rawX, double rawY, int button, int action) {
         if (button != 0 && button != 1) return false;
 
@@ -474,22 +461,21 @@ public class EditorWorkspace {
             }
 
             if (button == 0 && getActiveGizmoAxis() != GizmoAxis.NONE && getSelectedEntity() != null) {
-                com.retro.engine.scene.components.Transform tc = getSelectedEntity().getTransform();
+                Transform tc = getSelectedEntity().getTransform();
                 if (tc != null) {
                     if (tc.posX != gizmoStateController.getDragStartPx() || tc.posY != gizmoStateController.getDragStartPy() || tc.posZ != gizmoStateController.getDragStartPz() ||
                         tc.rotX != gizmoStateController.getDragStartRx() || tc.rotY != gizmoStateController.getDragStartRy() || tc.rotZ != gizmoStateController.getDragStartRz() ||
                         tc.scaleX != gizmoStateController.getDragStartSx() || tc.scaleY != gizmoStateController.getDragStartSy() || tc.scaleZ != gizmoStateController.getDragStartSz()) {
 
-                        TransformCommand cmd = new TransformCommand(
-                            getSelectedEntity(),
-                            gizmoStateController.getDragStartPx(), gizmoStateController.getDragStartPy(), gizmoStateController.getDragStartPz(),
-                            gizmoStateController.getDragStartRx(), gizmoStateController.getDragStartRy(), gizmoStateController.getDragStartRz(),
-                            gizmoStateController.getDragStartSx(), gizmoStateController.getDragStartSy(), gizmoStateController.getDragStartSz(),
-                            tc.posX, tc.posY, tc.posZ,
-                            tc.rotX, tc.rotY, tc.rotZ,
-                            tc.scaleX, tc.scaleY, tc.scaleZ
-                        );
-                        commandHistory.executeCommand(cmd);
+                        modifyFieldViaCommand(tc, "posX", gizmoStateController.getDragStartPx(), tc.posX, "POS X");
+                        modifyFieldViaCommand(tc, "posY", gizmoStateController.getDragStartPy(), tc.posY, "POS Y");
+                        modifyFieldViaCommand(tc, "posZ", gizmoStateController.getDragStartPz(), tc.posZ, "POS Z");
+                        modifyFieldViaCommand(tc, "rotX", gizmoStateController.getDragStartRx(), tc.rotX, "ROT X");
+                        modifyFieldViaCommand(tc, "rotY", gizmoStateController.getDragStartRy(), tc.rotY, "ROT Y");
+                        modifyFieldViaCommand(tc, "rotZ", gizmoStateController.getDragStartRz(), tc.rotZ, "ROT Z");
+                        modifyFieldViaCommand(tc, "scaleX", gizmoStateController.getDragStartSx(), tc.scaleX, "SCL X");
+                        modifyFieldViaCommand(tc, "scaleY", gizmoStateController.getDragStartSy(), tc.scaleY, "SCL Y");
+                        modifyFieldViaCommand(tc, "scaleZ", gizmoStateController.getDragStartSz(), tc.scaleZ, "SCL Z");
                     }
                 }
                 setActiveGizmoAxis(GizmoAxis.NONE);
@@ -515,7 +501,6 @@ public class EditorWorkspace {
         return false;
     }
 
-    // --- UI BATCH GENERATION ---
     public float[] getUiVertices() {
         return generateUiVertices();
     }
@@ -541,7 +526,6 @@ public class EditorWorkspace {
 
         MainMenuBar.render(uiGeometryBuffer, getActiveDropdownMenu(), getActiveScenePath(), getPlayState());
 
-        // Render System Console & Real-time Telemetry HUD
         EngineConsolePanel.renderProfilerHUD(uiGeometryBuffer, lastDeltaTime);
         if (EngineConsolePanel.isConsoleVisible()) {
             EngineConsolePanel.renderConsole(uiGeometryBuffer);

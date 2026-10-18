@@ -5,7 +5,6 @@ import com.retro.engine.editor.EditorWorkspace;
 
 /**
  * Encapsulates Entity hierarchy re-parenting edits for Undo/Redo.
- * Directly invokes SceneWorld's setParent to avoid recursive command stack re-entry.
  */
 public class ParentChangeCommand implements ICommand {
     private final EditorWorkspace manager;
