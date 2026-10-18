@@ -22,27 +22,28 @@ public class InspectorInputDelegate {
         Entity entity = manager.getSelectedEntity();
         if (entity == null) return;
 
-        float curY = 0.72f;
+        float scrollOffset = InspectorPanel.getScrollOffset();
+        float curY = 0.74f;
 
         for (Component comp : entity.getAllComponents()) {
-            if (curY < -0.45f) break;
-
-            curY -= 0.06f; // Header line
+            curY -= 0.055f; // Matches header spacing in InspectorPanel
 
             Field[] fields = comp.getClass().getDeclaredFields();
             for (Field field : fields) {
-                if (curY < -0.45f) break;
                 if (!field.isAnnotationPresent(InspectorProperty.class)) continue;
 
                 InspectorProperty prop = field.getAnnotation(InspectorProperty.class);
                 field.setAccessible(true);
                 String label = prop.label().isEmpty() ? field.getName() : prop.label();
 
+                float drawY = curY + scrollOffset;
+                boolean isVisible = (drawY <= 0.77f && drawY - 0.045f >= -0.48f);
+
                 try {
                     Object val = field.get(comp);
 
                     if (prop.type() == PropertyType.ASSET_PICKER) {
-                        if (ndcY >= curY - 0.04f && ndcY <= curY + 0.02f) {
+                        if (isVisible && ndcY >= drawY - 0.036f && ndcY <= drawY + 0.008f) {
                             if (ndcX >= 0.80f && ndcX <= 0.88f) {
                                 UISoundPlayer.play(UISound.OPEN_MODAL);
                                 AssetType targetType = parseAssetType(prop.assetType());
@@ -54,10 +55,10 @@ public class InspectorInputDelegate {
                                 return;
                             }
                         }
-                        curY -= 0.08f;
+                        curY -= 0.054f;
 
                     } else if (prop.type() == PropertyType.TOGGLE || field.getType() == boolean.class) {
-                        if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f && ndcX >= 0.58f && ndcX <= 0.85f) {
+                        if (isVisible && ndcY >= drawY - 0.030f && ndcY <= drawY + 0.008f && ndcX >= 0.58f && ndcX <= 0.85f) {
                             UISoundPlayer.play(UISound.TOGGLE);
                             boolean oldBool = (Boolean) val;
                             boolean newBool = !oldBool;
@@ -65,10 +66,10 @@ public class InspectorInputDelegate {
                             manager.getCommandHistory().executeCommand(cmd);
                             return;
                         }
-                        curY -= 0.06f;
+                        curY -= 0.048f;
 
                     } else if (prop.type() == PropertyType.BUTTON_GROUP || field.getType().isEnum()) {
-                        if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f && ndcX >= 0.84f && ndcX <= 0.98f) {
+                        if (isVisible && ndcY >= drawY - 0.030f && ndcY <= drawY + 0.008f && ndcX >= 0.84f && ndcX <= 0.98f) {
                             UISoundPlayer.play(UISound.TOGGLE);
                             Object[] constants = field.getType().getEnumConstants();
                             if (constants != null && constants.length > 0) {
@@ -82,10 +83,10 @@ public class InspectorInputDelegate {
                                 return;
                             }
                         }
-                        curY -= 0.06f;
+                        curY -= 0.048f;
 
                     } else if (prop.type() == PropertyType.COLOR) {
-                        if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
+                        if (isVisible && ndcY >= drawY - 0.030f && ndcY <= drawY + 0.008f) {
                             float floatVal = (Float) val;
                             if (ndcX >= 0.84f && ndcX <= 0.90f) {
                                 UISoundPlayer.play(UISound.CLICK);
@@ -102,10 +103,10 @@ public class InspectorInputDelegate {
                                 return;
                             }
                         }
-                        curY -= 0.06f;
+                        curY -= 0.048f;
 
                     } else if (field.getType() == float.class || field.getType() == Float.class) {
-                        if (ndcY >= curY - 0.03f && ndcY <= curY + 0.02f) {
+                        if (isVisible && ndcY >= drawY - 0.030f && ndcY <= drawY + 0.008f) {
                             float floatVal = (Float) val;
                             if (ndcX >= 0.84f && ndcX <= 0.90f) {
                                 UISoundPlayer.play(UISound.CLICK);
@@ -122,16 +123,25 @@ public class InspectorInputDelegate {
                                 return;
                             }
                         }
-                        curY -= 0.06f;
+                        curY -= 0.048f;
 
                     } else {
-                        curY -= 0.05f;
+                        curY -= 0.044f;
                     }
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
             }
-            curY -= 0.02f;
+            curY -= 0.020f;
+        }
+
+        // Check + ADD COMPONENT button click
+        float drawAddBtnY = curY + scrollOffset;
+        if (drawAddBtnY <= 0.77f && drawAddBtnY - 0.04f >= -0.48f) {
+            if (ndcX >= 0.58f && ndcX <= 0.98f && ndcY >= drawAddBtnY - 0.04f && ndcY <= drawAddBtnY + 0.01f) {
+                UISoundPlayer.play(UISound.OPEN_MODAL);
+                manager.openAssetPicker(AssetType.SCRIPT);
+            }
         }
     }
 

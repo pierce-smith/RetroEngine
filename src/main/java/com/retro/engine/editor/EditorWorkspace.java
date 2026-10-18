@@ -44,6 +44,9 @@ public class EditorWorkspace {
     private int windowHeight = 720;
     private float lastDeltaTime = 0.016f;
 
+    private float lastNdcX = 0.0f;
+    private float lastNdcY = 0.0f;
+
     private float[] cachedUiVertices = new float[16384 * 6];
     private int cachedUiVertexCount = 0;
     private final UIGeometryBatch.Buffer uiGeometryBuffer = new UIGeometryBatch.Buffer(16384 * 6);
@@ -82,7 +85,10 @@ public class EditorWorkspace {
 
     public List<Entity> getSceneEntities() { return sceneManager.getSceneEntities(); }
     public Entity getSelectedEntity() { return sceneManager.getSelectedEntity(); }
-    public void selectEntity(Entity entity) { sceneManager.selectEntity(entity); }
+    public void selectEntity(Entity entity) { 
+        sceneManager.selectEntity(entity);
+        InspectorPanel.resetScroll();
+    }
 
     public void deleteEntity(Entity entity) { if (entity != null) sceneManager.deleteEntity(entity); }
     public void addEntity(Entity entity, int index) { if (entity != null) sceneManager.addEntity(entity, index); }
@@ -295,9 +301,13 @@ public class EditorWorkspace {
         Entity selected = getSelectedEntity();
         if (selected == null) return;
         ScriptComponent sc = selected.getComponent(ScriptComponent.class);
-        if (sc == null) return;
+        String oldPath = (sc != null) ? sc.scriptAssetPath : null;
+        String oldName = (sc != null) ? sc.scriptName : null;
         String newPath = (scriptAsset != null) ? scriptAsset.absolutePath : null;
-        modifyFieldViaCommand(sc, "scriptAssetPath", sc.scriptAssetPath, newPath, "SCRIPT");
+        String newName = (scriptAsset != null) ? scriptAsset.name : null;
+        ScriptAssignCommand cmd = new ScriptAssignCommand(selected, oldPath, oldName, newPath, newName);
+        commandHistory.executeCommand(cmd);
+        InspectorPanel.resetScroll();
     }
 
     public void spawnAudioSource() {
@@ -314,8 +324,13 @@ public class EditorWorkspace {
         Entity selected = getSelectedEntity();
         if (selected == null || audioAsset == null) return;
         AudioSource ac = selected.getComponent(AudioSource.class);
-        if (ac == null) return;
-        modifyFieldViaCommand(ac, "audioAssetPath", ac.audioAssetPath, audioAsset.absolutePath, "AUDIO");
+        if (ac == null) {
+            ac = new AudioSource(audioAsset.absolutePath);
+            selected.addComponent(ac);
+        } else {
+            modifyFieldViaCommand(ac, "audioAssetPath", ac.audioAssetPath, audioAsset.absolutePath, "AUDIO");
+        }
+        InspectorPanel.resetScroll();
     }
 
     private void modifyFieldViaCommand(Component comp, String fieldName, Object oldVal, Object newVal, String label) {
@@ -486,6 +501,10 @@ public class EditorWorkspace {
     }
 
     public boolean onCursorPos(double rawX, double rawY) {
+        if (windowWidth > 0 && windowHeight > 0) {
+            this.lastNdcX = (float) ((rawX / (double) windowWidth) * 2.0 - 1.0);
+            this.lastNdcY = (float) (1.0 - (rawY / (double) windowHeight) * 2.0);
+        }
         return gizmoStateController.onCursorPos(rawX, rawY, this, overlayManager);
     }
 
@@ -494,6 +513,10 @@ public class EditorWorkspace {
     }
 
     public boolean handleScroll(double yOffset) {
+        if (lastNdcX >= 0.55f && lastNdcY >= -0.50f && lastNdcY <= 0.88f) {
+            InspectorPanel.scroll((float) yOffset * 0.06f);
+            return true;
+        }
         if (cameraController != null) {
             cameraController.onScroll(yOffset);
             return true;

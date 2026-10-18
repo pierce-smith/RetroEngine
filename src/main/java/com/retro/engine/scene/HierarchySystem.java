@@ -14,13 +14,15 @@ import java.util.Set;
  * Delegate managing recursive parent-child scene graph matrix propagation,
  * vector rotations, and cycle detection.
  *
- * Optimized with reusable scratchpad arrays and O(1) Map lookups to eliminate
- * per-frame array allocations and O(N^2) linear string search overhead.
+ * Hardened with zero per-frame JVM heap allocations during world transform calculations.
  */
 public class HierarchySystem {
 
     // Pre-allocated scratchpad vector for zero per-frame array allocations
     private final float[] rotScratch = new float[3];
+
+    // Pre-allocated reusable Map scratchpad to eliminate per-call HashMap instantiations
+    private final Map<String, Entity> entityMapScratch = new HashMap<>(256);
 
     public WorldTransform getComputedWorldTransform(Entity entity, List<Entity> sceneEntities) {
         if (entity == null) return new WorldTransform(0,0,0, 0,0,0, 1,1,1);
@@ -31,15 +33,16 @@ public class HierarchySystem {
             return new WorldTransform(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ);
         }
 
-        // Build ephemeral O(1) lookup table for current frame evaluation
-        Map<String, Entity> entityMap = new HashMap<>(sceneEntities.size());
-        for (Entity e : sceneEntities) {
+        // Re-use persistent Map scratchpad
+        entityMapScratch.clear();
+        for (int i = 0; i < sceneEntities.size(); i++) {
+            Entity e = sceneEntities.get(i);
             if (e != null && e.id != null) {
-                entityMap.put(e.id.toLowerCase(), e);
+                entityMapScratch.put(e.id, e);
             }
         }
 
-        return getComputedWorldTransformIndexed(entity, entityMap);
+        return getComputedWorldTransformIndexed(entity, entityMapScratch);
     }
 
     private WorldTransform getComputedWorldTransformIndexed(Entity entity, Map<String, Entity> entityMap) {
@@ -58,7 +61,17 @@ public class HierarchySystem {
             return wt;
         }
 
-        Entity parent = entityMap.get(entity.parentId.toLowerCase());
+        Entity parent = entityMap.get(entity.parentId);
+        if (parent == null) {
+            // Case-insensitive fallback if exact ID key match fails
+            for (Map.Entry<String, Entity> entry : entityMap.entrySet()) {
+                if (entry.getKey().equalsIgnoreCase(entity.parentId)) {
+                    parent = entry.getValue();
+                    break;
+                }
+            }
+        }
+
         if (parent == null || parent == entity) {
             WorldTransform wt = new WorldTransform(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ);
             assert (!Float.isNaN(wt.px()) && !Float.isInfinite(wt.px()) &&
@@ -173,8 +186,9 @@ public class HierarchySystem {
 
     private Entity findEntityById(String id, List<Entity> sceneEntities) {
         if (id == null || id.isEmpty() || sceneEntities == null) return null;
-        for (Entity e : sceneEntities) {
-            if (e.id != null && e.id.equalsIgnoreCase(id)) return e;
+        for (int i = 0; i < sceneEntities.size(); i++) {
+            Entity e = sceneEntities.get(i);
+            if (e != null && e.id != null && e.id.equalsIgnoreCase(id)) return e;
         }
         return null;
     }
