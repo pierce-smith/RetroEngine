@@ -8,7 +8,8 @@ import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
  * MetalPipeline sets up the 3D RenderWare 3.5 shader pipeline featuring:
  * 1. Adaptive stride vertex reading (supports 9-float grid/quad and 14-float 3D models).
  * 2. Directional, Point, and Spot light shading calculations.
- * 3. Ambient intensity blending and specular highlights.
+ * 3. Alpha cutout testing (discard_fragment()) and 3D alpha blending for transparent leaf cards.
+ * 4. Crisp, bright grid line rendering.
  */
 public class MetalPipeline {
     private long pipelineState3D = 0L;
@@ -27,7 +28,7 @@ public class MetalPipeline {
                 float3 worldPos;
                 float4 color;
                 float2 uv;
-            };
+            };	
 
             struct Uniforms {
                 float4x4 mvp;             // 64 bytes (0..63)
@@ -72,11 +73,16 @@ public class MetalPipeline {
                                           constant Uniforms& uniforms [[buffer(1)]]) {
                 float4 baseColor = in.color;
                 if (uniforms.hasTexture == 1) {
-                    baseColor *= tex.sample(smp, in.uv);
+                    float4 texColor = tex.sample(smp, in.uv);
+                    if (texColor.a < 0.25) {
+                        discard_fragment(); // Cuts out transparent borders around leaves!
+                    }
+                    baseColor *= texColor;
                 }
 
                 if (uniforms.isUnlit == 1) {
-                    return baseColor;
+                    // Brighten grid lines so they are clear and distinct against dark viewport
+                    return float4(baseColor.rgb * 1.8, max(baseColor.a, 0.7));
                 }
 
                 float3 N = normalize(in.worldNormal);
@@ -160,13 +166,21 @@ public class MetalPipeline {
         long colorAttach3D = invokePPP(pipeDesc3D, sel_registerName("colorAttachments"), send);
         long colorAttach3D0 = invokePPPP(colorAttach3D, sel_registerName("objectAtIndexedSubscript:"), 0L, send);
         invokePPPP(colorAttach3D0, sel_registerName("setPixelFormat:"), 80L, send);
+
+        // Enable alpha blending on 3D pipeline so grid lines and alpha foliage blend cleanly
+        invokePPPP(colorAttach3D0, sel_registerName("setBlendingEnabled:"), 1L, send);
+        invokePPPP(colorAttach3D0, sel_registerName("setSourceRGBBlendFactor:"), 4L, send);       // SourceAlpha
+        invokePPPP(colorAttach3D0, sel_registerName("setDestinationRGBBlendFactor:"), 5L, send);  // OneMinusSourceAlpha
+        invokePPPP(colorAttach3D0, sel_registerName("setSourceAlphaBlendFactor:"), 4L, send);
+        invokePPPP(colorAttach3D0, sel_registerName("setDestinationAlphaBlendFactor:"), 5L, send);
+
         invokePPPP(pipeDesc3D, sel_registerName("setDepthAttachmentPixelFormat:"), 252L, send);
 
         pipelineState3D = invokePPPPP(d, sel_registerName("newRenderPipelineStateWithDescriptor:error:"), pipeDesc3D, 0L, send);
 
         long depthDescClass = objc_getClass("MTLDepthStencilDescriptor");
         long depthDesc3D = invokePPP(depthDescClass, sel_registerName("new"), send);
-        invokePPPP(depthDesc3D, sel_registerName("setDepthCompareFunction:"), 1L, send);
+        invokePPPP(depthDesc3D, sel_registerName("setDepthCompareFunction:"), 1L, send); // Less
         invokePPPP(depthDesc3D, sel_registerName("setDepthWriteEnabled:"), 1L, send);
         depthStencilState3D = invokePPPP(d, sel_registerName("newDepthStencilStateWithDescriptor:"), depthDesc3D, send);
 
@@ -193,7 +207,7 @@ public class MetalPipeline {
         pipelineStateUI = invokePPPPP(d, sel_registerName("newRenderPipelineStateWithDescriptor:error:"), pipeDescUI, 0L, send);
 
         long depthDescUI = invokePPP(depthDescClass, sel_registerName("new"), send);
-        invokePPPP(depthDescUI, sel_registerName("setDepthCompareFunction:"), 7L, send);
+        invokePPPP(depthDescUI, sel_registerName("setDepthCompareFunction:"), 7L, send); // Always
         invokePPPP(depthDescUI, sel_registerName("setDepthWriteEnabled:"), 0L, send);
         depthStencilStateUI = invokePPPP(d, sel_registerName("newDepthStencilStateWithDescriptor:"), depthDescUI, send);
 
