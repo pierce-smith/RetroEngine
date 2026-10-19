@@ -10,6 +10,7 @@ import static org.lwjgl.system.macosx.ObjCRuntime.*;
 /**
  * Manages triple-buffered uniform streaming and matrix calculations with locked
  * public static offset constants for byte-level GPU alignment.
+ * Configures composition quad identity buffer with isUnlit = 2 for 1:1 pass-through sampling.
  */
 public class MetalUniformStream {
 
@@ -40,7 +41,6 @@ public class MetalUniformStream {
     private final float[] matP = new float[16];
     private final float[] matV = new float[16];
     private final float[] matM = new float[16];
-    private final float[] matVM = new float[16];
     private final float[] matMVP = new float[16];
     private final float[] matRotX = new float[16];
     private final float[] matRotY = new float[16];
@@ -70,8 +70,13 @@ public class MetalUniformStream {
             FloatBuffer fb = MemoryUtil.memFloatBuffer(pIdentity + OFFSET_MVP, 16);
             fb.clear();
             fb.put(identityMVP);
+
+            FloatBuffer fbModel = MemoryUtil.memFloatBuffer(pIdentity + OFFSET_MODEL, 16);
+            fbModel.clear();
+            fbModel.put(identityMVP);
+
             MemoryUtil.memPutInt(pIdentity + OFFSET_HAS_TEXTURE, 1);
-            MemoryUtil.memPutInt(pIdentity + OFFSET_IS_UNLIT, 1);
+            MemoryUtil.memPutInt(pIdentity + OFFSET_IS_UNLIT, 2); // 2 = Viewport Pass-through Mode
             MemoryUtil.memPutInt(pIdentity + OFFSET_STRIDE, 9);
             MemoryUtil.memPutInt(pIdentity + OFFSET_PASS_FLAGS, 0);
         }
@@ -154,7 +159,7 @@ public class MetalUniformStream {
     public float[] createPerspectiveMatrix(float aspect) {
         float fov = (float) Math.toRadians(50.0);
         float f = (float) (1.0 / Math.tan(fov / 2.0));
-        float zNear = 0.1f, zFar = 100.0f;
+        float zNear = 0.1f, zFar = 500.0f;
 
         float p00 = f / aspect;
         float p11 = f;
@@ -180,6 +185,8 @@ public class MetalUniformStream {
         createPerspectiveMatrix(aspect);
         createCameraViewMatrix(panX, panY, zoom, pitch, yaw);
         createModelMatrix(px, py, pz, rx, ry, rz, sx, sy, sz);
+
+        float[] matVM = new float[16];
         multiplyMat4(matV, matM, matVM);
         multiplyMat4(matP, matVM, matMVP);
         return matMVP;

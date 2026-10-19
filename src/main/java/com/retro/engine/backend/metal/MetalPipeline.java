@@ -8,6 +8,7 @@ import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
  * MetalPipeline sets up the RenderWare 3.5 multi-pass shader pipeline featuring:
  * 1. 14-float vertex stride & multi-light type shading (Directional, Point, Spot).
  * 2. Dynamic Ground Entity Shadow Blobs with soft radial distance falloff.
+ * 3. Procedural Ray-Plane Anti-Aliased Infinite Shader Grid.
  */
 public class MetalPipeline {
     private long pipelineState3D = 0L;
@@ -28,6 +29,7 @@ public class MetalPipeline {
                 float4 color;
                 float2 uv;
                 float2 uv2;
+                float viewDist;
             };
 
             struct Uniforms {
@@ -40,7 +42,7 @@ public class MetalPipeline {
                 float4 fogColorDensity;   // 16 bytes (192..207) -> rgb = fogColor, w = fogDensity
                 float4 matParams;         // 16 bytes (208..223) -> x = reflectStrength, y = shadowOpacity, z = unused, w = unused
                 uint hasTexture;          // 4 bytes  (224..227)
-                uint isUnlit;             // 4 bytes  (228..231)
+                uint isUnlit;             // 4 bytes  (228..231) -> 0 = Lit Model, 1 = Procedural Grid, 2 = Viewport Pass-through
                 uint stride;              // 4 bytes  (232..235)
                 uint passFlags;           // 4 bytes  (236..239) -> bit 0: shadowBlob, bit 1: reflection, bit 2: lightmap, bit 3: fog
             };
@@ -55,6 +57,7 @@ public class MetalPipeline {
                 float4 localPos = float4(vertices[idx], vertices[idx+1], vertices[idx+2], 1.0);
                 out.position = uniforms.mvp * localPos;
                 out.worldPos = (uniforms.model * localPos).xyz;
+                out.viewDist = out.position.w;
 
                 if (vertStride == 14) {
                     float3 localNorm = float3(vertices[idx+3], vertices[idx+4], vertices[idx+5]);
@@ -88,18 +91,70 @@ public class MetalPipeline {
                     return float4(0.02, 0.02, 0.05, alpha * 0.75);
                 }
 
+                // Mode 2: Viewport Composition Pass-Through (1:1 Framebuffer Output)
+                if (uniforms.isUnlit == 2u) {
+                    if (uniforms.hasTexture == 1) {
+                        return tex.sample(smp, in.uv);
+                    }
+                    return in.color;
+                }
+
+                // Mode 1: Procedural Ray-Plane Anti-Aliased Infinite Shader Grid
+                if (uniforms.isUnlit == 1u) {
+                    // Check if rendering the vertical green Y-axis pillar line
+                    if (in.worldPos.y > 0.05) {
+                        return float4(0.2, 1.0, 0.2, 1.0); // Vibrant Green Y-Axis Line
+                    }
+
+                    float2 coord = in.worldPos.xz;
+                    float2 der = fwidth(coord);
+                    float2 safeDer = max(der, float2(0.00001, 0.00001));
+
+                    // 1-Meter Minor Grid Lines
+                    float2 grid1 = abs(fract(coord - 0.5) - 0.5) / safeDer;
+                    float line1 = min(grid1.x, grid1.y);
+                    float c1 = 1.0 - min(line1, 1.0);
+
+                    // 10-Meter Major Grid Subdivisions
+                    float2 grid10 = abs(fract((coord / 10.0) - 0.5) - 0.5) / (safeDer / 10.0);
+                    float line10 = min(grid10.x, grid10.y);
+                    float c10 = 1.0 - min(line10, 1.0);
+
+                    // Primary Axes (Red X-Axis at Z=0, Blue Z-Axis at X=0)
+                    bool isXAxis = abs(in.worldPos.z) < max(der.y * 1.5, 0.08);
+                    bool isZAxis = abs(in.worldPos.x) < max(der.x * 1.5, 0.08);
+
+                    float4 gridColor = float4(0.45, 0.48, 0.55, 0.35 * c1); // Minor 1m lines
+                    if (c10 > 0.01) {
+                        gridColor = mix(gridColor, float4(0.75, 0.80, 0.90, 0.70), c10); // Major 10m lines
+                    }
+                    if (isXAxis) {
+                        gridColor = float4(0.95, 0.25, 0.25, 0.95); // Red X-Axis
+                    }
+                    if (isZAxis) {
+                        gridColor = float4(0.25, 0.55, 0.95, 0.95); // Blue Z-Axis
+                    }
+
+                    if (gridColor.a < 0.01) {
+                        discard_fragment();
+                    }
+
+                    // Distance Horizon Fog Attenuation
+                    float dist = length(in.worldPos.xz);
+                    float fade = clamp(1.0 - (dist / 450.0), 0.0, 1.0);
+                    gridColor.a *= fade;
+
+                    return gridColor;
+                }
+
+                // Mode 0: Standard Opaque 3D Mesh Lighting
                 float4 baseColor = in.color;
                 if (uniforms.hasTexture == 1) {
                     float4 texColor = tex.sample(smp, in.uv);
                     if (texColor.a < 0.25) {
-                        discard_fragment(); // Cuts out transparent borders around leaves!
+                        discard_fragment();
                     }
                     baseColor *= texColor;
-                }
-
-                if (uniforms.isUnlit == 1) {
-                    // Bright grid line rendering
-                    return float4(baseColor.rgb * 1.8, max(baseColor.a, 0.7));
                 }
 
                 float3 N = normalize(in.worldNormal);
@@ -132,6 +187,23 @@ public class MetalPipeline {
                 float3 ambient = max(uniforms.ambientColor.rgb, float3(0.35, 0.35, 0.38));
 
                 float3 finalRGB = (ambient + diffuse) * baseColor.rgb;
+
+                if ((uniforms.passFlags & 2u) != 0u || uniforms.matParams.x > 0.0) {
+                    float3 V = normalize(-in.worldPos);
+                    float3 R = reflect(V, N);
+                    float3 envSky = float3(0.85, 0.90, 1.0);
+                    float3 envGround = float3(0.15, 0.20, 0.30);
+                    float3 envColor = mix(envGround, envSky, clamp(R.y * 0.5 + 0.5, 0.0, 1.0));
+                    float reflectStrength = clamp(uniforms.matParams.x, 0.0, 1.0);
+                    finalRGB = mix(finalRGB, envColor, reflectStrength * 0.4);
+                }
+
+                float fogStart = 20.0;
+                float fogEnd = 150.0;
+                float fogFactor = clamp((in.viewDist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
+                float3 fogColor = float3(0.12, 0.13, 0.16);
+                finalRGB = mix(finalRGB, fogColor, fogFactor);
+
                 return float4(finalRGB, baseColor.a);
             }
             """ ;

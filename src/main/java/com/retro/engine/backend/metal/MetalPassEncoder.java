@@ -9,8 +9,8 @@ import static org.lwjgl.system.JNI.*;
 import static org.lwjgl.system.macosx.ObjCRuntime.*;
 
 /**
- * Encodes offscreen 3D passes (grid, batched 3D models, and dynamic downward-raycast shadow blobs)
- * and window quad composition into Metal command buffers.
+ * Encodes offscreen 3D passes (procedural grid, batched 3D models with environment reflections,
+ * and dynamic downward-raycast shadow blobs) and window quad composition into Metal command buffers.
  */
 public class MetalPassEncoder {
 
@@ -65,7 +65,7 @@ public class MetalPassEncoder {
         long streamingUniformBuffer = streamer.getStreamingUniformBuffer();
         long pBufferContents = invokePPP(streamingUniformBuffer, sel_registerName("contents"), send);
 
-        // 1A. Grid Mesh Encoding
+        // 1A. Procedural Ray-Plane Infinite Grid Encoding
         if (resourceCache.getGridVertexBuffer() != 0L && resourceCache.getGridVertexCount() > 0) {
             float[] mvpGrid = streamer.createGridMVPMatrix(aspect, camPanX, camPanY, camZoom, camPitch, camYaw);
             if (pBufferContents != 0L) {
@@ -73,6 +73,12 @@ public class MetalPassEncoder {
                 FloatBuffer fb = MemoryUtil.memFloatBuffer(gridAddr, 16);
                 fb.clear();
                 fb.put(mvpGrid);
+
+                float[] identityModel = streamer.createModelMatrix(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f);
+                FloatBuffer fbModel = MemoryUtil.memFloatBuffer(gridAddr + MetalUniformStream.OFFSET_MODEL, 16);
+                fbModel.clear();
+                fbModel.put(identityModel);
+
                 MemoryUtil.memPutInt(gridAddr + MetalUniformStream.OFFSET_HAS_TEXTURE, 0);
                 MemoryUtil.memPutInt(gridAddr + MetalUniformStream.OFFSET_IS_UNLIT, 1);
                 MemoryUtil.memPutInt(gridAddr + MetalUniformStream.OFFSET_STRIDE, 9);
@@ -80,15 +86,23 @@ public class MetalPassEncoder {
             }
 
             invokePPPP(encoder3D, sel_registerName("setRenderPipelineState:"), pipeline.getPipelineState3D(), send);
-            invokePPPP(encoder3D, sel_registerName("setDepthStencilState:"), pipeline.getDepthStencilState3D(), send);
+            long shadowDepthState = pipeline.getDepthStencilStateShadow() != 0L ? pipeline.getDepthStencilStateShadow() : pipeline.getDepthStencilState3D();
+            invokePPPP(encoder3D, sel_registerName("setDepthStencilState:"), shadowDepthState, send);
 
             invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), resourceCache.getGridVertexBuffer(), 0L, 0L, send);
             invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), streamingUniformBuffer, currentSlotOffset, 1L, send);
             invokePPPPPP(encoder3D, sel_registerName("setFragmentBuffer:offset:atIndex:"), streamingUniformBuffer, currentSlotOffset, 1L, send);
-            invokePPPPPP(encoder3D, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 1L, 0L, (long) resourceCache.getGridVertexCount(), send);
+
+            // Draw 6 vertices as Triangles (3L = MTLPrimitiveTypeTriangle) for Procedural Infinite Grid Quad
+            invokePPPPPP(encoder3D, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, 6L, send);
+
+            // Draw remaining 2 vertices as Lines (1L = MTLPrimitiveTypeLine) for Vertical Green Y-Axis Pillar
+            if (resourceCache.getGridVertexCount() >= 8) {
+                invokePPPPPP(encoder3D, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 1L, 6L, 2L, send);
+            }
         }
 
-        // 1B. Instanced & Batched Opaque 3D Models (Drawn FIRST to populate color & depth buffers)
+        // 1B. Instanced & Batched Opaque 3D Models
         if (sceneQueue != null && !sceneQueue.isEmpty()) {
             sceneQueue.sort(BATCH_COMPARATOR);
 
@@ -151,10 +165,17 @@ public class MetalPassEncoder {
                     MemoryUtil.memPutFloat(baseAddr + 184L, 0.38f);
                     MemoryUtil.memPutFloat(baseAddr + 188L, 1.0f);
 
+                    MemoryUtil.memPutFloat(baseAddr + 208L, item.reflectionStrength);
+
                     MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_HAS_TEXTURE, item.hasTexture ? 1 : 0);
                     MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_IS_UNLIT, 0);
                     MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_STRIDE, 14);
-                    MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PASS_FLAGS, 0);
+
+                    int passFlags = 0;
+                    if (item.reflectionStrength > 0.0f) {
+                        passFlags |= 2;
+                    }
+                    MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PASS_FLAGS, passFlags);
                 }
 
                 invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), streamingUniformBuffer, entityUniformOffset, 1L, send);
@@ -165,13 +186,11 @@ public class MetalPassEncoder {
             }
         }
 
-        // 1C. Dynamic Downward-Raycast Surface Shadow Blobs Pass (Pass Flag Bit 0)
-        // Drawn AFTER 3D models with Depth Write DISABLED so shadow quads blend smoothly without punching holes in geometry!
+        // 1C. Dynamic Downward-Raycast Surface Shadow Blobs Pass
         long groundQuadBuf = resourceCache.getGroundQuadBuffer();
         if (sceneQueue != null && !sceneQueue.isEmpty() && groundQuadBuf != 0L) {
             int shadowIndex = 0;
             invokePPPP(encoder3D, sel_registerName("setRenderPipelineState:"), pipeline.getPipelineState3D(), send);
-            // Use depthStencilStateShadow (Depth Test LessEqual, Depth Write OFF)
             long shadowDepthState = pipeline.getDepthStencilStateShadow() != 0L ? pipeline.getDepthStencilStateShadow() : pipeline.getDepthStencilState3D();
             invokePPPP(encoder3D, sel_registerName("setDepthStencilState:"), shadowDepthState, send);
             invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), groundQuadBuf, 0L, 0L, send);
@@ -204,7 +223,7 @@ public class MetalPassEncoder {
                     MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_HAS_TEXTURE, 0);
                     MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_IS_UNLIT, 0);
                     MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_STRIDE, 14);
-                    MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PASS_FLAGS, 1); // SHADOW_BLOB
+                    MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PASS_FLAGS, 1);
                 }
 
                 invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), streamingUniformBuffer, shadowUniformOffset, 1L, send);

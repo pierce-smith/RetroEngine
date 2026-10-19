@@ -14,7 +14,7 @@ import java.util.List;
 
 /**
  * Delegate managing 3D transform gizmo modes, active selection axes, transform drag start vectors,
- * camera orbit/pan state tracking, and 3D viewport grid generation.
+ * camera orbit/pan state tracking, and procedural 3D viewport grid proxy geometry.
  */
 public class GizmoState {
 
@@ -88,35 +88,21 @@ public class GizmoState {
     }
 
     private float[] generate3DGridVertices() {
-        List<Float> verts = new ArrayList<>();
-        int gridRadius = 10;
-        float gridSpacing = 1.0f;
-        float mainAxisAlpha = 0.85f;
-        float gridAlpha = 0.25f;
+        // 6 Vertices for 1000m x 1000m Procedural Ray-Plane Infinite Floor Quad + 2 Vertices for Vertical Green Y-Axis Pillar
+        return new float[] {
+            // Proxy Quad Triangles (Vertices 0..5) - Y=0.0 Plane
+            -1000.0f, 0.0f, -1000.0f,  0.5f, 0.5f, 0.5f, 1.0f,  0.0f, 0.0f,
+            -1000.0f, 0.0f,  1000.0f,  0.5f, 0.5f, 0.5f, 1.0f,  0.0f, 1.0f,
+             1000.0f, 0.0f,  1000.0f,  0.5f, 0.5f, 0.5f, 1.0f,  1.0f, 1.0f,
 
-        for (int i = -gridRadius; i <= gridRadius; i++) {
-            float pos = i * gridSpacing;
-            if (i == 0) {
-                // X Axis (Red)
-                addGridLine(verts, -gridRadius * gridSpacing, 0.0f, pos, gridRadius * gridSpacing, 0.0f, pos, 0.9f, 0.2f, 0.2f, mainAxisAlpha);
-                // Z Axis (Blue)
-                addGridLine(verts, pos, 0.0f, -gridRadius * gridSpacing, pos, 0.0f, gridRadius * gridSpacing, 0.2f, 0.4f, 0.9f, mainAxisAlpha);
-            } else {
-                addGridLine(verts, -gridRadius * gridSpacing, 0.0f, pos, gridRadius * gridSpacing, 0.0f, pos, 0.4f, 0.4f, 0.45f, gridAlpha);
-                addGridLine(verts, pos, 0.0f, -gridRadius * gridSpacing, pos, 0.0f, gridRadius * gridSpacing, 0.4f, 0.4f, 0.45f, gridAlpha);
-            }
-        }
-        // Vertical Y Axis line (Green)
-        addGridLine(verts, 0.0f, 0.0f, 0.0f, 0.0f, 3.0f, 0.0f, 0.2f, 1.0f, 0.2f, 1.0f);
+            -1000.0f, 0.0f, -1000.0f,  0.5f, 0.5f, 0.5f, 1.0f,  0.0f, 0.0f,
+             1000.0f, 0.0f,  1000.0f,  0.5f, 0.5f, 0.5f, 1.0f,  1.0f, 1.0f,
+             1000.0f, 0.0f, -1000.0f,  0.5f, 0.5f, 0.5f, 1.0f,  1.0f, 0.0f,
 
-        float[] array = new float[verts.size()];
-        for (int i = 0; i < verts.size(); i++) array[i] = verts.get(i);
-        return array;
-    }
-
-    private void addGridLine(List<Float> verts, float x1, float y1, float z1, float x2, float y2, float z2, float r, float g, float b, float a) {
-        verts.add(x1); verts.add(y1); verts.add(z1); verts.add(r); verts.add(g); verts.add(b); verts.add(a); verts.add(0.0f); verts.add(0.0f);
-        verts.add(x2); verts.add(y2); verts.add(z2); verts.add(r); verts.add(g); verts.add(b); verts.add(a); verts.add(0.0f); verts.add(0.0f);
+            // Vertical Green Y-Axis Line (Vertices 6..7) - World Origin (0,0,0) -> (0,4,0)
+             0.0f, 0.0f, 0.0f,  0.2f, 1.0f, 0.2f, 1.0f,  0.0f, 0.0f,
+             0.0f, 4.0f, 0.0f,  0.2f, 1.0f, 0.2f, 1.0f,  0.0f, 0.0f
+        };
     }
 
     public boolean processViewportToolbarClick(float ndcX, float ndcY) {
