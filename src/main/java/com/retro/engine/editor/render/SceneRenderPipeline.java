@@ -4,7 +4,6 @@ import com.retro.engine.assets.AssetStreamer;
 import com.retro.engine.assets.importers.MeshBufferData;
 import com.retro.engine.assets.importers.MeshImporter;
 import com.retro.engine.assets.importers.PixelBufferData;
-import com.retro.engine.backend.metal.MetalBackend;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ui.EngineConsolePanel;
 import com.retro.engine.rhi.IRenderBackend;
@@ -18,8 +17,8 @@ import com.retro.engine.scene.components.Transform;
 import java.util.List;
 
 /**
- * SceneRenderPipeline submits 14-float mesh geometry, queries Light components,
- * passes material reflection parameters, and performs downward surface raycasting to determine entity shadow projection heights.
+ * High-level render pipeline processing 3D scene entities, light state, and 
+ * downward-raycast ground shadows through a vendor-agnostic IRenderBackend contract.
  */
 public class SceneRenderPipeline {
 
@@ -37,7 +36,7 @@ public class SceneRenderPipeline {
 
         if (entities != null && !entities.isEmpty()) {
 
-            // Scan for active Light component in scene
+            // 1. Scan and pass active Light component state to RHI
             for (Entity entity : entities) {
                 Light light = entity.getComponent(Light.class);
                 Transform lightTransform = entity.getTransform();
@@ -61,14 +60,13 @@ public class SceneRenderPipeline {
                         case SPOT -> 2;
                     };
 
-                    if (rhi instanceof MetalBackend metalRhi) {
-                        metalRhi.setSceneLight(lightType, posX, posY, posZ, dirX, dirY, dirZ, light.r, light.g, light.b, light.intensity);
-                    }
+                    rhi.setSceneLight(lightType, posX, posY, posZ, dirX, dirY, dirZ, 
+                                      light.r, light.g, light.b, light.intensity);
                     break;
                 }
             }
 
-            // Traversal loop across active 3D entities
+            // 2. Traversal loop across active 3D entities
             for (Entity entity : entities) {
                 Transform tc = entity.getComponent(Transform.class);
                 MeshFilter mc = entity.getComponent(MeshFilter.class);
@@ -123,32 +121,19 @@ public class SceneRenderPipeline {
 
                     WorldTransform wt = editorManager.getSceneManager().getComputedWorldTransform(entity);
                     float groundY = findGroundSurfaceY(entity, wt, entities, editorManager);
+                    float reflectVal = (mat != null) ? mat.reflect : 0.0f;
 
-                    if (rhi instanceof MetalBackend metalRhi) {
-                        float reflectVal = (mat != null) ? mat.reflect : 0.0f;
-                        metalRhi.submitEntityWithShadow(
-                                submitKey,
-                                verticesToSubmit,
-                                vertexCountToSubmit,
-                                texturePath,
-                                pixels, texW, texH,
-                                wt.px(), wt.py(), wt.pz(),
-                                wt.rx(), wt.ry(), wt.rz(),
-                                wt.sx(), wt.sy(), wt.sz(),
-                                groundY, reflectVal
-                        );
-                    } else {
-                        rhi.submitEntity(
-                                submitKey,
-                                verticesToSubmit,
-                                vertexCountToSubmit,
-                                texturePath,
-                                pixels, texW, texH,
-                                wt.px(), wt.py(), wt.pz(),
-                                wt.rx(), wt.ry(), wt.rz(),
-                                wt.sx(), wt.sy(), wt.sz()
-                        );
-                    }
+                    rhi.submitEntity(
+                            submitKey,
+                            verticesToSubmit,
+                            vertexCountToSubmit,
+                            texturePath,
+                            pixels, texW, texH,
+                            wt.px(), wt.py(), wt.pz(),
+                            wt.rx(), wt.ry(), wt.rz(),
+                            wt.sx(), wt.sy(), wt.sz(),
+                            groundY, reflectVal
+                    );
                 }
             }
         }
@@ -165,8 +150,7 @@ public class SceneRenderPipeline {
         float rayX = currentWt.px();
         float rayY = currentWt.py();
         float rayZ = currentWt.pz();
-
-        float bestGroundY = 0.0f; // Default ground floor grid height
+        float bestGroundY = 0.0f;
 
         if (allEntities != null) {
             for (Entity other : allEntities) {
@@ -187,7 +171,6 @@ public class SceneRenderPipeline {
                 float radiusSq = dx * dx + dz * dz;
                 float maxRadius = Math.max(otherSx, otherSz) * 1.1f;
 
-                // Check if downward ray intersects entity footprint
                 if (radiusSq <= maxRadius * maxRadius) {
                     float topY = otherY + otherSy;
                     if (topY < rayY + 0.05f && topY > bestGroundY) {

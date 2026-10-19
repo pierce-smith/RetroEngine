@@ -10,6 +10,7 @@ import com.retro.engine.core.RuntimeLoop;
  * - Default: Boots Visual Editor IDE via EngineLoop.
  * - --runtime / --game: Boots Standalone Game Runtime via RuntimeLoop.
  * - --headless: Boots Headless Dedicated Game Server via RuntimeLoop without GPU window context.
+ * - --vulkan: Forces Vulkan backend selection across platforms (MoltenVK on macOS).
  */
 public class Main {
 
@@ -37,19 +38,19 @@ public class Main {
 
         if (isHeadless) {
             System.out.println("[Main] Target Execution Mode: Dedicated Headless Server (--headless)");
-            if (context.initializeHeadless()) {
+            if (context.initializeHeadless(args)) {
                 RuntimeLoop runtimeLoop = new RuntimeLoop(true);
                 runtimeLoop.run(context, context.getEditorManager().getSceneManager());
             }
         } else if (isRuntime) {
             System.out.println("[Main] Target Execution Mode: Standalone Game Executable (--runtime)");
-            if (context.initialize(1280, 720, "Retro Engine Standalone Runtime", true)) {
+            if (context.initialize(1280, 720, "Retro Engine Standalone Runtime", true, args)) {
                 RuntimeLoop runtimeLoop = new RuntimeLoop(false);
                 runtimeLoop.run(context, context.getEditorManager().getSceneManager());
             }
         } else {
             System.out.println("[Main] Target Execution Mode: Visual Editor IDE");
-            if (context.initialize(1280, 720, "Retro Engine Editor & Runtime", false)) {
+            if (context.initialize(1280, 720, "Retro Engine Editor & Runtime", false, args)) {
                 EngineLoop loop = new EngineLoop();
                 loop.run(context);
             }

@@ -27,10 +27,18 @@ public class EngineContext {
     private boolean runtimeOnlyMode = false;
 
     public boolean initialize(int width, int height, String title) {
-        return initialize(width, height, title, false);
+        return initialize(width, height, title, false, null);
+    }
+
+    public boolean initialize(int width, int height, String title, boolean isRuntimeOnly) {
+        return initialize(width, height, title, isRuntimeOnly, null);
     }
 
     public boolean initializeHeadless() {
+        return initializeHeadless(null);
+    }
+
+    public boolean initializeHeadless(String[] args) {
         this.headlessMode = true;
         this.runtimeOnlyMode = true;
         this.editorManager = new EditorWorkspace();
@@ -43,7 +51,7 @@ public class EngineContext {
         return true;
     }
 
-    public boolean initialize(int width, int height, String title, boolean isRuntimeOnly) {
+    public boolean initialize(int width, int height, String title, boolean isRuntimeOnly, String[] cliArgs) {
         this.runtimeOnlyMode = isRuntimeOnly;
         window = new WindowHost(width, height, title);
         if (!window.create()) {
@@ -67,7 +75,7 @@ public class EngineContext {
         renderSubmitter = new SceneRenderPipeline();
 
         BackendLoader loader = new BackendLoader();
-        if (!loader.loadTargetBackend()) {
+        if (!loader.loadTargetBackend(cliArgs)) {
             System.err.println("[Fatal] Target backend failed to load. Halting execution.");
             window.destroy();
             return false;

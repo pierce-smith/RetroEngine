@@ -2,15 +2,36 @@ package com.retro.engine.rhi;
 
 /**
  * Render Hardware Interface (RHI) abstraction contract for cross-platform backends.
- * Extended with Offscreen Viewport Render Target support.
+ * Extended with Offscreen Viewport Render Target and unified scene lighting support.
  */
 public interface IRenderBackend {
     boolean initialize(ViewportSpec windowInfo);
+
     void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw);
+    
+    default void setSceneLight(int lightType, float posX, float posY, float posZ, 
+                              float dirX, float dirY, float dirZ, 
+                              float r, float g, float b, float intensity) {}
+
     void updateGridMesh(float[] vertices, int count);
     void updateUiMesh(float[] vertices, int count);
     void clearSceneQueue();
-    void submitEntity(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz);
+
+    void submitEntity(String meshPath, float[] vertices, int vertexCount, 
+                      String texturePath, byte[] pixels, int texW, int texH, 
+                      float px, float py, float pz, 
+                      float rx, float ry, float rz, 
+                      float sx, float sy, float sz, 
+                      float groundY, float reflectionStrength);
+
+    default void submitEntity(String meshPath, float[] vertices, int vertexCount, 
+                              String texturePath, byte[] pixels, int texW, int texH, 
+                              float px, float py, float pz, 
+                              float rx, float ry, float rz, 
+                              float sx, float sy, float sz) {
+        submitEntity(meshPath, vertices, vertexCount, texturePath, pixels, texW, texH, 
+                     px, py, pz, rx, ry, rz, sx, sy, sz, 0.0f, 0.0f);
+    }
 
     void beginFrame();
     void endFrame();
@@ -24,6 +45,7 @@ public interface IRenderBackend {
     void destroyBuffer(long handle);
     long createTexture(TextureDesc createInfo);
     void destroyTexture(long handle);
+
     GraphicsAPI getAPI();
     String getDeviceName();
 }

@@ -51,6 +51,7 @@ application {
         "-XstartOnFirstThread",
         "-Xms256m",
         "-Xmx512m",
+        "-Dorg.lwjgl.vulkan.libname=${project.projectDir}/libs/macos/libMoltenVK.dylib",
         "--enable-native-access=ALL-UNNAMED"
     )
 }

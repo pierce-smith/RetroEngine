@@ -75,6 +75,7 @@ public class MetalBackend implements IRenderBackend {
         this.camPanX = panX; this.camPanY = panY; this.camZoom = zoom; this.camPitch = pitch; this.camYaw = yaw;
     }
 
+    @Override
     public void setSceneLight(int type, float posX, float posY, float posZ, float dirX, float dirY, float dirZ, float r, float g, float b, float intensity) {
         this.activeLightType = type;
         this.activeLightPosX = posX;
@@ -105,7 +106,8 @@ public class MetalBackend implements IRenderBackend {
         return sceneQueuePool.subList(0, activeSceneQueueCount);
     }
 
-    public void submitEntityWithShadow(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float reflectionStrength) {
+    @Override
+    public void submitEntity(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float reflectionStrength) {
         if (meshPath == null || vertices == null || vertexCount <= 0) return;
 
         long vbo = resourceCache.getOrCreateMeshBuffer(metalDevice, meshPath, vertices);
@@ -137,9 +139,13 @@ public class MetalBackend implements IRenderBackend {
         item.reflectionStrength = reflectionStrength;
     }
 
+    public void submitEntityWithShadow(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float reflectionStrength) {
+        submitEntity(meshPath, vertices, vertexCount, texturePath, pixels, texW, texH, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, reflectionStrength);
+    }
+
     @Override
     public void submitEntity(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
-        submitEntityWithShadow(meshPath, vertices, vertexCount, texturePath, pixels, texW, texH, px, py, pz, rx, ry, rz, sx, sy, sz, 0.0f, 0.0f);
+        submitEntity(meshPath, vertices, vertexCount, texturePath, pixels, texW, texH, px, py, pz, rx, ry, rz, sx, sy, sz, 0.0f, 0.0f);
     }
 
     @Override
