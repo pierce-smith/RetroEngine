@@ -15,8 +15,7 @@ import static org.lwjgl.system.macosx.ObjCRuntime.objc_getClass;
 import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 
 /**
- * MetalBackend Facade Bridge routing scene queue and light parameters to MetalPassEncoder.
- * Handles Directional, Point, and Spot light types.
+ * MetalBackend Facade Bridge routing scene queue and downward-raycast shadow parameters to MetalPassEncoder.
  */
 public class MetalBackend implements IRenderBackend {
 
@@ -66,7 +65,7 @@ public class MetalBackend implements IRenderBackend {
 
         uniformStreamer.initialize(metalDevice);
 
-        System.out.println("[MetalBackend] Step 1: 14-Float Vertex Stride & Multi-Light Type Pipeline Initialized.");
+        System.out.println("[MetalBackend] Sub-step 4B: Downward Raycast Dynamic Surface Shadows Active.");
         return true;
     }
 
@@ -106,8 +105,7 @@ public class MetalBackend implements IRenderBackend {
         return sceneQueuePool.subList(0, activeSceneQueueCount);
     }
 
-    @Override
-    public void submitEntity(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
+    public void submitEntityWithShadow(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float reflectionStrength) {
         if (meshPath == null || vertices == null || vertexCount <= 0) return;
 
         long vbo = resourceCache.getOrCreateMeshBuffer(metalDevice, meshPath, vertices);
@@ -135,6 +133,13 @@ public class MetalBackend implements IRenderBackend {
         item.px = px; item.py = py; item.pz = pz;
         item.rx = rx; item.ry = ry; item.rz = rz;
         item.sx = sx; item.sy = sy; item.sz = sz;
+        item.groundY = groundY;
+        item.reflectionStrength = reflectionStrength;
+    }
+
+    @Override
+    public void submitEntity(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
+        submitEntityWithShadow(meshPath, vertices, vertexCount, texturePath, pixels, texW, texH, px, py, pz, rx, ry, rz, sx, sy, sz, 0.0f, 0.0f);
     }
 
     @Override
@@ -208,5 +213,5 @@ public class MetalBackend implements IRenderBackend {
     @Override public long createTexture(TextureDesc createInfo) { return 201L; }
     @Override public void destroyTexture(long handle) {}
     @Override public GraphicsAPI getAPI() { return GraphicsAPI.METAL; }
-    @Override public String getDeviceName() { return "Native Apple Metal Driver (Multi-Light Type Active)"; }
+    @Override public String getDeviceName() { return "Native Apple Metal Driver (Raycast Ground Shadows Active)"; }
 }

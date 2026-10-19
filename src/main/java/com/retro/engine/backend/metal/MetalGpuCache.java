@@ -10,14 +10,13 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Set;
 
 import static org.lwjgl.system.JNI.invokePPP;
 import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 
 /**
- * Delegate managing GPU mesh VRAM buffer caches, texture handle caches, and ring-buffered vertex mesh state
- * (grid, UI overlays, viewport quad) with zero per-frame native GPU allocations and triple-buffered GPU memory isolation.
+ * Delegate managing GPU mesh VRAM buffer caches, texture handle caches, ring-buffered vertex mesh state,
+ * and a 14-float ground quad buffer for dynamic entity shadow blob projections.
  */
 public class MetalGpuCache {
 
@@ -41,6 +40,7 @@ public class MetalGpuCache {
     private int uiVertexCount = 0;
 
     private long viewportQuadBuffer = 0L;
+    private long groundQuadBuffer = 0L;
 
     public MetalGpuCache() {
         this(DEFAULT_MAX_CACHE_ENTRIES, DEFAULT_MAX_CACHE_ENTRIES);
@@ -78,6 +78,10 @@ public class MetalGpuCache {
         return viewportQuadBuffer;
     }
 
+    public long getGroundQuadBuffer() {
+        return groundQuadBuffer;
+    }
+
     public void initViewportQuad(MetalDevice metalDevice) {
         if (metalDevice == null) return;
         float[] quadVerts = new float[] {
@@ -91,6 +95,20 @@ public class MetalGpuCache {
         };
         MetalBuffer buf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), quadVerts, 9);
         this.viewportQuadBuffer = buf.getHandle();
+
+        // 14-float stride ground quad for dynamic entity shadow blob projections
+        float[] groundVerts = new float[] {
+            // X, Y, Z,  NX, NY, NZ,  R, G, B, A,  U1, V1,  U2, V2
+            -1.0f, 0.005f, -1.0f,  0.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f, 1.0f,  0.0f, 0.0f,  0.0f, 0.0f,
+            -1.0f, 0.005f,  1.0f,  0.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f, 1.0f,  0.0f, 1.0f,  0.0f, 1.0f,
+             1.0f, 0.005f,  1.0f,  0.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f, 1.0f,  1.0f, 1.0f,  1.0f, 1.0f,
+
+            -1.0f, 0.005f, -1.0f,  0.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f, 1.0f,  0.0f, 0.0f,  0.0f, 0.0f,
+             1.0f, 0.005f,  1.0f,  0.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f, 1.0f,  1.0f, 1.0f,  1.0f, 1.0f,
+             1.0f, 0.005f, -1.0f,  0.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f, 1.0f,  1.0f, 0.0f,  1.0f, 0.0f
+        };
+        MetalBuffer groundBuf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), groundVerts, 14);
+        this.groundQuadBuffer = groundBuf.getHandle();
     }
 
     public void updateGridMesh(MetalDevice metalDevice, float[] vertices, int count) {

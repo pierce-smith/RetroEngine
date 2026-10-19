@@ -18,9 +18,8 @@ import com.retro.engine.scene.components.Transform;
 import java.util.List;
 
 /**
- * SceneRenderPipeline submits 14-float mesh geometry and queries Light components
- * (supporting DIRECTIONAL, POINT, and SPOT light types) to stream live light parameters
- * into the rendering backend.
+ * SceneRenderPipeline submits 14-float mesh geometry, queries Light components,
+ * and performs downward surface raycasting to determine entity shadow projection heights.
  */
 public class SceneRenderPipeline {
 
@@ -123,17 +122,32 @@ public class SceneRenderPipeline {
                     entityDrawCalls++;
 
                     WorldTransform wt = editorManager.getSceneManager().getComputedWorldTransform(entity);
+                    float groundY = findGroundSurfaceY(entity, wt, entities, editorManager);
 
-                    rhi.submitEntity(
-                            submitKey,
-                            verticesToSubmit,
-                            vertexCountToSubmit,
-                            texturePath,
-                            pixels, texW, texH,
-                            wt.px(), wt.py(), wt.pz(),
-                            wt.rx(), wt.ry(), wt.rz(),
-                            wt.sx(), wt.sy(), wt.sz()
-                    );
+                    if (rhi instanceof MetalBackend metalRhi) {
+                        metalRhi.submitEntityWithShadow(
+                                submitKey,
+                                verticesToSubmit,
+                                vertexCountToSubmit,
+                                texturePath,
+                                pixels, texW, texH,
+                                wt.px(), wt.py(), wt.pz(),
+                                wt.rx(), wt.ry(), wt.rz(),
+                                wt.sx(), wt.sy(), wt.sz(),
+                                groundY, 0.0f
+                        );
+                    } else {
+                        rhi.submitEntity(
+                                submitKey,
+                                verticesToSubmit,
+                                vertexCountToSubmit,
+                                texturePath,
+                                pixels, texW, texH,
+                                wt.px(), wt.py(), wt.pz(),
+                                wt.rx(), wt.ry(), wt.rz(),
+                                wt.sx(), wt.sy(), wt.sz()
+                        );
+                    }
                 }
             }
         }
@@ -144,5 +158,43 @@ public class SceneRenderPipeline {
 
         int totalDrawCalls = entityDrawCalls + (editorManager.is3DGridVisible() ? 1 : 0) + 2;
         EngineConsolePanel.updateTelemetry(totalDrawCalls, totalActiveVertices);
+    }
+
+    private float findGroundSurfaceY(Entity currentEntity, WorldTransform currentWt, List<Entity> allEntities, EditorWorkspace workspace) {
+        float rayX = currentWt.px();
+        float rayY = currentWt.py();
+        float rayZ = currentWt.pz();
+
+        float bestGroundY = 0.0f; // Default ground floor grid height
+
+        if (allEntities != null) {
+            for (Entity other : allEntities) {
+                if (other == currentEntity) continue;
+                MeshFilter otherMc = other.getComponent(MeshFilter.class);
+                if (otherMc == null || !otherMc.isVisible) continue;
+
+                WorldTransform otherWt = workspace.getSceneManager().getComputedWorldTransform(other);
+                float otherX = otherWt.px();
+                float otherY = otherWt.py();
+                float otherZ = otherWt.pz();
+                float otherSx = Math.max(0.2f, otherWt.sx());
+                float otherSy = Math.max(0.2f, otherWt.sy());
+                float otherSz = Math.max(0.2f, otherWt.sz());
+
+                float dx = rayX - otherX;
+                float dz = rayZ - otherZ;
+                float radiusSq = dx * dx + dz * dz;
+                float maxRadius = Math.max(otherSx, otherSz) * 1.1f;
+
+                // Check if downward ray intersects entity footprint
+                if (radiusSq <= maxRadius * maxRadius) {
+                    float topY = otherY + otherSy;
+                    if (topY < rayY + 0.05f && topY > bestGroundY) {
+                        bestGroundY = topY;
+                    }
+                }
+            }
+        }
+        return bestGroundY;
     }
 }

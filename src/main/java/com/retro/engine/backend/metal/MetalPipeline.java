@@ -5,15 +5,14 @@ import static org.lwjgl.system.macosx.ObjCRuntime.objc_getClass;
 import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 
 /**
- * MetalPipeline sets up the 3D RenderWare 3.5 shader pipeline featuring:
- * 1. Adaptive stride vertex reading (supports 9-float grid/quad and 14-float 3D models).
- * 2. Directional, Point, and Spot light shading calculations.
- * 3. Alpha cutout testing (discard_fragment()) and 3D alpha blending for transparent leaf cards.
- * 4. Crisp, bright grid line rendering.
+ * MetalPipeline sets up the RenderWare 3.5 multi-pass shader pipeline featuring:
+ * 1. 14-float vertex stride & multi-light type shading (Directional, Point, Spot).
+ * 2. Dynamic Ground Entity Shadow Blobs with soft radial distance falloff.
  */
 public class MetalPipeline {
     private long pipelineState3D = 0L;
     private long depthStencilState3D = 0L;
+    private long depthStencilStateShadow = 0L;
 
     private long pipelineStateUI = 0L;
     private long depthStencilStateUI = 0L;
@@ -28,7 +27,8 @@ public class MetalPipeline {
                 float3 worldPos;
                 float4 color;
                 float2 uv;
-            };	
+                float2 uv2;
+            };
 
             struct Uniforms {
                 float4x4 mvp;             // 64 bytes (0..63)
@@ -37,9 +37,12 @@ public class MetalPipeline {
                 float4 lightPosType;      // 16 bytes (144..159) -> xyz = lightPos, w = lightType (0=DIR, 1=POINT, 2=SPOT)
                 float4 lightColor;        // 16 bytes (160..175) -> rgb = lightColor, a = unused
                 float4 ambientColor;      // 16 bytes (176..191) -> rgb = ambient, a = unused
-                uint hasTexture;          // 4 bytes  (192..195)
-                uint isUnlit;             // 4 bytes  (196..199)
-                uint stride;              // 4 bytes  (200..203)
+                float4 fogColorDensity;   // 16 bytes (192..207) -> rgb = fogColor, w = fogDensity
+                float4 matParams;         // 16 bytes (208..223) -> x = reflectStrength, y = shadowOpacity, z = unused, w = unused
+                uint hasTexture;          // 4 bytes  (224..227)
+                uint isUnlit;             // 4 bytes  (228..231)
+                uint stride;              // 4 bytes  (232..235)
+                uint passFlags;           // 4 bytes  (236..239) -> bit 0: shadowBlob, bit 1: reflection, bit 2: lightmap, bit 3: fog
             };
 
             vertex VertexOut vertexMain(uint vertexID [[vertex_id]],
@@ -58,10 +61,12 @@ public class MetalPipeline {
                     out.worldNormal = normalize((uniforms.model * float4(localNorm, 0.0)).xyz);
                     out.color = float4(vertices[idx+6], vertices[idx+7], vertices[idx+8], vertices[idx+9]);
                     out.uv = float2(vertices[idx+10], vertices[idx+11]);
+                    out.uv2 = float2(vertices[idx+12], vertices[idx+13]);
                 } else {
                     out.worldNormal = float3(0.0, 1.0, 0.0);
                     out.color = float4(vertices[idx+3], vertices[idx+4], vertices[idx+5], vertices[idx+6]);
                     out.uv = float2(vertices[idx+7], vertices[idx+8]);
+                    out.uv2 = out.uv;
                 }
 
                 return out;
@@ -71,6 +76,18 @@ public class MetalPipeline {
                                           texture2d<float> tex [[texture(0)]],
                                           sampler smp [[sampler(0)]],
                                           constant Uniforms& uniforms [[buffer(1)]]) {
+
+                // Pass Flag Bit 0: Ground Dynamic Shadow Blob Pass
+                if ((uniforms.passFlags & 1u) != 0u) {
+                    float2 uvCentered = in.uv - float2(0.5, 0.5);
+                    float distSq = dot(uvCentered, uvCentered) * 4.0;
+                    if (distSq >= 1.0) {
+                        discard_fragment();
+                    }
+                    float alpha = max(0.0, 1.0 - distSq) * uniforms.matParams.y;
+                    return float4(0.02, 0.02, 0.05, alpha * 0.75);
+                }
+
                 float4 baseColor = in.color;
                 if (uniforms.hasTexture == 1) {
                     float4 texColor = tex.sample(smp, in.uv);
@@ -81,7 +98,7 @@ public class MetalPipeline {
                 }
 
                 if (uniforms.isUnlit == 1) {
-                    // Brighten grid lines so they are clear and distinct against dark viewport
+                    // Bright grid line rendering
                     return float4(baseColor.rgb * 1.8, max(baseColor.a, 0.7));
                 }
 
@@ -91,24 +108,19 @@ public class MetalPipeline {
                 float attenuation = 1.0;
 
                 if (lightType == 0) {
-                    // Directional Light
                     L = normalize(-uniforms.lightDirIntensity.xyz);
                 } else {
-                    // Point or Spot Light
                     float3 lightPos = uniforms.lightPosType.xyz;
                     float3 lightVector = lightPos - in.worldPos;
                     float dist = length(lightVector);
                     L = normalize(lightVector);
-
-                    // Quadratic attenuation for Retro Engine scale
                     attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
 
                     if (lightType == 2) {
-                        // Spot Light cone calculation
                         float3 spotDir = normalize(-uniforms.lightDirIntensity.xyz);
                         float theta = dot(L, spotDir);
-                        float innerCutoff = 0.93; // ~21 deg inner angle
-                        float outerCutoff = 0.82; // ~35 deg outer angle
+                        float innerCutoff = 0.93;
+                        float outerCutoff = 0.82;
                         float spotIntensity = clamp((theta - outerCutoff) / (innerCutoff - outerCutoff), 0.0, 1.0);
                         attenuation *= spotIntensity;
                     }
@@ -167,7 +179,6 @@ public class MetalPipeline {
         long colorAttach3D0 = invokePPPP(colorAttach3D, sel_registerName("objectAtIndexedSubscript:"), 0L, send);
         invokePPPP(colorAttach3D0, sel_registerName("setPixelFormat:"), 80L, send);
 
-        // Enable alpha blending on 3D pipeline so grid lines and alpha foliage blend cleanly
         invokePPPP(colorAttach3D0, sel_registerName("setBlendingEnabled:"), 1L, send);
         invokePPPP(colorAttach3D0, sel_registerName("setSourceRGBBlendFactor:"), 4L, send);       // SourceAlpha
         invokePPPP(colorAttach3D0, sel_registerName("setDestinationRGBBlendFactor:"), 5L, send);  // OneMinusSourceAlpha
@@ -181,8 +192,14 @@ public class MetalPipeline {
         long depthDescClass = objc_getClass("MTLDepthStencilDescriptor");
         long depthDesc3D = invokePPP(depthDescClass, sel_registerName("new"), send);
         invokePPPP(depthDesc3D, sel_registerName("setDepthCompareFunction:"), 1L, send); // Less
-        invokePPPP(depthDesc3D, sel_registerName("setDepthWriteEnabled:"), 1L, send);
+        invokePPPP(depthDesc3D, sel_registerName("setDepthWriteEnabled:"), 1L, send);    // Depth write ON for 3D models
         depthStencilState3D = invokePPPP(d, sel_registerName("newDepthStencilStateWithDescriptor:"), depthDesc3D, send);
+
+        // Shadow Depth Stencil State: Depth Compare LessEqual, Depth Write OFF!
+        long depthDescShadow = invokePPP(depthDescClass, sel_registerName("new"), send);
+        invokePPPP(depthDescShadow, sel_registerName("setDepthCompareFunction:"), 3L, send); // LessEqual (3L)
+        invokePPPP(depthDescShadow, sel_registerName("setDepthWriteEnabled:"), 0L, send);   // Depth write OFF!
+        depthStencilStateShadow = invokePPPP(d, sel_registerName("newDepthStencilStateWithDescriptor:"), depthDescShadow, send);
 
         long sourceUI = device.createNSString(MSL_UI_SHADER);
         long libUI = invokePPPPPP(d, sel_registerName("newLibraryWithSource:options:error:"), sourceUI, 0L, 0L, send);
@@ -206,16 +223,17 @@ public class MetalPipeline {
 
         pipelineStateUI = invokePPPPP(d, sel_registerName("newRenderPipelineStateWithDescriptor:error:"), pipeDescUI, 0L, send);
 
-        long depthDescUI = invokePPP(depthDescClass, sel_registerName("new"), send);
-        invokePPPP(depthDescUI, sel_registerName("setDepthCompareFunction:"), 7L, send); // Always
-        invokePPPP(depthDescUI, sel_registerName("setDepthWriteEnabled:"), 0L, send);
-        depthStencilStateUI = invokePPPP(d, sel_registerName("newDepthStencilStateWithDescriptor:"), depthDescUI, send);
+        long depthDescUIInst = invokePPP(depthDescClass, sel_registerName("new"), send);
+        invokePPPP(depthDescUIInst, sel_registerName("setDepthCompareFunction:"), 7L, send);
+        invokePPPP(depthDescUIInst, sel_registerName("setDepthWriteEnabled:"), 0L, send);
+        depthStencilStateUI = invokePPPP(d, sel_registerName("newDepthStencilStateWithDescriptor:"), depthDescUIInst, send);
 
         return pipelineState3D != 0L && pipelineStateUI != 0L;
     }
 
     public long getPipelineState3D() { return pipelineState3D; }
     public long getDepthStencilState3D() { return depthStencilState3D; }
+    public long getDepthStencilStateShadow() { return depthStencilStateShadow; }
     public long getPipelineStateUI() { return pipelineStateUI; }
     public long getDepthStencilStateUI() { return depthStencilStateUI; }
 }

@@ -8,16 +8,30 @@ import static org.lwjgl.system.JNI.invokePPP;
 import static org.lwjgl.system.macosx.ObjCRuntime.*;
 
 /**
- * Manages triple-buffered uniform streaming and matrix calculations, expanded
- * to stream light direction, position, type, color, intensity, and ambient parameters.
+ * Manages triple-buffered uniform streaming and matrix calculations with locked
+ * public static offset constants for byte-level GPU alignment.
  */
 public class MetalUniformStream {
 
     private static final int RING_SLOTS = 3;
     public static final long UNIFORM_STRIDE = 256L;
     public static final int MAX_ENTITIES_PER_FRAME = 256;
-    private static final long FRAME_SLOT_SIZE = UNIFORM_STRIDE * (1 + MAX_ENTITIES_PER_FRAME);
+    private static final long FRAME_SLOT_SIZE = UNIFORM_STRIDE * (1 + 64 + MAX_ENTITIES_PER_FRAME);
     private static final long TOTAL_RING_BUFFER_SIZE = FRAME_SLOT_SIZE * RING_SLOTS;
+
+    // Locked Byte Offsets for MSL Uniforms Struct
+    public static final long OFFSET_MVP = 0L;
+    public static final long OFFSET_MODEL = 64L;
+    public static final long OFFSET_LIGHT_DIR = 128L;
+    public static final long OFFSET_LIGHT_POS = 144L;
+    public static final long OFFSET_LIGHT_COLOR = 160L;
+    public static final long OFFSET_AMBIENT = 176L;
+    public static final long OFFSET_FOG = 192L;
+    public static final long OFFSET_MAT_PARAMS = 208L;
+    public static final long OFFSET_HAS_TEXTURE = 224L;
+    public static final long OFFSET_IS_UNLIT = 228L;
+    public static final long OFFSET_STRIDE = 232L;
+    public static final long OFFSET_PASS_FLAGS = 236L;
 
     private long streamingUniformBuffer = 0L;
     private long uniformBufferIdentity = 0L;
@@ -50,15 +64,16 @@ public class MetalUniformStream {
             0.0f, 0.0f, 0.0f, 1.0f
         };
         long send = device.getObjcMsgSend();
-        uniformBufferIdentity = MetalBuffer.createUniformBuffer(device.getDevice(), send, 256L);
+        uniformBufferIdentity = MetalBuffer.createUniformBuffer(device.getDevice(), send, UNIFORM_STRIDE);
         long pIdentity = invokePPP(uniformBufferIdentity, sel_registerName("contents"), send);
         if (pIdentity != 0L) {
-            FloatBuffer fb = MemoryUtil.memFloatBuffer(pIdentity, 16);
+            FloatBuffer fb = MemoryUtil.memFloatBuffer(pIdentity + OFFSET_MVP, 16);
             fb.clear();
             fb.put(identityMVP);
-            MemoryUtil.memPutInt(pIdentity + 192L, 1); // hasTexture = 1
-            MemoryUtil.memPutInt(pIdentity + 196L, 1); // isUnlit = 1
-            MemoryUtil.memPutInt(pIdentity + 200L, 9); // stride = 9
+            MemoryUtil.memPutInt(pIdentity + OFFSET_HAS_TEXTURE, 1);
+            MemoryUtil.memPutInt(pIdentity + OFFSET_IS_UNLIT, 1);
+            MemoryUtil.memPutInt(pIdentity + OFFSET_STRIDE, 9);
+            MemoryUtil.memPutInt(pIdentity + OFFSET_PASS_FLAGS, 0);
         }
     }
 

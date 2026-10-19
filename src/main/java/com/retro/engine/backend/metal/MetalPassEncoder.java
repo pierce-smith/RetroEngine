@@ -4,14 +4,13 @@ import org.lwjgl.system.MemoryUtil;
 
 import java.nio.FloatBuffer;
 import java.util.List;
-import java.util.Objects;
 
 import static org.lwjgl.system.JNI.*;
 import static org.lwjgl.system.macosx.ObjCRuntime.*;
 
 /**
- * Encodes offscreen 3D passes and window quad composition, streaming MVP matrices
- * and multi-light type attributes (Directional, Point, Spot) into GPU uniform slots.
+ * Encodes offscreen 3D passes (grid, batched 3D models, and dynamic downward-raycast shadow blobs)
+ * and window quad composition into Metal command buffers.
  */
 public class MetalPassEncoder {
 
@@ -29,6 +28,8 @@ public class MetalPassEncoder {
         public float px, py, pz;
         public float rx, ry, rz;
         public float sx, sy, sz;
+        public float groundY = 0.0f;
+        public float reflectionStrength = 0.0f;
     }
 
     public void encodeOffscreen3DPass(
@@ -62,18 +63,20 @@ public class MetalPassEncoder {
         float aspect = 712.0f / 488.0f;
         long currentSlotOffset = streamer.getCurrentSlotOffset();
         long streamingUniformBuffer = streamer.getStreamingUniformBuffer();
+        long pBufferContents = invokePPP(streamingUniformBuffer, sel_registerName("contents"), send);
 
         // 1A. Grid Mesh Encoding
         if (resourceCache.getGridVertexBuffer() != 0L && resourceCache.getGridVertexCount() > 0) {
             float[] mvpGrid = streamer.createGridMVPMatrix(aspect, camPanX, camPanY, camZoom, camPitch, camYaw);
-            long pBufferContents = invokePPP(streamingUniformBuffer, sel_registerName("contents"), send);
             if (pBufferContents != 0L) {
-                FloatBuffer fb = MemoryUtil.memFloatBuffer(pBufferContents + currentSlotOffset, 16);
+                long gridAddr = pBufferContents + currentSlotOffset;
+                FloatBuffer fb = MemoryUtil.memFloatBuffer(gridAddr, 16);
                 fb.clear();
                 fb.put(mvpGrid);
-                MemoryUtil.memPutInt(pBufferContents + currentSlotOffset + 192L, 0); // hasTexture = 0
-                MemoryUtil.memPutInt(pBufferContents + currentSlotOffset + 196L, 1); // isUnlit = 1
-                MemoryUtil.memPutInt(pBufferContents + currentSlotOffset + 200L, 9); // stride = 9
+                MemoryUtil.memPutInt(gridAddr + MetalUniformStream.OFFSET_HAS_TEXTURE, 0);
+                MemoryUtil.memPutInt(gridAddr + MetalUniformStream.OFFSET_IS_UNLIT, 1);
+                MemoryUtil.memPutInt(gridAddr + MetalUniformStream.OFFSET_STRIDE, 9);
+                MemoryUtil.memPutInt(gridAddr + MetalUniformStream.OFFSET_PASS_FLAGS, 0);
             }
 
             invokePPPP(encoder3D, sel_registerName("setRenderPipelineState:"), pipeline.getPipelineState3D(), send);
@@ -85,12 +88,11 @@ public class MetalPassEncoder {
             invokePPPPPP(encoder3D, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 1L, 0L, (long) resourceCache.getGridVertexCount(), send);
         }
 
-        // 1B. Instanced & Batched 3D Models
+        // 1B. Instanced & Batched Opaque 3D Models (Drawn FIRST to populate color & depth buffers)
         if (sceneQueue != null && !sceneQueue.isEmpty()) {
             sceneQueue.sort(BATCH_COMPARATOR);
 
             int entityIndex = 0;
-            long pBufferContents = invokePPP(streamingUniformBuffer, sel_registerName("contents"), send);
             invokePPPP(encoder3D, sel_registerName("setRenderPipelineState:"), pipeline.getPipelineState3D(), send);
             invokePPPP(encoder3D, sel_registerName("setDepthStencilState:"), pipeline.getDepthStencilState3D(), send);
 
@@ -116,49 +118,43 @@ public class MetalPassEncoder {
                     lastTexture = currentTex;
                 }
 
-                long entityUniformOffset = currentSlotOffset + MetalUniformStream.UNIFORM_STRIDE * (1 + entityIndex);
+                long entityUniformOffset = currentSlotOffset + MetalUniformStream.UNIFORM_STRIDE * (1 + 64 + entityIndex);
                 float[] mvpModel = streamer.create3DMVPMatrix(aspect, camPanX, camPanY, camZoom, camPitch, camYaw, item.px, item.py, item.pz, item.rx, item.ry, item.rz, item.sx, item.sy, item.sz);
                 float[] modelMat = streamer.getModelMatrix();
 
                 if (pBufferContents != 0L) {
                     long baseAddr = pBufferContents + entityUniformOffset;
 
-                    // MVP Matrix (64 bytes: 0..63)
                     FloatBuffer fbMVP = MemoryUtil.memFloatBuffer(baseAddr, 16);
                     fbMVP.clear(); fbMVP.put(mvpModel);
 
-                    // Model Matrix (64 bytes: 64..127)
                     FloatBuffer fbModel = MemoryUtil.memFloatBuffer(baseAddr + 64L, 16);
                     fbModel.clear(); fbModel.put(modelMat);
 
-                    // Light Dir & Intensity (16 bytes: 128..143)
                     MemoryUtil.memPutFloat(baseAddr + 128L, lightDirX);
                     MemoryUtil.memPutFloat(baseAddr + 132L, lightDirY);
                     MemoryUtil.memPutFloat(baseAddr + 136L, lightDirZ);
                     MemoryUtil.memPutFloat(baseAddr + 140L, lightIntensity);
 
-                    // Light Pos & Type (16 bytes: 144..159)
                     MemoryUtil.memPutFloat(baseAddr + 144L, lightPosX);
                     MemoryUtil.memPutFloat(baseAddr + 148L, lightPosY);
                     MemoryUtil.memPutFloat(baseAddr + 152L, lightPosZ);
                     MemoryUtil.memPutFloat(baseAddr + 156L, (float) lightType);
 
-                    // Light Color (16 bytes: 160..175)
                     MemoryUtil.memPutFloat(baseAddr + 160L, lightR);
                     MemoryUtil.memPutFloat(baseAddr + 164L, lightG);
                     MemoryUtil.memPutFloat(baseAddr + 168L, lightB);
                     MemoryUtil.memPutFloat(baseAddr + 172L, 1.0f);
 
-                    // Ambient Color (16 bytes: 176..191)
                     MemoryUtil.memPutFloat(baseAddr + 176L, 0.35f);
                     MemoryUtil.memPutFloat(baseAddr + 180L, 0.35f);
                     MemoryUtil.memPutFloat(baseAddr + 184L, 0.38f);
                     MemoryUtil.memPutFloat(baseAddr + 188L, 1.0f);
 
-                    // Flags & Stride (12 bytes: 192..203)
-                    MemoryUtil.memPutInt(baseAddr + 192L, item.hasTexture ? 1 : 0);
-                    MemoryUtil.memPutInt(baseAddr + 196L, 0);  // isUnlit = 0
-                    MemoryUtil.memPutInt(baseAddr + 200L, 14); // stride = 14
+                    MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_HAS_TEXTURE, item.hasTexture ? 1 : 0);
+                    MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_IS_UNLIT, 0);
+                    MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_STRIDE, 14);
+                    MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PASS_FLAGS, 0);
                 }
 
                 invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), streamingUniformBuffer, entityUniformOffset, 1L, send);
@@ -166,6 +162,56 @@ public class MetalPassEncoder {
                 invokePPPPPP(encoder3D, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, (long) item.vertexCount, send);
 
                 entityIndex++;
+            }
+        }
+
+        // 1C. Dynamic Downward-Raycast Surface Shadow Blobs Pass (Pass Flag Bit 0)
+        // Drawn AFTER 3D models with Depth Write DISABLED so shadow quads blend smoothly without punching holes in geometry!
+        long groundQuadBuf = resourceCache.getGroundQuadBuffer();
+        if (sceneQueue != null && !sceneQueue.isEmpty() && groundQuadBuf != 0L) {
+            int shadowIndex = 0;
+            invokePPPP(encoder3D, sel_registerName("setRenderPipelineState:"), pipeline.getPipelineState3D(), send);
+            // Use depthStencilStateShadow (Depth Test LessEqual, Depth Write OFF)
+            long shadowDepthState = pipeline.getDepthStencilStateShadow() != 0L ? pipeline.getDepthStencilStateShadow() : pipeline.getDepthStencilState3D();
+            invokePPPP(encoder3D, sel_registerName("setDepthStencilState:"), shadowDepthState, send);
+            invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), groundQuadBuf, 0L, 0L, send);
+
+            for (RenderEntity item : sceneQueue) {
+                if (shadowIndex >= 64) break;
+
+                float clearance = item.py - item.groundY;
+                if (clearance < -0.01f) continue;
+
+                float heightFade = Math.max(0.0f, 1.0f - (clearance / 10.0f));
+                if (heightFade < 0.05f) continue;
+
+                float shadowScale = Math.max(item.sx, item.sz) * 1.25f;
+                long shadowUniformOffset = currentSlotOffset + MetalUniformStream.UNIFORM_STRIDE * (1 + shadowIndex);
+                float shadowY = item.groundY + 0.005f;
+                float[] mvpShadow = streamer.create3DMVPMatrix(aspect, camPanX, camPanY, camZoom, camPitch, camYaw, item.px, shadowY, item.pz, 0.0f, 0.0f, 0.0f, shadowScale, 1.0f, shadowScale);
+                float[] modelMat = streamer.getModelMatrix();
+
+                if (pBufferContents != 0L) {
+                    long baseAddr = pBufferContents + shadowUniformOffset;
+                    FloatBuffer fbMVP = MemoryUtil.memFloatBuffer(baseAddr, 16);
+                    fbMVP.clear(); fbMVP.put(mvpShadow);
+
+                    FloatBuffer fbModel = MemoryUtil.memFloatBuffer(baseAddr + 64L, 16);
+                    fbModel.clear(); fbModel.put(modelMat);
+
+                    MemoryUtil.memPutFloat(baseAddr + 212L, heightFade);
+
+                    MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_HAS_TEXTURE, 0);
+                    MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_IS_UNLIT, 0);
+                    MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_STRIDE, 14);
+                    MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PASS_FLAGS, 1); // SHADOW_BLOB
+                }
+
+                invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), streamingUniformBuffer, shadowUniformOffset, 1L, send);
+                invokePPPPPP(encoder3D, sel_registerName("setFragmentBuffer:offset:atIndex:"), streamingUniformBuffer, shadowUniformOffset, 1L, send);
+                invokePPPPPP(encoder3D, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, 6L, send);
+
+                shadowIndex++;
             }
         }
 
@@ -196,7 +242,6 @@ public class MetalPassEncoder {
 
         long encoderWin = invokePPPP(commandBuffer, sel_registerName("renderCommandEncoderWithDescriptor:"), windowPassDesc, send);
 
-        // Draw Offscreen Viewport Quad
         if (resourceCache.getViewportQuadBuffer() != 0L && framebuffer.getOffscreenColorTexture() != 0L) {
             invokePPPP(encoderWin, sel_registerName("setRenderPipelineState:"), pipeline.getPipelineState3D(), send);
             invokePPPP(encoderWin, sel_registerName("setDepthStencilState:"), pipeline.getDepthStencilStateUI(), send);
@@ -212,7 +257,6 @@ public class MetalPassEncoder {
             invokePPPPPP(encoderWin, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, 6L, send);
         }
 
-        // Draw 2D Editor UI Overlay & Viewport Gizmos
         if (resourceCache.getUiVertexBuffer() != 0L && resourceCache.getUiVertexCount() > 0 && pipeline.getPipelineStateUI() != 0L) {
             invokePPPP(encoderWin, sel_registerName("setRenderPipelineState:"), pipeline.getPipelineStateUI(), send);
             invokePPPP(encoderWin, sel_registerName("setDepthStencilState:"), pipeline.getDepthStencilStateUI(), send);
