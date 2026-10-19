@@ -18,9 +18,6 @@ import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 /**
  * Delegate managing GPU mesh VRAM buffer caches, texture handle caches, and ring-buffered vertex mesh state
  * (grid, UI overlays, viewport quad) with zero per-frame native GPU allocations and triple-buffered GPU memory isolation.
- *
- * Hardened with access-ordered LinkedHashMap containers, LRU VRAM capacity eviction, and explicit Objective-C
- * release dispatch during cache purges to prevent VRAM memory leaks.
  */
 public class MetalGpuCache {
 
@@ -30,17 +27,14 @@ public class MetalGpuCache {
     private final int maxMeshCacheSize;
     private final int maxTextureCacheSize;
 
-    // Access-ordered LinkedHashMap containers for LRU tracking
     private final Map<String, Long> gpuMeshCache;
     private final Map<String, Long> gpuTextureCache;
 
-    // Triple-buffered (Ring) Grid Mesh Buffers
     private final long[] gridVertexBufferRing = new long[RING_SLOTS];
     private final int[] gridVertexCapacityRing = new int[RING_SLOTS];
     private int gridRingIndex = 0;
     private int gridVertexCount = 0;
 
-    // Triple-buffered (Ring) UI Overlay Mesh Buffers
     private final long[] uiVertexBufferRing = new long[RING_SLOTS];
     private final int[] uiVertexCapacityRing = new int[RING_SLOTS];
     private int uiRingIndex = 0;
@@ -87,7 +81,6 @@ public class MetalGpuCache {
     public void initViewportQuad(MetalDevice metalDevice) {
         if (metalDevice == null) return;
         float[] quadVerts = new float[] {
-            // X,       Y,      Z,    R,    G,    B,    A,    U,    V
             -0.55f,  0.88f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f,
             -0.55f, -0.50f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f,
              0.55f, -0.50f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
@@ -110,14 +103,12 @@ public class MetalGpuCache {
         long send = metalDevice.getObjcMsgSend();
         if (device == 0L || send == 0L) return;
 
-        // Advance triple-buffer slot index to isolate in-flight GPU frames
         this.gridRingIndex = (this.gridRingIndex + 1) % RING_SLOTS;
 
         int requiredFloats = vertices.length;
         long currentBuffer = this.gridVertexBufferRing[this.gridRingIndex];
         int currentCapacity = this.gridVertexCapacityRing[this.gridRingIndex];
 
-        // Allocate or reallocate persistent GPU buffer for this slot if needed
         if (currentBuffer == 0L || requiredFloats > currentCapacity) {
             if (currentBuffer != 0L) {
                 invokePPP(currentBuffer, sel_registerName("release"), send);
@@ -129,7 +120,6 @@ public class MetalGpuCache {
             this.gridVertexBufferRing[this.gridRingIndex] = currentBuffer;
         }
 
-        // Copy vertex floats directly into current ring slot's persistent memory (data-race free)
         if (currentBuffer != 0L) {
             long pContents = invokePPP(currentBuffer, sel_registerName("contents"), send);
             if (pContents != 0L) {
@@ -151,14 +141,12 @@ public class MetalGpuCache {
         long send = metalDevice.getObjcMsgSend();
         if (device == 0L || send == 0L) return;
 
-        // Advance triple-buffer slot index to isolate in-flight GPU frames
         this.uiRingIndex = (this.uiRingIndex + 1) % RING_SLOTS;
 
         int requiredFloats = vertices.length;
         long currentBuffer = this.uiVertexBufferRing[this.uiRingIndex];
         int currentCapacity = this.uiVertexCapacityRing[this.uiRingIndex];
 
-        // Allocate or reallocate persistent GPU buffer for this slot if needed
         if (currentBuffer == 0L || requiredFloats > currentCapacity) {
             if (currentBuffer != 0L) {
                 invokePPP(currentBuffer, sel_registerName("release"), send);
@@ -170,7 +158,6 @@ public class MetalGpuCache {
             this.uiVertexBufferRing[this.uiRingIndex] = currentBuffer;
         }
 
-        // Copy vertex floats directly into current ring slot's persistent memory (data-race free)
         if (currentBuffer != 0L) {
             long pContents = invokePPP(currentBuffer, sel_registerName("contents"), send);
             if (pContents != 0L) {
@@ -190,7 +177,8 @@ public class MetalGpuCache {
 
         evictLruMeshesIfNeeded(metalDevice);
 
-        MetalBuffer buf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), vertices, 9);
+        int stride = (vertices.length % 14 == 0) ? 14 : 9;
+        MetalBuffer buf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), vertices, stride);
         long handle = buf.getHandle();
         if (handle != 0L) {
             gpuMeshCache.put(meshPath, handle);
@@ -249,70 +237,8 @@ public class MetalGpuCache {
         }
     }
 
-    public void purgeUnusedCaches(MetalDevice metalDevice, Set<String> activeMeshPaths, Set<String> activeTexturePaths) {
-        if (metalDevice == null || metalDevice.getObjcMsgSend() == 0L) return;
-        long send = metalDevice.getObjcMsgSend();
-        long selRelease = sel_registerName("release");
-
-        synchronized (gpuMeshCache) {
-            Iterator<Map.Entry<String, Long>> it = gpuMeshCache.entrySet().iterator();
-            while (it.hasNext()) {
-                Map.Entry<String, Long> entry = it.next();
-                if (activeMeshPaths == null || !activeMeshPaths.contains(entry.getKey())) {
-                    Long handle = entry.getValue();
-                    if (handle != null && handle != 0L) {
-                        invokePPP(handle, selRelease, send);
-                    }
-                    it.remove();
-                }
-            }
-        }
-
-        synchronized (gpuTextureCache) {
-            Iterator<Map.Entry<String, Long>> it = gpuTextureCache.entrySet().iterator();
-            while (it.hasNext()) {
-                Map.Entry<String, Long> entry = it.next();
-                if (activeTexturePaths == null || !activeTexturePaths.contains(entry.getKey())) {
-                    Long handle = entry.getValue();
-                    if (handle != null && handle != 0L) {
-                        invokePPP(handle, selRelease, send);
-                    }
-                    it.remove();
-                }
-            }
-        }
-    }
-
     public void clearCaches() {
         gpuMeshCache.clear();
         gpuTextureCache.clear();
-    }
-
-    public void clearCaches(MetalDevice metalDevice) {
-        if (metalDevice != null && metalDevice.getObjcMsgSend() != 0L) {
-            long send = metalDevice.getObjcMsgSend();
-            long selRelease = sel_registerName("release");
-
-            synchronized (gpuMeshCache) {
-                for (Long handle : gpuMeshCache.values()) {
-                    if (handle != null && handle != 0L) {
-                        invokePPP(handle, selRelease, send);
-                    }
-                }
-                gpuMeshCache.clear();
-            }
-
-            synchronized (gpuTextureCache) {
-                for (Long handle : gpuTextureCache.values()) {
-                    if (handle != null && handle != 0L) {
-                        invokePPP(handle, selRelease, send);
-                    }
-                }
-                gpuTextureCache.clear();
-            }
-        } else {
-            gpuMeshCache.clear();
-            gpuTextureCache.clear();
-        }
     }
 }

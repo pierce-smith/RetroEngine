@@ -8,7 +8,15 @@ import java.util.List;
 
 import static org.lwjgl.assimp.Assimp.*;
 
+/**
+ * High-performance Assimp model importer enforcing:
+ * 1. 14-float vertex stride: [PX, PY, PZ, NX, NY, NZ, R, G, B, A, U1, V1, U2, V2].
+ * 2. Clean neutral base material color (no debug rainbow RGB normal packing).
+ * 3. Safe Assimp buffer limits checking to prevent IndexOutOfBoundsException fallback to cube.
+ */
 public class MeshImporter {
+
+    public static final int FLOATS_PER_VERTEX = 14;
 
     public static MeshBufferData loadModel(String filePath) {
         if (filePath == null || filePath.trim().isEmpty()) return createDefaultCube();
@@ -42,6 +50,7 @@ public class MeshImporter {
                     AIVector3D.Buffer normals = mesh.mNormals();
                     AIVector3D.Buffer uvs = mesh.mTextureCoords(0);
 
+                    int numVertices = mesh.mNumVertices();
                     AIFace.Buffer faces = mesh.mFaces();
                     int numFaces = mesh.mNumFaces();
 
@@ -50,37 +59,41 @@ public class MeshImporter {
                         if (aiFace.mNumIndices() == 3) {
                             for (int k = 0; k < 3; k++) {
                                 int index = aiFace.mIndices().get(k);
+                                if (index < 0 || index >= numVertices) continue;
 
                                 AIVector3D pos = vertices.get(index);
                                 float px = pos.x();
                                 float py = pos.y();
                                 float pz = pos.z();
 
-                                float r = 0.8f, g = 0.8f, b = 0.85f;
-                                if (normals != null) {
+                                // True Normals (NX, NY, NZ) with safe bounds check
+                                float nx = 0.0f, ny = 1.0f, nz = 0.0f;
+                                if (normals != null && index < normals.remaining()) {
                                     AIVector3D norm = normals.get(index);
-                                    r = Math.max(0.2f, Math.abs(norm.x()));
-                                    g = Math.max(0.2f, Math.abs(norm.y()));
-                                    b = Math.max(0.2f, Math.abs(norm.z()));
+                                    nx = norm.x();
+                                    ny = norm.y();
+                                    nz = norm.z();
                                 }
 
-                                float u = 0.0f, v = 0.0f;
-                                if (uvs != null) {
+                                // Clean neutral white base color
+                                float r = 1.0f, g = 1.0f, b = 1.0f, a = 1.0f;
+
+                                // Primary UVs with safe bounds check
+                                float u1 = 0.0f, v1 = 0.0f;
+                                if (uvs != null && index < uvs.remaining()) {
                                     AIVector3D uv = uvs.get(index);
-                                    u = uv.x();
-                                    v = uv.y();
+                                    u1 = uv.x();
+                                    v1 = uv.y();
                                 }
 
-                                // 9 floats per vertex: x, y, z, r, g, b, a, u, v
-                                vertexBuffer.add(px);
-                                vertexBuffer.add(py);
-                                vertexBuffer.add(pz);
-                                vertexBuffer.add(r);
-                                vertexBuffer.add(g);
-                                vertexBuffer.add(b);
-                                vertexBuffer.add(1.0f);
-                                vertexBuffer.add(u);
-                                vertexBuffer.add(v);
+                                float u2 = u1, v2 = v1;
+
+                                // 14 floats per vertex
+                                vertexBuffer.add(px); vertexBuffer.add(py); vertexBuffer.add(pz);
+                                vertexBuffer.add(nx); vertexBuffer.add(ny); vertexBuffer.add(nz);
+                                vertexBuffer.add(r);  vertexBuffer.add(g);  vertexBuffer.add(b);  vertexBuffer.add(a);
+                                vertexBuffer.add(u1); vertexBuffer.add(v1);
+                                vertexBuffer.add(u2); vertexBuffer.add(v2);
                             }
                         }
                     }
@@ -93,12 +106,14 @@ public class MeshImporter {
                     for (int j = 0; j < vertexBuffer.size(); j++) {
                         verts[j] = vertexBuffer.get(j);
                     }
-                    System.out.println("[MeshImporter] Loaded mesh " + file.getName() + " with " + (verts.length / 9) + " vertices.");
-                    return new MeshBufferData(verts, verts.length / 9);
+                    int loadedCount = verts.length / FLOATS_PER_VERTEX;
+                    System.out.println("[MeshImporter] Successfully loaded 3D mesh " + file.getName() + " with " + loadedCount + " vertices.");
+                    return new MeshBufferData(verts, loadedCount);
                 }
             }
         } catch (Throwable t) {
             System.err.println("[MeshImporter] Assimp exception on " + filePath + ": " + t.getMessage());
+            t.printStackTrace();
         }
 
         return createDefaultCube();
@@ -109,23 +124,17 @@ public class MeshImporter {
         File direct = new File(filePath);
         if (direct.exists()) return direct;
 
-        String clean = filePath.replace('\\', '/').trim();
-
-        // 1. Try relative to user working directory
+        String clean = filePath.replace('\\', '/').replace('/', File.separatorChar).trim();
         File userDirFile = new File(System.getProperty("user.dir"), clean);
         if (userDirFile.exists()) return userDirFile;
 
-        // 2. Strip leading "Assets/" or "Assets/Models/"
-        if (clean.startsWith("Assets/")) {
-            String stripped = clean.substring(7);
-            File strippedFile = new File(stripped);
+        String rawClean = filePath.replace('\\', '/').trim();
+        if (rawClean.startsWith("Assets/")) {
+            String stripped = rawClean.substring(7);
+            File strippedFile = new File(System.getProperty("user.dir"), stripped);
             if (strippedFile.exists()) return strippedFile;
-
-            File userDirStripped = new File(System.getProperty("user.dir"), stripped);
-            if (userDirStripped.exists()) return userDirStripped;
         }
 
-        // 3. Recursive filename search in working directory & Downloads
         String fileName = new File(clean).getName();
         if (!fileName.isEmpty()) {
             File found = findFileByName(new File(System.getProperty("user.dir")), fileName, 0);
@@ -146,9 +155,8 @@ public class MeshImporter {
         if (files == null) return null;
 
         for (File f : files) {
-            if (f.isFile() && f.getName().equalsIgnoreCase(name)) {
-                return f;
-            } else if (f.isDirectory() && !f.getName().startsWith(".") && !f.getName().equals("build") && !f.getName().equals("node_modules")) {
+            if (f.isFile() && f.getName().equalsIgnoreCase(name)) return f;
+            if (f.isDirectory() && !f.getName().startsWith(".") && !f.getName().equals("build") && !f.getName().equals("node_modules")) {
                 File sub = findFileByName(f, name, depth + 1);
                 if (sub != null) return sub;
             }
@@ -158,54 +166,54 @@ public class MeshImporter {
 
     public static MeshBufferData createDefaultCube() {
         float[] cubeVerts = new float[] {
-            // Front Face (+Z) - Reddish/Orange
-            -1.0f,-1.0f, 1.0f,  0.9f,0.3f,0.2f,1.0f,  0.0f,1.0f,
-             1.0f,-1.0f, 1.0f,  0.9f,0.3f,0.2f,1.0f,  1.0f,1.0f,
-             1.0f, 1.0f, 1.0f,  0.9f,0.3f,0.2f,1.0f,  1.0f,0.0f,
-            -1.0f,-1.0f, 1.0f,  0.9f,0.3f,0.2f,1.0f,  0.0f,1.0f,
-             1.0f, 1.0f, 1.0f,  0.9f,0.3f,0.2f,1.0f,  1.0f,0.0f,
-            -1.0f, 1.0f, 1.0f,  0.9f,0.3f,0.2f,1.0f,  0.0f,0.0f,
+            // Front (+Z)
+            -1f,-1f, 1f,  0f,0f,1f,  0.9f,0.3f,0.2f,1f,  0f,1f, 0f,1f,
+             1f,-1f, 1f,  0f,0f,1f,  0.9f,0.3f,0.2f,1f,  1f,1f, 1f,1f,
+             1f, 1f, 1f,  0f,0f,1f,  0.9f,0.3f,0.2f,1f,  1f,0f, 1f,0f,
+            -1f,-1f, 1f,  0f,0f,1f,  0.9f,0.3f,0.2f,1f,  0f,1f, 0f,1f,
+             1f, 1f, 1f,  0f,0f,1f,  0.9f,0.3f,0.2f,1f,  1f,0f, 1f,0f,
+            -1f, 1f, 1f,  0f,0f,1f,  0.9f,0.3f,0.2f,1f,  0f,0f, 0f,0f,
 
-            // Back Face (-Z) - Cyan
-             1.0f,-1.0f,-1.0f,  0.2f,0.8f,0.9f,1.0f,  0.0f,1.0f,
-            -1.0f,-1.0f,-1.0f,  0.2f,0.8f,0.9f,1.0f,  1.0f,1.0f,
-            -1.0f, 1.0f,-1.0f,  0.2f,0.8f,0.9f,1.0f,  1.0f,0.0f,
-             1.0f,-1.0f,-1.0f,  0.2f,0.8f,0.9f,1.0f,  0.0f,1.0f,
-            -1.0f, 1.0f,-1.0f,  0.2f,0.8f,0.9f,1.0f,  1.0f,0.0f,
-             1.0f, 1.0f,-1.0f,  0.2f,0.8f,0.9f,1.0f,  0.0f,0.0f,
+            // Back (-Z)
+             1f,-1f,-1f,  0f,0f,-1f, 0.2f,0.8f,0.9f,1f,  0f,1f, 0f,1f,
+            -1f,-1f,-1f,  0f,0f,-1f, 0.2f,0.8f,0.9f,1f,  1f,1f, 1f,1f,
+            -1f, 1f,-1f,  0f,0f,-1f, 0.2f,0.8f,0.9f,1f,  1f,0f, 1f,0f,
+             1f,-1f,-1f,  0f,0f,-1f, 0.2f,0.8f,0.9f,1f,  0f,1f, 0f,1f,
+            -1f, 1f,-1f,  0f,0f,-1f, 0.2f,0.8f,0.9f,1f,  1f,0f, 1f,0f,
+             1f, 1f,-1f,  0f,0f,-1f, 0.2f,0.8f,0.9f,1f,  0f,0f, 0f,0f,
 
-            // Top Face (+Y) - Green
-            -1.0f, 1.0f, 1.0f,  0.2f,0.9f,0.3f,1.0f,  0.0f,1.0f,
-             1.0f, 1.0f, 1.0f,  0.2f,0.9f,0.3f,1.0f,  1.0f,1.0f,
-             1.0f, 1.0f,-1.0f,  0.2f,0.9f,0.3f,1.0f,  1.0f,0.0f,
-            -1.0f, 1.0f, 1.0f,  0.2f,0.9f,0.3f,1.0f,  0.0f,1.0f,
-             1.0f, 1.0f,-1.0f,  0.2f,0.9f,0.3f,1.0f,  1.0f,0.0f,
-            -1.0f, 1.0f,-1.0f,  0.2f,0.9f,0.3f,1.0f,  0.0f,0.0f,
+            // Top (+Y)
+            -1f, 1f, 1f,  0f,1f,0f,  0.2f,0.9f,0.3f,1f,  0f,1f, 0f,1f,
+             1f, 1f, 1f,  0f,1f,0f,  0.2f,0.9f,0.3f,1f,  1f,1f, 1f,1f,
+             1f, 1f,-1f,  0f,1f,0f,  0.2f,0.9f,0.3f,1f,  1f,0f, 1f,0f,
+            -1f, 1f, 1f,  0f,1f,0f,  0.2f,0.9f,0.3f,1f,  0f,1f, 0f,1f,
+             1f, 1f,-1f,  0f,1f,0f,  0.2f,0.9f,0.3f,1f,  1f,0f, 1f,0f,
+            -1f, 1f,-1f,  0f,1f,0f,  0.2f,0.9f,0.3f,1f,  0f,0f, 0f,0f,
 
-            // Bottom Face (-Y) - Blue
-            -1.0f,-1.0f,-1.0f,  0.2f,0.3f,0.9f,1.0f,  0.0f,1.0f,
-             1.0f,-1.0f,-1.0f,  0.2f,0.3f,0.9f,1.0f,  1.0f,1.0f,
-             1.0f,-1.0f, 1.0f,  0.2f,0.3f,0.9f,1.0f,  1.0f,0.0f,
-            -1.0f,-1.0f,-1.0f,  0.2f,0.3f,0.9f,1.0f,  0.0f,1.0f,
-             1.0f,-1.0f, 1.0f,  0.2f,0.3f,0.9f,1.0f,  1.0f,0.0f,
-            -1.0f,-1.0f, 1.0f,  0.2f,0.3f,0.9f,1.0f,  0.0f,0.0f,
+            // Bottom (-Y)
+            -1f,-1f,-1f,  0f,-1f,0f, 0.2f,0.3f,0.9f,1f,  0f,1f, 0f,1f,
+             1f,-1f,-1f,  0f,-1f,0f, 0.2f,0.3f,0.9f,1f,  1f,1f, 1f,1f,
+             1f,-1f, 1f,  0f,-1f,0f, 0.2f,0.3f,0.9f,1f,  1f,0f, 1f,0f,
+            -1f,-1f,-1f,  0f,-1f,0f, 0.2f,0.3f,0.9f,1f,  0f,1f, 0f,1f,
+             1f,-1f, 1f,  0f,-1f,0f, 0.2f,0.3f,0.9f,1f,  1f,0f, 1f,0f,
+            -1f,-1f, 1f,  0f,-1f,0f, 0.2f,0.3f,0.9f,1f,  0f,0f, 0f,0f,
 
-            // Left Face (-X) - Yellow
-            -1.0f,-1.0f,-1.0f,  0.9f,0.8f,0.2f,1.0f,  0.0f,1.0f,
-            -1.0f,-1.0f, 1.0f,  0.9f,0.8f,0.2f,1.0f,  1.0f,1.0f,
-            -1.0f, 1.0f, 1.0f,  0.9f,0.8f,0.2f,1.0f,  1.0f,0.0f,
-            -1.0f,-1.0f,-1.0f,  0.9f,0.8f,0.2f,1.0f,  0.0f,1.0f,
-            -1.0f, 1.0f, 1.0f,  0.9f,0.8f,0.2f,1.0f,  1.0f,0.0f,
-            -1.0f, 1.0f,-1.0f,  0.9f,0.8f,0.2f,1.0f,  0.0f,0.0f,
+            // Left (-X)
+            -1f,-1f,-1f, -1f,0f,0f,  0.9f,0.8f,0.2f,1f,  0f,1f, 0f,1f,
+            -1f,-1f, 1f, -1f,0f,0f,  0.9f,0.8f,0.2f,1f,  1f,1f, 1f,1f,
+            -1f, 1f, 1f, -1f,0f,0f,  0.9f,0.8f,0.2f,1f,  1f,0f, 1f,0f,
+            -1f,-1f,-1f, -1f,0f,0f,  0.9f,0.8f,0.2f,1f,  0f,1f, 0f,1f,
+            -1f, 1f, 1f, -1f,0f,0f,  0.9f,0.8f,0.2f,1f,  1f,0f, 1f,0f,
+            -1f, 1f,-1f, -1f,0f,0f,  0.9f,0.8f,0.2f,1f,  0f,0f, 0f,0f,
 
-            // Right Face (+X) - Purple
-             1.0f,-1.0f, 1.0f,  0.8f,0.2f,0.9f,1.0f,  0.0f,1.0f,
-             1.0f,-1.0f,-1.0f,  0.8f,0.2f,0.9f,1.0f,  1.0f,1.0f,
-             1.0f, 1.0f,-1.0f,  0.8f,0.2f,0.9f,1.0f,  1.0f,0.0f,
-             1.0f,-1.0f, 1.0f,  0.8f,0.2f,0.9f,1.0f,  0.0f,1.0f,
-             1.0f, 1.0f,-1.0f,  0.8f,0.2f,0.9f,1.0f,  1.0f,0.0f,
-             1.0f, 1.0f, 1.0f,  0.8f,0.2f,0.9f,1.0f,  0.0f,0.0f
+            // Right (+X)
+             1f,-1f, 1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  0f,1f, 0f,1f,
+             1f,-1f,-1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  1f,1f, 1f,1f,
+             1f, 1f,-1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  1f,0f, 1f,0f,
+             1f,-1f, 1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  0f,1f, 0f,1f,
+             1f, 1f,-1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  1f,0f, 1f,0f,
+             1f, 1f, 1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  0f,0f, 0f,0f
         };
-        return new MeshBufferData(cubeVerts, 36);
+        return new MeshBufferData(cubeVerts, cubeVerts.length / FLOATS_PER_VERTEX);
     }
 }

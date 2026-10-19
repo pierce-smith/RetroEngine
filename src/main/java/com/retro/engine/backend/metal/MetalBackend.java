@@ -5,14 +5,6 @@ import com.retro.engine.rhi.GraphicsAPI;
 import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.rhi.TextureDesc;
 import com.retro.engine.rhi.ViewportSpec;
-import com.retro.engine.scene.components.Camera;
-import com.retro.engine.scene.components.Transform;
-
-import com.retro.engine.backend.metal.MetalTargetPass;
-import com.retro.engine.backend.metal.MetalPassEncoder;
-import com.retro.engine.backend.metal.MetalGpuCache;
-import com.retro.engine.backend.metal.MetalUniformStream;
-import com.retro.engine.rhi.*;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,10 +15,8 @@ import static org.lwjgl.system.macosx.ObjCRuntime.objc_getClass;
 import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 
 /**
- * MetalBackend implements IRenderBackend as a lightweight Facade Bridge.
- * Delegates framebuffer targets, VRAM caching, uniform streaming, and pass encoding.
- * Hardened against native Objective-C memory leaks by wrapping every render frame in a
- * managed NSAutoreleasePool.
+ * MetalBackend Facade Bridge routing scene queue and light parameters to MetalPassEncoder.
+ * Handles Directional, Point, and Spot light types.
  */
 public class MetalBackend implements IRenderBackend {
 
@@ -34,7 +24,6 @@ public class MetalBackend implements IRenderBackend {
     private final MetalTexture metalTexture = new MetalTexture();
     private final MetalPipeline metalPipeline = new MetalPipeline();
 
-    // RHI Subsystem Delegates
     private final MetalTargetPass framebuffer = new MetalTargetPass();
     private final MetalGpuCache resourceCache = new MetalGpuCache();
     private final MetalUniformStream uniformStreamer = new MetalUniformStream();
@@ -44,14 +33,25 @@ public class MetalBackend implements IRenderBackend {
     private long currentCommandBuffer = 0L;
     private long currentAutoreleasePool = 0L;
 
-    // Camera Transform State
     private float camPanX = 0.0f;
     private float camPanY = 0.25f;
     private float camZoom = -5.0f;
     private float camPitch = 0.0f;
     private float camYaw = 0.0f;
 
-    // Multi-entity Batch Queue
+    // Active Scene Lighting Parameters
+    private int activeLightType = 0; // 0 = DIRECTIONAL, 1 = POINT, 2 = SPOT
+    private float activeLightPosX = 0.0f;
+    private float activeLightPosY = 5.0f;
+    private float activeLightPosZ = 0.0f;
+    private float activeLightDirX = -0.5f;
+    private float activeLightDirY = -1.0f;
+    private float activeLightDirZ = -0.5f;
+    private float activeLightR = 1.0f;
+    private float activeLightG = 0.95f;
+    private float activeLightB = 0.85f;
+    private float activeLightIntensity = 1.2f;
+
     private final List<MetalPassEncoder.RenderEntity> sceneQueuePool = new ArrayList<>();
     private int activeSceneQueueCount = 0;
 
@@ -66,7 +66,7 @@ public class MetalBackend implements IRenderBackend {
 
         uniformStreamer.initialize(metalDevice);
 
-        System.out.println("[MetalBackend] RHI Modular Pipeline Initialized.");
+        System.out.println("[MetalBackend] Step 1: 14-Float Vertex Stride & Multi-Light Type Pipeline Initialized.");
         return true;
     }
 
@@ -74,6 +74,20 @@ public class MetalBackend implements IRenderBackend {
     @Override public void resizeViewport(int width, int height) { framebuffer.resizeViewport(metalDevice, width, height); }
     @Override public void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw) {
         this.camPanX = panX; this.camPanY = panY; this.camZoom = zoom; this.camPitch = pitch; this.camYaw = yaw;
+    }
+
+    public void setSceneLight(int type, float posX, float posY, float posZ, float dirX, float dirY, float dirZ, float r, float g, float b, float intensity) {
+        this.activeLightType = type;
+        this.activeLightPosX = posX;
+        this.activeLightPosY = posY;
+        this.activeLightPosZ = posZ;
+        this.activeLightDirX = dirX;
+        this.activeLightDirY = dirY;
+        this.activeLightDirZ = dirZ;
+        this.activeLightR = r;
+        this.activeLightG = g;
+        this.activeLightB = b;
+        this.activeLightIntensity = intensity;
     }
 
     @Override
@@ -131,7 +145,6 @@ public class MetalBackend implements IRenderBackend {
 
         if (metalLayer == 0L || commandQueue == 0L || metalPipeline.getPipelineState3D() == 0L) return;
 
-        // Allocate per-frame NSAutoreleasePool to prevent native Cocoa object leaks
         long poolClass = objc_getClass("NSAutoreleasePool");
         if (poolClass != 0L && send != 0L) {
             long alloc = invokePPP(poolClass, sel_registerName("alloc"), send);
@@ -151,14 +164,15 @@ public class MetalBackend implements IRenderBackend {
 
         currentCommandBuffer = invokePPP(commandQueue, sel_registerName("commandBuffer"), send);
 
-        // Pass 1: Offscreen 3D Scene Pass
         passEncoder.encodeOffscreen3DPass(
             currentCommandBuffer, metalDevice, metalPipeline, metalTexture,
             framebuffer, resourceCache, uniformStreamer,
-            getActiveSceneQueue(), camPanX, camPanY, camZoom, camPitch, camYaw
+            getActiveSceneQueue(), camPanX, camPanY, camZoom, camPitch, camYaw,
+            activeLightType, activeLightPosX, activeLightPosY, activeLightPosZ,
+            activeLightDirX, activeLightDirY, activeLightDirZ,
+            activeLightR, activeLightG, activeLightB, activeLightIntensity
         );
 
-        // Pass 2: Window Composition Pass
         long drawableTexture = invokePPP(currentDrawable, sel_registerName("texture"), send);
         passEncoder.encodeWindowCompositionPass(
             currentCommandBuffer, drawableTexture, metalDevice, metalPipeline, metalTexture,
@@ -182,18 +196,17 @@ public class MetalBackend implements IRenderBackend {
             currentDrawable = 0L;
         }
 
-        // Drain per-frame NSAutoreleasePool to reclaim temporary Metal descriptors
         if (currentAutoreleasePool != 0L && send != 0L) {
             invokePPP(currentAutoreleasePool, sel_registerName("drain"), send);
             currentAutoreleasePool = 0L;
         }
     }
 
-    @Override public void shutdown() { System.out.println("[MetalBackend] Releasing Metal offscreen and pipeline resources..."); }
+    @Override public void shutdown() {}
     @Override public long createBuffer(BufferDesc createInfo) { return 102L; }
     @Override public void destroyBuffer(long handle) {}
     @Override public long createTexture(TextureDesc createInfo) { return 201L; }
     @Override public void destroyTexture(long handle) {}
     @Override public GraphicsAPI getAPI() { return GraphicsAPI.METAL; }
-    @Override public String getDeviceName() { return "Native Apple Metal Driver (Modular Phase 2 Active)"; }
+    @Override public String getDeviceName() { return "Native Apple Metal Driver (Multi-Light Type Active)"; }
 }

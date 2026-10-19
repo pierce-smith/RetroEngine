@@ -1,47 +1,35 @@
 package com.retro.engine.editor.render;
 
-import com.retro.engine.scene.SceneWorld;
-
 import com.retro.engine.assets.AssetStreamer;
 import com.retro.engine.assets.importers.MeshBufferData;
 import com.retro.engine.assets.importers.MeshImporter;
 import com.retro.engine.assets.importers.PixelBufferData;
-import com.retro.engine.scene.Entity;
-import com.retro.engine.scene.SceneWorld.WorldTransform;
-import com.retro.engine.scene.components.Material;
-import com.retro.engine.scene.components.MeshFilter;
-import com.retro.engine.scene.components.Transform;
+import com.retro.engine.backend.metal.MetalBackend;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ui.EngineConsolePanel;
 import com.retro.engine.rhi.IRenderBackend;
+import com.retro.engine.scene.Entity;
+import com.retro.engine.scene.SceneWorld.WorldTransform;
+import com.retro.engine.scene.components.Light;
+import com.retro.engine.scene.components.Material;
+import com.retro.engine.scene.components.MeshFilter;
+import com.retro.engine.scene.components.Transform;
 
 import java.util.List;
 
 /**
- * SceneRenderPipeline orchestrates non-blocking iteration of scene entities,
- * evaluates hierarchical world matrix transformations (parent world x local),
- * queries Virtual Thread asset streaming caches, supplies default fallback geometry
- * ONLY if loading fails, and submits 3D draw items to the RHI queue.
- *
- * Updates EngineConsolePanel with live frame vertex counts and dynamic RHI draw call batches.
+ * SceneRenderPipeline submits 14-float mesh geometry and queries Light components
+ * (supporting DIRECTIONAL, POINT, and SPOT light types) to stream live light parameters
+ * into the rendering backend.
  */
 public class SceneRenderPipeline {
 
-    // Cached default fallback geometry for assets that failed to load
     private final MeshBufferData fallbackCube = MeshImporter.createDefaultCube();
 
-    /**
-     * Drains virtual thread uploads, iterates active scene entities, computes
-     * hierarchical world transforms, resolves streaming assets, submits
-     * 3D draw calls to the active RHI backend, and updates telemetry counters.
-     */
     public void submitFrame(EditorWorkspace editorManager, AssetStreamer streamingService, IRenderBackend rhi) {
         if (editorManager == null || streamingService == null || rhi == null) return;
 
-        // 1. Drain completed background Virtual Thread asset uploads into main thread cache
         streamingService.processCompletedUploads();
-
-        // 2. Reset the multi-entity batch queue for the new frame
         rhi.clearSceneQueue();
 
         List<Entity> entities = editorManager.getSceneEntities();
@@ -49,7 +37,39 @@ public class SceneRenderPipeline {
         int entityDrawCalls = 0;
 
         if (entities != null && !entities.isEmpty()) {
-            // 3. Traversal loop across active scene graph
+
+            // Scan for active Light component in scene
+            for (Entity entity : entities) {
+                Light light = entity.getComponent(Light.class);
+                Transform lightTransform = entity.getTransform();
+
+                if (light != null && lightTransform != null) {
+                    WorldTransform wt = editorManager.getSceneManager().getComputedWorldTransform(entity);
+                    float posX = wt.px();
+                    float posY = wt.py();
+                    float posZ = wt.pz();
+
+                    float radPitch = (float) Math.toRadians(lightTransform.rotX);
+                    float radYaw = (float) Math.toRadians(lightTransform.rotY);
+
+                    float dirX = (float) (Math.sin(radYaw) * Math.cos(radPitch));
+                    float dirY = (float) (-Math.sin(radPitch));
+                    float dirZ = (float) (-Math.cos(radYaw) * Math.cos(radPitch));
+
+                    int lightType = switch (light.type) {
+                        case DIRECTIONAL -> 0;
+                        case POINT -> 1;
+                        case SPOT -> 2;
+                    };
+
+                    if (rhi instanceof MetalBackend metalRhi) {
+                        metalRhi.setSceneLight(lightType, posX, posY, posZ, dirX, dirY, dirZ, light.r, light.g, light.b, light.intensity);
+                    }
+                    break;
+                }
+            }
+
+            // Traversal loop across active 3D entities
             for (Entity entity : entities) {
                 Transform tc = entity.getComponent(Transform.class);
                 MeshFilter mc = entity.getComponent(MeshFilter.class);
@@ -62,9 +82,7 @@ public class SceneRenderPipeline {
                 String texturePath = (mat != null) ? mat.textureAssetPath : null;
 
                 if (meshPath != null) {
-                    // Request non-blocking async load on Virtual Threads if not present in cache
-                    boolean isMeshLoadedInCache = streamingService.isMeshLoaded(meshPath);
-                    if (!isMeshLoadedInCache) {
+                    if (!streamingService.isMeshLoaded(meshPath)) {
                         streamingService.requestModelAsync(meshPath);
                     }
 
@@ -72,7 +90,6 @@ public class SceneRenderPipeline {
                         streamingService.requestTextureAsync(texturePath);
                     }
 
-                    // Query main-thread cache hits
                     MeshBufferData model = streamingService.getModel(meshPath);
 
                     byte[] pixels = null;
@@ -91,28 +108,22 @@ public class SceneRenderPipeline {
                     int vertexCountToSubmit;
 
                     if (model != null && model.vertices != null && model.vertices.length > 0) {
-                        // Async load completed successfully
                         submitKey = meshPath;
                         verticesToSubmit = model.vertices;
                         vertexCountToSubmit = model.vertexCount;
-                    } else if (isMeshLoadedInCache) {
-                        // Async load finished, but failed or returned empty: show error fallback cube
+                    } else if (streamingService.isMeshLoaded(meshPath)) {
                         submitKey = "[FALLBACK_CUBE]";
                         verticesToSubmit = fallbackCube.vertices;
                         vertexCountToSubmit = fallbackCube.vertexCount;
                     } else {
-                        // Still actively streaming on background Virtual Threads: do NOT render fallback cube
                         continue;
                     }
 
-                    // Accumulate actual rendered mesh vertices and 3D entity draw calls
                     totalActiveVertices += vertexCountToSubmit;
                     entityDrawCalls++;
 
-                    // Compute accumulated hierarchical world transform
                     WorldTransform wt = editorManager.getSceneManager().getComputedWorldTransform(entity);
 
-                    // Submit 9-float stride entity geometry to RHI execution queue using world transform
                     rhi.submitEntity(
                             submitKey,
                             verticesToSubmit,
@@ -127,16 +138,11 @@ public class SceneRenderPipeline {
             }
         }
 
-        // Add 3D grid vertices if enabled
         if (editorManager.is3DGridVisible()) {
             totalActiveVertices += editorManager.get3DGridVertexCount();
         }
 
-        // Calculate total pipeline draw calls:
-        // 3D entities + 3D Grid pass + Offscreen Viewport Quad Composition pass + 2D UI Overlay Batch
         int totalDrawCalls = entityDrawCalls + (editorManager.is3DGridVisible() ? 1 : 0) + 2;
-
-        // Push live frame telemetry to EngineConsolePanel
         EngineConsolePanel.updateTelemetry(totalDrawCalls, totalActiveVertices);
     }
 }

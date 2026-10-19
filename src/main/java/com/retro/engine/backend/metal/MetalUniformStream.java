@@ -1,7 +1,5 @@
 package com.retro.engine.backend.metal;
 
-import com.retro.engine.backend.metal.MetalBuffer;
-import com.retro.engine.backend.metal.MetalDevice;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.FloatBuffer;
@@ -10,14 +8,13 @@ import static org.lwjgl.system.JNI.invokePPP;
 import static org.lwjgl.system.macosx.ObjCRuntime.*;
 
 /**
- * Delegate managing off-heap ring-buffered uniform streaming (triple buffering)
- * and 4x4 matrix calculations (View, Model, Projection, MVP).
- * Optimized with reusable matrix scratchpads to eliminate per-frame JVM GC pressure.
+ * Manages triple-buffered uniform streaming and matrix calculations, expanded
+ * to stream light direction, position, type, color, intensity, and ambient parameters.
  */
 public class MetalUniformStream {
 
     private static final int RING_SLOTS = 3;
-    public static final long UNIFORM_STRIDE = 256L; // 256-byte alignment required by Metal
+    public static final long UNIFORM_STRIDE = 256L;
     public static final int MAX_ENTITIES_PER_FRAME = 256;
     private static final long FRAME_SLOT_SIZE = UNIFORM_STRIDE * (1 + MAX_ENTITIES_PER_FRAME);
     private static final long TOTAL_RING_BUFFER_SIZE = FRAME_SLOT_SIZE * RING_SLOTS;
@@ -26,7 +23,6 @@ public class MetalUniformStream {
     private long uniformBufferIdentity = 0L;
     private int frameIndex = 0;
 
-    // Pre-allocated matrix scratchpads for zero per-frame heap allocations
     private final float[] matP = new float[16];
     private final float[] matV = new float[16];
     private final float[] matM = new float[16];
@@ -60,7 +56,9 @@ public class MetalUniformStream {
             FloatBuffer fb = MemoryUtil.memFloatBuffer(pIdentity, 16);
             fb.clear();
             fb.put(identityMVP);
-            MemoryUtil.memPutInt(pIdentity + 64L, 1); // hasTexture = 1
+            MemoryUtil.memPutInt(pIdentity + 192L, 1); // hasTexture = 1
+            MemoryUtil.memPutInt(pIdentity + 196L, 1); // isUnlit = 1
+            MemoryUtil.memPutInt(pIdentity + 200L, 9); // stride = 9
         }
     }
 
@@ -76,7 +74,6 @@ public class MetalUniformStream {
         return frameIndex * FRAME_SLOT_SIZE;
     }
 
-    // --- Zero-Allocation Matrix Math Calculations ---
     public float[] createCameraViewMatrix(float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
         float radYaw = (float) Math.toRadians(camYaw);
         float radPitch = (float) Math.toRadians(camPitch);
@@ -172,4 +169,6 @@ public class MetalUniformStream {
         multiplyMat4(matP, matVM, matMVP);
         return matMVP;
     }
+
+    public float[] getModelMatrix() { return matM; }
 }
