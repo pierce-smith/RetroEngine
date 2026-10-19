@@ -19,7 +19,7 @@ import java.util.List;
 
 /**
  * SceneRenderPipeline submits 14-float mesh geometry, queries Light components,
- * and performs downward surface raycasting to determine entity shadow projection heights.
+ * passes material reflection parameters, and performs downward surface raycasting to determine entity shadow projection heights.
  */
 public class SceneRenderPipeline {
 
@@ -125,6 +125,7 @@ public class SceneRenderPipeline {
                     float groundY = findGroundSurfaceY(entity, wt, entities, editorManager);
 
                     if (rhi instanceof MetalBackend metalRhi) {
+                        float reflectVal = (mat != null) ? mat.reflect : 0.0f;
                         metalRhi.submitEntityWithShadow(
                                 submitKey,
                                 verticesToSubmit,
@@ -134,7 +135,7 @@ public class SceneRenderPipeline {
                                 wt.px(), wt.py(), wt.pz(),
                                 wt.rx(), wt.ry(), wt.rz(),
                                 wt.sx(), wt.sy(), wt.sz(),
-                                groundY, 0.0f
+                                groundY, reflectVal
                         );
                     } else {
                         rhi.submitEntity(
