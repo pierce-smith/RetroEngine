@@ -184,9 +184,9 @@ public class VulkanPassEncoder {
                             VkDescriptorImageInfo.Buffer imageInfoShadow = VkDescriptorImageInfo.calloc(1, stack).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(whiteTex.imageViewHandle).sampler(whiteTex.samplerHandle);
 
                             VkWriteDescriptorSet.Buffer descriptorWrites = VkWriteDescriptorSet.calloc(3, stack);
-                            descriptorWrites.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC).pBufferInfo(bufferInfo);
-                            descriptorWrites.get(1).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(imageInfoTex);
-                            descriptorWrites.get(2).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(2).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(imageInfoShadow);
+                            descriptorWrites.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(0).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC).pBufferInfo(bufferInfo);
+                            descriptorWrites.get(1).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(1).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(imageInfoTex);
+                            descriptorWrites.get(2).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(2).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(imageInfoShadow);
 
                             vkUpdateDescriptorSets(vkDevice, descriptorWrites, null);
 
@@ -252,7 +252,7 @@ public class VulkanPassEncoder {
             long currentSwapchainImageView = swapchainManager.getImageView(imageIndex);
             long currentSwapchainImage = swapchainManager.getSwapchainImage(imageIndex);
 
-            // 1. Blit Offscreen 3D Viewport to Swapchain Image
+            // 1. Blit Offscreen 3D Viewport to Swapchain Image inside Viewport Sub-Window Bounds
             VkImageMemoryBarrier.Buffer srcBarrier = VkImageMemoryBarrier.calloc(1, stack)
                     .sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER)
                     .oldLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
@@ -278,14 +278,22 @@ public class VulkanPassEncoder {
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, srcBarrier);
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, dstBarrier);
 
+            int dstWidth = swapchainManager.getWidth();
+            int dstHeight = swapchainManager.getHeight();
+
+            int dstX0 = (int) ((1.0f - 0.55f) * 0.5f * dstWidth);
+            int dstX1 = (int) ((1.0f + 0.55f) * 0.5f * dstWidth);
+            int dstY0 = (int) ((1.0f - 0.88f) * 0.5f * dstHeight);
+            int dstY1 = (int) ((1.0f - (-0.50f)) * 0.5f * dstHeight);
+
             VkImageBlit.Buffer blitRegion = VkImageBlit.calloc(1, stack);
             blitRegion.srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
             blitRegion.srcOffsets(0).set(0, 0, 0);
             blitRegion.srcOffsets(1).set(targetPass.getWidth(), targetPass.getHeight(), 1);
 
             blitRegion.dstSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
-            blitRegion.dstOffsets(0).set(0, 0, 0);
-            blitRegion.dstOffsets(1).set(swapchainManager.getWidth(), swapchainManager.getHeight(), 1);
+            blitRegion.dstOffsets(0).set(dstX0, dstY0, 0);
+            blitRegion.dstOffsets(1).set(dstX1, dstY1, 1);
 
             vkCmdBlitImage(cmd, targetPass.getOffscreenImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, currentSwapchainImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, blitRegion, VK_FILTER_LINEAR);
 
