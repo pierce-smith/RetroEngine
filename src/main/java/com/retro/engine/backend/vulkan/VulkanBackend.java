@@ -116,7 +116,7 @@ public class VulkanBackend implements IRenderBackend {
             vkBeginCommandBuffer(cmd, beginInfo);
 
             float[] viewMatrix = computeViewMatrix();
-            float[] projMatrix = computePerspectiveProjectionMatrix(45.0f, (float) targetPass.getWidth() / (float) targetPass.getHeight(), 0.1f, 100.0f);
+            float[] projMatrix = computePerspectiveProjectionMatrix(50.0f, (float) targetPass.getWidth() / (float) targetPass.getHeight(), 0.1f, 100.0f);
 
             passEncoder.record4PhasePipeline(
                     cmd,
@@ -223,7 +223,7 @@ public class VulkanBackend implements IRenderBackend {
     }
 
     @Override public void updateGridMesh(float[] vertices, int count) {}
-    
+
     @Override
     public void updateUiMesh(float[] vertices, int count) {
         gpuCache.updateUiMesh(deviceManager, vertices, count);
