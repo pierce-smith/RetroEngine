@@ -180,73 +180,6 @@ public class VulkanPassEncoder {
                 VulkanGpuCache.VulkanTexture whiteTex = gpuCache.getDefaultWhiteTexture(deviceManager);
                 VulkanGpuCache.VulkanBuffer lightUbo = gpuCache.getOrCreateLightUniformBuffer(deviceManager);
 
-                if (vkDevice != null && descriptorPool.getHandle() != 0L && lightUbo != null && whiteTex != null) {
-                    // Allocate Set 0
-                    VkDescriptorSetAllocateInfo allocSetInfo = VkDescriptorSetAllocateInfo.calloc(stack)
-                            .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO)
-                            .descriptorPool(descriptorPool.getHandle())
-                            .pSetLayouts(stack.longs(pipelineManager.getDescriptorSetLayout3D()));
-
-                    LongBuffer pSet = stack.mallocLong(1);
-                    if (vkAllocateDescriptorSets(vkDevice, allocSetInfo, pSet) == VK_SUCCESS) {
-                        long descriptorSet0 = pSet.get(0);
-
-                        // Binding 0: Light UBO
-                        VkDescriptorBufferInfo.Buffer bufferInfo = VkDescriptorBufferInfo.calloc(1, stack)
-                                .buffer(lightUbo.bufferHandle)
-                                .offset(0)
-                                .range(512);
-
-                        // Binding 1: Main Texture
-                        VkDescriptorImageInfo.Buffer imageInfoTex = VkDescriptorImageInfo.calloc(1, stack)
-                                .imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                                .imageView(whiteTex.imageViewHandle)
-                                .sampler(whiteTex.samplerHandle);
-
-                        // Binding 2: Shadow Map
-                        VkDescriptorImageInfo.Buffer imageInfoShadow = VkDescriptorImageInfo.calloc(1, stack)
-                                .imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                                .imageView(whiteTex.imageViewHandle)
-                                .sampler(whiteTex.samplerHandle);
-
-                        VkWriteDescriptorSet.Buffer descriptorWrites = VkWriteDescriptorSet.calloc(3, stack);
-                        
-                        descriptorWrites.get(0)
-                                .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
-                                .dstSet(descriptorSet0)
-                                .dstBinding(0)
-                                .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC)
-                                .pBufferInfo(bufferInfo);
-
-                        descriptorWrites.get(1)
-                                .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
-                                .dstSet(descriptorSet0)
-                                .dstBinding(1)
-                                .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                                .pImageInfo(imageInfoTex);
-
-                        descriptorWrites.get(2)
-                                .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
-                                .dstSet(descriptorSet0)
-                                .dstBinding(2)
-                                .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                                .pImageInfo(imageInfoShadow);
-
-                        vkUpdateDescriptorSets(vkDevice, descriptorWrites, null);
-
-                        // Bind Descriptor Set 0 before draw calls
-                        IntBuffer pDynamicOffsets = stack.ints(0);
-                        vkCmdBindDescriptorSets(
-                                cmd,
-                                VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                pipelineManager.getPipelineLayout3D(),
-                                0,
-                                stack.longs(descriptorSet0),
-                                pDynamicOffsets
-                        );
-                    }
-                }
-
                 float[] identityLightSpace = new float[]{
                         1.0f, 0.0f, 0.0f, 0.0f,
                         0.0f, 1.0f, 0.0f, 0.0f,
@@ -258,6 +191,76 @@ public class VulkanPassEncoder {
                     RenderEntity entity = sceneQueue.get(i);
                     long vboHandle = entity.getVertexBufferHandle();
                     if (vboHandle == 0L || entity.vertexCount <= 0) continue;
+
+                    // Allocate a UNIQUE Descriptor Set per entity for this frame
+                    if (vkDevice != null && descriptorPool.getHandle() != 0L && lightUbo != null && whiteTex != null) {
+                        VkDescriptorSetAllocateInfo allocSetInfo = VkDescriptorSetAllocateInfo.calloc(stack)
+                                .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO)
+                                .descriptorPool(descriptorPool.getHandle())
+                                .pSetLayouts(stack.longs(pipelineManager.getDescriptorSetLayout3D()));
+
+                        LongBuffer pSet = stack.mallocLong(1);
+                        if (vkAllocateDescriptorSets(vkDevice, allocSetInfo, pSet) == VK_SUCCESS) {
+                            long descriptorSetEntity = pSet.get(0);
+
+                            // Binding 0: Light UBO
+                            VkDescriptorBufferInfo.Buffer bufferInfo = VkDescriptorBufferInfo.calloc(1, stack)
+                                    .buffer(lightUbo.bufferHandle)
+                                    .offset(0)
+                                    .range(512);
+
+                            // Binding 1: Main Texture (Per-Entity or WhiteTex)
+                            long activeTexView = (entity.hasTexture && entity.getTextureHandle() != 0L)
+                                    ? entity.getTextureHandle()
+                                    : whiteTex.imageViewHandle;
+
+                            VkDescriptorImageInfo.Buffer imageInfoTex = VkDescriptorImageInfo.calloc(1, stack)
+                                    .imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                                    .imageView(activeTexView)
+                                    .sampler(whiteTex.samplerHandle);
+
+                            // Binding 2: Shadow Map
+                            VkDescriptorImageInfo.Buffer imageInfoShadow = VkDescriptorImageInfo.calloc(1, stack)
+                                    .imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                                    .imageView(whiteTex.imageViewHandle)
+                                    .sampler(whiteTex.samplerHandle);
+
+                            VkWriteDescriptorSet.Buffer descriptorWrites = VkWriteDescriptorSet.calloc(3, stack);
+
+                            descriptorWrites.get(0)
+                                    .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+                                    .dstSet(descriptorSetEntity)
+                                    .dstBinding(0)
+                                    .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC)
+                                    .pBufferInfo(bufferInfo);
+
+                            descriptorWrites.get(1)
+                                    .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+                                    .dstSet(descriptorSetEntity)
+                                    .dstBinding(1)
+                                    .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                                    .pImageInfo(imageInfoTex);
+
+                            descriptorWrites.get(2)
+                                    .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+                                    .dstSet(descriptorSetEntity)
+                                    .dstBinding(2)
+                                    .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                                    .pImageInfo(imageInfoShadow);
+
+                            vkUpdateDescriptorSets(vkDevice, descriptorWrites, null);
+
+                            IntBuffer pDynamicOffsets = stack.ints(0);
+                            vkCmdBindDescriptorSets(
+                                    cmd,
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipelineManager.getPipelineLayout3D(),
+                                    0,
+                                    stack.longs(descriptorSetEntity),
+                                    pDynamicOffsets
+                            );
+                        }
+                    }
 
                     // 1. Compute 64-byte 4x4 Model Matrix
                     float[] modelMatrix = computeModelMatrix(

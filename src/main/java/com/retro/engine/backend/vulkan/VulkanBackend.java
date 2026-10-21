@@ -51,7 +51,6 @@ public class VulkanBackend implements IRenderBackend {
     public boolean initialize(ViewportSpec windowInfo) {
         System.out.println("[VulkanBackend] Modular Vulkan 1.3 Driver Initializing...");
 
-        // Access Java Record primitive methods
         long nativeHandle = windowInfo.nativeWindowHandle();
         int width = windowInfo.width();
         int height = windowInfo.height();
@@ -89,6 +88,16 @@ public class VulkanBackend implements IRenderBackend {
 
         // Reset Descriptor Pool at start of frame to reuse memory
         descriptorPool.resetPool(device);
+
+        // Stream current frame light data to GPU VRAM before recording pipelines
+        gpuCache.updateLightUniformBuffer(
+                deviceManager,
+                activeLightType,
+                activeLightPosX, activeLightPosY, activeLightPosZ,
+                activeLightDirX, activeLightDirY, activeLightDirZ,
+                activeLightR, activeLightG, activeLightB, activeLightIntensity,
+                camPanX, camPanY, camZoom, 0.0f
+        );
 
         vkWaitForFences(device, passEncoder.getInFlightFence(), true, Long.MAX_VALUE);
         vkResetFences(device, passEncoder.getInFlightFence());
