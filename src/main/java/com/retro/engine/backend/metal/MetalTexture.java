@@ -8,6 +8,11 @@ import java.nio.ByteBuffer;
 import static org.lwjgl.system.JNI.*;
 import static org.lwjgl.system.macosx.ObjCRuntime.*;
 
+/**
+ * MetalTexture manages 2D texture allocations and sampler states for Metal GPU pipelines.
+ * Configured with MTLPixelFormatRGBA8Unorm (70L) for correct RGBA texture channel alignment
+ * and nearest-neighbor sampling for crisp UI and grid rendering.
+ */
 public class MetalTexture {
 
     private long activeTextureHandle = 0L;
@@ -21,7 +26,8 @@ public class MetalTexture {
         byte[] whitePixel = new byte[]{(byte) 255, (byte) 255, (byte) 255, (byte) 255};
         long descClass = objc_getClass("MTLTextureDescriptor");
         long selTex2D = sel_registerName("texture2DDescriptorWithPixelFormat:width:height:mipmapped:");
-        long desc = invokePPPPPPP(descClass, selTex2D, 80L, 1L, 1L, 0L, objc_msgSend);
+        // 70L = MTLPixelFormatRGBA8Unorm (matches Vulkan VK_FORMAT_R8G8B8A8_UNORM)
+        long desc = invokePPPPPPP(descClass, selTex2D, 70L, 1L, 1L, 0L, objc_msgSend);
 
         defaultTextureHandle = invokePPPP(device, sel_registerName("newTextureWithDescriptor:"), desc, objc_msgSend);
 
@@ -42,8 +48,9 @@ public class MetalTexture {
 
         long samplerDescClass = objc_getClass("MTLSamplerDescriptor");
         long samplerDesc = invokePPP(samplerDescClass, sel_registerName("new"), objc_msgSend);
-        invokePPPP(samplerDesc, sel_registerName("setMinFilter:"), 1L, objc_msgSend);
-        invokePPPP(samplerDesc, sel_registerName("setMagFilter:"), 1L, objc_msgSend);
+        // 0L = MTLSamplerMinMagFilterNearest for sharp, crisp UI quads, text, and vector lines
+        invokePPPP(samplerDesc, sel_registerName("setMinFilter:"), 0L, objc_msgSend);
+        invokePPPP(samplerDesc, sel_registerName("setMagFilter:"), 0L, objc_msgSend);
         samplerStateHandle = invokePPPP(device, sel_registerName("newSamplerStateWithDescriptor:"), samplerDesc, objc_msgSend);
     }
 
@@ -52,7 +59,8 @@ public class MetalTexture {
 
         long descClass = objc_getClass("MTLTextureDescriptor");
         long selTex2D = sel_registerName("texture2DDescriptorWithPixelFormat:width:height:mipmapped:");
-        long desc = invokePPPPPPP(descClass, selTex2D, 80L, (long) width, (long) height, 0L, objc_msgSend);
+        // 70L = MTLPixelFormatRGBA8Unorm (prevents Red/Blue channel swizzling)
+        long desc = invokePPPPPPP(descClass, selTex2D, 70L, (long) width, (long) height, 0L, objc_msgSend);
         long texture = invokePPPP(device, sel_registerName("newTextureWithDescriptor:"), desc, objc_msgSend);
         if (texture == 0L) return;
 
@@ -72,7 +80,7 @@ public class MetalTexture {
         MemoryUtil.memFree(buf);
         this.activeTextureHandle = texture;
         this.hasActiveTexture = 1;
-        System.out.println("[MetalTexture] Bound " + width + "x" + height + " texture to Metal GPU pipeline.");
+        System.out.println("[MetalTexture] Bound " + width + "x" + height + " RGBA texture to Metal GPU pipeline.");
     }
 
     public long getBindableTexture() {
