@@ -27,6 +27,7 @@ public class VulkanBackend implements IRenderBackend {
     private final VulkanPipeline pipelineManager = new VulkanPipeline();
     private final VulkanGpuCache gpuCache = new VulkanGpuCache();
     private final VulkanTargetPass targetPass = new VulkanTargetPass();
+    private final VulkanDescriptorPool descriptorPool = new VulkanDescriptorPool();
 
     private int activeImageIndex = 0;
     private long minUniformAlignment = 16L;
@@ -50,13 +51,19 @@ public class VulkanBackend implements IRenderBackend {
     public boolean initialize(ViewportSpec windowInfo) {
         System.out.println("[VulkanBackend] Modular Vulkan 1.3 Driver Initializing...");
 
-        if (!deviceManager.initialize(windowInfo.nativeWindowHandle())) return false;
-        if (!surfaceManager.createSurface(deviceManager.getInstance(), windowInfo.nativeWindowHandle())) return false;
+        // Access Java Record primitive methods
+        long nativeHandle = windowInfo.nativeWindowHandle();
+        int width = windowInfo.width();
+        int height = windowInfo.height();
+
+        if (!deviceManager.initialize(nativeHandle)) return false;
+        if (!surfaceManager.createSurface(deviceManager.getInstance(), nativeHandle)) return false;
         if (!deviceManager.selectPhysicalDeviceAndCreateLogicalDevice(surfaceManager.getSurfaceHandle())) return false;
 
         queryPhysicalDeviceLimits();
 
-        if (!swapchainManager.createSwapchain(deviceManager, surfaceManager, windowInfo.width(), windowInfo.height())) return false;
+        if (!descriptorPool.initialize(deviceManager.getDevice())) return false;
+        if (!swapchainManager.createSwapchain(deviceManager, surfaceManager, width, height)) return false;
         if (!passEncoder.initialize(deviceManager)) return false;
 
         targetPass.initFramebuffer(deviceManager, 712, 488);
@@ -80,6 +87,9 @@ public class VulkanBackend implements IRenderBackend {
         VkDevice device = deviceManager.getDevice();
         if (device == null) return;
 
+        // Reset Descriptor Pool at start of frame to reuse memory
+        descriptorPool.resetPool(device);
+
         vkWaitForFences(device, passEncoder.getInFlightFence(), true, Long.MAX_VALUE);
         vkResetFences(device, passEncoder.getInFlightFence());
 
@@ -91,7 +101,7 @@ public class VulkanBackend implements IRenderBackend {
 
         try (MemoryStack stack = stackPush()) {
             VkCommandBufferBeginInfo beginInfo = VkCommandBufferBeginInfo.calloc(stack)
-                    .sType$Default()
+                    .sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO)
                     .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
 
             vkBeginCommandBuffer(cmd, beginInfo);
@@ -105,8 +115,13 @@ public class VulkanBackend implements IRenderBackend {
                     swapchainManager,
                     activeImageIndex,
                     pipelineManager,
+                    gpuCache,
+                    descriptorPool,
+                    deviceManager,
                     viewMatrix,
-                    projMatrix
+                    projMatrix,
+                    sceneQueuePool,
+                    activeSceneQueueCount
             );
 
             vkEndCommandBuffer(cmd);
@@ -114,12 +129,18 @@ public class VulkanBackend implements IRenderBackend {
     }
 
     private float[] computeViewMatrix() {
-        // Translation Matrix (Identity with camPanX, camPanY, camZoom)
+        float radYaw = (float) Math.toRadians(camYaw);
+        float radPitch = (float) Math.toRadians(camPitch);
+
+        float cy = (float) Math.cos(radYaw), sy = (float) Math.sin(radYaw);
+        float cp = (float) Math.cos(radPitch), sp = (float) Math.sin(radPitch);
+
         float[] view = new float[16];
-        view[0] = 1.0f; view[5] = 1.0f; view[10] = 1.0f; view[15] = 1.0f;
-        view[12] = camPanX;
-        view[13] = camPanY;
-        view[14] = camZoom;
+        view[0] = cy;        view[1] = sy * sp;   view[2] = sy * cp;   view[3] = 0.0f;
+        view[4] = 0.0f;      view[5] = cp;        view[6] = -sp;       view[7] = 0.0f;
+        view[8] = -sy;       view[9] = cy * sp;   view[10] = cy * cp;  view[11] = 0.0f;
+        view[12] = camPanX;  view[13] = camPanY;  view[14] = camZoom;  view[15] = 1.0f;
+
         return view;
     }
 
@@ -127,8 +148,8 @@ public class VulkanBackend implements IRenderBackend {
         float f = (float) (1.0 / Math.tan(Math.toRadians(fovDeg) / 2.0));
         float[] proj = new float[16];
         proj[0] = f / aspect;
-        proj[5] = f;
-        proj[10] = zFar / (zNear - zFar); // Vulkan clip space z: [0, 1]
+        proj[5] = -f; // Software Y-inversion for Vulkan clip space
+        proj[10] = zFar / (zNear - zFar); // Vulkan z: [0, 1]
         proj[11] = -1.0f;
         proj[14] = (zNear * zFar) / (zNear - zFar);
         return proj;
@@ -141,7 +162,7 @@ public class VulkanBackend implements IRenderBackend {
 
         try (MemoryStack stack = stackPush()) {
             VkSubmitInfo submitInfo = VkSubmitInfo.calloc(stack)
-                    .sType$Default()
+                    .sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
                     .pWaitSemaphores(stack.longs(passEncoder.getImageAvailableSemaphore()))
                     .pWaitDstStageMask(stack.ints(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT))
                     .pCommandBuffers(stack.pointers(cmd))
@@ -164,6 +185,7 @@ public class VulkanBackend implements IRenderBackend {
             vkDeviceWaitIdle(device);
         }
 
+        descriptorPool.cleanup(device);
         targetPass.cleanup(deviceManager);
         pipelineManager.cleanup(deviceManager);
         gpuCache.cleanup(deviceManager);
@@ -206,7 +228,36 @@ public class VulkanBackend implements IRenderBackend {
         }
         activeSceneQueueCount++;
 
-        item.px = px; item.py = py; item.rz = rz;
+        if (meshPath != null && vertices != null && vertices.length > 0) {
+            VulkanGpuCache.VulkanBuffer vbo = gpuCache.getOrCreateMeshBuffer(deviceManager, meshPath, vertices);
+            if (vbo != null) {
+                item.vertexBufferHandle = vbo.bufferHandle;
+                item.vertexCount = vbo.vertexCount > 0 ? vbo.vertexCount : vertexCount;
+            } else {
+                item.vertexBufferHandle = 0L;
+                item.vertexCount = vertexCount;
+            }
+        } else {
+            item.vertexBufferHandle = 0L;
+            item.vertexCount = vertexCount;
+        }
+
+        if (texturePath != null && pixels != null && pixels.length > 0 && texW > 0 && texH > 0) {
+            VulkanGpuCache.VulkanTexture tex = gpuCache.getOrCreateTexture(deviceManager, texturePath, pixels, texW, texH);
+            if (tex != null) {
+                item.textureHandle = tex.imageViewHandle;
+                item.hasTexture = true;
+            } else {
+                item.textureHandle = 0L;
+                item.hasTexture = false;
+            }
+        } else {
+            item.textureHandle = 0L;
+            item.hasTexture = false;
+        }
+
+        item.px = px; item.py = py; item.pz = pz;
+        item.rx = rx; item.ry = ry; item.rz = rz;
         item.sx = sx; item.sy = sy; item.sz = sz;
         item.groundY = groundY;
         item.reflectionStrength = reflectionStrength;
