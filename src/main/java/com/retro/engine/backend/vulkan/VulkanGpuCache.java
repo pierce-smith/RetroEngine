@@ -15,8 +15,8 @@ import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
 
 /**
- * Handles VRAM allocations for 3D Mesh Vertex Buffers (VBOs), 2D Textures, and Light UBOs
- * using Vulkan 1.3 memory management with optimal image tiling and staging buffers.
+ * Handles VRAM allocations for 3D Mesh Vertex Buffers (VBOs), 2D Textures, Light UBOs,
+ * and Dynamic 2D UI Overlay Vertex Buffers using Vulkan 1.3 memory management.
  */
 public class VulkanGpuCache {
 
@@ -51,6 +51,72 @@ public class VulkanGpuCache {
 
     private VulkanBuffer lightUniformBuffer = null;
     private VulkanTexture defaultWhiteTexture = null;
+
+    private long uiVertexBuffer = 0L;
+    private long uiMemoryBuffer = 0L;
+    private int uiVertexCapacity = 0;
+    private int uiVertexCount = 0;
+
+    public long getUiVertexBuffer() { return uiVertexBuffer; }
+    public int getUiVertexCount() { return uiVertexCount; }
+
+    public void updateUiMesh(VulkanDevice device, float[] vertices, int count) {
+        if (device == null || device.getLogicalDevice() == null || vertices == null || count <= 0) {
+            this.uiVertexCount = 0;
+            return;
+        }
+
+        VkDevice vkDevice = device.getLogicalDevice();
+        long bufferSize = (long) count * 6 * Float.BYTES;
+
+        try (MemoryStack stack = stackPush()) {
+            if (uiVertexBuffer == 0L || count > uiVertexCapacity) {
+                if (uiVertexBuffer != 0L) {
+                    vkDestroyBuffer(vkDevice, uiVertexBuffer, null);
+                    vkFreeMemory(vkDevice, uiMemoryBuffer, null);
+                }
+
+                int newCap = Math.max(count * 2, 4096);
+                long newSize = (long) newCap * 6 * Float.BYTES;
+
+                VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack)
+                        .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
+                        .size(newSize)
+                        .usage(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)
+                        .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+
+                LongBuffer pBuffer = stack.mallocLong(1);
+                if (vkCreateBuffer(vkDevice, bufferInfo, null, pBuffer) != VK_SUCCESS) return;
+                uiVertexBuffer = pBuffer.get(0);
+
+                VkMemoryRequirements memReqs = VkMemoryRequirements.calloc(stack);
+                vkGetBufferMemoryRequirements(vkDevice, uiVertexBuffer, memReqs);
+
+                int memTypeIndex = findMemoryType(device.getPhysicalDevice(), memReqs.memoryTypeBits(),
+                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+                VkMemoryAllocateInfo allocInfo = VkMemoryAllocateInfo.calloc(stack)
+                        .sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
+                        .allocationSize(memReqs.size())
+                        .memoryTypeIndex(memTypeIndex);
+
+                LongBuffer pMemory = stack.mallocLong(1);
+                if (vkAllocateMemory(vkDevice, allocInfo, null, pMemory) != VK_SUCCESS) return;
+                uiMemoryBuffer = pMemory.get(0);
+
+                vkBindBufferMemory(vkDevice, uiVertexBuffer, uiMemoryBuffer, 0);
+                uiVertexCapacity = newCap;
+            }
+
+            PointerBuffer pData = stack.mallocPointer(1);
+            if (vkMapMemory(vkDevice, uiMemoryBuffer, 0, bufferSize, 0, pData) == VK_SUCCESS) {
+                FloatBuffer floatBuf = pData.getFloatBuffer(0, count * 6);
+                floatBuf.put(vertices, 0, count * 6);
+                vkUnmapMemory(vkDevice, uiMemoryBuffer);
+                this.uiVertexCount = count;
+            }
+        }
+    }
 
     public VulkanBuffer getOrCreateMeshBuffer(VulkanDevice device, String meshPath, float[] vertices) {
         if (meshPath == null || vertices == null || vertices.length == 0) return null;
@@ -137,7 +203,6 @@ public class VulkanGpuCache {
         long imageSize = (long) width * height * 4;
 
         try (MemoryStack stack = stackPush()) {
-            // 1. Create Staging Buffer in Host-Visible Memory
             VkBufferCreateInfo stagingBufferInfo = VkBufferCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
                     .size(imageSize)
@@ -165,7 +230,6 @@ public class VulkanGpuCache {
             long stagingMemory = pStagingMemory.get(0);
             vkBindBufferMemory(vkDevice, stagingBuffer, stagingMemory, 0);
 
-            // Copy pixel data to staging memory
             PointerBuffer pData = stack.mallocPointer(1);
             if (vkMapMemory(vkDevice, stagingMemory, 0, imageSize, 0, pData) == VK_SUCCESS) {
                 ByteBuffer byteBuf = pData.getByteBuffer(0, (int) imageSize);
@@ -174,7 +238,6 @@ public class VulkanGpuCache {
                 vkUnmapMemory(vkDevice, stagingMemory);
             }
 
-            // 2. Create Target Image with OPTIMAL Tiling
             VkImageCreateInfo imageInfo = VkImageCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO)
                     .imageType(VK_IMAGE_TYPE_2D)
@@ -217,14 +280,11 @@ public class VulkanGpuCache {
             long memory = pMem.get(0);
             vkBindImageMemory(vkDevice, image, memory, 0);
 
-            // 3. Execute Staging Copy & Layout Transition to SHADER_READ_ONLY_OPTIMAL
             copyBufferToImage(device, stagingBuffer, image, width, height);
 
-            // Clean up staging buffer
             vkDestroyBuffer(vkDevice, stagingBuffer, null);
             vkFreeMemory(vkDevice, stagingMemory, null);
 
-            // 4. Create ImageView
             VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
                     .image(image)
@@ -240,7 +300,6 @@ public class VulkanGpuCache {
             }
             long imageView = pView.get(0);
 
-            // 5. Create Sampler
             VkSamplerCreateInfo samplerInfo = VkSamplerCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO)
                     .magFilter(VK_FILTER_LINEAR)
@@ -295,7 +354,6 @@ public class VulkanGpuCache {
 
             vkBeginCommandBuffer(cmd, beginInfo);
 
-            // Barrier 1: UNDEFINED -> TRANSFER_DST_OPTIMAL
             VkImageMemoryBarrier.Buffer barrier1 = VkImageMemoryBarrier.calloc(1, stack)
                     .sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER)
                     .oldLayout(VK_IMAGE_LAYOUT_UNDEFINED)
@@ -310,7 +368,6 @@ public class VulkanGpuCache {
 
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, barrier1);
 
-            // Buffer to Image Copy Region
             VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, stack);
             region.bufferOffset(0);
             region.bufferRowLength(0);
@@ -321,7 +378,6 @@ public class VulkanGpuCache {
 
             vkCmdCopyBufferToImage(cmd, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
 
-            // Barrier 2: TRANSFER_DST_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL
             VkImageMemoryBarrier.Buffer barrier2 = VkImageMemoryBarrier.calloc(1, stack)
                     .sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER)
                     .oldLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
@@ -354,7 +410,7 @@ public class VulkanGpuCache {
         if (device == null || device.getLogicalDevice() == null) return null;
 
         VkDevice vkDevice = device.getLogicalDevice();
-        long bufferSize = 512L; // 512-byte LightBuffer UBO
+        long bufferSize = 512L;
 
         try (MemoryStack stack = stackPush()) {
             VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack)
@@ -384,11 +440,9 @@ public class VulkanGpuCache {
 
             vkBindBufferMemory(vkDevice, buffer, memory, 0);
 
-            // Populate with basic light defaults
             PointerBuffer pData = stack.mallocPointer(1);
             vkMapMemory(vkDevice, memory, 0, bufferSize, 0, pData);
             FloatBuffer floatBuf = pData.getFloatBuffer(0, (int) (bufferSize / 4));
-            // Directional Light: dir=(-0.5, -1.0, -0.5, 0), color=(1, 0.95, 0.85, 1.2)
             floatBuf.put(new float[]{-0.5f, -1.0f, -0.5f, 0.0f, 1.0f, 0.95f, 0.85f, 1.2f});
             vkUnmapMemory(vkDevice, memory);
 
@@ -415,25 +469,20 @@ public class VulkanGpuCache {
                 float numPoint = (lightType == 1) ? 1.0f : 0.0f;
                 float numSpot = (lightType == 2) ? 1.0f : 0.0f;
 
-                // Directional Light (floats 0..7)
                 floatBuf.put(0, dirX); floatBuf.put(1, dirY); floatBuf.put(2, dirZ); floatBuf.put(3, 0.0f);
                 floatBuf.put(4, r);    floatBuf.put(5, g);    floatBuf.put(6, b);    floatBuf.put(7, intensity);
 
-                // Point Light (floats 8..19)
                 floatBuf.put(8, posX); floatBuf.put(9, posY); floatBuf.put(10, posZ); floatBuf.put(11, 0.0f);
                 floatBuf.put(12, r);   floatBuf.put(13, g);   floatBuf.put(14, b);    floatBuf.put(15, intensity);
                 floatBuf.put(16, 1.0f);floatBuf.put(17, 0.09f);floatBuf.put(18, 0.032f);floatBuf.put(19, 0.0f);
 
-                // Spot Light (floats 20..35)
-                floatBuf.put(20, posX); floatBuf.put(21, posY); floatBuf.put(22, posZ); floatBuf.put(23, 0.93f); // innerCutoff
-                floatBuf.put(24, dirX); floatBuf.put(25, dirY); floatBuf.put(26, dirZ); floatBuf.put(27, 0.82f); // outerCutoff
+                floatBuf.put(20, posX); floatBuf.put(21, posY); floatBuf.put(22, posZ); floatBuf.put(23, 0.93f);
+                floatBuf.put(24, dirX); floatBuf.put(25, dirY); floatBuf.put(26, dirZ); floatBuf.put(27, 0.82f);
                 floatBuf.put(28, r);    floatBuf.put(29, g);    floatBuf.put(30, b);    floatBuf.put(31, intensity);
                 floatBuf.put(32, 1.0f); floatBuf.put(33, 0.09f);floatBuf.put(34, 0.032f);floatBuf.put(35, 0.0f);
 
-                // numLights (floats 36..39)
                 floatBuf.put(36, numDir); floatBuf.put(37, numPoint); floatBuf.put(38, numSpot); floatBuf.put(39, 0.005f);
 
-                // viewPos (floats 40..43)
                 floatBuf.put(40, camX); floatBuf.put(41, camY); floatBuf.put(42, camZ); floatBuf.put(43, groundY);
 
                 vkUnmapMemory(vkDevice, buf.memoryHandle);
@@ -470,6 +519,13 @@ public class VulkanGpuCache {
     public void shutdown(VulkanDevice device) {
         if (device == null || device.getLogicalDevice() == null) return;
         VkDevice vkDevice = device.getLogicalDevice();
+
+        if (uiVertexBuffer != 0L) {
+            vkDestroyBuffer(vkDevice, uiVertexBuffer, null);
+            vkFreeMemory(vkDevice, uiMemoryBuffer, null);
+            uiVertexBuffer = 0L;
+            uiMemoryBuffer = 0L;
+        }
 
         if (lightUniformBuffer != null) {
             if (lightUniformBuffer.bufferHandle != 0L) vkDestroyBuffer(vkDevice, lightUniformBuffer.bufferHandle, null);

@@ -86,24 +86,24 @@ public class VulkanBackend implements IRenderBackend {
         VkDevice device = deviceManager.getDevice();
         if (device == null) return;
 
-        // Reset Descriptor Pool at start of frame to reuse memory
         descriptorPool.resetPool(device);
-
-        // Stream current frame light data to GPU VRAM before recording pipelines
-        gpuCache.updateLightUniformBuffer(
-                deviceManager,
-                activeLightType,
-                activeLightPosX, activeLightPosY, activeLightPosZ,
-                activeLightDirX, activeLightDirY, activeLightDirZ,
-                activeLightR, activeLightG, activeLightB, activeLightIntensity,
-                camPanX, camPanY, camZoom, 0.0f
-        );
 
         vkWaitForFences(device, passEncoder.getInFlightFence(), true, Long.MAX_VALUE);
         vkResetFences(device, passEncoder.getInFlightFence());
 
         activeImageIndex = swapchainManager.acquireNextImage(deviceManager, passEncoder.getImageAvailableSemaphore());
         if (activeImageIndex < 0) return;
+
+        gpuCache.updateLightUniformBuffer(
+                deviceManager,
+                activeLightType,
+                activeLightPosX, activeLightPosY, activeLightPosZ,
+                activeLightDirX, activeLightDirY, activeLightDirZ,
+                activeLightR, activeLightG, activeLightB,
+                activeLightIntensity,
+                camPanX, camPanY, camZoom,
+                0.0f
+        );
 
         VkCommandBuffer cmd = passEncoder.getCommandBuffer();
         vkResetCommandBuffer(cmd, 0);
@@ -157,8 +157,8 @@ public class VulkanBackend implements IRenderBackend {
         float f = (float) (1.0 / Math.tan(Math.toRadians(fovDeg) / 2.0));
         float[] proj = new float[16];
         proj[0] = f / aspect;
-        proj[5] = -f; // Software Y-inversion for Vulkan clip space
-        proj[10] = zFar / (zNear - zFar); // Vulkan z: [0, 1]
+        proj[5] = f; // Positive f for Vulkan Negative Height Viewport
+        proj[10] = zFar / (zNear - zFar);
         proj[11] = -1.0f;
         proj[14] = (zNear * zFar) / (zNear - zFar);
         return proj;
@@ -223,7 +223,12 @@ public class VulkanBackend implements IRenderBackend {
     }
 
     @Override public void updateGridMesh(float[] vertices, int count) {}
-    @Override public void updateUiMesh(float[] vertices, int count) {}
+    
+    @Override
+    public void updateUiMesh(float[] vertices, int count) {
+        gpuCache.updateUiMesh(deviceManager, vertices, count);
+    }
+
     @Override public void clearSceneQueue() { activeSceneQueueCount = 0; }
 
     @Override

@@ -13,7 +13,6 @@ import static org.lwjgl.vulkan.VK13.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_
 /**
  * Manages Vulkan 1.3 Graphics Pipelines for offscreen 3D Blinn-Phong geometry, infinite 3D grid rendering,
  * and swapchain 2D UI composition using Dynamic Rendering (VK_KHR_dynamic_rendering).
- * Strictly enforces Apple Silicon / MoltenVK dynamic alignment rules, 56-byte vertex stride, and 256-byte push constants.
  */
 public class VulkanPipeline {
 
@@ -49,49 +48,22 @@ public class VulkanPipeline {
         }
 
         try (MemoryStack stack = stackPush()) {
-            // =========================================================================
-            // 1. DESCRIPTOR SET LAYOUT & PIPELINE LAYOUT: 3D Scene Pass (Blinn-Phong)
-            // =========================================================================
+            // 1. 3D Scene Pass Layout
             VkDescriptorSetLayoutBinding.Buffer bindings3D = VkDescriptorSetLayoutBinding.calloc(3, stack);
-            
-            // Binding 0: LightBuffer UBO (Dynamic Uniform Buffer)
-            bindings3D.get(0)
-                    .binding(0)
-                    .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC)
-                    .descriptorCount(1)
-                    .stageFlags(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
-
-            // Binding 1: Main Albedo Texture (Combined Image Sampler)
-            bindings3D.get(1)
-                    .binding(1)
-                    .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                    .descriptorCount(1)
-                    .stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
-
-            // Binding 2: Shadow Map Texture (Combined Image Sampler)
-            bindings3D.get(2)
-                    .binding(2)
-                    .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                    .descriptorCount(1)
-                    .stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+            bindings3D.get(0).binding(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC).descriptorCount(1).stageFlags(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+            bindings3D.get(1).binding(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+            bindings3D.get(2).binding(2).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
 
             VkDescriptorSetLayoutCreateInfo dsCreateInfo3D = VkDescriptorSetLayoutCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)
                     .pBindings(bindings3D);
 
             LongBuffer pDSLayout3D = stack.mallocLong(1);
-            if (vkCreateDescriptorSetLayout(vkDevice, dsCreateInfo3D, null, pDSLayout3D) != VK_SUCCESS) {
-                System.err.println("[VulkanPipeline] Failed to create 3D Descriptor Set Layout!");
-                return false;
-            }
+            if (vkCreateDescriptorSetLayout(vkDevice, dsCreateInfo3D, null, pDSLayout3D) != VK_SUCCESS) return false;
             descriptorSetLayout3D = pDSLayout3D.get(0);
 
-            // 256-byte Push Constant Range for Model, View, Proj, LightSpace matrices
             VkPushConstantRange.Buffer pushConstants3D = VkPushConstantRange.calloc(1, stack);
-            pushConstants3D.get(0)
-                    .stageFlags(VK_SHADER_STAGE_VERTEX_BIT)
-                    .offset(0)
-                    .size(256);
+            pushConstants3D.get(0).stageFlags(VK_SHADER_STAGE_VERTEX_BIT).offset(0).size(256);
 
             VkPipelineLayoutCreateInfo layoutCreateInfo3D = VkPipelineLayoutCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO)
@@ -99,66 +71,41 @@ public class VulkanPipeline {
                     .pPushConstantRanges(pushConstants3D);
 
             LongBuffer pPipelineLayout3D = stack.mallocLong(1);
-            if (vkCreatePipelineLayout(vkDevice, layoutCreateInfo3D, null, pPipelineLayout3D) != VK_SUCCESS) {
-                System.err.println("[VulkanPipeline] Failed to create 3D Pipeline Layout!");
-                return false;
-            }
+            if (vkCreatePipelineLayout(vkDevice, layoutCreateInfo3D, null, pPipelineLayout3D) != VK_SUCCESS) return false;
             pipelineLayout3D = pPipelineLayout3D.get(0);
 
-            // =========================================================================
-            // 2. DESCRIPTOR SET LAYOUT & PIPELINE LAYOUT: Infinite 3D Grid Pass
-            // =========================================================================
+            // 2. Infinite 3D Grid Pass Layout
             VkPushConstantRange.Buffer pushConstantsGrid = VkPushConstantRange.calloc(1, stack);
-            pushConstantsGrid.get(0)
-                    .stageFlags(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
-                    .offset(0)
-                    .size(128);
+            pushConstantsGrid.get(0).stageFlags(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT).offset(0).size(128);
 
             VkPipelineLayoutCreateInfo layoutCreateInfoGrid = VkPipelineLayoutCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO)
                     .pPushConstantRanges(pushConstantsGrid);
 
             LongBuffer pPipelineLayoutGrid = stack.mallocLong(1);
-            if (vkCreatePipelineLayout(vkDevice, layoutCreateInfoGrid, null, pPipelineLayoutGrid) != VK_SUCCESS) {
-                System.err.println("[VulkanPipeline] Failed to create Grid Pipeline Layout!");
-                return false;
-            }
+            if (vkCreatePipelineLayout(vkDevice, layoutCreateInfoGrid, null, pPipelineLayoutGrid) != VK_SUCCESS) return false;
             pipelineLayoutGrid = pPipelineLayoutGrid.get(0);
 
-            // =========================================================================
-            // 3. DESCRIPTOR SET LAYOUT & PIPELINE LAYOUT: 2D UI Overlay Composition Pass
-            // =========================================================================
+            // 3. 2D UI Overlay Composition Pass Layout
             VkDescriptorSetLayoutBinding.Buffer bindingsUI = VkDescriptorSetLayoutBinding.calloc(1, stack);
-            bindingsUI.get(0)
-                    .binding(0)
-                    .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                    .descriptorCount(1)
-                    .stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+            bindingsUI.get(0).binding(0).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
 
             VkDescriptorSetLayoutCreateInfo dsCreateInfoUI = VkDescriptorSetLayoutCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)
                     .pBindings(bindingsUI);
 
             LongBuffer pDSLayoutUI = stack.mallocLong(1);
-            if (vkCreateDescriptorSetLayout(vkDevice, dsCreateInfoUI, null, pDSLayoutUI) != VK_SUCCESS) {
-                System.err.println("[VulkanPipeline] Failed to create UI Descriptor Set Layout!");
-                return false;
-            }
+            if (vkCreateDescriptorSetLayout(vkDevice, dsCreateInfoUI, null, pDSLayoutUI) != VK_SUCCESS) return false;
             descriptorSetLayoutUI = pDSLayoutUI.get(0);
 
             VkPipelineLayoutCreateInfo layoutCreateInfoUI = VkPipelineLayoutCreateInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO)
-                    .pSetLayouts(stack.longs(descriptorSetLayoutUI));
+                    .sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
 
             LongBuffer pPipelineLayoutUI = stack.mallocLong(1);
-            if (vkCreatePipelineLayout(vkDevice, layoutCreateInfoUI, null, pPipelineLayoutUI) != VK_SUCCESS) {
-                System.err.println("[VulkanPipeline] Failed to create UI Pipeline Layout!");
-                return false;
-            }
+            if (vkCreatePipelineLayout(vkDevice, layoutCreateInfoUI, null, pPipelineLayoutUI) != VK_SUCCESS) return false;
             pipelineLayoutUI = pPipelineLayoutUI.get(0);
 
-            System.out.println("[VulkanPipeline] Vulkan 1.3 Layouts and Descriptor Sets configured.");
-
+            System.out.println("[VulkanPipeline] Layouts and Descriptor Sets configured.");
             createGraphicsPipelines(device);
 
             return true;
@@ -169,57 +116,109 @@ public class VulkanPipeline {
         VkDevice vkDevice = device.getLogicalDevice();
 
         try (MemoryStack stack = stackPush()) {
-            // -------------------------------------------------------------------------
-            // 1. INFINITE 3D GRID GRAPHICS PIPELINE
-            // -------------------------------------------------------------------------
+            // 1. Grid Pipeline
             long vertGridModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/infinite_grid.vert.spv");
             long fragGridModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/infinite_grid.frag.spv");
 
             if (vertGridModule != 0L && fragGridModule != 0L) {
                 VkPipelineShaderStageCreateInfo.Buffer shaderStages = VkPipelineShaderStageCreateInfo.calloc(2, stack);
-                shaderStages.get(0)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO)
-                        .stage(VK_SHADER_STAGE_VERTEX_BIT)
-                        .module(vertGridModule)
-                        .pName(stack.UTF8("main"));
+                shaderStages.get(0).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_VERTEX_BIT).module(vertGridModule).pName(stack.UTF8("main"));
+                shaderStages.get(1).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_FRAGMENT_BIT).module(fragGridModule).pName(stack.UTF8("main"));
 
-                shaderStages.get(1)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO)
-                        .stage(VK_SHADER_STAGE_FRAGMENT_BIT)
-                        .module(fragGridModule)
-                        .pName(stack.UTF8("main"));
-
-                VkPipelineVertexInputStateCreateInfo vertexInputInfo = VkPipelineVertexInputStateCreateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
-
-                VkPipelineInputAssemblyStateCreateInfo inputAssembly = VkPipelineInputAssemblyStateCreateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO)
-                        .topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
-                        .primitiveRestartEnable(false);
-
-                VkPipelineViewportStateCreateInfo viewportState = VkPipelineViewportStateCreateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO)
-                        .viewportCount(1)
-                        .scissorCount(1);
-
-                VkPipelineRasterizationStateCreateInfo rasterizer = VkPipelineRasterizationStateCreateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO)
-                        .polygonMode(VK_POLYGON_MODE_FILL)
-                        .lineWidth(1.0f)
-                        .cullMode(VK_CULL_MODE_NONE)
-                        .frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);
-
-                VkPipelineMultisampleStateCreateInfo multisampling = VkPipelineMultisampleStateCreateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO)
-                        .rasterizationSamples(VK_SAMPLE_COUNT_1_BIT);
-
-                VkPipelineDepthStencilStateCreateInfo depthStencil = VkPipelineDepthStencilStateCreateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO)
-                        .depthTestEnable(true)
-                        .depthWriteEnable(false)
-                        .depthCompareOp(VK_COMPARE_OP_LESS_OR_EQUAL);
+                VkPipelineVertexInputStateCreateInfo vertexInputInfo = VkPipelineVertexInputStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
+                VkPipelineInputAssemblyStateCreateInfo inputAssembly = VkPipelineInputAssemblyStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO).topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST).primitiveRestartEnable(false);
+                VkPipelineViewportStateCreateInfo viewportState = VkPipelineViewportStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO).viewportCount(1).scissorCount(1);
+                VkPipelineRasterizationStateCreateInfo rasterizer = VkPipelineRasterizationStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO).polygonMode(VK_POLYGON_MODE_FILL).lineWidth(1.0f).cullMode(VK_CULL_MODE_NONE).frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);
+                VkPipelineMultisampleStateCreateInfo multisampling = VkPipelineMultisampleStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO).rasterizationSamples(VK_SAMPLE_COUNT_1_BIT);
+                VkPipelineDepthStencilStateCreateInfo depthStencil = VkPipelineDepthStencilStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO).depthTestEnable(true).depthWriteEnable(false).depthCompareOp(VK_COMPARE_OP_LESS_OR_EQUAL);
 
                 VkPipelineColorBlendAttachmentState.Buffer colorBlendAttachment = VkPipelineColorBlendAttachmentState.calloc(1, stack)
+                        .colorWriteMask(VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT)
+                        .blendEnable(true).srcColorBlendFactor(VK_BLEND_FACTOR_SRC_ALPHA).dstColorBlendFactor(VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA).colorBlendOp(VK_BLEND_OP_ADD).srcAlphaBlendFactor(VK_BLEND_FACTOR_ONE).dstAlphaBlendFactor(VK_BLEND_FACTOR_ZERO).alphaBlendOp(VK_BLEND_OP_ADD);
+
+                VkPipelineColorBlendStateCreateInfo colorBlending = VkPipelineColorBlendStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO).pAttachments(colorBlendAttachment);
+                IntBuffer pDynamicStates = stack.ints(VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR);
+                VkPipelineDynamicStateCreateInfo dynamicState = VkPipelineDynamicStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO).pDynamicStates(pDynamicStates);
+
+                VkPipelineRenderingCreateInfo renderingCreateInfo = VkPipelineRenderingCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO).pColorAttachmentFormats(stack.ints(VK_FORMAT_B8G8R8A8_UNORM)).depthAttachmentFormat(VK_FORMAT_D32_SFLOAT);
+
+                VkGraphicsPipelineCreateInfo.Buffer pipelineInfo = VkGraphicsPipelineCreateInfo.calloc(1, stack)
+                        .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO).pNext(renderingCreateInfo.address()).pStages(shaderStages).pVertexInputState(vertexInputInfo).pInputAssemblyState(inputAssembly).pViewportState(viewportState).pRasterizationState(rasterizer).pMultisampleState(multisampling).pDepthStencilState(depthStencil).pColorBlendState(colorBlending).pDynamicState(dynamicState).layout(pipelineLayoutGrid).renderPass(VK_NULL_HANDLE).subpass(0);
+
+                LongBuffer pPipeline = stack.mallocLong(1);
+                if (vkCreateGraphicsPipelines(vkDevice, VK_NULL_HANDLE, pipelineInfo, null, pPipeline) == VK_SUCCESS) {
+                    graphicsPipelineGrid = pPipeline.get(0);
+                }
+
+                VulkanShaderLoader.destroyShaderModule(vkDevice, vertGridModule);
+                VulkanShaderLoader.destroyShaderModule(vkDevice, fragGridModule);
+            }
+
+            // 2. 3D Scene Pipeline
+            long vert3DModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/blinn_phong.vert.spv");
+            long frag3DModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/blinn_phong.frag.spv");
+
+            if (vert3DModule != 0L && frag3DModule != 0L) {
+                VkPipelineShaderStageCreateInfo.Buffer shaderStages3D = VkPipelineShaderStageCreateInfo.calloc(2, stack);
+                shaderStages3D.get(0).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_VERTEX_BIT).module(vert3DModule).pName(stack.UTF8("main"));
+                shaderStages3D.get(1).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_FRAGMENT_BIT).module(frag3DModule).pName(stack.UTF8("main"));
+
+                VkVertexInputBindingDescription.Buffer bindingDescription = VkVertexInputBindingDescription.calloc(1, stack).binding(0).stride(56).inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
+                VkVertexInputAttributeDescription.Buffer attributeDescriptions = VkVertexInputAttributeDescription.calloc(3, stack);
+                attributeDescriptions.get(0).binding(0).location(0).format(VK_FORMAT_R32G32B32_SFLOAT).offset(0);
+                attributeDescriptions.get(1).binding(0).location(1).format(VK_FORMAT_R32G32B32_SFLOAT).offset(12);
+                attributeDescriptions.get(2).binding(0).location(2).format(VK_FORMAT_R32G32_SFLOAT).offset(40);
+
+                VkPipelineVertexInputStateCreateInfo vertexInputInfo3D = VkPipelineVertexInputStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO).pVertexBindingDescriptions(bindingDescription).pVertexAttributeDescriptions(attributeDescriptions);
+                VkPipelineInputAssemblyStateCreateInfo inputAssembly = VkPipelineInputAssemblyStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO).topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST).primitiveRestartEnable(false);
+                VkPipelineViewportStateCreateInfo viewportState = VkPipelineViewportStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO).viewportCount(1).scissorCount(1);
+                VkPipelineRasterizationStateCreateInfo rasterizer = VkPipelineRasterizationStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO).polygonMode(VK_POLYGON_MODE_FILL).lineWidth(1.0f).cullMode(VK_CULL_MODE_NONE).frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);
+                VkPipelineMultisampleStateCreateInfo multisampling = VkPipelineMultisampleStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO).rasterizationSamples(VK_SAMPLE_COUNT_1_BIT);
+                VkPipelineDepthStencilStateCreateInfo depthStencil3D = VkPipelineDepthStencilStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO).depthTestEnable(true).depthWriteEnable(true).depthCompareOp(VK_COMPARE_OP_LESS_OR_EQUAL);
+
+                VkPipelineColorBlendAttachmentState.Buffer colorBlendAttachment3D = VkPipelineColorBlendAttachmentState.calloc(1, stack).colorWriteMask(VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT).blendEnable(false);
+                VkPipelineColorBlendStateCreateInfo colorBlending3D = VkPipelineColorBlendStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO).pAttachments(colorBlendAttachment3D);
+
+                IntBuffer pDynamicStates = stack.ints(VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR);
+                VkPipelineDynamicStateCreateInfo dynamicState = VkPipelineDynamicStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO).pDynamicStates(pDynamicStates);
+
+                VkPipelineRenderingCreateInfo renderingCreateInfo = VkPipelineRenderingCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO).pColorAttachmentFormats(stack.ints(VK_FORMAT_B8G8R8A8_UNORM)).depthAttachmentFormat(VK_FORMAT_D32_SFLOAT);
+
+                VkGraphicsPipelineCreateInfo.Buffer pipelineInfo3D = VkGraphicsPipelineCreateInfo.calloc(1, stack)
+                        .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO).pNext(renderingCreateInfo.address()).pStages(shaderStages3D).pVertexInputState(vertexInputInfo3D).pInputAssemblyState(inputAssembly).pViewportState(viewportState).pRasterizationState(rasterizer).pMultisampleState(multisampling).pDepthStencilState(depthStencil3D).pColorBlendState(colorBlending3D).pDynamicState(dynamicState).layout(pipelineLayout3D).renderPass(VK_NULL_HANDLE).subpass(0);
+
+                LongBuffer pPipeline3D = stack.mallocLong(1);
+                if (vkCreateGraphicsPipelines(vkDevice, VK_NULL_HANDLE, pipelineInfo3D, null, pPipeline3D) == VK_SUCCESS) {
+                    graphicsPipeline3D = pPipeline3D.get(0);
+                    System.out.println("[VulkanPipeline] Created 3D Scene Blinn-Phong VkPipeline [0x" + Long.toHexString(graphicsPipeline3D) + "].");
+                }
+
+                VulkanShaderLoader.destroyShaderModule(vkDevice, vert3DModule);
+                VulkanShaderLoader.destroyShaderModule(vkDevice, frag3DModule);
+            }
+
+            // 3. 2D UI Overlay Pipeline
+            long vertUIModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/ui.vert.spv");
+            long fragUIModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/ui.frag.spv");
+
+            if (vertUIModule != 0L && fragUIModule != 0L) {
+                VkPipelineShaderStageCreateInfo.Buffer shaderStagesUI = VkPipelineShaderStageCreateInfo.calloc(2, stack);
+                shaderStagesUI.get(0).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_VERTEX_BIT).module(vertUIModule).pName(stack.UTF8("main"));
+                shaderStagesUI.get(1).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_FRAGMENT_BIT).module(fragUIModule).pName(stack.UTF8("main"));
+
+                VkVertexInputBindingDescription.Buffer bindingDescriptionUI = VkVertexInputBindingDescription.calloc(1, stack).binding(0).stride(24).inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
+                VkVertexInputAttributeDescription.Buffer attributeDescriptionsUI = VkVertexInputAttributeDescription.calloc(2, stack);
+                attributeDescriptionsUI.get(0).binding(0).location(0).format(VK_FORMAT_R32G32_SFLOAT).offset(0);
+                attributeDescriptionsUI.get(1).binding(0).location(1).format(VK_FORMAT_R32G32B32A32_SFLOAT).offset(8);
+
+                VkPipelineVertexInputStateCreateInfo vertexInputInfoUI = VkPipelineVertexInputStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO).pVertexBindingDescriptions(bindingDescriptionUI).pVertexAttributeDescriptions(attributeDescriptionsUI);
+                VkPipelineInputAssemblyStateCreateInfo inputAssemblyUI = VkPipelineInputAssemblyStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO).topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST).primitiveRestartEnable(false);
+                VkPipelineViewportStateCreateInfo viewportStateUI = VkPipelineViewportStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO).viewportCount(1).scissorCount(1);
+                VkPipelineRasterizationStateCreateInfo rasterizerUI = VkPipelineRasterizationStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO).polygonMode(VK_POLYGON_MODE_FILL).lineWidth(1.0f).cullMode(VK_CULL_MODE_NONE).frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);
+                VkPipelineMultisampleStateCreateInfo multisamplingUI = VkPipelineMultisampleStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO).rasterizationSamples(VK_SAMPLE_COUNT_1_BIT);
+                VkPipelineDepthStencilStateCreateInfo depthStencilUI = VkPipelineDepthStencilStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO).depthTestEnable(false).depthWriteEnable(false).depthCompareOp(VK_COMPARE_OP_ALWAYS);
+
+                VkPipelineColorBlendAttachmentState.Buffer colorBlendAttachmentUI = VkPipelineColorBlendAttachmentState.calloc(1, stack)
                         .colorWriteMask(VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT)
                         .blendEnable(true)
                         .srcColorBlendFactor(VK_BLEND_FACTOR_SRC_ALPHA)
@@ -229,175 +228,28 @@ public class VulkanPipeline {
                         .dstAlphaBlendFactor(VK_BLEND_FACTOR_ZERO)
                         .alphaBlendOp(VK_BLEND_OP_ADD);
 
-                VkPipelineColorBlendStateCreateInfo colorBlending = VkPipelineColorBlendStateCreateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO)
-                        .pAttachments(colorBlendAttachment);
-
+                VkPipelineColorBlendStateCreateInfo colorBlendingUI = VkPipelineColorBlendStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO).pAttachments(colorBlendAttachmentUI);
                 IntBuffer pDynamicStates = stack.ints(VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR);
-                VkPipelineDynamicStateCreateInfo dynamicState = VkPipelineDynamicStateCreateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO)
-                        .pDynamicStates(pDynamicStates);
+                VkPipelineDynamicStateCreateInfo dynamicStateUI = VkPipelineDynamicStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO).pDynamicStates(pDynamicStates);
 
-                VkPipelineRenderingCreateInfo renderingCreateInfo = VkPipelineRenderingCreateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO)
-                        .pColorAttachmentFormats(stack.ints(VK_FORMAT_B8G8R8A8_UNORM))
-                        .depthAttachmentFormat(VK_FORMAT_D32_SFLOAT);
+                VkPipelineRenderingCreateInfo renderingCreateInfoUI = VkPipelineRenderingCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO).pColorAttachmentFormats(stack.ints(VK_FORMAT_B8G8R8A8_UNORM));
 
-                VkGraphicsPipelineCreateInfo.Buffer pipelineInfo = VkGraphicsPipelineCreateInfo.calloc(1, stack)
-                        .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO)
-                        .pNext(renderingCreateInfo.address())
-                        .pStages(shaderStages)
-                        .pVertexInputState(vertexInputInfo)
-                        .pInputAssemblyState(inputAssembly)
-                        .pViewportState(viewportState)
-                        .pRasterizationState(rasterizer)
-                        .pMultisampleState(multisampling)
-                        .pDepthStencilState(depthStencil)
-                        .pColorBlendState(colorBlending)
-                        .pDynamicState(dynamicState)
-                        .layout(pipelineLayoutGrid)
-                        .renderPass(VK_NULL_HANDLE)
-                        .subpass(0);
+                VkGraphicsPipelineCreateInfo.Buffer pipelineInfoUI = VkGraphicsPipelineCreateInfo.calloc(1, stack)
+                        .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO).pNext(renderingCreateInfoUI.address()).pStages(shaderStagesUI).pVertexInputState(vertexInputInfoUI).pInputAssemblyState(inputAssemblyUI).pViewportState(viewportStateUI).pRasterizationState(rasterizerUI).pMultisampleState(multisamplingUI).pDepthStencilState(depthStencilUI).pColorBlendState(colorBlendingUI).pDynamicState(dynamicStateUI).layout(pipelineLayoutUI).renderPass(VK_NULL_HANDLE).subpass(0);
 
-                LongBuffer pPipeline = stack.mallocLong(1);
-                if (vkCreateGraphicsPipelines(vkDevice, VK_NULL_HANDLE, pipelineInfo, null, pPipeline) == VK_SUCCESS) {
-                    graphicsPipelineGrid = pPipeline.get(0);
-                    System.out.println("[VulkanPipeline] Created Infinite 3D Grid VkPipeline [0x" + Long.toHexString(graphicsPipelineGrid) + "].");
-                } else {
-                    System.err.println("[VulkanPipeline] ERROR: Failed to create Infinite 3D Grid VkPipeline!");
+                LongBuffer pPipelineUI = stack.mallocLong(1);
+                if (vkCreateGraphicsPipelines(vkDevice, VK_NULL_HANDLE, pipelineInfoUI, null, pPipelineUI) == VK_SUCCESS) {
+                    graphicsPipelineUI = pPipelineUI.get(0);
+                    System.out.println("[VulkanPipeline] Created 2D UI Overlay VkPipeline [0x" + Long.toHexString(graphicsPipelineUI) + "].");
                 }
 
-                VulkanShaderLoader.destroyShaderModule(vkDevice, vertGridModule);
-                VulkanShaderLoader.destroyShaderModule(vkDevice, fragGridModule);
-            }
-
-            // -------------------------------------------------------------------------
-            // 2. 3D BLINN-PHONG GRAPHICS PIPELINE
-            // -------------------------------------------------------------------------
-            long vert3DModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/blinn_phong.vert.spv");
-            long frag3DModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/blinn_phong.frag.spv");
-
-            if (vert3DModule != 0L && frag3DModule != 0L) {
-                VkPipelineShaderStageCreateInfo.Buffer shaderStages3D = VkPipelineShaderStageCreateInfo.calloc(2, stack);
-                shaderStages3D.get(0)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO)
-                        .stage(VK_SHADER_STAGE_VERTEX_BIT)
-                        .module(vert3DModule)
-                        .pName(stack.UTF8("main"));
-
-                shaderStages3D.get(1)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO)
-                        .stage(VK_SHADER_STAGE_FRAGMENT_BIT)
-                        .module(frag3DModule)
-                        .pName(stack.UTF8("main"));
-
-                // 14-float stride = 56 bytes matching MeshImporter!
-                VkVertexInputBindingDescription.Buffer bindingDescription = VkVertexInputBindingDescription.calloc(1, stack)
-                        .binding(0)
-                        .stride(56)
-                        .inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
-
-                VkVertexInputAttributeDescription.Buffer attributeDescriptions = VkVertexInputAttributeDescription.calloc(3, stack);
-                // Location 0: vec3 aPos -> Offset 0
-                attributeDescriptions.get(0).binding(0).location(0).format(VK_FORMAT_R32G32B32_SFLOAT).offset(0);
-                // Location 1: vec3 aNormal -> Offset 12
-                attributeDescriptions.get(1).binding(0).location(1).format(VK_FORMAT_R32G32B32_SFLOAT).offset(12);
-                // Location 2: vec2 aTexCoord -> Offset 40 (skipping 16 RGBA bytes at 24..39)
-                attributeDescriptions.get(2).binding(0).location(2).format(VK_FORMAT_R32G32_SFLOAT).offset(40);
-
-                VkPipelineVertexInputStateCreateInfo vertexInputInfo3D = VkPipelineVertexInputStateCreateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO)
-                        .pVertexBindingDescriptions(bindingDescription)
-                        .pVertexAttributeDescriptions(attributeDescriptions);
-
-                VkPipelineInputAssemblyStateCreateInfo inputAssembly = VkPipelineInputAssemblyStateCreateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO)
-                        .topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
-                        .primitiveRestartEnable(false);
-
-                VkPipelineViewportStateCreateInfo viewportState = VkPipelineViewportStateCreateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO)
-                        .viewportCount(1)
-                        .scissorCount(1);
-
-                VkPipelineRasterizationStateCreateInfo rasterizer = VkPipelineRasterizationStateCreateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO)
-                        .polygonMode(VK_POLYGON_MODE_FILL)
-                        .lineWidth(1.0f)
-                        .cullMode(VK_CULL_MODE_NONE)
-                        .frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);
-
-                VkPipelineMultisampleStateCreateInfo multisampling = VkPipelineMultisampleStateCreateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO)
-                        .rasterizationSamples(VK_SAMPLE_COUNT_1_BIT);
-
-                VkPipelineDepthStencilStateCreateInfo depthStencil3D = VkPipelineDepthStencilStateCreateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO)
-                        .depthTestEnable(true)
-                        .depthWriteEnable(true)
-                        .depthCompareOp(VK_COMPARE_OP_LESS_OR_EQUAL);
-
-                VkPipelineColorBlendAttachmentState.Buffer colorBlendAttachment3D = VkPipelineColorBlendAttachmentState.calloc(1, stack)
-                        .colorWriteMask(VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT)
-                        .blendEnable(false);
-
-                VkPipelineColorBlendStateCreateInfo colorBlending3D = VkPipelineColorBlendStateCreateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO)
-                        .pAttachments(colorBlendAttachment3D);
-
-                IntBuffer pDynamicStates = stack.ints(VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR);
-                VkPipelineDynamicStateCreateInfo dynamicState = VkPipelineDynamicStateCreateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO)
-                        .pDynamicStates(pDynamicStates);
-
-                VkPipelineRenderingCreateInfo renderingCreateInfo = VkPipelineRenderingCreateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO)
-                        .pColorAttachmentFormats(stack.ints(VK_FORMAT_B8G8R8A8_UNORM))
-                        .depthAttachmentFormat(VK_FORMAT_D32_SFLOAT);
-
-                VkGraphicsPipelineCreateInfo.Buffer pipelineInfo3D = VkGraphicsPipelineCreateInfo.calloc(1, stack)
-                        .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO)
-                        .pNext(renderingCreateInfo.address())
-                        .pStages(shaderStages3D)
-                        .pVertexInputState(vertexInputInfo3D)
-                        .pInputAssemblyState(inputAssembly)
-                        .pViewportState(viewportState)
-                        .pRasterizationState(rasterizer)
-                        .pMultisampleState(multisampling)
-                        .pDepthStencilState(depthStencil3D)
-                        .pColorBlendState(colorBlending3D)
-                        .pDynamicState(dynamicState)
-                        .layout(pipelineLayout3D)
-                        .renderPass(VK_NULL_HANDLE)
-                        .subpass(0);
-
-                LongBuffer pPipeline3D = stack.mallocLong(1);
-                if (vkCreateGraphicsPipelines(vkDevice, VK_NULL_HANDLE, pipelineInfo3D, null, pPipeline3D) == VK_SUCCESS) {
-                    graphicsPipeline3D = pPipeline3D.get(0);
-                    System.out.println("[VulkanPipeline] Created 3D Scene Blinn-Phong VkPipeline [0x" + Long.toHexString(graphicsPipeline3D) + "].");
-                } else {
-                    System.err.println("[VulkanPipeline] ERROR: Failed to create 3D Scene VkPipeline!");
-                }
-
-                VulkanShaderLoader.destroyShaderModule(vkDevice, vert3DModule);
-                VulkanShaderLoader.destroyShaderModule(vkDevice, frag3DModule);
+                VulkanShaderLoader.destroyShaderModule(vkDevice, vertUIModule);
+                VulkanShaderLoader.destroyShaderModule(vkDevice, fragUIModule);
             }
         }
     }
 
-    public static VkPipelineDynamicStateCreateInfo createDynamicStateCreateInfo(MemoryStack stack) {
-        IntBuffer pDynamicStates = stack.ints(
-                VK_DYNAMIC_STATE_VIEWPORT,
-                VK_DYNAMIC_STATE_SCISSOR
-        );
-
-        return VkPipelineDynamicStateCreateInfo.calloc(stack)
-                .sType(VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO)
-                .pDynamicStates(pDynamicStates);
-    }
-
     public long getMinUniformBufferOffsetAlignment() { return minUniformBufferOffsetAlignment; }
-
     public long getDescriptorSetLayout3D() { return descriptorSetLayout3D; }
     public long getPipelineLayout3D() { return pipelineLayout3D; }
     public long getGraphicsPipeline3D() { return graphicsPipeline3D; }
