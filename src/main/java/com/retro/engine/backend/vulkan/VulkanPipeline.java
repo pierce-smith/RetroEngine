@@ -13,7 +13,7 @@ import static org.lwjgl.vulkan.VK13.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_
 /**
  * Manages Vulkan 1.3 Graphics Pipelines for offscreen 3D Blinn-Phong geometry, infinite 3D grid rendering,
  * and swapchain 2D UI composition using Dynamic Rendering (VK_KHR_dynamic_rendering).
- * Strictly enforces Apple Silicon / MoltenVK dynamic alignment rules and dynamic pipeline bounds.
+ * Strictly enforces Apple Silicon / MoltenVK dynamic alignment rules, 56-byte vertex stride, and 256-byte push constants.
  */
 public class VulkanPipeline {
 
@@ -41,12 +41,11 @@ public class VulkanPipeline {
 
         VkDevice vkDevice = device.getLogicalDevice();
 
-        // Query physical device properties for minUniformBufferOffsetAlignment
         try (MemoryStack stack = stackPush()) {
             VkPhysicalDeviceProperties deviceProperties = VkPhysicalDeviceProperties.calloc(stack);
             vkGetPhysicalDeviceProperties(device.getPhysicalDevice(), deviceProperties);
             this.minUniformBufferOffsetAlignment = deviceProperties.limits().minUniformBufferOffsetAlignment();
-            System.out.println("[VulkanPipeline] Queried Hardware minUniformBufferOffsetAlignment: " + minUniformBufferOffsetAlignment + " bytes.");
+            System.out.println("[VulkanPipeline] Hardware minUniformBufferOffsetAlignment: " + minUniformBufferOffsetAlignment + " bytes.");
         }
 
         try (MemoryStack stack = stackPush()) {
@@ -55,18 +54,21 @@ public class VulkanPipeline {
             // =========================================================================
             VkDescriptorSetLayoutBinding.Buffer bindings3D = VkDescriptorSetLayoutBinding.calloc(3, stack);
             
+            // Binding 0: LightBuffer UBO (Dynamic Uniform Buffer)
             bindings3D.get(0)
                     .binding(0)
                     .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC)
                     .descriptorCount(1)
                     .stageFlags(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
 
+            // Binding 1: Main Albedo Texture (Combined Image Sampler)
             bindings3D.get(1)
                     .binding(1)
-                    .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC)
+                    .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                     .descriptorCount(1)
                     .stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
 
+            // Binding 2: Shadow Map Texture (Combined Image Sampler)
             bindings3D.get(2)
                     .binding(2)
                     .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
@@ -84,9 +86,17 @@ public class VulkanPipeline {
             }
             descriptorSetLayout3D = pDSLayout3D.get(0);
 
+            // 256-byte Push Constant Range for Model, View, Proj, LightSpace matrices
+            VkPushConstantRange.Buffer pushConstants3D = VkPushConstantRange.calloc(1, stack);
+            pushConstants3D.get(0)
+                    .stageFlags(VK_SHADER_STAGE_VERTEX_BIT)
+                    .offset(0)
+                    .size(256);
+
             VkPipelineLayoutCreateInfo layoutCreateInfo3D = VkPipelineLayoutCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO)
-                    .pSetLayouts(stack.longs(descriptorSetLayout3D));
+                    .pSetLayouts(stack.longs(descriptorSetLayout3D))
+                    .pPushConstantRanges(pushConstants3D);
 
             LongBuffer pPipelineLayout3D = stack.mallocLong(1);
             if (vkCreatePipelineLayout(vkDevice, layoutCreateInfo3D, null, pPipelineLayout3D) != VK_SUCCESS) {
@@ -149,7 +159,6 @@ public class VulkanPipeline {
 
             System.out.println("[VulkanPipeline] Vulkan 1.3 Layouts and Descriptor Sets configured.");
 
-            // Create actual VkPipeline handles
             createGraphicsPipelines(device);
 
             return true;
@@ -282,15 +291,19 @@ public class VulkanPipeline {
                         .module(frag3DModule)
                         .pName(stack.UTF8("main"));
 
+                // 14-float stride = 56 bytes matching MeshImporter!
                 VkVertexInputBindingDescription.Buffer bindingDescription = VkVertexInputBindingDescription.calloc(1, stack)
                         .binding(0)
-                        .stride(32)
+                        .stride(56)
                         .inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
 
                 VkVertexInputAttributeDescription.Buffer attributeDescriptions = VkVertexInputAttributeDescription.calloc(3, stack);
+                // Location 0: vec3 aPos -> Offset 0
                 attributeDescriptions.get(0).binding(0).location(0).format(VK_FORMAT_R32G32B32_SFLOAT).offset(0);
+                // Location 1: vec3 aNormal -> Offset 12
                 attributeDescriptions.get(1).binding(0).location(1).format(VK_FORMAT_R32G32B32_SFLOAT).offset(12);
-                attributeDescriptions.get(2).binding(0).location(2).format(VK_FORMAT_R32G32_SFLOAT).offset(24);
+                // Location 2: vec2 aTexCoord -> Offset 40 (skipping 16 RGBA bytes at 24..39)
+                attributeDescriptions.get(2).binding(0).location(2).format(VK_FORMAT_R32G32_SFLOAT).offset(40);
 
                 VkPipelineVertexInputStateCreateInfo vertexInputInfo3D = VkPipelineVertexInputStateCreateInfo.calloc(stack)
                         .sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO)
