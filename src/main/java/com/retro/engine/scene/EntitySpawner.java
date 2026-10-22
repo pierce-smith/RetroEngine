@@ -1,22 +1,20 @@
 package com.retro.engine.scene;
 
-import com.retro.engine.Main;
-
-import com.retro.engine.scene.Entity;
+import com.retro.engine.animation.AnimationClip;
+import com.retro.engine.animation.AnimatorController;
+import com.retro.engine.animation.AnimatorState;
+import com.retro.engine.assets.AssetMeta;
+import com.retro.engine.assets.AssetType;
+import com.retro.engine.assets.importers.SkeletonImporter;
+import com.retro.engine.scene.components.AnimatorComponent;
 import com.retro.engine.scene.components.AudioSource;
 import com.retro.engine.scene.components.Camera;
 import com.retro.engine.scene.components.Light;
 import com.retro.engine.scene.components.Material;
 import com.retro.engine.scene.components.Transform;
-import com.retro.engine.assets.AssetMeta;
-import com.retro.engine.assets.AssetType;
 
 import java.util.List;
 
-/**
- * Delegate managing entity instantiation, duplication cloning, primitive spawning,
- * deletion reparenting, and asset component linking.
- */
 public class EntitySpawner {
 
     public Entity spawnDefaultCube(List<Entity> sceneEntities) {
@@ -59,6 +57,9 @@ public class EntitySpawner {
         String entityId = "entity_" + (sceneEntities.size() + 1);
         String name = meshAsset.name.replaceAll("\\.[^.]+$", "");
         Entity entity = new Entity(entityId, name, meshAsset.absolutePath);
+        
+        attachAnimatorIfRigged(entity, meshAsset.absolutePath);
+
         sceneEntities.add(entity);
         return entity;
     }
@@ -120,6 +121,16 @@ public class EntitySpawner {
             copy.addComponent(copyAc);
         }
 
+        AnimatorComponent origAnim = selectedEntity.getComponent(AnimatorComponent.class);
+        if (origAnim != null) {
+            AnimatorComponent copyAnim = new AnimatorComponent();
+            copyAnim.skeleton = origAnim.skeleton;
+            copyAnim.controller = origAnim.controller;
+            copyAnim.currentClip = origAnim.currentClip;
+            copyAnim.activeClipName = origAnim.activeClipName;
+            copy.addComponent(copyAnim);
+        }
+
         sceneEntities.add(copy);
         return copy;
     }
@@ -147,6 +158,7 @@ public class EntitySpawner {
     public void assignMeshToSelectedEntity(Entity selectedEntity, AssetMeta meshAsset) {
         if (selectedEntity == null || meshAsset == null || meshAsset.type != AssetType.MESH_3D) return;
         selectedEntity.setMeshAssetPath(meshAsset.absolutePath);
+        attachAnimatorIfRigged(selectedEntity, meshAsset.absolutePath);
     }
 
     public void assignAudioToSelectedEntity(Entity selectedEntity, AssetMeta audioAsset) {
@@ -157,6 +169,49 @@ public class EntitySpawner {
             selectedEntity.addComponent(ac);
         }
         ac.audioAssetPath = audioAsset.absolutePath;
+    }
+
+    public static void attachAnimatorIfRigged(Entity entity, String meshPath) {
+        if (entity == null || meshPath == null || meshPath.trim().isEmpty()) return;
+        try {
+            SkeletonImporter.SkeletonImportResult result = SkeletonImporter.loadSkeletonAndAnimations(meshPath);
+            if (result != null && result.skeleton() != null && result.skeleton().getBoneCount() > 0) {
+                AnimatorComponent animator = entity.getComponent(AnimatorComponent.class);
+                if (animator == null) {
+                    animator = new AnimatorComponent();
+                    entity.addComponent(animator);
+                }
+                animator.skeleton = result.skeleton();
+
+                AnimatorController controller = animator.controller;
+                if (controller == null) {
+                    controller = new AnimatorController(entity.name + "_Controller");
+                    animator.controller = controller;
+                }
+
+                if (result.animations() != null && !result.animations().isEmpty()) {
+                    float gridX = -0.20f;
+                    float gridY = 0.65f;
+                    int col = 0;
+
+                    for (AnimationClip clip : result.animations()) {
+                        if (controller.getState(clip.name) == null) {
+                            AnimatorState state = new AnimatorState(clip.name, clip);
+                            state.graphX = gridX + (col % 3) * 0.38f;
+                            state.graphY = gridY - (col / 3) * 0.25f;
+                            controller.addState(state);
+                            col++;
+                        }
+                    }
+                    if (animator.currentClip == null && !result.animations().isEmpty()) {
+                        animator.currentClip = result.animations().get(0);
+                        animator.activeClipName = animator.currentClip.name;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("[EntitySpawner] Skeletal animation check failed for " + meshPath + ": " + e.getMessage());
+        }
     }
 
     private Entity findEntityById(String id, List<Entity> sceneEntities) {

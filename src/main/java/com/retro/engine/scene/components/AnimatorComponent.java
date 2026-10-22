@@ -1,11 +1,12 @@
 package com.retro.engine.scene.components;
 
 import com.retro.engine.animation.AnimationClip;
+import com.retro.engine.animation.AnimatorController;
 import com.retro.engine.animation.Skeleton;
 
 /**
- * Entity Component storing skeleton reference, active animation clip, playback state,
- * and pre-allocated 64-matrix bone palette buffer for zero per-frame JVM allocations.
+ * Entity Component storing skeleton reference, active animation clip, state machine controller,
+ * playback state, and pre-allocated 64-matrix bone palette buffer for zero per-frame JVM allocations.
  */
 public class AnimatorComponent implements Component {
 
@@ -14,6 +15,8 @@ public class AnimatorComponent implements Component {
     public String activeClipName = "";
     public AnimationClip currentClip = null;
     public Skeleton skeleton = null;
+
+    public AnimatorController controller = null;
 
     public float playbackTime = 0.0f;
     public float playbackSpeed = 1.0f;
@@ -34,6 +37,12 @@ public class AnimatorComponent implements Component {
         if (initialClip != null) {
             this.activeClipName = initialClip.name;
         }
+        initIdentityPalette();
+    }
+
+    public AnimatorComponent(Skeleton skeleton, AnimatorController controller) {
+        this.skeleton = skeleton;
+        this.controller = controller;
         initIdentityPalette();
     }
 
