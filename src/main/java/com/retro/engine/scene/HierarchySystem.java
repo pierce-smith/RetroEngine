@@ -34,10 +34,12 @@ public class HierarchySystem {
     // Transform Caches for zero-cost static matrix propagation
     private final Map<String, WorldTransform> worldTransformCache = new HashMap<>(256);
     private final Map<String, LocalSnapshot> localSnapshotMap = new HashMap<>(256);
+    private final Map<String, WorldTransform> parentSnapshotMap = new HashMap<>(256);
 
     public void clearCache() {
         worldTransformCache.clear();
         localSnapshotMap.clear();
+        parentSnapshotMap.clear();
     }
 
     public WorldTransform getComputedWorldTransform(Entity entity, List<Entity> sceneEntities) {
@@ -114,9 +116,12 @@ public class HierarchySystem {
         // Recursively evaluate parent
         WorldTransform parentWt = getComputedWorldTransformIndexed(parent, entityMap);
         WorldTransform cached = worldTransformCache.get(entityId);
+        WorldTransform lastParentWt = parentSnapshotMap.get(entityId);
 
-        Transform parentTc = parent.getTransform();
-        boolean parentChanged = (parentTc != null && parentTc.isDirty());
+        boolean parentChanged = (lastParentWt == null ||
+                lastParentWt.px() != parentWt.px() || lastParentWt.py() != parentWt.py() || lastParentWt.pz() != parentWt.pz() ||
+                lastParentWt.rx() != parentWt.rx() || lastParentWt.ry() != parentWt.ry() || lastParentWt.rz() != parentWt.rz() ||
+                lastParentWt.sx() != parentWt.sx() || lastParentWt.sy() != parentWt.sy() || lastParentWt.sz() != parentWt.sz());
 
         if (!localChanged && !parentChanged && cached != null) {
             return cached;
@@ -143,6 +148,7 @@ public class HierarchySystem {
         WorldTransform wt = new WorldTransform(px, py, pz, rx, ry, rz, sx, sy, sz);
         worldTransformCache.put(entityId, wt);
         localSnapshotMap.put(entityId, new LocalSnapshot(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ));
+        parentSnapshotMap.put(entityId, parentWt);
         tc.setDirty(false);
 
         return wt;

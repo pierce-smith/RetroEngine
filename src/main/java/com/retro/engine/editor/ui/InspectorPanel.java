@@ -60,7 +60,12 @@ public class InspectorPanel {
         if (selectedEntity != null) {
             strBuilder.setLength(0);
             strBuilder.append("ENTITY: ").append(selectedEntity.name);
-            UIGeometryBatch.addBoundedText(buffer, strBuilder, 0.58f, 0.82f, 0.98f, 1.25f, 1.0f, 0.8f, 0.2f, 1.0f);
+            UIGeometryBatch.addBoundedText(buffer, strBuilder, 0.58f, 0.82f, 0.81f, 1.25f, 1.0f, 0.8f, 0.2f, 1.0f);
+
+            // Save as Prefab button in Inspector Header
+            UIGeometryBatch.addQuad(buffer, 0.82f, 0.800f, 0.98f, 0.845f, 0.18f, 0.35f, 0.55f, 1.0f);
+            UIGeometryBatch.addFrameBorder(buffer, 0.82f, 0.800f, 0.98f, 0.845f, 0.001f, 0.4f, 0.7f, 1.0f, 1.0f);
+            UIGeometryBatch.addBoundedText(buffer, "+ PREFAB", 0.83f, 0.815f, 0.97f, 0.88f, 1.0f, 1.0f, 1.0f, 1.0f);
 
             float curY = 0.74f;
 
@@ -68,7 +73,6 @@ public class InspectorPanel {
                 float drawHeaderY = curY + scrollOffset;
 
                 if (drawHeaderY <= 0.77f && drawHeaderY - 0.028f >= -0.48f) {
-                    // Distinct component banner with accent border
                     UIGeometryBatch.addQuad(buffer, 0.57f, drawHeaderY - 0.028f, 0.98f, drawHeaderY + 0.010f, 0.14f, 0.16f, 0.22f, 1.0f);
                     UIGeometryBatch.addFrameBorder(buffer, 0.57f, drawHeaderY - 0.028f, 0.98f, drawHeaderY + 0.010f, 0.001f, 0.30f, 0.45f, 0.65f, 1.0f);
 
@@ -76,7 +80,7 @@ public class InspectorPanel {
                     strBuilder.append("--- ").append(comp.getComponentName().toUpperCase()).append(" ---");
                     UIGeometryBatch.addBoundedText(buffer, strBuilder, 0.58f, drawHeaderY - 0.004f, 0.97f, 1.0f, 0.4f, 0.85f, 1.0f, 1.0f);
                 }
-                curY -= 0.055f; // Generous vertical gap below header to eliminate bleeding
+                curY -= 0.055f;
 
                 Class<?> compClass = comp.getClass();
                 Field[] fields = CACHED_FIELDS.computeIfAbsent(compClass, Class::getDeclaredFields);

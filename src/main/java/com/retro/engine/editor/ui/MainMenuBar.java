@@ -1,40 +1,38 @@
 package com.retro.engine.editor.ui;
 
-import com.retro.engine.editor.EditorWorkspace;
-import com.retro.engine.scene.SceneWorld;
-import com.retro.engine.scene.components.Camera;
-import com.retro.engine.scene.components.Light;
-
-import com.retro.engine.scene.SceneWorld.PlayState;
 import com.retro.engine.editor.EditorWorkspace.DropdownMenu;
 import com.retro.engine.editor.commands.CommandStack;
+import com.retro.engine.scene.SceneWorld.PlayState;
 
 import java.io.File;
 import java.util.List;
 
+/**
+ * MainMenuBar handles 2D UI vector geometry batching for top menu items,
+ * dropdown overlays, title bar indicators, and simulation state controls.
+ */
 public class MainMenuBar {
 
-    public static void render(UIGeometryBatch.Buffer buffer, DropdownMenu activeDropdown, String activeScenePath, PlayState playState) {
-        UIGeometryBatch.addQuad(buffer, -1.0f, 0.92f, 1.0f, 1.0f, 0.10f, 0.10f, 0.14f, 1.0f);
-        UIGeometryBatch.addFrameBorder(buffer, -1.0f, 0.92f, 1.0f, 1.0f, 0.002f, 0.20f, 0.20f, 0.28f, 1.0f);
+    public static void render(UIGeometryBatch.Buffer buffer, DropdownMenu activeMenu, String activeScenePath, PlayState playState) {
+        // Top Menu Bar Background Quad (-1.0 to 1.0, 0.92 to 1.0)
+        UIGeometryBatch.addQuad(buffer, -1.0f, 0.92f, 1.0f, 1.0f, 0.08f, 0.08f, 0.10f, 1.0f);
+        UIGeometryBatch.addFrameBorder(buffer, -1.0f, 0.92f, 1.0f, 1.0f, 0.002f, 0.25f, 0.25f, 0.32f, 1.0f);
 
-        UIGeometryBatch.addBoundedText(buffer, "RETRO ENGINE", -0.98f, 0.94f, -0.75f, 1.2f, 0.25f, 0.80f, 1.0f, 1.0f);
+        // Retro Engine Brand Title
+        UIGeometryBatch.addBoundedText(buffer, "RETRO ENGINE", -0.98f, 0.95f, -0.75f, 1.2f, 0.25f, 0.80f, 1.0f, 1.0f);
 
-        renderHeaderMenuButton(buffer, "FILE", -0.72f, -0.62f, activeDropdown == DropdownMenu.FILE);
-        renderHeaderMenuButton(buffer, "EDIT", -0.61f, -0.51f, activeDropdown == DropdownMenu.EDIT);
-        renderHeaderMenuButton(buffer, "ENTITY", -0.50f, -0.38f, activeDropdown == DropdownMenu.ENTITY);
-        renderHeaderMenuButton(buffer, "VIEW", -0.37f, -0.27f, activeDropdown == DropdownMenu.VIEW);
+        // Menu Dropdown Titles
+        renderMenuTitle(buffer, "FILE", -0.72f, -0.62f, activeMenu == DropdownMenu.FILE);
+        renderMenuTitle(buffer, "EDIT", -0.61f, -0.51f, activeMenu == DropdownMenu.EDIT);
+        renderMenuTitle(buffer, "ENTITY", -0.50f, -0.38f, activeMenu == DropdownMenu.ENTITY);
+        renderMenuTitle(buffer, "VIEW", -0.37f, -0.27f, activeMenu == DropdownMenu.VIEW);
 
+        // Play / Pause / Stop Controls (-0.15f to 0.25f)
         renderPlayControls(buffer, playState);
 
-        String sceneName = new File(activeScenePath).getName();
-        UIGeometryBatch.addBoundedText(buffer, "SCENE: " + sceneName, 0.45f, 0.94f, 0.98f, 1.0f, 0.7f, 0.7f, 0.8f, 1.0f);
-    }
-
-    public static void render(List<Float> verts, DropdownMenu activeDropdown, String activeScenePath, PlayState playState) {
-        UIGeometryBatch.Buffer tempBuf = new UIGeometryBatch.Buffer();
-        render(tempBuf, activeDropdown, activeScenePath, playState);
-        for (int idx = 0; idx < tempBuf.getSize(); idx++) verts.add(tempBuf.getArray()[idx]);
+        // Scene Title (Right Side: 0.45f to 0.98f)
+        String sceneName = extractSceneName(activeScenePath);
+        UIGeometryBatch.addBoundedText(buffer, "SCENE: " + sceneName.toUpperCase(), 0.45f, 0.95f, 0.98f, 1.0f, 0.7f, 0.7f, 0.8f, 1.0f);
     }
 
     private static void renderPlayControls(UIGeometryBatch.Buffer buffer, PlayState playState) {
@@ -48,6 +46,7 @@ public class MainMenuBar {
         boolean isPaused = (playState == PlayState.PAUSED);
         boolean isEditing = (playState == PlayState.EDITING);
 
+        // PLAY Button
         float rPlay = isSimulating ? 0.2f : 0.14f;
         float gPlay = isSimulating ? 0.8f : 0.18f;
         float bPlay = isSimulating ? 0.3f : 0.22f;
@@ -57,6 +56,7 @@ public class MainMenuBar {
         }
         UIGeometryBatch.addBoundedText(buffer, "PLAY", -0.125f, 0.945f, -0.035f, 1.0f, isSimulating ? 1.0f : 0.7f, 1.0f, isSimulating ? 1.0f : 0.7f, 1.0f);
 
+        // PAUSE Button
         float rPause = isPaused ? 0.8f : 0.14f;
         float gPause = isPaused ? 0.7f : 0.18f;
         float bPause = isPaused ? 0.2f : 0.22f;
@@ -66,6 +66,7 @@ public class MainMenuBar {
         }
         UIGeometryBatch.addBoundedText(buffer, "PAUSE", 0.005f, 0.945f, 0.095f, 1.0f, isPaused ? 1.0f : 0.7f, isPaused ? 1.0f : 0.7f, 0.7f, 1.0f);
 
+        // STOP Button
         float rStop = isEditing ? 0.22f : 0.65f;
         float gStop = isEditing ? 0.14f : 0.18f;
         float bStop = isEditing ? 0.18f : 0.22f;
@@ -73,28 +74,16 @@ public class MainMenuBar {
         UIGeometryBatch.addBoundedText(buffer, "STOP", 0.135f, 0.945f, 0.215f, 1.0f, isEditing ? 0.6f : 1.0f, isEditing ? 0.6f : 0.8f, isEditing ? 0.6f : 0.8f, 1.0f);
     }
 
-    private static void renderPlayControls(List<Float> verts, PlayState playState) {
-        UIGeometryBatch.Buffer tempBuf = new UIGeometryBatch.Buffer();
-        renderPlayControls(tempBuf, playState);
-        for (int idx = 0; idx < tempBuf.getSize(); idx++) verts.add(tempBuf.getArray()[idx]);
-    }
-
-    private static void renderHeaderMenuButton(UIGeometryBatch.Buffer buffer, String label, float minX, float maxX, boolean isActive) {
-        float r = isActive ? 0.22f : 0.14f;
-        float g = isActive ? 0.28f : 0.14f;
-        float b = isActive ? 0.38f : 0.18f;
+    private static void renderMenuTitle(UIGeometryBatch.Buffer buffer, String title, float minX, float maxX, boolean active) {
+        float r = active ? 0.22f : 0.14f;
+        float g = active ? 0.28f : 0.14f;
+        float b = active ? 0.38f : 0.18f;
 
         UIGeometryBatch.addQuad(buffer, minX, 0.93f, maxX, 0.99f, r, g, b, 1.0f);
-        if (isActive) {
+        if (active) {
             UIGeometryBatch.addFrameBorder(buffer, minX, 0.93f, maxX, 0.99f, 0.002f, 0.0f, 0.6f, 1.0f, 1.0f);
         }
-        UIGeometryBatch.addBoundedText(buffer, label, minX + 0.015f, 0.945f, maxX - 0.005f, 1.1f, 1.0f, 1.0f, 1.0f, 1.0f);
-    }
-
-    private static void renderHeaderMenuButton(List<Float> verts, String label, float minX, float maxX, boolean isActive) {
-        UIGeometryBatch.Buffer tempBuf = new UIGeometryBatch.Buffer();
-        renderHeaderMenuButton(tempBuf, label, minX, maxX, isActive);
-        for (int idx = 0; idx < tempBuf.getSize(); idx++) verts.add(tempBuf.getArray()[idx]);
+        UIGeometryBatch.addBoundedText(buffer, title, minX + 0.015f, 0.945f, maxX - 0.005f, 1.1f, 1.0f, 1.0f, 1.0f, 1.0f);
     }
 
     public static void renderDropdownMenuOverlay(UIGeometryBatch.Buffer buffer, DropdownMenu menu, CommandStack commandHistory, boolean show3DGrid) {
@@ -105,8 +94,8 @@ public class MainMenuBar {
             case VIEW -> -0.37f;
             default -> -0.72f;
         };
-        float maxX = minX + 0.32f;
-        float minY = 0.58f;
+        float maxX = minX + 0.36f;
+        float minY = 0.50f;
         float maxY = 0.92f;
 
         UIGeometryBatch.addQuad(buffer, minX, minY, maxX, maxY, 0.12f, 0.12f, 0.16f, 0.98f);
@@ -129,6 +118,7 @@ public class MainMenuBar {
                 renderDropdownItem(buffer, "+ Spawn 3D Cube", minX + 0.01f, 0.85f, maxX - 0.01f);
                 renderDropdownItem(buffer, "+ Spawn Light Source", minX + 0.01f, 0.76f, maxX - 0.01f);
                 renderDropdownItem(buffer, "+ Spawn Camera", minX + 0.01f, 0.67f, maxX - 0.01f);
+                renderDropdownItem(buffer, "Save Selected as Prefab...", minX + 0.01f, 0.58f, maxX - 0.01f);
             }
             case VIEW -> {
                 renderDropdownItem(buffer, "Reset Viewport Camera (F)", minX + 0.01f, 0.85f, maxX - 0.01f);
@@ -151,9 +141,13 @@ public class MainMenuBar {
         UIGeometryBatch.addBoundedText(buffer, text, minX + 0.01f, y + 0.01f, maxX - 0.01f, 1.0f, 0.95f, 0.95f, 0.95f, 1.0f);
     }
 
-    private static void renderDropdownItem(List<Float> verts, String text, float minX, float y, float maxX) {
-        UIGeometryBatch.Buffer tempBuf = new UIGeometryBatch.Buffer();
-        renderDropdownItem(tempBuf, text, minX, y, maxX);
-        for (int idx = 0; idx < tempBuf.getSize(); idx++) verts.add(tempBuf.getArray()[idx]);
+    private static String extractSceneName(String path) {
+        if (path == null) return "Untitled";
+        int lastSlash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+        String fileName = (lastSlash >= 0 && lastSlash < path.length() - 1) ? path.substring(lastSlash + 1) : path;
+        if (fileName.toLowerCase().endsWith(".rscene")) {
+            fileName = fileName.substring(0, fileName.length() - 7);
+        }
+        return fileName;
     }
 }

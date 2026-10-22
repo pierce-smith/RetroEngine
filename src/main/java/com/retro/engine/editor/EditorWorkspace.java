@@ -150,6 +150,24 @@ public class EditorWorkspace {
         }
     }
 
+    public void promptSaveSelectedAsPrefab() {
+        UISoundPlayer.play(UISound.OPEN_MODAL);
+        sceneManager.promptSaveSelectedAsPrefab(assetDirectoryManager.getMutableAssetDirectory(), assetDirectoryManager);
+    }
+
+    public void instantiatePrefab(String prefabPath) {
+        if (prefabPath == null || prefabPath.trim().isEmpty()) return;
+        List<Entity> spawned = sceneManager.instantiatePrefab(prefabPath, assetDirectoryManager);
+        if (spawned != null && !spawned.isEmpty()) {
+            assetDirectoryManager.addAssetDirectoryIfNotExists(prefabPath, AssetType.PREFAB);
+        }
+    }
+
+    public void spawnPrefabFromAsset(AssetMeta prefabAsset) {
+        if (prefabAsset == null) return;
+        instantiatePrefab(prefabAsset.absolutePath);
+    }
+
     public String getCurrentFolderPath() { return assetDirectoryManager.getCurrentFolderPath(); }
     public void setCurrentFolderPath(String path) { assetDirectoryManager.setCurrentFolderPath(path); }
     public void navigateUpFolder() { assetDirectoryManager.navigateUpFolder(); }
@@ -482,15 +500,15 @@ public class EditorWorkspace {
                         tc.rotX != gizmoStateController.getDragStartRx() || tc.rotY != gizmoStateController.getDragStartRy() || tc.rotZ != gizmoStateController.getDragStartRz() ||
                         tc.scaleX != gizmoStateController.getDragStartSx() || tc.scaleY != gizmoStateController.getDragStartSy() || tc.scaleZ != gizmoStateController.getDragStartSz()) {
 
-                        modifyFieldViaCommand(tc, "posX", gizmoStateController.getDragStartPx(), tc.posX, "POS X");
-                        modifyFieldViaCommand(tc, "posY", gizmoStateController.getDragStartPy(), tc.posY, "POS Y");
-                        modifyFieldViaCommand(tc, "posZ", gizmoStateController.getDragStartPz(), tc.posZ, "POS Z");
-                        modifyFieldViaCommand(tc, "rotX", gizmoStateController.getDragStartRx(), tc.rotX, "ROT X");
-                        modifyFieldViaCommand(tc, "rotY", gizmoStateController.getDragStartRy(), tc.rotY, "ROT Y");
-                        modifyFieldViaCommand(tc, "rotZ", gizmoStateController.getDragStartRz(), tc.rotZ, "ROT Z");
-                        modifyFieldViaCommand(tc, "scaleX", gizmoStateController.getDragStartSx(), tc.scaleX, "SCL X");
-                        modifyFieldViaCommand(tc, "scaleY", gizmoStateController.getDragStartSy(), tc.scaleY, "SCL Y");
-                        modifyFieldViaCommand(tc, "scaleZ", gizmoStateController.getDragStartSz(), tc.scaleZ, "SCL Z");
+                        TransformCommand cmd = new TransformCommand(tc,
+                            gizmoStateController.getDragStartPx(), gizmoStateController.getDragStartPy(), gizmoStateController.getDragStartPz(),
+                            gizmoStateController.getDragStartRx(), gizmoStateController.getDragStartRy(), gizmoStateController.getDragStartRz(),
+                            gizmoStateController.getDragStartSx(), gizmoStateController.getDragStartSy(), gizmoStateController.getDragStartSz(),
+                            tc.posX, tc.posY, tc.posZ,
+                            tc.rotX, tc.rotY, tc.rotZ,
+                            tc.scaleX, tc.scaleY, tc.scaleZ
+                        );
+                        commandHistory.executeCommand(cmd);
                     }
                 }
                 setActiveGizmoAxis(GizmoAxis.NONE);
