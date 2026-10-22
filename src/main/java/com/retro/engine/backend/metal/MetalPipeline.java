@@ -6,7 +6,7 @@ import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 
 /**
  * MetalPipeline sets up the RenderWare 3.5 multi-pass shader pipeline featuring:
- * 1. 14-float vertex stride & multi-light type shading (Directional, Point, Spot).
+ * 1. 22-float vertex stride & multi-light type shading (Directional, Point, Spot).
  * 2. Dynamic Ground Entity Shadow Blobs with soft radial distance falloff.
  * 3. Procedural Ray-Plane Anti-Aliased Infinite Shader Grid.
  */
@@ -29,6 +29,8 @@ public class MetalPipeline {
                 float4 color;
                 float2 uv;
                 float2 uv2;
+                float3 tangent;
+                float3 bitangent;
                 float viewDist;
             };
 
@@ -51,7 +53,7 @@ public class MetalPipeline {
                                         constant float* vertices [[buffer(0)]],
                                         constant Uniforms& uniforms [[buffer(1)]]) {
                 VertexOut out;
-                uint vertStride = uniforms.stride > 0 ? uniforms.stride : 14;
+                uint vertStride = uniforms.stride > 0 ? uniforms.stride : 22;
                 int idx = vertexID * vertStride;
 
                 float4 localPos = float4(vertices[idx], vertices[idx+1], vertices[idx+2], 1.0);
@@ -59,17 +61,31 @@ public class MetalPipeline {
                 out.worldPos = (uniforms.model * localPos).xyz;
                 out.viewDist = out.position.w;
 
-                if (vertStride == 14) {
+                if (vertStride == 22) {
                     float3 localNorm = float3(vertices[idx+3], vertices[idx+4], vertices[idx+5]);
                     out.worldNormal = normalize((uniforms.model * float4(localNorm, 0.0)).xyz);
                     out.color = float4(vertices[idx+6], vertices[idx+7], vertices[idx+8], vertices[idx+9]);
                     out.uv = float2(vertices[idx+10], vertices[idx+11]);
                     out.uv2 = float2(vertices[idx+12], vertices[idx+13]);
+                    float3 localTan = float3(vertices[idx+14], vertices[idx+15], vertices[idx+16]);
+                    out.tangent = normalize((uniforms.model * float4(localTan, 0.0)).xyz);
+                    float3 localBitan = float3(vertices[idx+17], vertices[idx+18], vertices[idx+19]);
+                    out.bitangent = normalize((uniforms.model * float4(localBitan, 0.0)).xyz);
+                } else if (vertStride == 14) {
+                    float3 localNorm = float3(vertices[idx+3], vertices[idx+4], vertices[idx+5]);
+                    out.worldNormal = normalize((uniforms.model * float4(localNorm, 0.0)).xyz);
+                    out.color = float4(vertices[idx+6], vertices[idx+7], vertices[idx+8], vertices[idx+9]);
+                    out.uv = float2(vertices[idx+10], vertices[idx+11]);
+                    out.uv2 = float2(vertices[idx+12], vertices[idx+13]);
+                    out.tangent = float3(1.0, 0.0, 0.0);
+                    out.bitangent = float3(0.0, 1.0, 0.0);
                 } else {
                     out.worldNormal = float3(0.0, 1.0, 0.0);
                     out.color = float4(vertices[idx+3], vertices[idx+4], vertices[idx+5], vertices[idx+6]);
                     out.uv = float2(vertices[idx+7], vertices[idx+8]);
                     out.uv2 = out.uv;
+                    out.tangent = float3(1.0, 0.0, 0.0);
+                    out.bitangent = float3(0.0, 1.0, 0.0);
                 }
 
                 return out;
@@ -101,7 +117,6 @@ public class MetalPipeline {
 
                 // Mode 1: Procedural Ray-Plane Anti-Aliased Infinite Shader Grid
                 if (uniforms.isUnlit == 1u) {
-                    // Check if rendering the vertical green Y-axis pillar line
                     if (in.worldPos.y > 0.05) {
                         return float4(0.2, 1.0, 0.2, 1.0); // Vibrant Green Y-Axis Line
                     }
@@ -206,7 +221,7 @@ public class MetalPipeline {
 
                 return float4(finalRGB, baseColor.a);
             }
-            """ ;
+            """;
 
     private static final String MSL_UI_SHADER = """
             #include <metal_stdlib>
@@ -229,7 +244,7 @@ public class MetalPipeline {
             fragment float4 uiFragmentMain(VertexOut in [[stage_in]]) {
                 return in.color;
             }
-            """ ;
+            """;
 
     public boolean initialize(MetalDevice device) {
         long d = device.getDevice();
@@ -267,9 +282,8 @@ public class MetalPipeline {
         invokePPPP(depthDesc3D, sel_registerName("setDepthWriteEnabled:"), 1L, send);    // Depth write ON for 3D models
         depthStencilState3D = invokePPPP(d, sel_registerName("newDepthStencilStateWithDescriptor:"), depthDesc3D, send);
 
-        // Shadow Depth Stencil State: Depth Compare LessEqual, Depth Write OFF!
         long depthDescShadow = invokePPP(depthDescClass, sel_registerName("new"), send);
-        invokePPPP(depthDescShadow, sel_registerName("setDepthCompareFunction:"), 3L, send); // LessEqual (3L)
+        invokePPPP(depthDescShadow, sel_registerName("setDepthCompareFunction:"), 3L, send); // LessEqual
         invokePPPP(depthDescShadow, sel_registerName("setDepthWriteEnabled:"), 0L, send);   // Depth write OFF!
         depthStencilStateShadow = invokePPPP(d, sel_registerName("newDepthStencilStateWithDescriptor:"), depthDescShadow, send);
 
