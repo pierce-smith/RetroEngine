@@ -195,7 +195,7 @@ public class MetalGpuCache {
 
         evictLruMeshesIfNeeded(metalDevice);
 
-        int stride = (vertices.length % 14 == 0) ? 14 : 9;
+        int stride = (vertices.length % 22 == 0) ? 22 : ((vertices.length % 14 == 0) ? 14 : 9);
         MetalBuffer buf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), vertices, stride);
         long handle = buf.getHandle();
         if (handle != 0L) {

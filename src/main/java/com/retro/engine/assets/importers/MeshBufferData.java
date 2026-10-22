@@ -1,8 +1,8 @@
 package com.retro.engine.assets.importers;
 
 /**
- * Immutable container for 14-float stride vertex buffer data
- * [PX, PY, PZ, NX, NY, NZ, R, G, B, A, U1, V1, U2, V2].
+ * Immutable container for 22-float stride vertex buffer data
+ * [PX, PY, PZ, NX, NY, NZ, R, G, B, A, U1, V1, U2, V2, TX, TY, TZ, BX, BY, BZ, LM_SCALE, LM_BIAS].
  */
 public class MeshBufferData {
     public final float[] vertices;

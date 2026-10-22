@@ -154,7 +154,7 @@ public class VulkanPipeline {
                 VulkanShaderLoader.destroyShaderModule(vkDevice, fragGridModule);
             }
 
-            // 2. 3D Scene Pipeline
+            // 2. 3D Scene Pipeline (22-Float Vertex Stride)
             long vert3DModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/blinn_phong.vert.spv");
             long frag3DModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/blinn_phong.frag.spv");
 
@@ -163,11 +163,15 @@ public class VulkanPipeline {
                 shaderStages3D.get(0).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_VERTEX_BIT).module(vert3DModule).pName(stack.UTF8("main"));
                 shaderStages3D.get(1).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_FRAGMENT_BIT).module(frag3DModule).pName(stack.UTF8("main"));
 
-                VkVertexInputBindingDescription.Buffer bindingDescription = VkVertexInputBindingDescription.calloc(1, stack).binding(0).stride(56).inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
-                VkVertexInputAttributeDescription.Buffer attributeDescriptions = VkVertexInputAttributeDescription.calloc(3, stack);
-                attributeDescriptions.get(0).binding(0).location(0).format(VK_FORMAT_R32G32B32_SFLOAT).offset(0);
-                attributeDescriptions.get(1).binding(0).location(1).format(VK_FORMAT_R32G32B32_SFLOAT).offset(12);
-                attributeDescriptions.get(2).binding(0).location(2).format(VK_FORMAT_R32G32_SFLOAT).offset(40);
+                VkVertexInputBindingDescription.Buffer bindingDescription = VkVertexInputBindingDescription.calloc(1, stack).binding(0).stride(88).inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
+                VkVertexInputAttributeDescription.Buffer attributeDescriptions = VkVertexInputAttributeDescription.calloc(7, stack);
+                attributeDescriptions.get(0).binding(0).location(0).format(VK_FORMAT_R32G32B32_SFLOAT).offset(0);   // aPos (3 floats)
+                attributeDescriptions.get(1).binding(0).location(1).format(VK_FORMAT_R32G32B32_SFLOAT).offset(12);  // aNormal (3 floats)
+                attributeDescriptions.get(2).binding(0).location(2).format(VK_FORMAT_R32G32_SFLOAT).offset(40);     // aTexCoord (2 floats)
+                attributeDescriptions.get(3).binding(0).location(3).format(VK_FORMAT_R32G32_SFLOAT).offset(48);     // aLightmapUV (2 floats)
+                attributeDescriptions.get(4).binding(0).location(4).format(VK_FORMAT_R32G32B32_SFLOAT).offset(56);  // aTangent (3 floats)
+                attributeDescriptions.get(5).binding(0).location(5).format(VK_FORMAT_R32G32B32_SFLOAT).offset(68);  // aBitangent (3 floats)
+                attributeDescriptions.get(6).binding(0).location(6).format(VK_FORMAT_R32G32_SFLOAT).offset(80);     // aLightmapParams (2 floats)
 
                 VkPipelineVertexInputStateCreateInfo vertexInputInfo3D = VkPipelineVertexInputStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO).pVertexBindingDescriptions(bindingDescription).pVertexAttributeDescriptions(attributeDescriptions);
                 VkPipelineInputAssemblyStateCreateInfo inputAssembly = VkPipelineInputAssemblyStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO).topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST).primitiveRestartEnable(false);

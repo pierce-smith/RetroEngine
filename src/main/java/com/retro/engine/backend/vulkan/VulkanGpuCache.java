@@ -281,7 +281,7 @@ public class VulkanGpuCache {
             floatBuf.put(vertices);
             vkUnmapMemory(vkDevice, bufferMemory);
 
-            int floatStride = (vertices.length % 14 == 0) ? 14 : 9;
+            int floatStride = (vertices.length % 22 == 0) ? 22 : ((vertices.length % 14 == 0) ? 14 : 9);
             return new VulkanBuffer(buffer, bufferMemory, vertices.length / floatStride);
         }
     }

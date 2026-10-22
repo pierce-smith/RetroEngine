@@ -169,7 +169,7 @@ public class MetalPassEncoder {
 
                     MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_HAS_TEXTURE, item.hasTexture ? 1 : 0);
                     MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_IS_UNLIT, 0);
-                    MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_STRIDE, 14);
+                    MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_STRIDE, 22);
 
                     int passFlags = 0;
                     if (item.reflectionStrength > 0.0f) {

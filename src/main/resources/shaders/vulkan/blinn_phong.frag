@@ -4,6 +4,9 @@ layout(location = 0) in vec3 vFragPos;
 layout(location = 1) in vec3 vNormal;
 layout(location = 2) in vec2 vTexCoord;
 layout(location = 3) in vec4 vFragPosLightSpace;
+layout(location = 4) in vec2 vLightmapUV;
+layout(location = 5) in vec3 vTangent;
+layout(location = 6) in vec3 vBitangent;
 
 layout(location = 0) out vec4 outFragColor;
 

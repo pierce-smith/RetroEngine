@@ -12,15 +12,15 @@ import static org.lwjgl.assimp.Assimp.*;
 
 /**
  * High-performance Assimp model importer enforcing:
- * 1. 14-float vertex stride: [PX, PY, PZ, NX, NY, NZ, R, G, B, A, U1, V1, U2, V2].
+ * 1. 22-float vertex stride: [PX, PY, PZ, NX, NY, NZ, R, G, B, A, U1, V1, U2, V2, TX, TY, TZ, BX, BY, BZ, LM_SCALE, LM_BIAS].
  * 2. Clean neutral base material color (no debug rainbow RGB normal packing).
  * 3. Safe Assimp buffer limits checking to prevent IndexOutOfBoundsException fallback to cube.
  * 4. True Voxel Grid Vertex Collapse Decimation (Rossignac-Borrel Algorithm) preserving
- *    closed 3D surface geometry, normals, and UVs for RenderWare 3.5 target budgets (~4,500 verts).
+ *    closed 3D surface geometry, normals, UVs, and Tangents/Bitangents for RenderWare 3.5 target budgets (~4,500 verts).
  */
 public class MeshImporter {
 
-    public static final int FLOATS_PER_VERTEX = 14;
+    public static final int FLOATS_PER_VERTEX = 22;
     public static final int RW35_TARGET_MAX_VERTICES = 4500; // RenderWare 3.5 target prop budget
 
     public static MeshBufferData loadModel(String filePath) {
@@ -42,6 +42,7 @@ public class MeshImporter {
             AIScene scene = aiImportFile(filePath,
                     aiProcess_Triangulate |
                     aiProcess_GenSmoothNormals |
+                    aiProcess_CalcTangentSpace |
                     aiProcess_JoinIdenticalVertices |
                     aiProcess_FlipUVs);
 
@@ -54,6 +55,9 @@ public class MeshImporter {
                     AIVector3D.Buffer vertices = mesh.mVertices();
                     AIVector3D.Buffer normals = mesh.mNormals();
                     AIVector3D.Buffer uvs = mesh.mTextureCoords(0);
+                    AIVector3D.Buffer lightmapUvs = mesh.mTextureCoords(1);
+                    AIVector3D.Buffer tangents = mesh.mTangents();
+                    AIVector3D.Buffer bitangents = mesh.mBitangents();
 
                     int numVertices = mesh.mNumVertices();
                     AIFace.Buffer faces = mesh.mFaces();
@@ -91,14 +95,43 @@ public class MeshImporter {
                                     v1 = uv.y();
                                 }
 
+                                // Lightmap UVs (U2, V2)
                                 float u2 = u1, v2 = v1;
+                                if (lightmapUvs != null && index < lightmapUvs.remaining()) {
+                                    AIVector3D lmUv = lightmapUvs.get(index);
+                                    u2 = lmUv.x();
+                                    v2 = lmUv.y();
+                                }
 
-                                // 14 floats per vertex
+                                // Tangents (TX, TY, TZ)
+                                float tx = 1.0f, ty = 0.0f, tz = 0.0f;
+                                if (tangents != null && index < tangents.remaining()) {
+                                    AIVector3D tan = tangents.get(index);
+                                    tx = tan.x();
+                                    ty = tan.y();
+                                    tz = tan.z();
+                                }
+
+                                // Bitangents (BX, BY, BZ)
+                                float bx = 0.0f, by = 1.0f, bz = 0.0f;
+                                if (bitangents != null && index < bitangents.remaining()) {
+                                    AIVector3D bitan = bitangents.get(index);
+                                    bx = bitan.x();
+                                    by = bitan.y();
+                                    bz = bitan.z();
+                                }
+
+                                float lmScale = 1.0f, lmBias = 0.0f;
+
+                                // 22 floats per vertex
                                 vertexBuffer.add(px); vertexBuffer.add(py); vertexBuffer.add(pz);
                                 vertexBuffer.add(nx); vertexBuffer.add(ny); vertexBuffer.add(nz);
                                 vertexBuffer.add(r);  vertexBuffer.add(g);  vertexBuffer.add(b);  vertexBuffer.add(a);
                                 vertexBuffer.add(u1); vertexBuffer.add(v1);
                                 vertexBuffer.add(u2); vertexBuffer.add(v2);
+                                vertexBuffer.add(tx); vertexBuffer.add(ty); vertexBuffer.add(tz);
+                                vertexBuffer.add(bx); vertexBuffer.add(by); vertexBuffer.add(bz);
+                                vertexBuffer.add(lmScale); vertexBuffer.add(lmBias);
                             }
                         }
                     }
@@ -119,7 +152,7 @@ public class MeshImporter {
                         return decimateToRW35Target(verts, loadedCount, RW35_TARGET_MAX_VERTICES);
                     }
 
-                    System.out.println("[MeshImporter] Successfully loaded 3D mesh " + file.getName() + " with " + loadedCount + " vertices.");
+                    System.out.println("[MeshImporter] Successfully loaded 3D mesh " + file.getName() + " with " + loadedCount + " vertices (22-float stride).");
                     return new MeshBufferData(verts, loadedCount);
                 }
             }
@@ -134,7 +167,7 @@ public class MeshImporter {
     /**
      * True Voxel Grid Vertex Collapse Decimation (Rossignac-Borrel Algorithm):
      * Maps vertices to 3D spatial voxel centroids and rebuilds non-degenerate faces,
-     * maintaining contiguous 3D surface geometry, volume, normals, and UVs without holes.
+     * maintaining contiguous 3D surface geometry, volume, normals, UVs, and Tangents/Bitangents.
      */
     public static MeshBufferData decimateToRW35Target(float[] rawVerts, int rawCount, int maxTargetVerts) {
         if (rawCount <= maxTargetVerts) return new MeshBufferData(rawVerts, rawCount);
@@ -206,10 +239,19 @@ public class MeshImporter {
             // Normalize average surface normal (nx, ny, nz)
             float nLen = (float) Math.sqrt(avg[3] * avg[3] + avg[4] * avg[4] + avg[5] * avg[5]);
             if (nLen > 0.0001f) {
-                avg[3] /= nLen;
-                avg[4] /= nLen;
-                avg[5] /= nLen;
+                avg[3] /= nLen; avg[4] /= nLen; avg[5] /= nLen;
             }
+            // Normalize tangent (tx, ty, tz)
+            float tLen = (float) Math.sqrt(avg[14] * avg[14] + avg[15] * avg[15] + avg[16] * avg[16]);
+            if (tLen > 0.0001f) {
+                avg[14] /= tLen; avg[15] /= tLen; avg[16] /= tLen;
+            }
+            // Normalize bitangent (bx, by, bz)
+            float bLen = (float) Math.sqrt(avg[17] * avg[17] + avg[18] * avg[18] + avg[19] * avg[19]);
+            if (bLen > 0.0001f) {
+                avg[17] /= bLen; avg[18] /= bLen; avg[19] /= bLen;
+            }
+
             cellCentroids.put(entry.getKey(), avg);
         }
 
@@ -300,52 +342,52 @@ public class MeshImporter {
     public static MeshBufferData createDefaultCube() {
         float[] cubeVerts = new float[] {
             // Front (+Z)
-            -1f,-1f, 1f,  0f,0f,1f,  0.9f,0.3f,0.2f,1f,  0f,1f, 0f,1f,
-             1f,-1f, 1f,  0f,0f,1f,  0.9f,0.3f,0.2f,1f,  1f,1f, 1f,1f,
-             1f, 1f, 1f,  0f,0f,1f,  0.9f,0.3f,0.2f,1f,  1f,0f, 1f,0f,
-            -1f,-1f, 1f,  0f,0f,1f,  0.9f,0.3f,0.2f,1f,  0f,1f, 0f,1f,
-             1f, 1f, 1f,  0f,0f,1f,  0.9f,0.3f,0.2f,1f,  1f,0f, 1f,0f,
-            -1f, 1f, 1f,  0f,0f,1f,  0.9f,0.3f,0.2f,1f,  0f,0f, 0f,0f,
+            -1f,-1f, 1f,  0f,0f,1f,  0.9f,0.3f,0.2f,1f,  0f,1f,  0f,1f,  1f,0f,0f,  0f,1f,0f,  1f,0f,
+             1f,-1f, 1f,  0f,0f,1f,  0.9f,0.3f,0.2f,1f,  1f,1f,  1f,1f,  1f,0f,0f,  0f,1f,0f,  1f,0f,
+             1f, 1f, 1f,  0f,0f,1f,  0.9f,0.3f,0.2f,1f,  1f,0f,  1f,0f,  1f,0f,0f,  0f,1f,0f,  1f,0f,
+            -1f,-1f, 1f,  0f,0f,1f,  0.9f,0.3f,0.2f,1f,  0f,1f,  0f,1f,  1f,0f,0f,  0f,1f,0f,  1f,0f,
+             1f, 1f, 1f,  0f,0f,1f,  0.9f,0.3f,0.2f,1f,  1f,0f,  1f,0f,  1f,0f,0f,  0f,1f,0f,  1f,0f,
+            -1f, 1f, 1f,  0f,0f,1f,  0.9f,0.3f,0.2f,1f,  0f,0f,  0f,0f,  1f,0f,0f,  0f,1f,0f,  1f,0f,
 
             // Back (-Z)
-             1f,-1f,-1f,  0f,0f,-1f, 0.2f,0.8f,0.9f,1f,  0f,1f, 0f,1f,
-            -1f,-1f,-1f,  0f,0f,-1f, 0.2f,0.8f,0.9f,1f,  1f,1f, 1f,1f,
-            -1f, 1f,-1f,  0f,0f,-1f, 0.2f,0.8f,0.9f,1f,  1f,0f, 1f,0f,
-             1f,-1f,-1f,  0f,0f,-1f, 0.2f,0.8f,0.9f,1f,  0f,1f, 0f,1f,
-            -1f, 1f,-1f,  0f,0f,-1f, 0.2f,0.8f,0.9f,1f,  1f,0f, 1f,0f,
-             1f, 1f,-1f,  0f,0f,-1f, 0.2f,0.8f,0.9f,1f,  0f,0f, 0f,0f,
+             1f,-1f,-1f,  0f,0f,-1f, 0.2f,0.8f,0.9f,1f,  0f,1f,  0f,1f, -1f,0f,0f,  0f,1f,0f,  1f,0f,
+            -1f,-1f,-1f,  0f,0f,-1f, 0.2f,0.8f,0.9f,1f,  1f,1f,  1f,1f, -1f,0f,0f,  0f,1f,0f,  1f,0f,
+            -1f, 1f,-1f,  0f,0f,-1f, 0.2f,0.8f,0.9f,1f,  1f,0f,  1f,0f, -1f,0f,0f,  0f,1f,0f,  1f,0f,
+             1f,-1f,-1f,  0f,0f,-1f, 0.2f,0.8f,0.9f,1f,  0f,1f,  0f,1f, -1f,0f,0f,  0f,1f,0f,  1f,0f,
+            -1f, 1f,-1f,  0f,0f,-1f, 0.2f,0.8f,0.9f,1f,  1f,0f,  1f,0f, -1f,0f,0f,  0f,1f,0f,  1f,0f,
+             1f, 1f,-1f,  0f,0f,-1f, 0.2f,0.8f,0.9f,1f,  0f,0f,  0f,0f, -1f,0f,0f,  0f,1f,0f,  1f,0f,
 
             // Top (+Y)
-            -1f, 1f, 1f,  0f,1f,0f,  0.2f,0.9f,0.3f,1f,  0f,1f, 0f,1f,
-             1f, 1f, 1f,  0f,1f,0f,  0.2f,0.9f,0.3f,1f,  1f,1f, 1f,1f,
-             1f, 1f,-1f,  0f,1f,0f,  0.2f,0.9f,0.3f,1f,  1f,0f, 1f,0f,
-            -1f, 1f, 1f,  0f,1f,0f,  0.2f,0.9f,0.3f,1f,  0f,1f, 0f,1f,
-             1f, 1f,-1f,  0f,1f,0f,  0.2f,0.9f,0.3f,1f,  1f,0f, 1f,0f,
-            -1f, 1f,-1f,  0f,1f,0f,  0.2f,0.9f,0.3f,1f,  0f,0f, 0f,0f,
+            -1f, 1f, 1f,  0f,1f,0f,  0.2f,0.9f,0.3f,1f,  0f,1f,  0f,1f,  1f,0f,0f,  0f,0f,-1f, 1f,0f,
+             1f, 1f, 1f,  0f,1f,0f,  0.2f,0.9f,0.3f,1f,  1f,1f,  1f,1f,  1f,0f,0f,  0f,0f,-1f, 1f,0f,
+             1f, 1f,-1f,  0f,1f,0f,  0.2f,0.9f,0.3f,1f,  1f,0f,  1f,0f,  1f,0f,0f,  0f,0f,-1f, 1f,0f,
+            -1f, 1f, 1f,  0f,1f,0f,  0.2f,0.9f,0.3f,1f,  0f,1f,  0f,1f,  1f,0f,0f,  0f,0f,-1f, 1f,0f,
+             1f, 1f,-1f,  0f,1f,0f,  0.2f,0.9f,0.3f,1f,  1f,0f,  1f,0f,  1f,0f,0f,  0f,0f,-1f, 1f,0f,
+            -1f, 1f,-1f,  0f,1f,0f,  0.2f,0.9f,0.3f,1f,  0f,0f,  0f,0f,  1f,0f,0f,  0f,0f,-1f, 1f,0f,
 
             // Bottom (-Y)
-            -1f,-1f,-1f,  0f,-1f,0f, 0.2f,0.3f,0.9f,1f,  0f,1f, 0f,1f,
-             1f,-1f,-1f,  0f,-1f,0f, 0.2f,0.3f,0.9f,1f,  1f,1f, 1f,1f,
-             1f,-1f, 1f,  0f,-1f,0f, 0.2f,0.3f,0.9f,1f,  1f,0f, 1f,0f,
-            -1f,-1f,-1f,  0f,-1f,0f, 0.2f,0.3f,0.9f,1f,  0f,1f, 0f,1f,
-             1f,-1f, 1f,  0f,-1f,0f, 0.2f,0.3f,0.9f,1f,  1f,0f, 1f,0f,
-            -1f,-1f, 1f,  0f,-1f,0f, 0.2f,0.3f,0.9f,1f,  0f,0f, 0f,0f,
+            -1f,-1f,-1f,  0f,-1f,0f, 0.2f,0.3f,0.9f,1f,  0f,1f,  0f,1f,  1f,0f,0f,  0f,0f,1f,  1f,0f,
+             1f,-1f,-1f,  0f,-1f,0f, 0.2f,0.3f,0.9f,1f,  1f,1f,  1f,1f,  1f,0f,0f,  0f,0f,1f,  1f,0f,
+             1f,-1f, 1f,  0f,-1f,0f, 0.2f,0.3f,0.9f,1f,  1f,0f,  1f,0f,  1f,0f,0f,  0f,0f,1f,  1f,0f,
+            -1f,-1f,-1f,  0f,-1f,0f, 0.2f,0.3f,0.9f,1f,  0f,1f,  0f,1f,  1f,0f,0f,  0f,0f,1f,  1f,0f,
+             1f,-1f, 1f,  0f,-1f,0f, 0.2f,0.3f,0.9f,1f,  1f,0f,  1f,0f,  1f,0f,0f,  0f,0f,1f,  1f,0f,
+            -1f,-1f, 1f,  0f,-1f,0f, 0.2f,0.3f,0.9f,1f,  0f,0f,  0f,0f,  1f,0f,0f,  0f,0f,1f,  1f,0f,
 
             // Left (-X)
-            -1f,-1f,-1f, -1f,0f,0f,  0.9f,0.8f,0.2f,1f,  0f,1f, 0f,1f,
-            -1f,-1f, 1f, -1f,0f,0f,  0.9f,0.8f,0.2f,1f,  1f,1f, 1f,1f,
-            -1f, 1f, 1f, -1f,0f,0f,  0.9f,0.8f,0.2f,1f,  1f,0f, 1f,0f,
-            -1f,-1f,-1f, -1f,0f,0f,  0.9f,0.8f,0.2f,1f,  0f,1f, 0f,1f,
-            -1f, 1f, 1f, -1f,0f,0f,  0.9f,0.8f,0.2f,1f,  1f,0f, 1f,0f,
-            -1f, 1f,-1f, -1f,0f,0f,  0.9f,0.8f,0.2f,1f,  0f,0f, 0f,0f,
+            -1f,-1f,-1f, -1f,0f,0f,  0.9f,0.8f,0.2f,1f,  0f,1f,  0f,1f,  0f,0f,1f,  0f,1f,0f,  1f,0f,
+            -1f,-1f, 1f, -1f,0f,0f,  0.9f,0.8f,0.2f,1f,  1f,1f,  1f,1f,  0f,0f,1f,  0f,1f,0f,  1f,0f,
+            -1f, 1f, 1f, -1f,0f,0f,  0.9f,0.8f,0.2f,1f,  1f,0f,  1f,0f,  0f,0f,1f,  0f,1f,0f,  1f,0f,
+            -1f,-1f,-1f, -1f,0f,0f,  0.9f,0.8f,0.2f,1f,  0f,1f,  0f,1f,  0f,0f,1f,  0f,1f,0f,  1f,0f,
+            -1f, 1f, 1f, -1f,0f,0f,  0.9f,0.8f,0.2f,1f,  1f,0f,  1f,0f,  0f,0f,1f,  0f,1f,0f,  1f,0f,
+            -1f, 1f,-1f, -1f,0f,0f,  0.9f,0.8f,0.2f,1f,  0f,0f,  0f,0f,  0f,0f,1f,  0f,1f,0f,  1f,0f,
 
             // Right (+X)
-             1f,-1f, 1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  0f,1f, 0f,1f,
-             1f,-1f,-1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  1f,1f, 1f,1f,
-             1f, 1f,-1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  1f,0f, 1f,0f,
-             1f,-1f, 1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  0f,1f, 0f,1f,
-             1f, 1f,-1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  1f,0f, 1f,0f,
-             1f, 1f, 1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  0f,0f, 0f,0f
+             1f,-1f, 1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  0f,1f,  0f,1f,  0f,0f,-1f, 0f,1f,0f,  1f,0f,
+             1f,-1f,-1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  1f,1f,  1f,1f,  0f,0f,-1f, 0f,1f,0f,  1f,0f,
+             1f, 1f,-1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  1f,0f,  1f,0f,  0f,0f,-1f, 0f,1f,0f,  1f,0f,
+             1f,-1f, 1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  0f,1f,  0f,1f,  0f,0f,-1f, 0f,1f,0f,  1f,0f,
+             1f, 1f,-1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  1f,0f,  1f,0f,  0f,0f,-1f, 0f,1f,0f,  1f,0f,
+             1f, 1f, 1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  0f,0f,  0f,0f,  0f,0f,-1f, 0f,1f,0f,  1f,0f
         };
         return new MeshBufferData(cubeVerts, cubeVerts.length / FLOATS_PER_VERTEX);
     }
