@@ -2,7 +2,8 @@ package com.retro.engine.rhi;
 
 /**
  * Render Hardware Interface (RHI) abstraction contract for cross-platform backends.
- * Extended with Offscreen Viewport Render Target and unified scene lighting support.
+ * Extended with Offscreen Viewport Render Target, unified scene lighting support,
+ * and 64-matrix GPU skeletal animation matrix palette streaming.
  */
 public interface IRenderBackend {
     boolean initialize(ViewportSpec windowInfo);
@@ -31,6 +32,17 @@ public interface IRenderBackend {
                               float sx, float sy, float sz) {
         submitEntity(meshPath, vertices, vertexCount, texturePath, pixels, texW, texH, 
                      px, py, pz, rx, ry, rz, sx, sy, sz, 0.0f, 0.0f);
+    }
+
+    default void submitEntity(String meshPath, float[] vertices, int vertexCount, 
+                              String texturePath, byte[] pixels, int texW, int texH, 
+                              float px, float py, float pz, 
+                              float rx, float ry, float rz, 
+                              float sx, float sy, float sz, 
+                              float groundY, float reflectionStrength,
+                              float[][] bonePalette) {
+        submitEntity(meshPath, vertices, vertexCount, texturePath, pixels, texW, texH, 
+                     px, py, pz, rx, ry, rz, sx, sy, sz, groundY, reflectionStrength);
     }
 
     void beginFrame();

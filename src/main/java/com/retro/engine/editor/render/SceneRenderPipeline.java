@@ -10,6 +10,7 @@ import com.retro.engine.editor.ui.EngineConsolePanel;
 import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.scene.Entity;
 import com.retro.engine.scene.SceneWorld.WorldTransform;
+import com.retro.engine.scene.components.AnimatorComponent;
 import com.retro.engine.scene.components.Light;
 import com.retro.engine.scene.components.Material;
 import com.retro.engine.scene.components.MeshFilter;
@@ -19,7 +20,8 @@ import java.util.List;
 
 /**
  * High-level render pipeline processing 3D scene entities, view-frustum culling,
- * light state, and downward-raycast ground shadows through a vendor-agnostic IRenderBackend contract.
+ * light state, GPU skeletal animation bone palette extraction, and downward-raycast ground shadows
+ * through a vendor-agnostic IRenderBackend contract.
  */
 public class SceneRenderPipeline {
 
@@ -77,11 +79,12 @@ public class SceneRenderPipeline {
                 }
             }
 
-            // 2. Traversal loop across active 3D entities with View-Frustum Culling
+            // 2. Traversal loop across active 3D entities with View-Frustum Culling & Skeletal Palette Extraction
             for (Entity entity : entities) {
                 Transform tc = entity.getComponent(Transform.class);
                 MeshFilter mc = entity.getComponent(MeshFilter.class);
                 Material mat = entity.getComponent(Material.class);
+                AnimatorComponent anim = entity.getComponent(AnimatorComponent.class);
 
                 if (tc == null || mc == null) continue;
                 if (!mc.isVisible) continue;
@@ -141,6 +144,7 @@ public class SceneRenderPipeline {
 
                     float groundY = findGroundSurfaceY(entity, wt, entities, editorManager);
                     float reflectVal = (mat != null) ? mat.reflect : 0.0f;
+                    float[][] bonePalette = (anim != null && anim.skeleton != null) ? anim.bonePaletteMatrices : null;
 
                     rhi.submitEntity(
                             submitKey,
@@ -151,7 +155,8 @@ public class SceneRenderPipeline {
                             wt.px(), wt.py(), wt.pz(),
                             wt.rx(), wt.ry(), wt.rz(),
                             wt.sx(), wt.sy(), wt.sz(),
-                            groundY, reflectVal
+                            groundY, reflectVal,
+                            bonePalette
                     );
                 }
             }
