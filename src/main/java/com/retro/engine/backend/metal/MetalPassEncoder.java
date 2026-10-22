@@ -249,21 +249,21 @@ public class MetalPassEncoder {
         long colorAttachWin0 = invokePPPP(colorAttachWin, sel_registerName("objectAtIndexedSubscript:"), 0L, send);
 
         invokePPPP(colorAttachWin0, sel_registerName("setTexture:"), drawableTexture, send);
-        invokePPPP(colorAttachWin0, sel_registerName("setLoadAction:"), 2L, send);
-        invokePPPP(colorAttachWin0, sel_registerName("setStoreAction:"), 1L, send);
+        invokePPPP(colorAttachWin0, sel_registerName("setLoadAction:"), 2L, send); // Clear
+        invokePPPP(colorAttachWin0, sel_registerName("setStoreAction:"), 1L, send); // Store
 
-        if (framebuffer.getWindowDepthTexture() != 0L) {
-            long depthAttachWin = invokePPP(windowPassDesc, sel_registerName("depthAttachment"), send);
-            invokePPPP(depthAttachWin, sel_registerName("setTexture:"), framebuffer.getWindowDepthTexture(), send);
-            invokePPPP(depthAttachWin, sel_registerName("setLoadAction:"), 2L, send);
-            invokePPPP(depthAttachWin, sel_registerName("setStoreAction:"), 0L, send);
-        }
+        // NO DEPTH ATTACHMENT FOR WINDOW COMPOSITION PASS!
+        // drawableTexture handles color output at native window/Retina resolution.
 
         long encoderWin = invokePPPP(commandBuffer, sel_registerName("renderCommandEncoderWithDescriptor:"), windowPassDesc, send);
+        if (encoderWin == 0L) return;
 
-        if (resourceCache.getViewportQuadBuffer() != 0L && framebuffer.getOffscreenColorTexture() != 0L) {
-            invokePPPP(encoderWin, sel_registerName("setRenderPipelineState:"), pipeline.getPipelineState3D(), send);
-            invokePPPP(encoderWin, sel_registerName("setDepthStencilState:"), pipeline.getDepthStencilStateUI(), send);
+        // 1. Viewport Quad Pass-Through Composition
+        long pipelineComp = pipeline.getPipelineStateComposition();
+        if (pipelineComp == 0L) pipelineComp = pipeline.getPipelineState3D();
+
+        if (resourceCache.getViewportQuadBuffer() != 0L && framebuffer.getOffscreenColorTexture() != 0L && pipelineComp != 0L) {
+            invokePPPP(encoderWin, sel_registerName("setRenderPipelineState:"), pipelineComp, send);
 
             invokePPPPP(encoderWin, sel_registerName("setFragmentTexture:atIndex:"), framebuffer.getOffscreenColorTexture(), 0L, send);
             if (texture.getSamplerStateHandle() != 0L) {
@@ -276,9 +276,9 @@ public class MetalPassEncoder {
             invokePPPPPP(encoderWin, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, 6L, send);
         }
 
+        // 2. 2D Editor UI Geometry Batch Pass
         if (resourceCache.getUiVertexBuffer() != 0L && resourceCache.getUiVertexCount() > 0 && pipeline.getPipelineStateUI() != 0L) {
             invokePPPP(encoderWin, sel_registerName("setRenderPipelineState:"), pipeline.getPipelineStateUI(), send);
-            invokePPPP(encoderWin, sel_registerName("setDepthStencilState:"), pipeline.getDepthStencilStateUI(), send);
 
             invokePPPPPP(encoderWin, sel_registerName("setVertexBuffer:offset:atIndex:"), resourceCache.getUiVertexBuffer(), 0L, 0L, send);
             invokePPPPPP(encoderWin, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, (long) resourceCache.getUiVertexCount(), send);

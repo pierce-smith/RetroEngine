@@ -9,9 +9,11 @@ import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
  * 1. 22-float vertex stride & multi-light type shading (Directional, Point, Spot).
  * 2. Dynamic Ground Entity Shadow Blobs with soft radial distance falloff.
  * 3. Procedural Ray-Plane Anti-Aliased Infinite Shader Grid.
+ * 4. Decoupled window composition & 2D UI pipelines with zero depth attachment dependency.
  */
 public class MetalPipeline {
     private long pipelineState3D = 0L;
+    private long pipelineStateComposition = 0L;
     private long depthStencilState3D = 0L;
     private long depthStencilStateShadow = 0L;
 
@@ -258,6 +260,8 @@ public class MetalPipeline {
         long fragFunc3D = invokePPPP(lib3D, sel_registerName("newFunctionWithName:"), device.createNSString("fragmentMain"), send);
 
         long pipeDescClass = objc_getClass("MTLRenderPipelineDescriptor");
+
+        // 1. Offscreen 3D Pipeline (Depth Format = Depth32Float 252L)
         long pipeDesc3D = invokePPP(pipeDescClass, sel_registerName("new"), send);
         invokePPPP(pipeDesc3D, sel_registerName("setVertexFunction:"), vertFunc3D, send);
         invokePPPP(pipeDesc3D, sel_registerName("setFragmentFunction:"), fragFunc3D, send);
@@ -276,6 +280,25 @@ public class MetalPipeline {
 
         pipelineState3D = invokePPPPP(d, sel_registerName("newRenderPipelineStateWithDescriptor:error:"), pipeDesc3D, 0L, send);
 
+        // 2. Viewport Composition Quad Pipeline (Depth Format = 0L / Invalid)
+        long pipeDescComp = invokePPP(pipeDescClass, sel_registerName("new"), send);
+        invokePPPP(pipeDescComp, sel_registerName("setVertexFunction:"), vertFunc3D, send);
+        invokePPPP(pipeDescComp, sel_registerName("setFragmentFunction:"), fragFunc3D, send);
+
+        long colorAttachComp = invokePPP(pipeDescComp, sel_registerName("colorAttachments"), send);
+        long colorAttachComp0 = invokePPPP(colorAttachComp, sel_registerName("objectAtIndexedSubscript:"), 0L, send);
+        invokePPPP(colorAttachComp0, sel_registerName("setPixelFormat:"), 80L, send);
+
+        invokePPPP(colorAttachComp0, sel_registerName("setBlendingEnabled:"), 1L, send);
+        invokePPPP(colorAttachComp0, sel_registerName("setSourceRGBBlendFactor:"), 4L, send);
+        invokePPPP(colorAttachComp0, sel_registerName("setDestinationRGBBlendFactor:"), 5L, send);
+        invokePPPP(colorAttachComp0, sel_registerName("setSourceAlphaBlendFactor:"), 4L, send);
+        invokePPPP(colorAttachComp0, sel_registerName("setDestinationAlphaBlendFactor:"), 5L, send);
+
+        invokePPPP(pipeDescComp, sel_registerName("setDepthAttachmentPixelFormat:"), 0L, send); // NO DEPTH ATTACHMENT
+
+        pipelineStateComposition = invokePPPPP(d, sel_registerName("newRenderPipelineStateWithDescriptor:error:"), pipeDescComp, 0L, send);
+
         long depthDescClass = objc_getClass("MTLDepthStencilDescriptor");
         long depthDesc3D = invokePPP(depthDescClass, sel_registerName("new"), send);
         invokePPPP(depthDesc3D, sel_registerName("setDepthCompareFunction:"), 1L, send); // Less
@@ -287,6 +310,7 @@ public class MetalPipeline {
         invokePPPP(depthDescShadow, sel_registerName("setDepthWriteEnabled:"), 0L, send);   // Depth write OFF!
         depthStencilStateShadow = invokePPPP(d, sel_registerName("newDepthStencilStateWithDescriptor:"), depthDescShadow, send);
 
+        // 3. 2D UI Overlay Pipeline (Depth Format = 0L / Invalid)
         long sourceUI = device.createNSString(MSL_UI_SHADER);
         long libUI = invokePPPPPP(d, sel_registerName("newLibraryWithSource:options:error:"), sourceUI, 0L, 0L, send);
         if (libUI == 0L) return false;
@@ -305,7 +329,10 @@ public class MetalPipeline {
         invokePPPP(colorAttachUI0, sel_registerName("setBlendingEnabled:"), 1L, send);
         invokePPPP(colorAttachUI0, sel_registerName("setSourceRGBBlendFactor:"), 4L, send);
         invokePPPP(colorAttachUI0, sel_registerName("setDestinationRGBBlendFactor:"), 5L, send);
-        invokePPPP(pipeDescUI, sel_registerName("setDepthAttachmentPixelFormat:"), 252L, send);
+        invokePPPP(colorAttachUI0, sel_registerName("setSourceAlphaBlendFactor:"), 4L, send);
+        invokePPPP(colorAttachUI0, sel_registerName("setDestinationAlphaBlendFactor:"), 5L, send);
+
+        invokePPPP(pipeDescUI, sel_registerName("setDepthAttachmentPixelFormat:"), 0L, send); // NO DEPTH ATTACHMENT
 
         pipelineStateUI = invokePPPPP(d, sel_registerName("newRenderPipelineStateWithDescriptor:error:"), pipeDescUI, 0L, send);
 
@@ -314,10 +341,11 @@ public class MetalPipeline {
         invokePPPP(depthDescUIInst, sel_registerName("setDepthWriteEnabled:"), 0L, send);
         depthStencilStateUI = invokePPPP(d, sel_registerName("newDepthStencilStateWithDescriptor:"), depthDescUIInst, send);
 
-        return pipelineState3D != 0L && pipelineStateUI != 0L;
+        return pipelineState3D != 0L && pipelineStateComposition != 0L && pipelineStateUI != 0L;
     }
 
     public long getPipelineState3D() { return pipelineState3D; }
+    public long getPipelineStateComposition() { return pipelineStateComposition; }
     public long getDepthStencilState3D() { return depthStencilState3D; }
     public long getDepthStencilStateShadow() { return depthStencilStateShadow; }
     public long getPipelineStateUI() { return pipelineStateUI; }

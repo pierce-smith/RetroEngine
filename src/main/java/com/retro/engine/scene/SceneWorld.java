@@ -1,18 +1,16 @@
 package com.retro.engine.scene;
 
-import com.retro.engine.scene.SceneSerializer.SceneLoadData;
-import com.retro.engine.scene.EntitySpawner;
-import com.retro.engine.scene.HierarchySystem;
-import com.retro.engine.scene.SimulationSystem;
-import com.retro.engine.scene.components.AudioSource;
-import com.retro.engine.scene.components.Component;
+import com.retro.engine.animation.AnimationSystem;
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
-import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
-import com.retro.engine.scene.SceneSerializer;
+import com.retro.engine.editor.dialogs.NativeFileDialog;
+import com.retro.engine.scene.SceneSerializer.SceneLoadData;
+import com.retro.engine.scene.components.AnimatorComponent;
+import com.retro.engine.scene.components.AudioSource;
+import com.retro.engine.scene.components.Component;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -26,7 +24,8 @@ import java.util.Map;
  * Coordinates entity storage, 64-bit generational entity handle lifecycle management,
  * selection state, and scene file path state while delegating matrix evaluation,
  * simulation state machine, and entity instantiation.
- * Hardened with hardware audio clip disposal and contiguous ComponentPool ECS storage.
+ * Hardened with hardware audio clip disposal, contiguous ComponentPool ECS storage,
+ * and per-frame skeletal AnimationSystem updates.
  */
 public class SceneWorld {
 
@@ -48,10 +47,11 @@ public class SceneWorld {
 
     private String activeScenePath = "Assets/Scenes/Default.rscene";
 
-    // ECS Subsystem Delegates & Contiguous Component Storage
+    // ECS Subsystem Delegates, Contiguous Component Storage, & Animation Engine
     private final HierarchySystem graphEvaluator = new HierarchySystem();
     private final SimulationSystem simulationEngine = new SimulationSystem();
     private final EntitySpawner entityFactory = new EntitySpawner();
+    private final AnimationSystem animationEngine = new AnimationSystem();
     private final Map<Class<?>, ComponentPool<?>> componentPools = new HashMap<>();
 
     public SceneWorld() {}
@@ -245,6 +245,19 @@ public class SceneWorld {
 
     public void update(float deltaTime) {
         simulationEngine.update(deltaTime, sceneEntities);
+        
+        // Per-frame Skeletal Animation Keyframe Sampling & Pose Matrix Palette Evaluation
+        if (sceneEntities != null) {
+            for (int i = 0; i < sceneEntities.size(); i++) {
+                Entity e = sceneEntities.get(i);
+                if (e != null) {
+                    AnimatorComponent animator = e.getComponent(AnimatorComponent.class);
+                    if (animator != null) {
+                        animationEngine.update(animator, deltaTime);
+                    }
+                }
+            }
+        }
     }
 
     public Entity findEntityById(String id) {
