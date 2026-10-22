@@ -16,9 +16,11 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /**
  * Handles VRAM allocations for 3D Mesh Vertex Buffers (VBOs), 2D Textures, Light UBOs,
- * and Dynamic 2D UI Overlay Vertex Buffers using Vulkan 1.3 memory management.
+ * 3-Slot Ring-Buffered 2D UI Overlay Buffers, and 3-Slot Ring-Buffered 3D Grid Buffers.
  */
 public class VulkanGpuCache {
+
+    private static final int RING_SLOTS = 3;
 
     public static class VulkanBuffer {
         public long bufferHandle;
@@ -52,13 +54,25 @@ public class VulkanGpuCache {
     private VulkanBuffer lightUniformBuffer = null;
     private VulkanTexture defaultWhiteTexture = null;
 
-    private long uiVertexBuffer = 0L;
-    private long uiMemoryBuffer = 0L;
-    private int uiVertexCapacity = 0;
+    // 3-Slot Ring Buffer for Dynamic 2D UI Overlay Geometry
+    private final long[] uiVertexBufferRing = new long[RING_SLOTS];
+    private final long[] uiMemoryBufferRing = new long[RING_SLOTS];
+    private final int[] uiVertexCapacityRing = new int[RING_SLOTS];
+    private int uiRingIndex = 0;
     private int uiVertexCount = 0;
 
-    public long getUiVertexBuffer() { return uiVertexBuffer; }
+    // 3-Slot Ring Buffer for Dynamic 3D Infinite Grid Geometry
+    private final long[] gridVertexBufferRing = new long[RING_SLOTS];
+    private final long[] gridMemoryBufferRing = new long[RING_SLOTS];
+    private final int[] gridVertexCapacityRing = new int[RING_SLOTS];
+    private int gridRingIndex = 0;
+    private int gridVertexCount = 0;
+
+    public long getUiVertexBuffer() { return uiVertexBufferRing[uiRingIndex]; }
     public int getUiVertexCount() { return uiVertexCount; }
+
+    public long getGridVertexBuffer() { return gridVertexBufferRing[gridRingIndex]; }
+    public int getGridVertexCount() { return gridVertexCount; }
 
     public void updateUiMesh(VulkanDevice device, float[] vertices, int count) {
         if (device == null || device.getLogicalDevice() == null || vertices == null || count <= 0) {
@@ -69,14 +83,20 @@ public class VulkanGpuCache {
         VkDevice vkDevice = device.getLogicalDevice();
         long bufferSize = (long) count * 6 * Float.BYTES;
 
+        this.uiRingIndex = (this.uiRingIndex + 1) % RING_SLOTS;
+
+        long currentBuffer = uiVertexBufferRing[uiRingIndex];
+        long currentMemory = uiMemoryBufferRing[uiRingIndex];
+        int currentCap = uiVertexCapacityRing[uiRingIndex];
+
         try (MemoryStack stack = stackPush()) {
-            if (uiVertexBuffer == 0L || count > uiVertexCapacity) {
-                if (uiVertexBuffer != 0L) {
-                    vkDestroyBuffer(vkDevice, uiVertexBuffer, null);
-                    vkFreeMemory(vkDevice, uiMemoryBuffer, null);
+            if (currentBuffer == 0L || count > currentCap) {
+                if (currentBuffer != 0L) {
+                    vkDestroyBuffer(vkDevice, currentBuffer, null);
+                    vkFreeMemory(vkDevice, currentMemory, null);
                 }
 
-                int newCap = Math.max(count * 2, 4096);
+                int newCap = Math.max(count * 2, 16384);
                 long newSize = (long) newCap * 6 * Float.BYTES;
 
                 VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack)
@@ -87,10 +107,10 @@ public class VulkanGpuCache {
 
                 LongBuffer pBuffer = stack.mallocLong(1);
                 if (vkCreateBuffer(vkDevice, bufferInfo, null, pBuffer) != VK_SUCCESS) return;
-                uiVertexBuffer = pBuffer.get(0);
+                currentBuffer = pBuffer.get(0);
 
                 VkMemoryRequirements memReqs = VkMemoryRequirements.calloc(stack);
-                vkGetBufferMemoryRequirements(vkDevice, uiVertexBuffer, memReqs);
+                vkGetBufferMemoryRequirements(vkDevice, currentBuffer, memReqs);
 
                 int memTypeIndex = findMemoryType(device.getPhysicalDevice(), memReqs.memoryTypeBits(),
                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
@@ -102,18 +122,88 @@ public class VulkanGpuCache {
 
                 LongBuffer pMemory = stack.mallocLong(1);
                 if (vkAllocateMemory(vkDevice, allocInfo, null, pMemory) != VK_SUCCESS) return;
-                uiMemoryBuffer = pMemory.get(0);
+                currentMemory = pMemory.get(0);
 
-                vkBindBufferMemory(vkDevice, uiVertexBuffer, uiMemoryBuffer, 0);
-                uiVertexCapacity = newCap;
+                vkBindBufferMemory(vkDevice, currentBuffer, currentMemory, 0);
+
+                uiVertexBufferRing[uiRingIndex] = currentBuffer;
+                uiMemoryBufferRing[uiRingIndex] = currentMemory;
+                uiVertexCapacityRing[uiRingIndex] = newCap;
             }
 
             PointerBuffer pData = stack.mallocPointer(1);
-            if (vkMapMemory(vkDevice, uiMemoryBuffer, 0, bufferSize, 0, pData) == VK_SUCCESS) {
+            if (vkMapMemory(vkDevice, currentMemory, 0, bufferSize, 0, pData) == VK_SUCCESS) {
                 FloatBuffer floatBuf = pData.getFloatBuffer(0, count * 6);
                 floatBuf.put(vertices, 0, count * 6);
-                vkUnmapMemory(vkDevice, uiMemoryBuffer);
+                vkUnmapMemory(vkDevice, currentMemory);
                 this.uiVertexCount = count;
+            }
+        }
+    }
+
+    public void updateGridMesh(VulkanDevice device, float[] vertices, int count) {
+        if (device == null || device.getLogicalDevice() == null || vertices == null || count <= 0) {
+            this.gridVertexCount = 0;
+            return;
+        }
+
+        VkDevice vkDevice = device.getLogicalDevice();
+        long bufferSize = (long) vertices.length * Float.BYTES;
+
+        this.gridRingIndex = (this.gridRingIndex + 1) % RING_SLOTS;
+
+        long currentBuffer = gridVertexBufferRing[gridRingIndex];
+        long currentMemory = gridMemoryBufferRing[gridRingIndex];
+        int currentCap = gridVertexCapacityRing[gridRingIndex];
+
+        try (MemoryStack stack = stackPush()) {
+            if (currentBuffer == 0L || vertices.length > currentCap) {
+                if (currentBuffer != 0L) {
+                    vkDestroyBuffer(vkDevice, currentBuffer, null);
+                    vkFreeMemory(vkDevice, currentMemory, null);
+                }
+
+                int newCap = Math.max(vertices.length, 2048 * 9);
+                long newSize = (long) newCap * Float.BYTES;
+
+                VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack)
+                        .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
+                        .size(newSize)
+                        .usage(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)
+                        .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+
+                LongBuffer pBuffer = stack.mallocLong(1);
+                if (vkCreateBuffer(vkDevice, bufferInfo, null, pBuffer) != VK_SUCCESS) return;
+                currentBuffer = pBuffer.get(0);
+
+                VkMemoryRequirements memReqs = VkMemoryRequirements.calloc(stack);
+                vkGetBufferMemoryRequirements(vkDevice, currentBuffer, memReqs);
+
+                int memTypeIndex = findMemoryType(device.getPhysicalDevice(), memReqs.memoryTypeBits(),
+                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+                VkMemoryAllocateInfo allocInfo = VkMemoryAllocateInfo.calloc(stack)
+                        .sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
+                        .allocationSize(memReqs.size())
+                        .memoryTypeIndex(memTypeIndex);
+
+                LongBuffer pMemory = stack.mallocLong(1);
+                if (vkAllocateMemory(vkDevice, allocInfo, null, pMemory) != VK_SUCCESS) return;
+                currentMemory = pMemory.get(0);
+
+                vkBindBufferMemory(vkDevice, currentBuffer, currentMemory, 0);
+
+                gridVertexBufferRing[gridRingIndex] = currentBuffer;
+                gridMemoryBufferRing[gridRingIndex] = currentMemory;
+                gridVertexCapacityRing[gridRingIndex] = newCap;
+            }
+
+            PointerBuffer pData = stack.mallocPointer(1);
+            if (vkMapMemory(vkDevice, currentMemory, 0, bufferSize, 0, pData) == VK_SUCCESS) {
+                FloatBuffer floatBuf = pData.getFloatBuffer(0, vertices.length);
+                floatBuf.put(vertices, 0, vertices.length);
+                vkUnmapMemory(vkDevice, currentMemory);
+                this.gridVertexCount = count;
             }
         }
     }
@@ -520,11 +610,19 @@ public class VulkanGpuCache {
         if (device == null || device.getLogicalDevice() == null) return;
         VkDevice vkDevice = device.getLogicalDevice();
 
-        if (uiVertexBuffer != 0L) {
-            vkDestroyBuffer(vkDevice, uiVertexBuffer, null);
-            vkFreeMemory(vkDevice, uiMemoryBuffer, null);
-            uiVertexBuffer = 0L;
-            uiMemoryBuffer = 0L;
+        for (int i = 0; i < RING_SLOTS; i++) {
+            if (uiVertexBufferRing[i] != 0L) {
+                vkDestroyBuffer(vkDevice, uiVertexBufferRing[i], null);
+                vkFreeMemory(vkDevice, uiMemoryBufferRing[i], null);
+                uiVertexBufferRing[i] = 0L;
+                uiMemoryBufferRing[i] = 0L;
+            }
+            if (gridVertexBufferRing[i] != 0L) {
+                vkDestroyBuffer(vkDevice, gridVertexBufferRing[i], null);
+                vkFreeMemory(vkDevice, gridMemoryBufferRing[i], null);
+                gridVertexBufferRing[i] = 0L;
+                gridMemoryBufferRing[i] = 0L;
+            }
         }
 
         if (lightUniformBuffer != null) {

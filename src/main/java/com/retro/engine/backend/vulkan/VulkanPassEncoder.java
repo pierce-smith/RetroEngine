@@ -214,7 +214,10 @@ public class VulkanPassEncoder {
             }
 
             // PHASE 3: Infinite 3D Grid Pass
-            if (pipelineManager.getGraphicsPipelineGrid() != 0L) {
+            long gridVbo = gpuCache.getGridVertexBuffer();
+            int gridCount = gpuCache.getGridVertexCount();
+
+            if (pipelineManager.getGraphicsPipelineGrid() != 0L && gridVbo != 0L && gridCount > 0) {
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getGraphicsPipelineGrid());
 
                 FloatBuffer pushData = stack.mallocFloat(32);
@@ -227,7 +230,18 @@ public class VulkanPassEncoder {
                 pushData.flip();
 
                 vkCmdPushConstants(cmd, pipelineManager.getPipelineLayoutGrid(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, pushData);
+
+                LongBuffer pGridBuffers = stack.longs(gridVbo);
+                LongBuffer pGridOffsets = stack.longs(0L);
+                vkCmdBindVertexBuffers(cmd, 0, pGridBuffers, pGridOffsets);
+
+                // Draw 6 vertices for infinite grid floor
                 vkCmdDraw(cmd, 6, 1, 0, 0);
+
+                // Draw 2 vertices for vertical green Y-axis line if present
+                if (gridCount >= 8) {
+                    vkCmdDraw(cmd, 2, 1, 6, 0);
+                }
             }
 
             vkCmdEndRendering(cmd);
@@ -281,6 +295,17 @@ public class VulkanPassEncoder {
             int dstWidth = swapchainManager.getWidth();
             int dstHeight = swapchainManager.getHeight();
 
+            // Clear swapchain background VRAM to dark neutral gray prior to blitting
+            VkClearColorValue clearColor = VkClearColorValue.calloc(stack);
+            clearColor.float32(0, 0.05f).float32(1, 0.05f).float32(2, 0.06f).float32(3, 1.0f);
+
+            VkImageSubresourceRange clearRange = VkImageSubresourceRange.calloc(stack)
+                    .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                    .baseMipLevel(0).levelCount(1)
+                    .baseArrayLayer(0).layerCount(1);
+
+            vkCmdClearColorImage(cmd, currentSwapchainImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, clearColor, clearRange);
+
             int dstX0 = (int) ((1.0f - 0.55f) * 0.5f * dstWidth);
             int dstX1 = (int) ((1.0f + 0.55f) * 0.5f * dstWidth);
             int dstY0 = (int) ((1.0f - 0.88f) * 0.5f * dstHeight);
@@ -312,7 +337,10 @@ public class VulkanPassEncoder {
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, null, null, uiBarrier);
 
             // 3. Render 2D UI Overlay quads directly over Swapchain Framebuffer
-            if (pipelineManager.getGraphicsPipelineUI() != 0L && gpuCache.getUiVertexBuffer() != 0L && gpuCache.getUiVertexCount() > 0) {
+            long uiVbo = gpuCache.getUiVertexBuffer();
+            int uiCount = gpuCache.getUiVertexCount();
+
+            if (pipelineManager.getGraphicsPipelineUI() != 0L && uiVbo != 0L && uiCount > 0) {
                 VkRenderingAttachmentInfo.Buffer swapchainColorAttachment = VkRenderingAttachmentInfo.calloc(1, stack)
                         .sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO)
                         .imageView(currentSwapchainImageView)
@@ -344,11 +372,11 @@ public class VulkanPassEncoder {
 
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getGraphicsPipelineUI());
 
-                LongBuffer pBuffers = stack.longs(gpuCache.getUiVertexBuffer());
+                LongBuffer pBuffers = stack.longs(uiVbo);
                 LongBuffer pOffsets = stack.longs(0L);
                 vkCmdBindVertexBuffers(cmd, 0, pBuffers, pOffsets);
 
-                vkCmdDraw(cmd, gpuCache.getUiVertexCount(), 1, 0, 0);
+                vkCmdDraw(cmd, uiCount, 1, 0, 0);
 
                 vkCmdEndRendering(cmd);
             }

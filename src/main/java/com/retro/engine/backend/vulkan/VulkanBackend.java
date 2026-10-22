@@ -16,7 +16,7 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /**
  * Modular Vulkan 1.3 IRenderBackend implementation. Integrates Apple Silicon / MoltenVK
- * dynamic buffer alignment rules and orchestrates the 4-Phase rendering pipeline.
+ * dynamic buffer alignment rules and orchestrates the 4-Phase rendering pipeline with 3-slot ring buffers.
  */
 public class VulkanBackend implements IRenderBackend {
 
@@ -222,7 +222,10 @@ public class VulkanBackend implements IRenderBackend {
         this.activeLightIntensity = intensity;
     }
 
-    @Override public void updateGridMesh(float[] vertices, int count) {}
+    @Override
+    public void updateGridMesh(float[] vertices, int count) {
+        gpuCache.updateGridMesh(deviceManager, vertices, count);
+    }
 
     @Override
     public void updateUiMesh(float[] vertices, int count) {
