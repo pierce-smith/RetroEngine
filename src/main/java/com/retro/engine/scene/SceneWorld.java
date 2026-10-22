@@ -5,6 +5,7 @@ import com.retro.engine.scene.EntitySpawner;
 import com.retro.engine.scene.HierarchySystem;
 import com.retro.engine.scene.SimulationSystem;
 import com.retro.engine.scene.components.AudioSource;
+import com.retro.engine.scene.components.Component;
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
@@ -15,14 +16,16 @@ import com.retro.engine.scene.SceneSerializer;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Refactored SceneWorld acting as a Backwards-Compatible Facade Bridge.
  * Coordinates entity storage, 64-bit generational entity handle lifecycle management,
  * selection state, and scene file path state while delegating matrix evaluation,
  * simulation state machine, and entity instantiation.
- * Hardened with hardware audio clip disposal on entity deletion and scene unloads.
+ * Hardened with hardware audio clip disposal and contiguous ComponentPool ECS storage.
  */
 public class SceneWorld {
 
@@ -44,20 +47,51 @@ public class SceneWorld {
 
     private String activeScenePath = "Assets/Scenes/Default.rscene";
 
-    // ECS Subsystem Delegates
+    // ECS Subsystem Delegates & Contiguous Component Storage
     private final HierarchySystem graphEvaluator = new HierarchySystem();
     private final SimulationSystem simulationEngine = new SimulationSystem();
     private final EntitySpawner entityFactory = new EntitySpawner();
+    private final Map<Class<?>, ComponentPool<?>> componentPools = new HashMap<>();
 
     public SceneWorld() {}
 
     public List<Entity> getSceneEntities() { return Collections.unmodifiableList(sceneEntities); }
 
+    @SuppressWarnings("unchecked")
+    public <T extends Component> ComponentPool<T> getComponentPool(Class<T> clazz) {
+        if (clazz == null) return null;
+        return (ComponentPool<T>) componentPools.computeIfAbsent(clazz, k -> new ComponentPool<>(clazz, 256));
+    }
+
+    public void syncEntityToPools(Entity entity) {
+        if (entity == null || entity.id == null) return;
+        for (Component comp : entity.getAllComponents()) {
+            if (comp != null) {
+                syncComponentToPool(entity.id, comp);
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T extends Component> void syncComponentToPool(String entityId, T component) {
+        Class<T> clazz = (Class<T>) component.getClass();
+        ComponentPool<T> pool = getComponentPool(clazz);
+        if (pool != null) {
+            pool.add(entityId, component);
+        }
+    }
+
+    public void removeEntityFromPools(Entity entity) {
+        if (entity == null || entity.id == null) return;
+        for (ComponentPool<?> pool : componentPools.values()) {
+            pool.remove(entity.id);
+        }
+    }
+
     // --- GENERATIONAL HANDLE REGISTRY API ---
     public EntityHandle registerEntityHandle(Entity entity) {
         if (entity == null) return EntityHandle.NULL;
         
-        // Find existing reusable empty slot or expand array
         int slotIndex = -1;
         for (int i = 0; i < entitySlots.size(); i++) {
             if (entitySlots.get(i) == null) {
@@ -77,6 +111,8 @@ public class SceneWorld {
         int gen = entityGenerations.get(slotIndex);
         EntityHandle handle = new EntityHandle(slotIndex, gen);
         entity.setHandle(handle);
+
+        syncEntityToPools(entity);
         return handle;
     }
 
@@ -85,8 +121,9 @@ public class SceneWorld {
         int idx = entity.handle.index();
         if (idx >= 0 && idx < entitySlots.size()) {
             entitySlots.set(idx, null);
-            entityGenerations.set(idx, entityGenerations.get(idx) + 1); // Increment generation to invalidate stale handles
+            entityGenerations.set(idx, entityGenerations.get(idx) + 1);
         }
+        removeEntityFromPools(entity);
         entity.setHandle(EntityHandle.NULL);
     }
 
@@ -169,7 +206,6 @@ public class SceneWorld {
     }
 
     private void clearRegistryAndRebind(List<Entity> newEntities) {
-        // Dispose hardware audio resources for all active entities before clearing
         for (Entity e : sceneEntities) {
             if (e != null) {
                 AudioSource ac = e.getComponent(AudioSource.class);
@@ -177,12 +213,15 @@ public class SceneWorld {
             }
         }
 
-        // Increment generations for all active slots
         for (int i = 0; i < entitySlots.size(); i++) {
             if (entitySlots.get(i) != null) {
                 entityGenerations.set(i, entityGenerations.get(i) + 1);
                 entitySlots.set(i, null);
             }
+        }
+
+        for (ComponentPool<?> pool : componentPools.values()) {
+            pool.clear();
         }
 
         this.sceneEntities.clear();
@@ -193,7 +232,8 @@ public class SceneWorld {
             }
         }
 
-        // Rebind selection handle if target entity ID exists
+        graphEvaluator.clearCache();
+
         if (selectedEntity != null && selectedEntity.id != null) {
             Entity matched = findEntityById(selectedEntity.id);
             selectEntity(matched);
@@ -224,7 +264,11 @@ public class SceneWorld {
     }
 
     public boolean setParent(Entity child, Entity parent) {
-        return graphEvaluator.setParent(child, parent, sceneEntities);
+        boolean result = graphEvaluator.setParent(child, parent, sceneEntities);
+        if (result) {
+            graphEvaluator.clearCache();
+        }
+        return result;
     }
 
     // --- DELEGATED ENTITY FACTORY OPERATIONS ---
@@ -235,6 +279,7 @@ public class SceneWorld {
 
             unregisterEntityHandle(target);
             entityFactory.deleteEntity(target, sceneEntities);
+            graphEvaluator.clearCache();
             if (selectedEntity == target) {
                 selectEntity((Entity) null);
             }
@@ -258,6 +303,7 @@ public class SceneWorld {
                 }
             }
             selectEntity(target);
+            graphEvaluator.clearCache();
         }
     }
 
@@ -306,14 +352,17 @@ public class SceneWorld {
 
     public void assignTextureToSelectedEntity(AssetMeta textureAsset) {
         entityFactory.assignTextureToSelectedEntity(getSelectedEntity(), textureAsset);
+        if (getSelectedEntity() != null) syncEntityToPools(getSelectedEntity());
     }
 
     public void assignMeshToSelectedEntity(AssetMeta meshAsset) {
         entityFactory.assignMeshToSelectedEntity(getSelectedEntity(), meshAsset);
+        if (getSelectedEntity() != null) syncEntityToPools(getSelectedEntity());
     }
 
     public void assignAudioToSelectedEntity(AssetMeta audioAsset) {
         entityFactory.assignAudioToSelectedEntity(getSelectedEntity(), audioAsset);
+        if (getSelectedEntity() != null) syncEntityToPools(getSelectedEntity());
     }
 
     // --- SCENE SERIALIZATION & DIALOGS ---

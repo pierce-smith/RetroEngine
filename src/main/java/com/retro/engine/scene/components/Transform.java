@@ -4,6 +4,7 @@ import com.retro.engine.editor.ui.InspectorProperty;
 
 /**
  * Encapsulates 3D position, rotation (degrees), and scale.
+ * Hardened with dirty-flag tracking for zero-cost static transform matrix propagation.
  */
 public class Transform implements Component {
 
@@ -34,12 +35,40 @@ public class Transform implements Component {
     @InspectorProperty(label = "SCL Z", min = 0.01f, max = 100.0f, step = 0.1f)
     public float scaleZ = 1.0f;
 
+    private boolean dirty = true;
+
     public Transform() {}
 
     public Transform(float px, float py, float pz) {
         this.posX = px;
         this.posY = py;
         this.posZ = pz;
+        this.dirty = true;
+    }
+
+    public boolean isDirty() { return dirty; }
+    public void markDirty() { this.dirty = true; }
+    public void setDirty(boolean dirty) { this.dirty = dirty; }
+
+    public void setPosition(float x, float y, float z) {
+        if (this.posX != x || this.posY != y || this.posZ != z) {
+            this.posX = x; this.posY = y; this.posZ = z;
+            this.dirty = true;
+        }
+    }
+
+    public void setRotation(float x, float y, float z) {
+        if (this.rotX != x || this.rotY != y || this.rotZ != z) {
+            this.rotX = x; this.rotY = y; this.rotZ = z;
+            this.dirty = true;
+        }
+    }
+
+    public void setScale(float x, float y, float z) {
+        if (this.scaleX != x || this.scaleY != y || this.scaleZ != z) {
+            this.scaleX = x; this.scaleY = y; this.scaleZ = z;
+            this.dirty = true;
+        }
     }
 
     @Override
