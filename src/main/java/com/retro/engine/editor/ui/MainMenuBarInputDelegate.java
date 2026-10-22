@@ -73,7 +73,8 @@ public class MainMenuBarInputDelegate {
                 else if (itemIndex == 2) { UISoundPlayer.play(UISound.SPAWN); manager.spawnCameraEntity(); }
                 else if (itemIndex == 3) { manager.promptSaveSelectedAsPrefab(); }
             } else if (activeDropdownMenu == DropdownMenu.VIEW) {
-                if (itemIndex == 1) { UISoundPlayer.play(UISound.TOGGLE); manager.toggle3DGrid(); }
+                if (itemIndex == 0) { UISoundPlayer.play(UISound.CLICK); manager.resetViewportCamera(); }
+                else if (itemIndex == 1) { UISoundPlayer.play(UISound.TOGGLE); manager.toggle3DGrid(); }
             }
             return true;
         }
