@@ -140,12 +140,17 @@ void main() {
     }
 
     vec4 texColor = texture(u_MainTexture, vTexCoord);
-    vec3 albedo = texColor.rgb;
-    float alpha = texColor.a;
     
-    if (alpha < 0.05 || length(albedo) < 0.001) {
+    // Foliage / Leaf Billboard Alpha Cutout Masking (Discard transparent empty space)
+    if (texColor.a < 0.25) {
+        discard;
+    }
+
+    vec3 albedo = texColor.rgb;
+    
+    // Fallback to neutral base color if texture color is black/unmapped
+    if (length(albedo) < 0.001) {
         albedo = vec3(0.75, 0.80, 0.85);
-        alpha = 1.0;
     }
     
     vec3 norm = normalize(vNormal);
@@ -168,5 +173,6 @@ void main() {
         result = 0.05 * albedo;
     }
     
-    outFragColor = vec4(result, alpha);
+    // Output SOLID OPAQUE 3D geometry (Alpha = 1.0) to prevent pipeline blend transparency
+    outFragColor = vec4(result, 1.0);
 }

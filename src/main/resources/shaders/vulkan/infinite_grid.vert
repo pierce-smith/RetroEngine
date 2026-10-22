@@ -2,6 +2,7 @@
 
 layout(location = 0) out vec3 vNearPoint;
 layout(location = 1) out vec3 vFarPoint;
+layout(location = 2) out float vIsLine;
 
 layout(push_constant) uniform GridPushConstants {
     mat4 view;
@@ -21,6 +22,16 @@ const vec3 gridPlane[6] = vec3[](
 );
 
 void main() {
+    if (gl_VertexIndex >= 6) {
+        vIsLine = 1.0;
+        vNearPoint = vec3(0.0);
+        vFarPoint = vec3(0.0);
+        vec3 linePos = (gl_VertexIndex == 6) ? vec3(0.0, 0.0, 0.0) : vec3(0.0, 5.0, 0.0);
+        gl_Position = u_Grid.proj * u_Grid.view * vec4(linePos, 1.0);
+        return;
+    }
+
+    vIsLine = 0.0;
     vec3 p = gridPlane[gl_VertexIndex];
     vNearPoint = UnprojectPoint(p.x, p.y, 0.0, u_Grid.view, u_Grid.proj);
     vFarPoint = UnprojectPoint(p.x, p.y, 1.0, u_Grid.view, u_Grid.proj);

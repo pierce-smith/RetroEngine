@@ -12,7 +12,7 @@ import static org.lwjgl.vulkan.VK13.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_
 
 /**
  * Manages Vulkan 1.3 Graphics Pipelines for offscreen 3D Blinn-Phong geometry, infinite 3D grid rendering,
- * dynamic ground shadow blobs, and swapchain 2D UI composition using Dynamic Rendering (VK_KHR_dynamic_rendering).
+ * dynamic ground shadow blobs, vertical Y-axis pillar lines, and swapchain 2D UI composition using Dynamic Rendering (VK_KHR_dynamic_rendering).
  */
 public class VulkanPipeline {
 
@@ -25,6 +25,7 @@ public class VulkanPipeline {
     private long descriptorSetLayoutGrid = 0L;
     private long pipelineLayoutGrid = 0L;
     private long graphicsPipelineGrid = 0L;
+    private long graphicsPipelineGridLines = 0L;
 
     private long descriptorSetLayoutUI = 0L;
     private long pipelineLayoutUI = 0L;
@@ -116,7 +117,7 @@ public class VulkanPipeline {
         VkDevice vkDevice = device.getLogicalDevice();
 
         try (MemoryStack stack = stackPush()) {
-            // 1. Grid Pipeline
+            // 1A. Grid Pipeline (Triangle List for Floor Quad)
             long vertGridModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/infinite_grid.vert.spv");
             long fragGridModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/infinite_grid.frag.spv");
 
@@ -150,11 +151,21 @@ public class VulkanPipeline {
                     graphicsPipelineGrid = pPipeline.get(0);
                 }
 
+                // 1B. Grid Lines Pipeline (Line List for Vertical Y-Axis Pillar)
+                VkPipelineInputAssemblyStateCreateInfo inputAssemblyLines = VkPipelineInputAssemblyStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO).topology(VK_PRIMITIVE_TOPOLOGY_LINE_LIST).primitiveRestartEnable(false);
+                VkGraphicsPipelineCreateInfo.Buffer pipelineInfoLines = VkGraphicsPipelineCreateInfo.calloc(1, stack)
+                        .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO).pNext(renderingCreateInfo.address()).pStages(shaderStages).pVertexInputState(vertexInputInfo).pInputAssemblyState(inputAssemblyLines).pViewportState(viewportState).pRasterizationState(rasterizer).pMultisampleState(multisampling).pDepthStencilState(depthStencil).pColorBlendState(colorBlending).pDynamicState(dynamicState).layout(pipelineLayoutGrid).renderPass(VK_NULL_HANDLE).subpass(0);
+
+                LongBuffer pPipelineLines = stack.mallocLong(1);
+                if (vkCreateGraphicsPipelines(vkDevice, VK_NULL_HANDLE, pipelineInfoLines, null, pPipelineLines) == VK_SUCCESS) {
+                    graphicsPipelineGridLines = pPipelineLines.get(0);
+                }
+
                 VulkanShaderLoader.destroyShaderModule(vkDevice, vertGridModule);
                 VulkanShaderLoader.destroyShaderModule(vkDevice, fragGridModule);
             }
 
-            // 2. 3D Scene Pipeline with Alpha Blending Enable
+            // 2. 3D Scene Pipeline (Depth Write Enabled for 3D Mesh Geometry)
             long vert3DModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/blinn_phong.vert.spv");
             long frag3DModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/blinn_phong.frag.spv");
 
@@ -178,7 +189,9 @@ public class VulkanPipeline {
                 VkPipelineViewportStateCreateInfo viewportState = VkPipelineViewportStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO).viewportCount(1).scissorCount(1);
                 VkPipelineRasterizationStateCreateInfo rasterizer = VkPipelineRasterizationStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO).polygonMode(VK_POLYGON_MODE_FILL).lineWidth(1.0f).cullMode(VK_CULL_MODE_NONE).frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);
                 VkPipelineMultisampleStateCreateInfo multisampling = VkPipelineMultisampleStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO).rasterizationSamples(VK_SAMPLE_COUNT_1_BIT);
-                VkPipelineDepthStencilStateCreateInfo depthStencil3D = VkPipelineDepthStencilStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO).depthTestEnable(true).depthWriteEnable(false).depthCompareOp(VK_COMPARE_OP_LESS_OR_EQUAL);
+                
+                // Depth Write ENABLED (true) so 3D meshes write to Z-buffer properly
+                VkPipelineDepthStencilStateCreateInfo depthStencil3D = VkPipelineDepthStencilStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO).depthTestEnable(true).depthWriteEnable(true).depthCompareOp(VK_COMPARE_OP_LESS_OR_EQUAL);
 
                 VkPipelineColorBlendAttachmentState.Buffer colorBlendAttachment3D = VkPipelineColorBlendAttachmentState.calloc(1, stack)
                         .colorWriteMask(VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT)
@@ -270,6 +283,7 @@ public class VulkanPipeline {
     public long getDescriptorSetLayoutGrid() { return descriptorSetLayoutGrid; }
     public long getPipelineLayoutGrid() { return pipelineLayoutGrid; }
     public long getGraphicsPipelineGrid() { return graphicsPipelineGrid; }
+    public long getGraphicsPipelineGridLines() { return graphicsPipelineGridLines; }
 
     public long getDescriptorSetLayoutUI() { return descriptorSetLayoutUI; }
     public long getPipelineLayoutUI() { return pipelineLayoutUI; }
@@ -284,6 +298,7 @@ public class VulkanPipeline {
         if (descriptorSetLayout3D != 0L) { vkDestroyDescriptorSetLayout(vkDevice, descriptorSetLayout3D, null); descriptorSetLayout3D = 0L; }
 
         if (graphicsPipelineGrid != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineGrid, null); graphicsPipelineGrid = 0L; }
+        if (graphicsPipelineGridLines != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineGridLines, null); graphicsPipelineGridLines = 0L; }
         if (pipelineLayoutGrid != 0L) { vkDestroyPipelineLayout(vkDevice, pipelineLayoutGrid, null); pipelineLayoutGrid = 0L; }
         if (descriptorSetLayoutGrid != 0L) { vkDestroyDescriptorSetLayout(vkDevice, descriptorSetLayoutGrid, null); descriptorSetLayoutGrid = 0L; }
 

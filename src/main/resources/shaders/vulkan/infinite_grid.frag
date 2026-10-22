@@ -2,6 +2,7 @@
 
 layout(location = 0) in vec3 vNearPoint;
 layout(location = 1) in vec3 vFarPoint;
+layout(location = 2) in float vIsLine;
 
 layout(location = 0) out vec4 outFragColor;
 
@@ -43,6 +44,11 @@ float ComputeLinearDepth(vec3 pos) {
 }
 
 void main() {
+    if (vIsLine > 0.5) {
+        outFragColor = vec4(0.2, 1.0, 0.2, 1.0); // Vibrant Green Y-Axis Pillar
+        return;
+    }
+
     float t = -vNearPoint.y / (vFarPoint.y - vNearPoint.y);
     if (t < 0.0) {
         discard;

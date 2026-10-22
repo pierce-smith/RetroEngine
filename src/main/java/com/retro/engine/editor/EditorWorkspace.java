@@ -72,6 +72,7 @@ public class EditorWorkspace {
 
     public void setCameraController(ViewportCamera cameraController) { this.cameraController = cameraController; }
     public ViewportCamera getCameraController() { return cameraController; }
+    public void resetViewportCamera() { if (cameraController != null) cameraController.reset(); }
     public SceneWorld getSceneManager() { return sceneManager; }
 
     public PlayState getPlayState() { return sceneManager.getPlayState(); }
