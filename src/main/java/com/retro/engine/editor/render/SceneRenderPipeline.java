@@ -5,6 +5,7 @@ import com.retro.engine.assets.importers.MeshBufferData;
 import com.retro.engine.assets.importers.MeshImporter;
 import com.retro.engine.assets.importers.PixelBufferData;
 import com.retro.engine.editor.EditorWorkspace;
+import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.ui.EngineConsolePanel;
 import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.scene.Entity;
@@ -17,18 +18,28 @@ import com.retro.engine.scene.components.Transform;
 import java.util.List;
 
 /**
- * High-level render pipeline processing 3D scene entities, light state, and 
- * downward-raycast ground shadows through a vendor-agnostic IRenderBackend contract.
+ * High-level render pipeline processing 3D scene entities, view-frustum culling,
+ * light state, and downward-raycast ground shadows through a vendor-agnostic IRenderBackend contract.
  */
 public class SceneRenderPipeline {
 
     private final MeshBufferData fallbackCube = MeshImporter.createDefaultCube();
+    private final FrustumCuller frustumCuller = new FrustumCuller();
 
     public void submitFrame(EditorWorkspace editorManager, AssetStreamer streamingService, IRenderBackend rhi) {
         if (editorManager == null || streamingService == null || rhi == null) return;
 
         streamingService.processCompletedUploads();
         rhi.clearSceneQueue();
+
+        ViewportCamera camera = editorManager.getCameraController();
+        if (camera != null) {
+            frustumCuller.updateFromCamera(
+                    camera.getPanX(), camera.getPanY(), camera.getZoom(),
+                    camera.getPitch(), camera.getYaw(),
+                    50.0f, 712.0f / 488.0f, 0.1f, 100.0f
+            );
+        }
 
         List<Entity> entities = editorManager.getSceneEntities();
         int totalActiveVertices = 0;
@@ -66,7 +77,7 @@ public class SceneRenderPipeline {
                 }
             }
 
-            // 2. Traversal loop across active 3D entities
+            // 2. Traversal loop across active 3D entities with View-Frustum Culling
             for (Entity entity : entities) {
                 Transform tc = entity.getComponent(Transform.class);
                 MeshFilter mc = entity.getComponent(MeshFilter.class);
@@ -74,6 +85,15 @@ public class SceneRenderPipeline {
 
                 if (tc == null || mc == null) continue;
                 if (!mc.isVisible) continue;
+
+                WorldTransform wt = editorManager.getSceneManager().getComputedWorldTransform(entity);
+
+                // View-Frustum Culling Test (Bounding Sphere check)
+                float scaleRadius = Math.max(Math.abs(wt.sx()), Math.max(Math.abs(wt.sy()), Math.abs(wt.sz())));
+                float sphereRadius = Math.max(scaleRadius * 1.5f, 1.0f);
+                if (!frustumCuller.isSphereVisible(wt.px(), wt.py(), wt.pz(), sphereRadius)) {
+                    continue; // Culled: Entity outside camera view frustum
+                }
 
                 String meshPath = mc.meshAssetPath;
                 String texturePath = (mat != null) ? mat.textureAssetPath : null;
@@ -119,7 +139,6 @@ public class SceneRenderPipeline {
                     totalActiveVertices += vertexCountToSubmit;
                     entityDrawCalls++;
 
-                    WorldTransform wt = editorManager.getSceneManager().getComputedWorldTransform(entity);
                     float groundY = findGroundSurfaceY(entity, wt, entities, editorManager);
                     float reflectVal = (mat != null) ? mat.reflect : 0.0f;
 
