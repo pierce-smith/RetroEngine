@@ -82,6 +82,9 @@ public class AssetBrowserInputDelegate {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     String newPath = activePath.isEmpty() ? asset.name : activePath + "/" + asset.name;
                     manager.setCurrentFolderPath(newPath);
+                } else if (asset.type == AssetType.PREFAB) {
+                    UISoundPlayer.play(UISound.SPAWN);
+                    manager.spawnPrefabFromAsset(asset);
                 } else if (asset.type == AssetType.MESH_3D) {
                     UISoundPlayer.play(UISound.SPAWN);
                     manager.spawnEntityFromAsset(asset);

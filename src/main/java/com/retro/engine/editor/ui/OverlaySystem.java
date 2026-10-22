@@ -197,6 +197,10 @@ public class OverlaySystem {
                     items.add(new MenuItem("Open Folder '" + folderName + "'", () -> manager.setCurrentFolderPath(childPath)));
                     items.add(new MenuItem("Rename Folder", () -> manager.promptRenameFolder(targetAsset)));
                     items.add(new MenuItem("Delete Folder", () -> manager.deleteFolder(targetAsset)));
+                } else if (targetAsset.type == AssetType.PREFAB) {
+                    items.add(new MenuItem("Spawn Prefab Entity", () -> manager.spawnPrefabFromAsset(targetAsset)));
+                    items.add(new MenuItem("Rename Prefab", () -> manager.promptRenameAsset(targetAsset)));
+                    items.add(new MenuItem("Remove Asset from Directory", () -> manager.removeAssetFromDirectory(targetAsset)));
                 } else {
                     if (targetAsset.type == AssetType.MESH_3D) {
                         items.add(new MenuItem("Spawn Mesh Entity", () -> manager.spawnEntityFromAsset(targetAsset)));
@@ -233,6 +237,7 @@ public class OverlaySystem {
                 items.add(new MenuItem("Rename Entity", () -> manager.promptRenameEntity(hitEntity)));
                 items.add(new MenuItem("Duplicate Entity (Cmd+D)", manager::duplicateSelectedEntity));
                 items.add(new MenuItem("Delete Entity (Del)", manager::deleteSelectedEntity));
+                items.add(new MenuItem("Save as Prefab...", manager::promptSaveSelectedAsPrefab));
                 items.add(new MenuItem("+ Add Script Component", () -> manager.openAssetPicker(AssetType.SCRIPT)));
                 items.add(new MenuItem("+ Add Child Cube", () -> manager.spawnChildEntity(hitEntity, "Cube", "Assets/Models/cube.obj")));
                 items.add(new MenuItem("+ Add Child Light", () -> manager.spawnChildLight(hitEntity)));
@@ -255,6 +260,7 @@ public class OverlaySystem {
                 items.add(new MenuItem("Rename Entity", () -> manager.promptRenameEntity(manager.getSelectedEntity())));
                 items.add(new MenuItem("Duplicate Entity (Cmd+D)", manager::duplicateSelectedEntity));
                 items.add(new MenuItem("Delete Entity (Del)", manager::deleteSelectedEntity));
+                items.add(new MenuItem("Save as Prefab...", manager::promptSaveSelectedAsPrefab));
                 items.add(new MenuItem("+ Add Script Component", () -> manager.openAssetPicker(AssetType.SCRIPT)));
             }
             items.add(new MenuItem("+ Import Asset...", manager::promptImportAssetForDirectory));
@@ -290,6 +296,7 @@ public class OverlaySystem {
                 items.add(new MenuItem("Rename Entity", () -> manager.promptRenameEntity(hitEntity)));
                 items.add(new MenuItem("Duplicate Object (Cmd+D)", manager::duplicateSelectedEntity));
                 items.add(new MenuItem("Delete Object (Del)", manager::deleteSelectedEntity));
+                items.add(new MenuItem("Save as Prefab...", manager::promptSaveSelectedAsPrefab));
                 items.add(new MenuItem("+ Add Script Component", () -> manager.openAssetPicker(AssetType.SCRIPT)));
                 items.add(new MenuItem("+ Add Child Cube", () -> manager.spawnChildEntity(hitEntity, "Cube", "Assets/Models/cube.obj")));
 

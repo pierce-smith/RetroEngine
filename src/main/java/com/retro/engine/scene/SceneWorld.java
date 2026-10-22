@@ -8,6 +8,7 @@ import com.retro.engine.scene.components.AudioSource;
 import com.retro.engine.scene.components.Component;
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
+import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
@@ -363,6 +364,31 @@ public class SceneWorld {
     public void assignAudioToSelectedEntity(AssetMeta audioAsset) {
         entityFactory.assignAudioToSelectedEntity(getSelectedEntity(), audioAsset);
         if (getSelectedEntity() != null) syncEntityToPools(getSelectedEntity());
+    }
+
+    // --- PREFAB BLUEPRINT SERIALIZATION & INSTANTIATION ---
+    public void promptSaveSelectedAsPrefab(List<AssetMeta> assetDirectory, AssetDatabase assetDb) {
+        Entity selected = getSelectedEntity();
+        if (selected == null) return;
+        String defaultDir = new File("Assets/Prefabs").getAbsolutePath();
+        String targetPath = NativeFileDialog.saveFileDialog("Save Entity Prefab Blueprint", defaultDir, "Prefab Blueprint (*.prefab.bin)", "prefab.bin", "prefab");
+        if (targetPath != null && !targetPath.trim().isEmpty()) {
+            UISoundPlayer.play(UISound.SPAWN);
+            PrefabSerializer.savePrefab(targetPath, selected, sceneEntities, assetDb);
+            if (assetDb != null) {
+                assetDb.addAssetDirectoryIfNotExists(targetPath, AssetType.PREFAB);
+            }
+        } else {
+            UISoundPlayer.play(UISound.CLOSE_MODAL);
+        }
+    }
+
+    public List<Entity> instantiatePrefab(String filePath, AssetDatabase assetDb) {
+        List<Entity> spawned = PrefabSerializer.instantiatePrefab(filePath, this, assetDb);
+        if (spawned != null && !spawned.isEmpty()) {
+            UISoundPlayer.play(UISound.SPAWN);
+        }
+        return spawned;
     }
 
     // --- SCENE SERIALIZATION & DIALOGS ---

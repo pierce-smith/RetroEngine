@@ -71,6 +71,7 @@ public class AssetBrowserPanel {
                 if (cardX + 0.35f > 0.95f) break;
 
                 boolean isFolder = (asset.type == AssetType.FOLDER);
+                boolean isPrefab = (asset.type == AssetType.PREFAB);
 
                 if (isFolder) {
                     // Folder Card Style (Warm Amber / Dark Gold)
@@ -82,6 +83,16 @@ public class AssetBrowserPanel {
 
                     UIGeometryBatch.addBoundedText(buffer, "DIR: " + asset.name, cardX + 0.02f, -0.75f, cardX + 0.30f, 1.1f, 1.0f, 0.9f, 0.5f, 1.0f);
                     UIGeometryBatch.addBoundedText(buffer, "[CLICK: OPEN]", cardX + 0.02f, -0.85f, cardX + 0.30f, 0.9f, 1.0f, 0.8f, 0.3f, 1.0f);
+                } else if (isPrefab) {
+                    // Prefab Blueprint Style (Cyan / Electric Blue)
+                    UIGeometryBatch.addQuad(buffer, cardX, -0.92f, cardX + 0.32f, -0.55f, 0.08f, 0.16f, 0.22f, 1.0f);
+                    UIGeometryBatch.addFrameBorder(buffer, cardX, -0.92f, cardX + 0.32f, -0.55f, 0.002f, 0.2f, 0.8f, 1.0f, 1.0f);
+
+                    UIGeometryBatch.addQuad(buffer, cardX + 0.02f, -0.66f, cardX + 0.18f, -0.58f, 0.10f, 0.50f, 0.70f, 1.0f);
+                    UIGeometryBatch.addBoundedText(buffer, ".PREFAB", cardX + 0.03f, -0.60f, cardX + 0.17f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f);
+
+                    UIGeometryBatch.addBoundedText(buffer, asset.name, cardX + 0.02f, -0.75f, cardX + 0.30f, 1.0f, 0.4f, 0.9f, 1.0f, 1.0f);
+                    UIGeometryBatch.addBoundedText(buffer, "[CLICK: SPAWN]", cardX + 0.02f, -0.85f, cardX + 0.30f, 0.9f, 0.2f, 0.9f, 1.0f, 1.0f);
                 } else {
                     // Standard Asset Card Style
                     UIGeometryBatch.addQuad(buffer, cardX, -0.92f, cardX + 0.32f, -0.55f, 0.10f, 0.10f, 0.13f, 1.0f);

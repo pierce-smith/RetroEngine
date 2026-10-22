@@ -1,58 +1,58 @@
 package com.retro.engine.editor.commands;
 
-import com.retro.engine.scene.Entity;
 import com.retro.engine.scene.components.Transform;
 
 /**
- * Encapsulates 3D transform edits (translation, rotation, scale) for Undo/Redo.
+ * Atomic TransformCommand bundling 9-axis (position, rotation, scale) 
+ * transform mutations into a single undo/redo transaction.
  */
 public class TransformCommand implements ICommand {
-    private final Entity entity;
-    private final float oldPx, oldPy, oldPz;
-    private final float oldRx, oldRy, oldRz;
-    private final float oldSx, oldSy, oldSz;
 
-    private final float newPx, newPy, newPz;
-    private final float newRx, newRy, newRz;
-    private final float newSx, newSy, newSz;
+    private final Transform transform;
 
-    public TransformCommand(Entity entity,
-                            float oldPx, float oldPy, float oldPz,
-                            float oldRx, float oldRy, float oldRz,
-                            float oldSx, float oldSy, float oldSz,
-                            float newPx, float newPy, float newPz,
-                            float newRx, float newRy, float newRz,
-                            float newSx, float newSy, float newSz) {
-        this.entity = entity;
-        this.oldPx = oldPx; this.oldPy = oldPy; this.oldPz = oldPz;
-        this.oldRx = oldRx; this.oldRy = oldRy; this.oldRz = oldRz;
-        this.oldSx = oldSx; this.oldSy = oldSy; this.oldSz = oldSz;
+    private final float startPx, startPy, startPz;
+    private final float startRx, startRy, startRz;
+    private final float startSx, startSy, startSz;
 
-        this.newPx = newPx; this.newPy = newPy; this.newPz = newPz;
-        this.newRx = newRx; this.newRy = newRy; this.newRz = newRz;
-        this.newSx = newSx; this.newSy = newSy; this.newSz = newSz;
+    private final float endPx, endPy, endPz;
+    private final float endRx, endRy, endRz;
+    private final float endSx, endSy, endSz;
+
+    public TransformCommand(Transform transform,
+                            float startPx, float startPy, float startPz,
+                            float startRx, float startRy, float startRz,
+                            float startSx, float startSy, float startSz,
+                            float endPx, float endPy, float endPz,
+                            float endRx, float endRy, float endRz,
+                            float endSx, float endSy, float endSz) {
+        this.transform = transform;
+        this.startPx = startPx; this.startPy = startPy; this.startPz = startPz;
+        this.startRx = startRx; this.startRy = startRy; this.startRz = startRz;
+        this.startSx = startSx; this.startSy = startSy; this.startSz = startSz;
+
+        this.endPx = endPx; this.endPy = endPy; this.endPz = endPz;
+        this.endRx = endRx; this.endRy = endRy; this.endRz = endRz;
+        this.endSx = endSx; this.endSy = endSy; this.endSz = endSz;
     }
 
     @Override
     public void execute() {
-        if (entity == null) return;
-        Transform tc = entity.getTransform();
-        tc.posX = newPx; tc.posY = newPy; tc.posZ = newPz;
-        tc.rotX = newRx; tc.rotY = newRy; tc.rotZ = newRz;
-        tc.scaleX = newSx; tc.scaleY = newSy; tc.scaleZ = newSz;
+        if (transform == null) return;
+        transform.setPosition(endPx, endPy, endPz);
+        transform.setRotation(endRx, endRy, endRz);
+        transform.setScale(endSx, endSy, endSz);
     }
 
     @Override
     public void undo() {
-        if (entity == null) return;
-        Transform tc = entity.getTransform();
-        tc.posX = oldPx; tc.posY = oldPy; tc.posZ = oldPz;
-        tc.rotX = oldRx; tc.rotY = oldRy; tc.rotZ = oldRz;
-        tc.scaleX = oldSx; tc.scaleY = oldSy; tc.scaleZ = oldSz;
+        if (transform == null) return;
+        transform.setPosition(startPx, startPy, startPz);
+        transform.setRotation(startRx, startRy, startRz);
+        transform.setScale(startSx, startSy, startSz);
     }
 
     @Override
     public String getName() {
-        return "Transform Entity '" + (entity != null ? entity.name : "null") + "'";
+        return "Transform Delta";
     }
 }

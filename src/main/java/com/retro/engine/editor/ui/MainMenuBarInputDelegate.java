@@ -52,8 +52,8 @@ public class MainMenuBarInputDelegate {
             case VIEW -> -0.37f;
             default -> -0.72f;
         };
-        float maxX = minX + 0.32f;
-        float minY = 0.58f;
+        float maxX = minX + 0.36f;
+        float minY = 0.50f;
         float maxY = 0.92f;
 
         if (ndcX >= minX && ndcX <= maxX && ndcY >= minY && ndcY <= maxY) {
@@ -71,6 +71,7 @@ public class MainMenuBarInputDelegate {
                 if (itemIndex == 0) { UISoundPlayer.play(UISound.SPAWN); manager.spawnDefaultCube(); }
                 else if (itemIndex == 1) { UISoundPlayer.play(UISound.SPAWN); manager.spawnLightSource(); }
                 else if (itemIndex == 2) { UISoundPlayer.play(UISound.SPAWN); manager.spawnCameraEntity(); }
+                else if (itemIndex == 3) { manager.promptSaveSelectedAsPrefab(); }
             } else if (activeDropdownMenu == DropdownMenu.VIEW) {
                 if (itemIndex == 1) { UISoundPlayer.play(UISound.TOGGLE); manager.toggle3DGrid(); }
             }
@@ -99,40 +100,39 @@ public class MainMenuBarInputDelegate {
         if (ndcX >= -0.42f && ndcX <= -0.07f && ndcY >= 0.27f && ndcY <= 0.33f) {
             Entity selected = manager.getSelectedEntity();
             if (selected != null) {
-                if (pickerFilterType == AssetType.TEXTURE) selected.setTextureAsset(null, "DEFAULT_CHECKER");
-                else if (pickerFilterType == AssetType.MESH_3D) selected.setMeshAssetPath(null);
-                else if (pickerFilterType == AssetType.AUDIO) {
-                    AudioSource ac = selected.getComponent(AudioSource.class);
-                    if (ac != null) ac.audioAssetPath = "";
-                } else if (pickerFilterType == AssetType.SCRIPT) {
-                    manager.assignScriptToSelectedEntity(null);
+                if (pickerFilterType == AssetType.TEXTURE) {
+                    selected.setTextureAsset(null, null);
+                } else if (pickerFilterType == AssetType.MESH_3D) {
+                    selected.setMeshAssetPath(null);
                 }
             }
-            UISoundPlayer.play(UISound.DELETE);
+            UISoundPlayer.play(UISound.CLICK);
             manager.closeModal();
             return;
         }
 
-        if (ndcX >= 0.07f && ndcX <= 0.42f && ndcY >= 0.27f && ndcY <= 0.33f) {
-            UISoundPlayer.play(UISound.OPEN_MODAL);
-            manager.closeModal();
-            if (pickerFilterType == AssetType.TEXTURE) InspectorInputDelegate.promptImportTexture(manager);
-            else if (pickerFilterType == AssetType.MESH_3D) InspectorInputDelegate.promptImportMesh(manager);
-            else if (pickerFilterType == AssetType.AUDIO) InspectorInputDelegate.promptImportAudio(manager);
-            else if (pickerFilterType == AssetType.SCRIPT) InspectorInputDelegate.promptImportScript(manager);
-            return;
-        }
+        List<AssetMeta> allAssets = manager.getAssetDirectory();
+        List<AssetMeta> filteredAssets = (allAssets != null) ? allAssets.stream()
+                .filter(a -> a.type == pickerFilterType)
+                .toList() : List.of();
 
-        List<AssetMeta> filtered = manager.getAssetDirectory().stream().filter(a -> a.type == pickerFilterType).toList();
-        float listY = cardMaxY - 0.24f;
-        for (AssetMeta asset : filtered) {
-            if (listY < cardMinY + 0.05f) break;
-            if (ndcY >= listY - 0.05f && ndcY <= listY + 0.03f) {
+        float listY = 0.20f;
+        for (AssetMeta asset : filteredAssets) {
+            if (listY < -0.38f) break;
+            if (ndcX >= -0.42f && ndcX <= 0.42f && ndcY >= listY - 0.05f && ndcY <= listY + 0.03f) {
                 UISoundPlayer.play(UISound.CLICK);
-                if (pickerFilterType == AssetType.TEXTURE) manager.assignTextureToSelectedEntity(asset);
-                else if (pickerFilterType == AssetType.MESH_3D) manager.assignMeshToSelectedEntity(asset);
-                else if (pickerFilterType == AssetType.AUDIO) manager.assignAudioToSelectedEntity(asset);
-                else if (pickerFilterType == AssetType.SCRIPT) manager.assignScriptToSelectedEntity(asset);
+                Entity selected = manager.getSelectedEntity();
+                if (selected != null) {
+                    if (pickerFilterType == AssetType.TEXTURE) {
+                        manager.assignTextureToSelectedEntity(asset);
+                    } else if (pickerFilterType == AssetType.MESH_3D) {
+                        manager.assignMeshToSelectedEntity(asset);
+                    } else if (pickerFilterType == AssetType.AUDIO) {
+                        manager.assignAudioToSelectedEntity(asset);
+                    } else if (pickerFilterType == AssetType.SCRIPT) {
+                        manager.assignScriptToSelectedEntity(asset);
+                    }
+                }
                 manager.closeModal();
                 return;
             }

@@ -22,11 +22,18 @@ public class InspectorInputDelegate {
         Entity entity = manager.getSelectedEntity();
         if (entity == null) return;
 
+        // Check top header + PREFAB button
+        if (ndcX >= 0.82f && ndcX <= 0.98f && ndcY >= 0.800f && ndcY <= 0.845f) {
+            UISoundPlayer.play(UISound.OPEN_MODAL);
+            manager.promptSaveSelectedAsPrefab();
+            return;
+        }
+
         float scrollOffset = InspectorPanel.getScrollOffset();
         float curY = 0.74f;
 
         for (Component comp : entity.getAllComponents()) {
-            curY -= 0.055f; // Matches header spacing in InspectorPanel
+            curY -= 0.055f;
 
             Field[] fields = comp.getClass().getDeclaredFields();
             for (Field field : fields) {
@@ -125,6 +132,21 @@ public class InspectorInputDelegate {
                         }
                         curY -= 0.048f;
 
+                    } else if (field.getType() == String.class || prop.type() == PropertyType.TEXT) {
+                        if (isVisible && ndcY >= drawY - 0.030f && ndcY <= drawY + 0.008f && ndcX >= 0.58f && ndcX <= 0.98f) {
+                            UISoundPlayer.play(UISound.OPEN_MODAL);
+                            String currentStr = (val != null) ? val.toString() : "";
+                            String newStr = NativeFileDialog.promptInput("Edit Property: " + label, "Enter text value:", currentStr);
+                            if (newStr != null && !newStr.equals(currentStr)) {
+                                UISoundPlayer.play(UISound.CLICK);
+                                ModifyPropertyCommand cmd = new ModifyPropertyCommand(comp, field, currentStr, newStr, label);
+                                manager.getCommandHistory().executeCommand(cmd);
+                            } else {
+                                UISoundPlayer.play(UISound.CLOSE_MODAL);
+                            }
+                            return;
+                        }
+                        curY -= 0.044f;
                     } else {
                         curY -= 0.044f;
                     }
@@ -170,8 +192,8 @@ public class InspectorInputDelegate {
     public static void promptImportAssetForDirectory(EditorWorkspace manager) {
         if (manager == null) return;
         List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
-            "Import Asset(s) into Project", "", "All Supported Assets (*.obj, *.fbx, *.gltf, *.glb, *.png, *.jpg, *.jpeg, *.tga, *.scene, *.java)",
-            "obj", "fbx", "gltf", "glb", "png", "jpg", "jpeg", "tga", "scene", "java"
+            "Import Asset(s) into Project", "", "All Supported Assets (*.obj, *.fbx, *.gltf, *.glb, *.png, *.jpg, *.jpeg, *.tga, *.scene, *.java, *.prefab.bin)",
+            "obj", "fbx", "gltf", "glb", "png", "jpg", "jpeg", "tga", "scene", "java", "prefab.bin", "prefab"
         );
         if (importedPaths != null && !importedPaths.isEmpty()) {
             UISoundPlayer.play(UISound.SPAWN);

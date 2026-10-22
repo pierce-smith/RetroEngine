@@ -6,6 +6,7 @@ public enum AssetType {
     AUDIO,
     SCENE,
     SCRIPT,
+    PREFAB,
     FOLDER,
     UNKNOWN
 }
