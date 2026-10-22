@@ -15,7 +15,8 @@ import static org.lwjgl.vulkan.VK13.*;
 import static org.lwjgl.vulkan.KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
 /**
- * Encodes offscreen 3D passes and final swapchain composition pass (3D viewport blit + 2D UI overlay pass).
+ * Encodes offscreen 3D passes, dynamic ground shadow blobs, and final swapchain composition pass
+ * (3D viewport blit + 2D UI overlay pass).
  */
 public class VulkanPassEncoder {
 
@@ -151,7 +152,7 @@ public class VulkanPassEncoder {
             vkCmdSetViewport(cmd, 0, VkViewport.calloc(1, stack).put(0, offscreenViewport));
             vkCmdSetScissor(cmd, 0, VkRect2D.calloc(1, stack).put(0, offscreenScissor));
 
-            // PHASE 2: 3D Scene Pass
+            // PHASE 2A: 3D Scene Mesh Pass
             if (pipelineManager.getGraphicsPipeline3D() != 0L && sceneQueue != null && sceneQueueCount > 0) {
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getGraphicsPipeline3D());
 
@@ -197,19 +198,96 @@ public class VulkanPassEncoder {
 
                     float[] modelMatrix = computeModelMatrix(entity.px, entity.py, entity.pz, entity.rx, entity.ry, entity.rz, entity.sx, entity.sy, entity.sz);
 
-                    FloatBuffer push256 = stack.mallocFloat(64);
-                    push256.put(modelMatrix);
-                    push256.put(viewMatrix != null && viewMatrix.length == 16 ? viewMatrix : identityLightSpace);
-                    push256.put(projMatrix != null && projMatrix.length == 16 ? projMatrix : identityLightSpace);
-                    push256.put(identityLightSpace);
-                    push256.flip();
+                    FloatBuffer push68 = stack.mallocFloat(68);
+                    push68.put(modelMatrix);
+                    push68.put(viewMatrix != null && viewMatrix.length == 16 ? viewMatrix : identityLightSpace);
+                    push68.put(projMatrix != null && projMatrix.length == 16 ? projMatrix : identityLightSpace);
+                    push68.put(0.0f);                      // shadowParams.x = passFlags (0.0 = Standard 3D Mesh)
+                    push68.put(1.0f);                      // shadowParams.y = heightFade
+                    push68.put(entity.reflectionStrength); // shadowParams.z = reflection
+                    push68.put(0.0f);                      // shadowParams.w = unused
+                    push68.put(identityLightSpace);
+                    push68.flip();
 
-                    vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT, 0, push256);
+                    vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, push68);
 
                     LongBuffer pBuffers = stack.longs(vboHandle);
                     LongBuffer pOffsets = stack.longs(0L);
                     vkCmdBindVertexBuffers(cmd, 0, pBuffers, pOffsets);
                     vkCmdDraw(cmd, entity.vertexCount, 1, 0, 0);
+                }
+            }
+
+            // PHASE 2B: Dynamic Ground Entity Shadow Blobs Pass
+            long groundQuadBuf = gpuCache.getGroundQuadBuffer(deviceManager);
+            if (pipelineManager.getGraphicsPipeline3D() != 0L && sceneQueue != null && sceneQueueCount > 0 && groundQuadBuf != 0L) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getGraphicsPipeline3D());
+
+                VkDevice vkDevice = deviceManager.getDevice();
+                VulkanGpuCache.VulkanTexture whiteTex = gpuCache.getDefaultWhiteTexture(deviceManager);
+                VulkanGpuCache.VulkanBuffer lightUbo = gpuCache.getOrCreateLightUniformBuffer(deviceManager);
+                float[] identityLightSpace = new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+
+                int shadowIndex = 0;
+                for (int i = 0; i < sceneQueueCount; i++) {
+                    if (shadowIndex >= 64) break;
+                    RenderEntity entity = sceneQueue.get(i);
+                    float clearance = entity.py - entity.groundY;
+                    if (clearance < -0.01f) continue;
+
+                    float heightFade = Math.max(0.0f, 1.0f - (clearance / 10.0f));
+                    if (heightFade < 0.05f) continue;
+
+                    float shadowScale = Math.max(entity.sx, entity.sz) * 1.25f;
+                    float shadowY = entity.groundY + 0.005f;
+
+                    if (vkDevice != null && descriptorPool.getHandle() != 0L && lightUbo != null && whiteTex != null) {
+                        VkDescriptorSetAllocateInfo allocSetInfo = VkDescriptorSetAllocateInfo.calloc(stack)
+                                .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO)
+                                .descriptorPool(descriptorPool.getHandle())
+                                .pSetLayouts(stack.longs(pipelineManager.getDescriptorSetLayout3D()));
+
+                        LongBuffer pSet = stack.mallocLong(1);
+                        if (vkAllocateDescriptorSets(vkDevice, allocSetInfo, pSet) == VK_SUCCESS) {
+                            long descriptorSetEntity = pSet.get(0);
+
+                            VkDescriptorBufferInfo.Buffer bufferInfo = VkDescriptorBufferInfo.calloc(1, stack).buffer(lightUbo.bufferHandle).offset(0).range(512);
+                            VkDescriptorImageInfo.Buffer imageInfoTex = VkDescriptorImageInfo.calloc(1, stack).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(whiteTex.imageViewHandle).sampler(whiteTex.samplerHandle);
+                            VkDescriptorImageInfo.Buffer imageInfoShadow = VkDescriptorImageInfo.calloc(1, stack).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(whiteTex.imageViewHandle).sampler(whiteTex.samplerHandle);
+
+                            VkWriteDescriptorSet.Buffer descriptorWrites = VkWriteDescriptorSet.calloc(3, stack);
+                            descriptorWrites.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(0).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC).pBufferInfo(bufferInfo);
+                            descriptorWrites.get(1).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(1).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(imageInfoTex);
+                            descriptorWrites.get(2).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(2).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(imageInfoShadow);
+
+                            vkUpdateDescriptorSets(vkDevice, descriptorWrites, null);
+
+                            IntBuffer pDynamicOffsets = stack.ints(0);
+                            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, stack.longs(descriptorSetEntity), pDynamicOffsets);
+                        }
+                    }
+
+                    float[] shadowModelMatrix = computeModelMatrix(entity.px, shadowY, entity.pz, 0.0f, 0.0f, 0.0f, shadowScale, 1.0f, shadowScale);
+
+                    FloatBuffer pushShadow = stack.mallocFloat(68);
+                    pushShadow.put(shadowModelMatrix);
+                    pushShadow.put(viewMatrix != null && viewMatrix.length == 16 ? viewMatrix : identityLightSpace);
+                    pushShadow.put(projMatrix != null && projMatrix.length == 16 ? projMatrix : identityLightSpace);
+                    pushShadow.put(1.0f);       // shadowParams.x = passFlags (1.0 = Shadow Blob Pass!)
+                    pushShadow.put(heightFade); // shadowParams.y = heightFade
+                    pushShadow.put(0.0f);       // shadowParams.z = unused
+                    pushShadow.put(0.0f);       // shadowParams.w = unused
+                    pushShadow.put(identityLightSpace);
+                    pushShadow.flip();
+
+                    vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, pushShadow);
+
+                    LongBuffer pBuffers = stack.longs(groundQuadBuf);
+                    LongBuffer pOffsets = stack.longs(0L);
+                    vkCmdBindVertexBuffers(cmd, 0, pBuffers, pOffsets);
+                    vkCmdDraw(cmd, 6, 1, 0, 0);
+
+                    shadowIndex++;
                 }
             }
 

@@ -16,7 +16,8 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /**
  * Handles VRAM allocations for 3D Mesh Vertex Buffers (VBOs), 2D Textures, Light UBOs,
- * 3-Slot Ring-Buffered 2D UI Overlay Buffers, and 3-Slot Ring-Buffered 3D Grid Buffers.
+ * 3-Slot Ring-Buffered 2D UI Overlay Buffers, 3-Slot Ring-Buffered 3D Grid Buffers,
+ * and 22-float ground quad buffer for dynamic entity shadow blob projections.
  */
 public class VulkanGpuCache {
 
@@ -53,6 +54,7 @@ public class VulkanGpuCache {
 
     private VulkanBuffer lightUniformBuffer = null;
     private VulkanTexture defaultWhiteTexture = null;
+    private VulkanBuffer groundQuadBuffer = null;
 
     // 3-Slot Ring Buffer for Dynamic 2D UI Overlay Geometry
     private final long[] uiVertexBufferRing = new long[RING_SLOTS];
@@ -73,6 +75,26 @@ public class VulkanGpuCache {
 
     public long getGridVertexBuffer() { return gridVertexBufferRing[gridRingIndex]; }
     public int getGridVertexCount() { return gridVertexCount; }
+
+    public long getGroundQuadBuffer(VulkanDevice device) {
+        if (groundQuadBuffer != null) return groundQuadBuffer.bufferHandle;
+        if (device == null || device.getLogicalDevice() == null) return 0L;
+
+        // 22-float stride ground quad VBO for dynamic shadow blob projection
+        float[] groundVerts = new float[] {
+            // X, Y, Z,  NX, NY, NZ,  R, G, B, A,  U1, V1,  U2, V2,  TX, TY, TZ,  BX, BY, BZ,  LM_S, LM_B
+            -1.0f, 0.005f, -1.0f,  0.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f, 1.0f,  0.0f, 0.0f,  0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 0.0f, 1.0f,  1.0f, 0.0f,
+            -1.0f, 0.005f,  1.0f,  0.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f, 1.0f,  0.0f, 1.0f,  0.0f, 1.0f,  1.0f, 0.0f, 0.0f,  0.0f, 0.0f, 1.0f,  1.0f, 0.0f,
+             1.0f, 0.005f,  1.0f,  0.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f, 1.0f,  1.0f, 1.0f,  1.0f, 1.0f,  1.0f, 0.0f, 0.0f,  0.0f, 0.0f, 1.0f,  1.0f, 0.0f,
+
+            -1.0f, 0.005f, -1.0f,  0.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f, 1.0f,  0.0f, 0.0f,  0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 0.0f, 1.0f,  1.0f, 0.0f,
+             1.0f, 0.005f,  1.0f,  0.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f, 1.0f,  1.0f, 1.0f,  1.0f, 1.0f,  1.0f, 0.0f, 0.0f,  0.0f, 0.0f, 1.0f,  1.0f, 0.0f,
+             1.0f, 0.005f, -1.0f,  0.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f, 1.0f,  1.0f, 0.0f,  1.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 0.0f, 1.0f,  1.0f, 0.0f
+        };
+
+        groundQuadBuffer = createHostVisibleBuffer(device, groundVerts);
+        return (groundQuadBuffer != null) ? groundQuadBuffer.bufferHandle : 0L;
+    }
 
     public void updateUiMesh(VulkanDevice device, float[] vertices, int count) {
         if (device == null || device.getLogicalDevice() == null || vertices == null || count <= 0) {
@@ -629,6 +651,12 @@ public class VulkanGpuCache {
             if (lightUniformBuffer.bufferHandle != 0L) vkDestroyBuffer(vkDevice, lightUniformBuffer.bufferHandle, null);
             if (lightUniformBuffer.memoryHandle != 0L) vkFreeMemory(vkDevice, lightUniformBuffer.memoryHandle, null);
             lightUniformBuffer = null;
+        }
+
+        if (groundQuadBuffer != null) {
+            if (groundQuadBuffer.bufferHandle != 0L) vkDestroyBuffer(vkDevice, groundQuadBuffer.bufferHandle, null);
+            if (groundQuadBuffer.memoryHandle != 0L) vkFreeMemory(vkDevice, groundQuadBuffer.memoryHandle, null);
+            groundQuadBuffer = null;
         }
 
         if (defaultWhiteTexture != null) {
