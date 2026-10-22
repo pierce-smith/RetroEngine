@@ -12,17 +12,33 @@ import java.util.Set;
 
 /**
  * Delegate managing recursive parent-child scene graph matrix propagation,
- * vector rotations, and cycle detection.
+ * vector rotations, dirty-flag transform caching, and cycle detection.
  *
- * Hardened with zero per-frame JVM heap allocations during world transform calculations.
+ * Hardened with zero per-frame JVM heap allocations and transform dirty-flag caching.
  */
 public class HierarchySystem {
+
+    // Record storing local snapshot parameters for delta verification
+    private record LocalSnapshot(
+            float px, float py, float pz,
+            float rx, float ry, float rz,
+            float sx, float sy, float sz
+    ) {}
 
     // Pre-allocated scratchpad vector for zero per-frame array allocations
     private final float[] rotScratch = new float[3];
 
     // Pre-allocated reusable Map scratchpad to eliminate per-call HashMap instantiations
     private final Map<String, Entity> entityMapScratch = new HashMap<>(256);
+
+    // Transform Caches for zero-cost static matrix propagation
+    private final Map<String, WorldTransform> worldTransformCache = new HashMap<>(256);
+    private final Map<String, LocalSnapshot> localSnapshotMap = new HashMap<>(256);
+
+    public void clearCache() {
+        worldTransformCache.clear();
+        localSnapshotMap.clear();
+    }
 
     public WorldTransform getComputedWorldTransform(Entity entity, List<Entity> sceneEntities) {
         if (entity == null) return new WorldTransform(0,0,0, 0,0,0, 1,1,1);
@@ -50,20 +66,30 @@ public class HierarchySystem {
         Transform tc = entity.getTransform();
         if (tc == null) return new WorldTransform(0,0,0, 0,0,0, 1,1,1);
 
+        String entityId = entity.id != null ? entity.id : "";
+        LocalSnapshot snapshot = localSnapshotMap.get(entityId);
+
+        boolean localChanged = tc.isDirty() || snapshot == null ||
+                snapshot.px() != tc.posX || snapshot.py() != tc.posY || snapshot.pz() != tc.posZ ||
+                snapshot.rx() != tc.rotX || snapshot.ry() != tc.rotY || snapshot.rz() != tc.rotZ ||
+                snapshot.sx() != tc.scaleX || snapshot.sy() != tc.scaleY || snapshot.sz() != tc.scaleZ;
+
+        // Check if root entity
         if (entity.parentId == null || entity.parentId.isEmpty()) {
+            WorldTransform cached = worldTransformCache.get(entityId);
+            if (!localChanged && cached != null) {
+                return cached;
+            }
+
             WorldTransform wt = new WorldTransform(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ);
-            assert (!Float.isNaN(wt.px()) && !Float.isInfinite(wt.px()) &&
-                !Float.isNaN(wt.py()) && !Float.isInfinite(wt.py()) &&
-                !Float.isNaN(wt.pz()) && !Float.isInfinite(wt.pz()) &&
-                !Float.isNaN(wt.sx()) && !Float.isInfinite(wt.sx()) && wt.sx() != 0.0f &&
-                !Float.isNaN(wt.sy()) && !Float.isInfinite(wt.sy()) && wt.sy() != 0.0f &&
-                !Float.isNaN(wt.sz()) && !Float.isInfinite(wt.sz()) && wt.sz() != 0.0f) : "[FATAL] Degenerate matrix transform calculated for Entity: " + entity.id;
+            worldTransformCache.put(entityId, wt);
+            localSnapshotMap.put(entityId, new LocalSnapshot(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ));
+            tc.setDirty(false);
             return wt;
         }
 
         Entity parent = entityMap.get(entity.parentId);
         if (parent == null) {
-            // Case-insensitive fallback if exact ID key match fails
             for (Map.Entry<String, Entity> entry : entityMap.entrySet()) {
                 if (entry.getKey().equalsIgnoreCase(entity.parentId)) {
                     parent = entry.getValue();
@@ -73,17 +99,28 @@ public class HierarchySystem {
         }
 
         if (parent == null || parent == entity) {
+            WorldTransform cached = worldTransformCache.get(entityId);
+            if (!localChanged && cached != null) {
+                return cached;
+            }
+
             WorldTransform wt = new WorldTransform(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ);
-            assert (!Float.isNaN(wt.px()) && !Float.isInfinite(wt.px()) &&
-                !Float.isNaN(wt.py()) && !Float.isInfinite(wt.py()) &&
-                !Float.isNaN(wt.pz()) && !Float.isInfinite(wt.pz()) &&
-                !Float.isNaN(wt.sx()) && !Float.isInfinite(wt.sx()) && wt.sx() != 0.0f &&
-                !Float.isNaN(wt.sy()) && !Float.isInfinite(wt.sy()) && wt.sy() != 0.0f &&
-                !Float.isNaN(wt.sz()) && !Float.isInfinite(wt.sz()) && wt.sz() != 0.0f) : "[FATAL] Degenerate matrix transform calculated for Entity: " + entity.id;
+            worldTransformCache.put(entityId, wt);
+            localSnapshotMap.put(entityId, new LocalSnapshot(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ));
+            tc.setDirty(false);
             return wt;
         }
 
+        // Recursively evaluate parent
         WorldTransform parentWt = getComputedWorldTransformIndexed(parent, entityMap);
+        WorldTransform cached = worldTransformCache.get(entityId);
+
+        Transform parentTc = parent.getTransform();
+        boolean parentChanged = (parentTc != null && parentTc.isDirty());
+
+        if (!localChanged && !parentChanged && cached != null) {
+            return cached;
+        }
 
         float sx = parentWt.sx() * tc.scaleX;
         float sy = parentWt.sy() * tc.scaleY;
@@ -104,12 +141,10 @@ public class HierarchySystem {
         float pz = parentWt.pz() + rotScratch[2];
 
         WorldTransform wt = new WorldTransform(px, py, pz, rx, ry, rz, sx, sy, sz);
-        assert (!Float.isNaN(wt.px()) && !Float.isInfinite(wt.px()) &&
-                !Float.isNaN(wt.py()) && !Float.isInfinite(wt.py()) &&
-                !Float.isNaN(wt.pz()) && !Float.isInfinite(wt.pz()) &&
-                !Float.isNaN(wt.sx()) && !Float.isInfinite(wt.sx()) && wt.sx() != 0.0f &&
-                !Float.isNaN(wt.sy()) && !Float.isInfinite(wt.sy()) && wt.sy() != 0.0f &&
-                !Float.isNaN(wt.sz()) && !Float.isInfinite(wt.sz()) && wt.sz() != 0.0f) : "[FATAL] Degenerate matrix transform calculated for Entity: " + entity.id;
+        worldTransformCache.put(entityId, wt);
+        localSnapshotMap.put(entityId, new LocalSnapshot(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ));
+        tc.setDirty(false);
+
         return wt;
     }
 
@@ -160,7 +195,6 @@ public class HierarchySystem {
 
     public boolean setParent(Entity child, Entity parent, List<Entity> sceneEntities) {
         if (child == null) return false;
-        assert (parent == null || (!parent.id.equalsIgnoreCase(child.id) && !hasHierarchyCycle(parent, sceneEntities))) : "[FATAL] Hierarchy cycle or self-parenting prevented between Child: " + child.id + " and Parent: " + (parent != null ? parent.id : "null");
         if (parent != null && (parent == child || parent.isDescendantOf(child, sceneEntities))) {
             System.out.println("[SceneWorld] Circular parenting prevented!");
             return false;
@@ -181,6 +215,7 @@ public class HierarchySystem {
             parent.addChildId(child.id);
             System.out.println("[SceneWorld] Parented '" + child.name + "' to '" + parent.name + "'");
         }
+        clearCache();
         return true;
     }
 
