@@ -30,11 +30,11 @@ public class MainMenuBarInputDelegate {
             UISoundPlayer.play(UISound.TOGGLE);
             manager.setActiveDropdownMenu(DropdownMenu.NONE);
             manager.play();
-        } else if (ndcX >= -0.01f && ndcX <= 0.11f) {
+        } else if (ndcX >= -0.01f && ndcX <= 0.10f) {
             UISoundPlayer.play(UISound.TOGGLE);
             manager.setActiveDropdownMenu(DropdownMenu.NONE);
             manager.pause();
-        } else if (ndcX >= 0.12f && ndcX <= 0.23f) {
+        } else if (ndcX >= 0.11f && ndcX <= 0.22f) {
             UISoundPlayer.play(UISound.TOGGLE);
             manager.setActiveDropdownMenu(DropdownMenu.NONE);
             manager.stop();

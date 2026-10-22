@@ -13,6 +13,8 @@ import com.retro.engine.scene.SceneWorld.PlayState;
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
+import com.retro.engine.animation.AnimatorController;
+import com.retro.engine.animation.AnimatorTransition;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.scene.components.*;
 
@@ -30,6 +32,7 @@ public class EditorWorkspace {
     public enum GizmoAxis { NONE, X, Y, Z }
     public enum DropdownMenu { NONE, FILE, EDIT, ENTITY, VIEW }
     public enum ModalState { NONE, ASSET_PICKER, PARENT_PICKER }
+    public enum WorkspaceTab { SCENE_3D, ANIMATOR }
 
     private final SceneWorld sceneManager;
     private final CommandStack commandHistory = new CommandStack();
@@ -37,6 +40,11 @@ public class EditorWorkspace {
     private final AssetDatabase assetDirectoryManager = new AssetDatabase();
     private final GizmoState gizmoStateController = new GizmoState();
     private final OverlaySystem overlayManager = new OverlaySystem();
+
+    private WorkspaceTab activeWorkspaceTab = WorkspaceTab.SCENE_3D;
+    private AnimatorController activeAnimatorController = null;
+    private String selectedStateName = "Walk";
+    private AnimatorTransition selectedTransition = null;
 
     private ViewportCamera cameraController;
     private long windowHandle = 0L;
@@ -57,6 +65,12 @@ public class EditorWorkspace {
         this.sceneManager = (sceneManager != null) ? sceneManager : new SceneWorld();
         EngineConsolePanel.installConsoleRedirect();
     }
+
+    public WorkspaceTab getActiveWorkspaceTab() { return activeWorkspaceTab; }
+    public void setActiveWorkspaceTab(WorkspaceTab tab) { if (tab != null) this.activeWorkspaceTab = tab; }
+
+    public AnimatorController getActiveAnimatorController() { return activeAnimatorController; }
+    public void setActiveAnimatorController(AnimatorController controller) { this.activeAnimatorController = controller; }
 
     public void setWindowHandle(long handle) { this.windowHandle = handle; }
 
@@ -460,6 +474,33 @@ public class EditorWorkspace {
                 return true;
             }
 
+            // Check Viewport Panel Header Tab Clicks (-0.55f to 0.55f, 0.86f to 0.92f)
+            if (ndcY >= 0.86f && ndcY <= 0.92f && ndcX >= -0.55f && ndcX <= 0.55f) {
+                if (ndcX >= -0.53f && ndcX <= -0.33f) {
+                    UISoundPlayer.play(UISound.CLICK);
+                    setActiveWorkspaceTab(WorkspaceTab.SCENE_3D);
+                    return true;
+                } else if (ndcX >= -0.31f && ndcX <= -0.09f) {
+                    UISoundPlayer.play(UISound.CLICK);
+                    setActiveWorkspaceTab(WorkspaceTab.ANIMATOR);
+                    return true;
+                }
+            }
+
+            if (ndcY >= 0.92f) {
+                MainMenuBarInputDelegate.processTopBarClick(ndcX, this);
+                return true;
+            }
+
+            if (activeWorkspaceTab == WorkspaceTab.ANIMATOR) {
+                // In Animator workspace, allow asset browser interactions at bottom
+                if (region == PanelRegion.ASSET_DIRECTORY) {
+                    AssetBrowserInputDelegate.processAssetDirectoryClick(ndcX, ndcY, this);
+                    return true;
+                }
+                return true;
+            }
+
             switch (region) {
                 case TOP_BAR -> {
                     MainMenuBarInputDelegate.processTopBarClick(ndcX, this);
@@ -553,22 +594,31 @@ public class EditorWorkspace {
 
     public float[] generateUiVertices() {
         uiGeometryBuffer.reset();
-        ViewportPanel.renderFraming(uiGeometryBuffer);
-        ViewportPanel.renderToolbar(uiGeometryBuffer, getCurrentGizmoMode());
 
-        Entity selected = getSelectedEntity();
-        if (selected != null && getActiveModal() == ModalState.NONE) {
-            SceneWorld.WorldTransform wt = sceneManager.getComputedWorldTransform(selected);
-            GizmoSystem.render3DGizmosAtWorldPosition(uiGeometryBuffer, wt.px(), wt.py(), wt.pz(), getCurrentGizmoMode(), getActiveGizmoAxis(), cameraController, gizmoStateController.getCamPanX(), gizmoStateController.getCamPanY(), gizmoStateController.getCamZoom(), gizmoStateController.getCamPitch(), gizmoStateController.getCamYaw());
+        ViewportPanel.renderFraming(uiGeometryBuffer, activeWorkspaceTab);
+
+        if (activeWorkspaceTab == WorkspaceTab.SCENE_3D) {
+            ViewportPanel.renderToolbar(uiGeometryBuffer, getCurrentGizmoMode());
+
+            Entity selected = getSelectedEntity();
+            if (selected != null && getActiveModal() == ModalState.NONE) {
+                SceneWorld.WorldTransform wt = sceneManager.getComputedWorldTransform(selected);
+                GizmoSystem.render3DGizmosAtWorldPosition(uiGeometryBuffer, wt.px(), wt.py(), wt.pz(), getCurrentGizmoMode(), getActiveGizmoAxis(), cameraController, gizmoStateController.getCamPanX(), gizmoStateController.getCamPanY(), gizmoStateController.getCamZoom(), gizmoStateController.getCamPitch(), gizmoStateController.getCamYaw());
+            }
+
+            HierarchyPanel.render(uiGeometryBuffer, getSceneEntities());
+            InspectorPanel.render(uiGeometryBuffer, getSelectedEntity(), getAssetDirectory());
+        } else if (activeWorkspaceTab == WorkspaceTab.ANIMATOR) {
+            AnimatorGraphPanel.render(uiGeometryBuffer, activeAnimatorController, selectedStateName, selectedTransition);
         }
 
-        HierarchyPanel.render(uiGeometryBuffer, getSceneEntities());
-        InspectorPanel.render(uiGeometryBuffer, getSelectedEntity(), getAssetDirectory());
         AssetBrowserPanel.render(uiGeometryBuffer, getAssetDirectory(), getCurrentFolderPath());
 
         MainMenuBar.render(uiGeometryBuffer, getActiveDropdownMenu(), getActiveScenePath(), getPlayState());
 
-        EngineConsolePanel.renderProfilerHUD(uiGeometryBuffer, lastDeltaTime);
+        if (activeWorkspaceTab == WorkspaceTab.SCENE_3D) {
+            EngineConsolePanel.renderProfilerHUD(uiGeometryBuffer, lastDeltaTime);
+        }
         if (EngineConsolePanel.isConsoleVisible()) {
             EngineConsolePanel.renderConsole(uiGeometryBuffer);
         }

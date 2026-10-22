@@ -27,7 +27,7 @@ public class MainMenuBar {
         renderMenuTitle(buffer, "ENTITY", -0.50f, -0.38f, activeMenu == DropdownMenu.ENTITY);
         renderMenuTitle(buffer, "VIEW", -0.37f, -0.27f, activeMenu == DropdownMenu.VIEW);
 
-        // Play / Pause / Stop Controls (-0.15f to 0.25f)
+        // Play / Pause / Stop Controls (-0.15f to 0.23f)
         renderPlayControls(buffer, playState);
 
         // Scene Title (Right Side: 0.45f to 0.98f)
@@ -37,7 +37,7 @@ public class MainMenuBar {
 
     private static void renderPlayControls(UIGeometryBatch.Buffer buffer, PlayState playState) {
         float minX = -0.15f;
-        float maxX = 0.25f;
+        float maxX = 0.23f;
 
         UIGeometryBatch.addQuad(buffer, minX, 0.925f, maxX, 0.995f, 0.08f, 0.09f, 0.12f, 1.0f);
         UIGeometryBatch.addFrameBorder(buffer, minX, 0.925f, maxX, 0.995f, 0.001f, 0.25f, 0.28f, 0.35f, 1.0f);
@@ -60,18 +60,18 @@ public class MainMenuBar {
         float rPause = isPaused ? 0.8f : 0.14f;
         float gPause = isPaused ? 0.7f : 0.18f;
         float bPause = isPaused ? 0.2f : 0.22f;
-        UIGeometryBatch.addQuad(buffer, -0.01f, 0.935f, 0.11f, 0.985f, rPause, gPause, bPause, 1.0f);
+        UIGeometryBatch.addQuad(buffer, -0.01f, 0.935f, 0.10f, 0.985f, rPause, gPause, bPause, 1.0f);
         if (isPaused) {
-            UIGeometryBatch.addFrameBorder(buffer, -0.01f, 0.935f, 0.11f, 0.985f, 0.002f, 1.0f, 0.9f, 0.3f, 1.0f);
+            UIGeometryBatch.addFrameBorder(buffer, -0.01f, 0.935f, 0.10f, 0.985f, 0.002f, 1.0f, 0.9f, 0.3f, 1.0f);
         }
-        UIGeometryBatch.addBoundedText(buffer, "PAUSE", 0.005f, 0.945f, 0.095f, 1.0f, isPaused ? 1.0f : 0.7f, isPaused ? 1.0f : 0.7f, 0.7f, 1.0f);
+        UIGeometryBatch.addBoundedText(buffer, "PAUSE", 0.002f, 0.945f, 0.088f, 1.0f, isPaused ? 1.0f : 0.7f, isPaused ? 1.0f : 0.7f, 0.7f, 1.0f);
 
         // STOP Button
         float rStop = isEditing ? 0.22f : 0.65f;
         float gStop = isEditing ? 0.14f : 0.18f;
         float bStop = isEditing ? 0.18f : 0.22f;
-        UIGeometryBatch.addQuad(buffer, 0.12f, 0.935f, 0.23f, 0.985f, rStop, gStop, bStop, 1.0f);
-        UIGeometryBatch.addBoundedText(buffer, "STOP", 0.135f, 0.945f, 0.215f, 1.0f, isEditing ? 0.6f : 1.0f, isEditing ? 0.6f : 0.8f, isEditing ? 0.6f : 0.8f, 1.0f);
+        UIGeometryBatch.addQuad(buffer, 0.11f, 0.935f, 0.22f, 0.985f, rStop, gStop, bStop, 1.0f);
+        UIGeometryBatch.addBoundedText(buffer, "STOP", 0.125f, 0.945f, 0.205f, 1.0f, isEditing ? 0.6f : 1.0f, isEditing ? 0.6f : 0.8f, isEditing ? 0.6f : 0.8f, 1.0f);
     }
 
     private static void renderMenuTitle(UIGeometryBatch.Buffer buffer, String title, float minX, float maxX, boolean active) {
