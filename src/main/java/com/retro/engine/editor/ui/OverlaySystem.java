@@ -1,14 +1,10 @@
 package com.retro.engine.editor.ui;
 
 import com.retro.engine.scene.Entity;
-import com.retro.engine.scene.components.RigidBodyComponent;
-import com.retro.engine.scene.components.BoxCollider;
-import com.retro.engine.scene.components.SphereCollider;
-import com.retro.engine.scene.components.CapsuleCollider;
-import com.retro.engine.scene.components.AudioSource;
-import com.retro.engine.scene.components.Light;
 import com.retro.engine.scene.SceneWorld;
-import com.retro.engine.scene.components.Transform;
+import com.retro.engine.scene.components.*;
+import com.retro.engine.editor.audio.UISoundPlayer;
+import com.retro.engine.editor.audio.UISoundPlayer.UISound;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.EditorWorkspace.DropdownMenu;
 import com.retro.engine.editor.EditorWorkspace.ModalState;
@@ -245,28 +241,16 @@ public class OverlaySystem {
                 items.add(new MenuItem("Delete Entity (Del)", manager::deleteSelectedEntity));
                 items.add(new MenuItem("Save as Prefab...", manager::promptSaveSelectedAsPrefab));
                 items.add(new MenuItem("+ Add Script Component", () -> manager.openAssetPicker(AssetType.SCRIPT)));
-                items.add(new MenuItem("+ Add RigidBody", () -> {
-                    Entity e = manager.getSelectedEntity();
-                    if (e != null && e.getComponent(RigidBodyComponent.class) == null) {
-                        e.addComponent(new RigidBodyComponent());
+                items.add(new MenuItem("+ Add Character Controller", () -> {
+                    if (hitEntity.getComponent(CharacterControllerComponent.class) == null) {
+                        hitEntity.addComponent(new CharacterControllerComponent());
+                        UISoundPlayer.play(UISound.SPAWN);
                     }
                 }));
-                items.add(new MenuItem("+ Add Box Collider", () -> {
-                    Entity e = manager.getSelectedEntity();
-                    if (e != null && e.getComponent(BoxCollider.class) == null) {
-                        e.addComponent(new BoxCollider());
-                    }
-                }));
-                items.add(new MenuItem("+ Add Sphere Collider", () -> {
-                    Entity e = manager.getSelectedEntity();
-                    if (e != null && e.getComponent(SphereCollider.class) == null) {
-                        e.addComponent(new SphereCollider());
-                    }
-                }));
-                items.add(new MenuItem("+ Add Capsule Collider", () -> {
-                    Entity e = manager.getSelectedEntity();
-                    if (e != null && e.getComponent(CapsuleCollider.class) == null) {
-                        e.addComponent(new CapsuleCollider());
+                items.add(new MenuItem("+ Add Vehicle Controller", () -> {
+                    if (hitEntity.getComponent(VehicleControllerComponent.class) == null) {
+                        hitEntity.addComponent(new VehicleControllerComponent());
+                        UISoundPlayer.play(UISound.SPAWN);
                     }
                 }));
                 items.add(new MenuItem("+ Add Child Cube", () -> manager.spawnChildEntity(hitEntity, "Cube", "Assets/Models/cube.obj")));
@@ -286,34 +270,23 @@ public class OverlaySystem {
                 items.add(new MenuItem("New Scene", manager::newScene));
             }
         } else if (ndcX >= 0.55f) {
-            if (manager.getSelectedEntity() != null) {
-                items.add(new MenuItem("Rename Entity", () -> manager.promptRenameEntity(manager.getSelectedEntity())));
+            Entity selected = manager.getSelectedEntity();
+            if (selected != null) {
+                items.add(new MenuItem("Rename Entity", () -> manager.promptRenameEntity(selected)));
                 items.add(new MenuItem("Duplicate Entity (Cmd+D)", manager::duplicateSelectedEntity));
                 items.add(new MenuItem("Delete Entity (Del)", manager::deleteSelectedEntity));
                 items.add(new MenuItem("Save as Prefab...", manager::promptSaveSelectedAsPrefab));
                 items.add(new MenuItem("+ Add Script Component", () -> manager.openAssetPicker(AssetType.SCRIPT)));
-                items.add(new MenuItem("+ Add RigidBody", () -> {
-                    Entity e = manager.getSelectedEntity();
-                    if (e != null && e.getComponent(RigidBodyComponent.class) == null) {
-                        e.addComponent(new RigidBodyComponent());
+                items.add(new MenuItem("+ Add Character Controller", () -> {
+                    if (selected.getComponent(CharacterControllerComponent.class) == null) {
+                        selected.addComponent(new CharacterControllerComponent());
+                        UISoundPlayer.play(UISound.SPAWN);
                     }
                 }));
-                items.add(new MenuItem("+ Add Box Collider", () -> {
-                    Entity e = manager.getSelectedEntity();
-                    if (e != null && e.getComponent(BoxCollider.class) == null) {
-                        e.addComponent(new BoxCollider());
-                    }
-                }));
-                items.add(new MenuItem("+ Add Sphere Collider", () -> {
-                    Entity e = manager.getSelectedEntity();
-                    if (e != null && e.getComponent(SphereCollider.class) == null) {
-                        e.addComponent(new SphereCollider());
-                    }
-                }));
-                items.add(new MenuItem("+ Add Capsule Collider", () -> {
-                    Entity e = manager.getSelectedEntity();
-                    if (e != null && e.getComponent(CapsuleCollider.class) == null) {
-                        e.addComponent(new CapsuleCollider());
+                items.add(new MenuItem("+ Add Vehicle Controller", () -> {
+                    if (selected.getComponent(VehicleControllerComponent.class) == null) {
+                        selected.addComponent(new VehicleControllerComponent());
+                        UISoundPlayer.play(UISound.SPAWN);
                     }
                 }));
             }
@@ -352,28 +325,16 @@ public class OverlaySystem {
                 items.add(new MenuItem("Delete Object (Del)", manager::deleteSelectedEntity));
                 items.add(new MenuItem("Save as Prefab...", manager::promptSaveSelectedAsPrefab));
                 items.add(new MenuItem("+ Add Script Component", () -> manager.openAssetPicker(AssetType.SCRIPT)));
-                items.add(new MenuItem("+ Add RigidBody", () -> {
-                    Entity e = manager.getSelectedEntity();
-                    if (e != null && e.getComponent(RigidBodyComponent.class) == null) {
-                        e.addComponent(new RigidBodyComponent());
+                items.add(new MenuItem("+ Add Character Controller", () -> {
+                    if (hitEntity.getComponent(CharacterControllerComponent.class) == null) {
+                        hitEntity.addComponent(new CharacterControllerComponent());
+                        UISoundPlayer.play(UISound.SPAWN);
                     }
                 }));
-                items.add(new MenuItem("+ Add Box Collider", () -> {
-                    Entity e = manager.getSelectedEntity();
-                    if (e != null && e.getComponent(BoxCollider.class) == null) {
-                        e.addComponent(new BoxCollider());
-                    }
-                }));
-                items.add(new MenuItem("+ Add Sphere Collider", () -> {
-                    Entity e = manager.getSelectedEntity();
-                    if (e != null && e.getComponent(SphereCollider.class) == null) {
-                        e.addComponent(new SphereCollider());
-                    }
-                }));
-                items.add(new MenuItem("+ Add Capsule Collider", () -> {
-                    Entity e = manager.getSelectedEntity();
-                    if (e != null && e.getComponent(CapsuleCollider.class) == null) {
-                        e.addComponent(new CapsuleCollider());
+                items.add(new MenuItem("+ Add Vehicle Controller", () -> {
+                    if (hitEntity.getComponent(VehicleControllerComponent.class) == null) {
+                        hitEntity.addComponent(new VehicleControllerComponent());
+                        UISoundPlayer.play(UISound.SPAWN);
                     }
                 }));
                 items.add(new MenuItem("+ Add Child Cube", () -> manager.spawnChildEntity(hitEntity, "Cube", "Assets/Models/cube.obj")));
