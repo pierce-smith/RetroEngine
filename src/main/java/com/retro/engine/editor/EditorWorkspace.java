@@ -589,6 +589,7 @@ public class EditorWorkspace {
                 }
             }
         } else if (action == 0) { // Release
+            InspectorInputDelegate.onMouseRelease();
             if (button == 1) {
                 overlayManager.onRightClickRelease(refX, refY, this, cameraController, gizmoStateController.getCamPitch(), gizmoStateController.getCamYaw(), gizmoStateController.getCamPanX(), gizmoStateController.getCamPanY(), gizmoStateController.getCamZoom(), gizmoStateController.getLastOrbitTime());
                 return true;
@@ -630,6 +631,8 @@ public class EditorWorkspace {
         }
         if (activeWorkspaceTab == WorkspaceTab.ANIMATOR) {
             AnimatorGraphPanel.handleCursorPos(lastNdcX, lastNdcY, this);
+        } else {
+            InspectorInputDelegate.processInspectorDrag(lastNdcX, lastNdcY, this);
         }
         return gizmoStateController.onCursorPos(rawX, rawY, this, overlayManager);
     }
@@ -640,12 +643,14 @@ public class EditorWorkspace {
 
     public boolean handleScroll(double yOffset) {
         if (lastNdcX >= 0.55f && lastNdcY >= -0.50f && lastNdcY <= 0.88f) {
-            InspectorPanel.scroll((float) yOffset * 0.06f);
+            InspectorPanel.scroll((float) -yOffset * 0.18f);
             return true;
         }
-        if (cameraController != null) {
-            cameraController.onScroll(yOffset);
-            return true;
+        if (activeWorkspaceTab == WorkspaceTab.SCENE_3D && lastNdcX >= -0.55f && lastNdcX <= 0.55f && lastNdcY >= -0.50f && lastNdcY <= 0.86f) {
+            if (cameraController != null) {
+                cameraController.onScroll(yOffset);
+                return true;
+            }
         }
         return false;
     }

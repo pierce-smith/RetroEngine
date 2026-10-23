@@ -1,13 +1,12 @@
 package com.retro.engine.editor.ui;
 
-import com.retro.engine.editor.audio.UISoundPlayer;
-import com.retro.engine.editor.audio.UISoundPlayer.UISound;
-import com.retro.engine.editor.dialogs.NativeFileDialog;
-import com.retro.engine.animation.AnimatorController;
-import com.retro.engine.animation.AnimatorState;
-import com.retro.engine.animation.AnimatorParameter;
-import com.retro.engine.animation.AnimatorTransition;
 import com.retro.engine.scene.Entity;
+import com.retro.engine.scene.components.RigidBodyComponent;
+import com.retro.engine.scene.components.BoxCollider;
+import com.retro.engine.scene.components.SphereCollider;
+import com.retro.engine.scene.components.CapsuleCollider;
+import com.retro.engine.scene.components.AudioSource;
+import com.retro.engine.scene.components.Light;
 import com.retro.engine.scene.SceneWorld;
 import com.retro.engine.scene.components.Transform;
 import com.retro.engine.editor.EditorWorkspace;
@@ -149,24 +148,90 @@ public class OverlaySystem {
         }
     }
 
-    
     public void buildAndShowContextMenu(float ndcX, float ndcY, double refX, double refY, EditorWorkspace manager) {
         List<MenuItem> items = new ArrayList<>();
-
-        if (manager != null && manager.getActiveWorkspaceTab() == EditorWorkspace.WorkspaceTab.ANIMATOR) {
-            buildAnimatorContextMenu(ndcX, ndcY, refX, refY, manager, items);
-            openContextMenu(ndcX, ndcY, items);
-            return;
-        }
 
         if (ndcY >= 0.92f) {
             items.add(new MenuItem("New Scene", manager::newScene));
             items.add(new MenuItem("Open Scene... (Cmd+O)", manager::promptOpenSceneWithNativeDialog));
             items.add(new MenuItem("Save Scene... (Cmd+S)", manager::promptSaveSceneWithNativeDialog));
         } else if (ndcY <= -0.42f) {
-            buildAssetDirectoryContextMenu(ndcX, ndcY, manager, items);
-        } else if (ndcX <= -0.55f) {
+            String activePath = manager.getCurrentFolderPath();
+            List<AssetMeta> allDirectoryAssets = manager.getAssetDirectory();
+            List<AssetMeta> visibleAssets = new ArrayList<>();
+            if (allDirectoryAssets != null) {
+                for (int i = 0; i < allDirectoryAssets.size(); i++) {
+                    AssetMeta a = allDirectoryAssets.get(i);
+                    if (a != null && a.parentFolderPath != null && a.parentFolderPath.equalsIgnoreCase(activePath)) {
+                        visibleAssets.add(a);
+                    }
+                }
+            }
 
+            boolean hasUpLevel = !activePath.isEmpty();
+            float cardX = -0.95f;
+            AssetMeta hitCard = null;
+            boolean hitUpLevel = false;
+
+            if (hasUpLevel) {
+                if (ndcX >= cardX && ndcX <= cardX + 0.32f && ndcY >= -0.92f && ndcY <= -0.55f) {
+                    hitUpLevel = true;
+                }
+                cardX += 0.36f;
+            }
+
+            if (!hitUpLevel) {
+                for (AssetMeta asset : visibleAssets) {
+                    if (cardX + 0.35f > 0.95f) break;
+                    if (ndcX >= cardX && ndcX <= cardX + 0.32f && ndcY >= -0.92f && ndcY <= -0.55f) {
+                        hitCard = asset;
+                        break;
+                    }
+                    cardX += 0.36f;
+                }
+            }
+
+            if (hitUpLevel) {
+                items.add(new MenuItem(".. Return to Parent Folder", manager::navigateUpFolder));
+                items.add(new MenuItem("+ Create Folder Here", manager::createNewFolder));
+                items.add(new MenuItem("+ Import Asset Here...", manager::promptImportAssetForDirectory));
+            } else if (hitCard != null) {
+                AssetMeta targetAsset = hitCard;
+                if (targetAsset.type == AssetType.FOLDER) {
+                    String folderName = targetAsset.name;
+                    String childPath = activePath.isEmpty() ? folderName : activePath + "/" + folderName;
+                    items.add(new MenuItem("Open Folder '" + folderName + "'", () -> manager.setCurrentFolderPath(childPath)));
+                    items.add(new MenuItem("Rename Folder", () -> manager.promptRenameFolder(targetAsset)));
+                    items.add(new MenuItem("Delete Folder", () -> manager.deleteFolder(targetAsset)));
+                } else if (targetAsset.type == AssetType.PREFAB) {
+                    items.add(new MenuItem("Spawn Prefab Entity", () -> manager.spawnPrefabFromAsset(targetAsset)));
+                    items.add(new MenuItem("Rename Prefab", () -> manager.promptRenameAsset(targetAsset)));
+                    items.add(new MenuItem("Remove Asset from Directory", () -> manager.removeAssetFromDirectory(targetAsset)));
+                } else {
+                    if (targetAsset.type == AssetType.MESH_3D) {
+                        items.add(new MenuItem("Spawn Mesh Entity", () -> manager.spawnEntityFromAsset(targetAsset)));
+                    } else if (targetAsset.type == AssetType.TEXTURE) {
+                        items.add(new MenuItem("Link Texture to Selected", () -> manager.assignTextureToSelectedEntity(targetAsset)));
+                    } else if (targetAsset.type == AssetType.AUDIO) {
+                        items.add(new MenuItem("Link Audio to Selected", () -> manager.assignAudioToSelectedEntity(targetAsset)));
+                    } else if (targetAsset.type == AssetType.SCRIPT) {
+                        items.add(new MenuItem("Link Script to Selected", () -> manager.assignScriptToSelectedEntity(targetAsset)));
+                    }
+                    items.add(new MenuItem("Rename Asset", () -> manager.promptRenameAsset(targetAsset)));
+                    items.add(new MenuItem("Remove Asset from Directory", () -> manager.removeAssetFromDirectory(targetAsset)));
+                }
+            } else {
+                items.add(new MenuItem("+ Create Folder", manager::createNewFolder));
+                items.add(new MenuItem("+ Import Asset...", manager::promptImportAssetForDirectory));
+                items.add(new MenuItem("+ Import Texture...", manager::promptImportTexture));
+                items.add(new MenuItem("+ Import 3D Mesh...", manager::promptImportMesh));
+                items.add(new MenuItem("+ Import Audio...", manager::promptImportAudio));
+                items.add(new MenuItem("+ Import Script...", manager::promptImportScript));
+                if (!manager.getCurrentFolderPath().isEmpty()) {
+                    items.add(new MenuItem(".. Up Level (" + manager.getCurrentFolderPath() + ")", manager::navigateUpFolder));
+                }
+            }
+        } else if (ndcX <= -0.55f) {
             List<Entity> entities = manager.getSceneEntities();
             List<HierarchyPanel.HierarchyNode> visibleTree = HierarchyPanel.buildFlattenedTree(entities);
             int index = (int) ((0.85f - ndcY) / 0.08f);
@@ -180,6 +245,30 @@ public class OverlaySystem {
                 items.add(new MenuItem("Delete Entity (Del)", manager::deleteSelectedEntity));
                 items.add(new MenuItem("Save as Prefab...", manager::promptSaveSelectedAsPrefab));
                 items.add(new MenuItem("+ Add Script Component", () -> manager.openAssetPicker(AssetType.SCRIPT)));
+                items.add(new MenuItem("+ Add RigidBody", () -> {
+                    Entity e = manager.getSelectedEntity();
+                    if (e != null && e.getComponent(RigidBodyComponent.class) == null) {
+                        e.addComponent(new RigidBodyComponent());
+                    }
+                }));
+                items.add(new MenuItem("+ Add Box Collider", () -> {
+                    Entity e = manager.getSelectedEntity();
+                    if (e != null && e.getComponent(BoxCollider.class) == null) {
+                        e.addComponent(new BoxCollider());
+                    }
+                }));
+                items.add(new MenuItem("+ Add Sphere Collider", () -> {
+                    Entity e = manager.getSelectedEntity();
+                    if (e != null && e.getComponent(SphereCollider.class) == null) {
+                        e.addComponent(new SphereCollider());
+                    }
+                }));
+                items.add(new MenuItem("+ Add Capsule Collider", () -> {
+                    Entity e = manager.getSelectedEntity();
+                    if (e != null && e.getComponent(CapsuleCollider.class) == null) {
+                        e.addComponent(new CapsuleCollider());
+                    }
+                }));
                 items.add(new MenuItem("+ Add Child Cube", () -> manager.spawnChildEntity(hitEntity, "Cube", "Assets/Models/cube.obj")));
                 items.add(new MenuItem("+ Add Child Light", () -> manager.spawnChildLight(hitEntity)));
 
@@ -203,6 +292,30 @@ public class OverlaySystem {
                 items.add(new MenuItem("Delete Entity (Del)", manager::deleteSelectedEntity));
                 items.add(new MenuItem("Save as Prefab...", manager::promptSaveSelectedAsPrefab));
                 items.add(new MenuItem("+ Add Script Component", () -> manager.openAssetPicker(AssetType.SCRIPT)));
+                items.add(new MenuItem("+ Add RigidBody", () -> {
+                    Entity e = manager.getSelectedEntity();
+                    if (e != null && e.getComponent(RigidBodyComponent.class) == null) {
+                        e.addComponent(new RigidBodyComponent());
+                    }
+                }));
+                items.add(new MenuItem("+ Add Box Collider", () -> {
+                    Entity e = manager.getSelectedEntity();
+                    if (e != null && e.getComponent(BoxCollider.class) == null) {
+                        e.addComponent(new BoxCollider());
+                    }
+                }));
+                items.add(new MenuItem("+ Add Sphere Collider", () -> {
+                    Entity e = manager.getSelectedEntity();
+                    if (e != null && e.getComponent(SphereCollider.class) == null) {
+                        e.addComponent(new SphereCollider());
+                    }
+                }));
+                items.add(new MenuItem("+ Add Capsule Collider", () -> {
+                    Entity e = manager.getSelectedEntity();
+                    if (e != null && e.getComponent(CapsuleCollider.class) == null) {
+                        e.addComponent(new CapsuleCollider());
+                    }
+                }));
             }
             items.add(new MenuItem("+ Import Asset...", manager::promptImportAssetForDirectory));
         } else {
@@ -239,6 +352,30 @@ public class OverlaySystem {
                 items.add(new MenuItem("Delete Object (Del)", manager::deleteSelectedEntity));
                 items.add(new MenuItem("Save as Prefab...", manager::promptSaveSelectedAsPrefab));
                 items.add(new MenuItem("+ Add Script Component", () -> manager.openAssetPicker(AssetType.SCRIPT)));
+                items.add(new MenuItem("+ Add RigidBody", () -> {
+                    Entity e = manager.getSelectedEntity();
+                    if (e != null && e.getComponent(RigidBodyComponent.class) == null) {
+                        e.addComponent(new RigidBodyComponent());
+                    }
+                }));
+                items.add(new MenuItem("+ Add Box Collider", () -> {
+                    Entity e = manager.getSelectedEntity();
+                    if (e != null && e.getComponent(BoxCollider.class) == null) {
+                        e.addComponent(new BoxCollider());
+                    }
+                }));
+                items.add(new MenuItem("+ Add Sphere Collider", () -> {
+                    Entity e = manager.getSelectedEntity();
+                    if (e != null && e.getComponent(SphereCollider.class) == null) {
+                        e.addComponent(new SphereCollider());
+                    }
+                }));
+                items.add(new MenuItem("+ Add Capsule Collider", () -> {
+                    Entity e = manager.getSelectedEntity();
+                    if (e != null && e.getComponent(CapsuleCollider.class) == null) {
+                        e.addComponent(new CapsuleCollider());
+                    }
+                }));
                 items.add(new MenuItem("+ Add Child Cube", () -> manager.spawnChildEntity(hitEntity, "Cube", "Assets/Models/cube.obj")));
 
                 if (hitEntity.parentId != null && !hitEntity.parentId.isEmpty()) {
@@ -309,259 +446,4 @@ public class OverlaySystem {
             listY -= 0.10f;
         }
     }
-
-    private void buildAnimatorContextMenu(float ndcX, float ndcY, double refX, double refY, EditorWorkspace manager, List<MenuItem> items) {
-        if (ndcY >= 0.92f) {
-            items.add(new MenuItem("New Scene", manager::newScene));
-            items.add(new MenuItem("Open Scene... (Cmd+O)", manager::promptOpenSceneWithNativeDialog));
-            items.add(new MenuItem("Save Scene... (Cmd+S)", manager::promptSaveSceneWithNativeDialog));
-            items.add(new MenuItem("Switch to 3D Scene View", () -> manager.setActiveWorkspaceTab(EditorWorkspace.WorkspaceTab.SCENE_3D)));
-            return;
-        }
-
-        if (ndcY <= -0.42f) {
-            buildAssetDirectoryContextMenu(ndcX, ndcY, manager, items);
-            return;
-        }
-
-        AnimatorController controller = manager.getActiveAnimatorController();
-
-        // 1. Parameters Sidebar (-1.00f to -0.55f)
-        if (ndcX < -0.55f) {
-            items.add(new MenuItem("+ Add Float Parameter", () -> promptAddParamWithType(controller, "FLOAT")));
-            items.add(new MenuItem("+ Add Int Parameter", () -> promptAddParamWithType(controller, "INT")));
-            items.add(new MenuItem("+ Add Bool Parameter", () -> promptAddParamWithType(controller, "BOOL")));
-            items.add(new MenuItem("+ Add Trigger Parameter", () -> promptAddParamWithType(controller, "TRIGGER")));
-
-            if (controller != null && !controller.getParameters().isEmpty()) {
-                items.add(new MenuItem("--- Registered Parameters ---", () -> {}));
-                for (AnimatorParameter param : controller.getParameters().values()) {
-                    items.add(new MenuItem("Delete Parameter '" + param.name + "'", () -> {
-                        controller.getParameters().remove(param.name);
-                        UISoundPlayer.play(UISound.CLICK);
-                    }));
-                }
-            }
-            return;
-        }
-
-        // 2. Animator Inspector Sidebar (0.55f to 1.00f)
-        if (ndcX > 0.55f) {
-            String selStateName = manager.getSelectedStateName();
-            AnimatorState selState = (controller != null && selStateName != null) ? controller.getState(selStateName) : null;
-            if (selState == null && controller != null) {
-                selState = controller.getCurrentState();
-            }
-
-            if (selState != null) {
-                final AnimatorState stateToOperate = selState;
-                items.add(new MenuItem("Set as Entry/Default State", () -> {
-                    controller.setInitialState(stateToOperate.name);
-                    UISoundPlayer.play(UISound.CLICK);
-                }));
-                items.add(new MenuItem("+ Add Outgoing Transition...", () -> promptAddTransition(stateToOperate, controller)));
-                items.add(new MenuItem("Toggle Looping (Current: " + (stateToOperate.isLooping ? "ON" : "OFF") + ")", () -> {
-                    stateToOperate.isLooping = !stateToOperate.isLooping;
-                    UISoundPlayer.play(UISound.CLICK);
-                }));
-                items.add(new MenuItem("Rename State Node...", () -> promptRenameState(stateToOperate, controller, manager)));
-                items.add(new MenuItem("Delete State Node", () -> {
-                    controller.getStates().remove(stateToOperate.name);
-                    UISoundPlayer.play(UISound.DELETE);
-                }));
-            } else {
-                items.add(new MenuItem("+ Add State Node...", () -> promptAddStateAt(controller, manager, 0.0f, 0.20f)));
-                items.add(new MenuItem("+ Add Parameter...", () -> promptAddParamWithType(controller, "FLOAT")));
-            }
-            return;
-        }
-
-        // 3. Central Canvas Area (-0.55f to 0.55f)
-        if (controller != null) {
-            AnimatorState hitState = null;
-            for (AnimatorState state : controller.getStates().values()) {
-                float x1 = state.graphX;
-                float x2 = state.graphX + 0.22f;
-                float y1 = state.graphY - 0.12f;
-                float y2 = state.graphY;
-
-                if (ndcX >= x1 && ndcX <= x2 && ndcY >= y1 && ndcY <= y2) {
-                    hitState = state;
-                    break;
-                }
-            }
-
-            if (hitState != null) {
-                final AnimatorState targetState = hitState;
-                manager.setSelectedStateName(targetState.name);
-
-                items.add(new MenuItem("Select & Inspect State '" + targetState.name + "'", () -> manager.setSelectedStateName(targetState.name)));
-                items.add(new MenuItem("Set as Entry/Default State", () -> {
-                    controller.setInitialState(targetState.name);
-                    UISoundPlayer.play(UISound.CLICK);
-                }));
-                items.add(new MenuItem("+ Add Outgoing Transition...", () -> promptAddTransition(targetState, controller)));
-                items.add(new MenuItem("Toggle Motion Looping (" + (targetState.isLooping ? "Enabled" : "Disabled") + ")", () -> {
-                    targetState.isLooping = !targetState.isLooping;
-                    UISoundPlayer.play(UISound.CLICK);
-                }));
-                items.add(new MenuItem("Rename State Node...", () -> promptRenameState(targetState, controller, manager)));
-                items.add(new MenuItem("Delete State Node", () -> {
-                    controller.getStates().remove(targetState.name);
-                    UISoundPlayer.play(UISound.DELETE);
-                }));
-            } else {
-                final float spawnX = ndcX - 0.11f;
-                final float spawnY = ndcY + 0.06f;
-                items.add(new MenuItem("+ Add State Node Here", () -> promptAddStateAt(controller, manager, spawnX, spawnY)));
-                items.add(new MenuItem("+ Add Parameter...", () -> promptAddParamWithType(controller, "FLOAT")));
-                items.add(new MenuItem("Reset Node Layout Grid", () -> {
-                    float gX = -0.20f, gY = 0.65f;
-                    int col = 0;
-                    for (AnimatorState st : controller.getStates().values()) {
-                        st.graphX = gX + (col % 3) * 0.38f;
-                        st.graphY = gY - (col / 3) * 0.25f;
-                        col++;
-                    }
-                    UISoundPlayer.play(UISound.CLICK);
-                }));
-                items.add(new MenuItem("Switch to 3D Viewport", () -> manager.setActiveWorkspaceTab(EditorWorkspace.WorkspaceTab.SCENE_3D)));
-            }
-        } else {
-            items.add(new MenuItem("Switch to 3D Viewport", () -> manager.setActiveWorkspaceTab(EditorWorkspace.WorkspaceTab.SCENE_3D)));
-        }
-    }
-
-    private void promptAddParamWithType(AnimatorController controller, String typeDefault) {
-        if (controller == null) return;
-        String name = NativeFileDialog.promptInput("Add Parameter", "Enter parameter name:", "NewParam");
-        if (name != null && !name.trim().isEmpty()) {
-            String trimmed = name.trim();
-            String typeStr = NativeFileDialog.promptInput("Parameter Type", "Type (FLOAT, INT, BOOL, TRIGGER):", typeDefault);
-            if (typeStr != null) {
-                String t = typeStr.trim().toUpperCase();
-                if (t.startsWith("I")) controller.setInt(trimmed, 0);
-                else if (t.startsWith("B")) controller.setBool(trimmed, false);
-                else if (t.startsWith("T")) controller.setTrigger(trimmed);
-                else controller.setFloat(trimmed, 0.0f);
-                UISoundPlayer.play(UISound.CLICK);
-            }
-        }
-    }
-
-    private void promptAddTransition(AnimatorState srcState, AnimatorController controller) {
-        if (srcState == null || controller == null) return;
-        String targetName = NativeFileDialog.promptInput("Add Transition", "Enter destination state name for transition from '" + srcState.name + "':", "Idle");
-        if (targetName != null && !targetName.trim().isEmpty()) {
-            String dest = targetName.trim();
-            srcState.addTransition(dest, 0.25f);
-            UISoundPlayer.play(UISound.CLICK);
-        }
-    }
-
-    private void promptRenameState(AnimatorState state, AnimatorController controller, EditorWorkspace manager) {
-        if (state == null || controller == null) return;
-        String newName = NativeFileDialog.promptInput("Rename State", "Enter new name for state '" + state.name + "':", state.name);
-        if (newName != null && !newName.trim().isEmpty() && !newName.trim().equalsIgnoreCase(state.name)) {
-            String trimmed = newName.trim();
-            controller.getStates().remove(state.name);
-            state.name = trimmed;
-            controller.getStates().put(trimmed, state);
-            if (manager != null) manager.setSelectedStateName(trimmed);
-            UISoundPlayer.play(UISound.CLICK);
-        }
-    }
-
-    private void promptAddStateAt(AnimatorController controller, EditorWorkspace manager, float x, float y) {
-        if (controller == null) return;
-        String stateName = NativeFileDialog.promptInput("Add State Node", "Enter new state name:", "NewState");
-        if (stateName != null && !stateName.trim().isEmpty()) {
-            String trimmed = stateName.trim();
-            AnimatorState newState = new AnimatorState(trimmed, null);
-            newState.graphX = Math.max(-0.50f, Math.min(0.30f, x));
-            newState.graphY = Math.max(-0.35f, Math.min(0.80f, y));
-            controller.addState(newState);
-            if (manager != null) manager.setSelectedStateName(trimmed);
-            UISoundPlayer.play(UISound.SPAWN);
-        }
-    }
-
-    private void buildAssetDirectoryContextMenu(float ndcX, float ndcY, EditorWorkspace manager, List<MenuItem> items) {
-        String activePath = manager.getCurrentFolderPath();
-        List<AssetMeta> allDirectoryAssets = manager.getAssetDirectory();
-        List<AssetMeta> visibleAssets = new ArrayList<>();
-        if (allDirectoryAssets != null) {
-            for (int i = 0; i < allDirectoryAssets.size(); i++) {
-                AssetMeta a = allDirectoryAssets.get(i);
-                if (a != null && a.parentFolderPath != null && a.parentFolderPath.equalsIgnoreCase(activePath)) {
-                    visibleAssets.add(a);
-                }
-            }
-        }
-
-        boolean hasUpLevel = !activePath.isEmpty();
-        float cardX = -0.95f;
-        AssetMeta hitCard = null;
-        boolean hitUpLevel = false;
-
-        if (hasUpLevel) {
-            if (ndcX >= cardX && ndcX <= cardX + 0.32f && ndcY >= -0.92f && ndcY <= -0.55f) {
-                hitUpLevel = true;
-            }
-            cardX += 0.36f;
-        }
-
-        if (!hitUpLevel) {
-            for (AssetMeta asset : visibleAssets) {
-                if (cardX + 0.35f > 0.95f) break;
-                if (ndcX >= cardX && ndcX <= cardX + 0.32f && ndcY >= -0.92f && ndcY <= -0.55f) {
-                    hitCard = asset;
-                    break;
-                }
-                cardX += 0.36f;
-            }
-        }
-
-        if (hitUpLevel) {
-            items.add(new MenuItem(".. Return to Parent Folder", manager::navigateUpFolder));
-            items.add(new MenuItem("+ Create Folder Here", manager::createNewFolder));
-            items.add(new MenuItem("+ Import Asset Here...", manager::promptImportAssetForDirectory));
-        } else if (hitCard != null) {
-            AssetMeta targetAsset = hitCard;
-            if (targetAsset.type == AssetType.FOLDER) {
-                String folderName = targetAsset.name;
-                String childPath = activePath.isEmpty() ? folderName : activePath + "/" + folderName;
-                items.add(new MenuItem("Open Folder '" + folderName + "'", () -> manager.setCurrentFolderPath(childPath)));
-                items.add(new MenuItem("Rename Folder", () -> manager.promptRenameFolder(targetAsset)));
-                items.add(new MenuItem("Delete Folder", () -> manager.deleteFolder(targetAsset)));
-            } else if (targetAsset.type == AssetType.PREFAB) {
-                items.add(new MenuItem("Spawn Prefab Entity", () -> manager.spawnPrefabFromAsset(targetAsset)));
-                items.add(new MenuItem("Rename Prefab", () -> manager.promptRenameAsset(targetAsset)));
-                items.add(new MenuItem("Remove Asset from Directory", () -> manager.removeAssetFromDirectory(targetAsset)));
-            } else {
-                if (targetAsset.type == AssetType.MESH_3D) {
-                    items.add(new MenuItem("Spawn Mesh Entity", () -> manager.spawnEntityFromAsset(targetAsset)));
-                } else if (targetAsset.type == AssetType.TEXTURE) {
-                    items.add(new MenuItem("Link Texture to Selected", () -> manager.assignTextureToSelectedEntity(targetAsset)));
-                } else if (targetAsset.type == AssetType.AUDIO) {
-                    items.add(new MenuItem("Link Audio to Selected", () -> manager.assignAudioToSelectedEntity(targetAsset)));
-                } else if (targetAsset.type == AssetType.SCRIPT) {
-                    items.add(new MenuItem("Link Script to Selected", () -> manager.assignScriptToSelectedEntity(targetAsset)));
-                }
-                items.add(new MenuItem("Rename Asset", () -> manager.promptRenameAsset(targetAsset)));
-                items.add(new MenuItem("Remove Asset from Directory", () -> manager.removeAssetFromDirectory(targetAsset)));
-            }
-        } else {
-            items.add(new MenuItem("+ Create Folder", manager::createNewFolder));
-            items.add(new MenuItem("+ Import Asset...", manager::promptImportAssetForDirectory));
-            items.add(new MenuItem("+ Import Texture...", manager::promptImportTexture));
-            items.add(new MenuItem("+ Import 3D Mesh...", manager::promptImportMesh));
-            items.add(new MenuItem("+ Import Audio...", manager::promptImportAudio));
-            items.add(new MenuItem("+ Import Script...", manager::promptImportScript));
-            if (!manager.getCurrentFolderPath().isEmpty()) {
-                items.add(new MenuItem(".. Up Level (" + manager.getCurrentFolderPath() + ")", manager::navigateUpFolder));
-            }
-        }
-    }
 }
-

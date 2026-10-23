@@ -2,13 +2,7 @@ package com.retro.engine.scene;
 
 import com.retro.engine.scene.Entity;
 import com.retro.engine.scene.SceneWorld.PlayState;
-import com.retro.engine.scene.components.AnimatorComponent;
-import com.retro.engine.scene.components.AudioSource;
-import com.retro.engine.scene.components.Camera;
-import com.retro.engine.scene.components.Light;
-import com.retro.engine.scene.components.Material;
-import com.retro.engine.scene.components.Transform;
-import com.retro.engine.scene.components.ScriptComponent;
+import com.retro.engine.scene.components.*;
 import com.retro.engine.scripting.ScriptEngine;
 
 import java.util.ArrayList;
@@ -186,6 +180,46 @@ public class SimulationSystem {
                 cloneAnim.playbackSpeed = origAnim.playbackSpeed;
                 cloneAnim.isPlaying = origAnim.isPlaying;
                 cloned.addComponent(cloneAnim);
+            }
+
+            RigidBodyComponent origRb = orig.getComponent(RigidBodyComponent.class);
+            if (origRb != null) {
+                RigidBodyComponent cloneRb = new RigidBodyComponent();
+                cloneRb.motionType = origRb.motionType;
+                cloneRb.mass = origRb.mass;
+                cloneRb.useGravity = origRb.useGravity;
+                cloneRb.linearDrag = origRb.linearDrag;
+                cloneRb.angularDrag = origRb.angularDrag;
+                cloneRb.friction = origRb.friction;
+                cloneRb.restitution = origRb.restitution;
+                cloned.addComponent(cloneRb);
+            }
+
+            BoxCollider origBox = orig.getComponent(BoxCollider.class);
+            if (origBox != null) {
+                BoxCollider cloneBox = new BoxCollider();
+                cloneBox.sizeX = origBox.sizeX; cloneBox.sizeY = origBox.sizeY; cloneBox.sizeZ = origBox.sizeZ;
+                cloneBox.offsetX = origBox.offsetX; cloneBox.offsetY = origBox.offsetY; cloneBox.offsetZ = origBox.offsetZ;
+                cloneBox.isTrigger = origBox.isTrigger;
+                cloned.addComponent(cloneBox);
+            }
+
+            SphereCollider origSphere = orig.getComponent(SphereCollider.class);
+            if (origSphere != null) {
+                SphereCollider cloneSphere = new SphereCollider();
+                cloneSphere.radius = origSphere.radius;
+                cloneSphere.offsetX = origSphere.offsetX; cloneSphere.offsetY = origSphere.offsetY; cloneSphere.offsetZ = origSphere.offsetZ;
+                cloneSphere.isTrigger = origSphere.isTrigger;
+                cloned.addComponent(cloneSphere);
+            }
+
+            CapsuleCollider origCapsule = orig.getComponent(CapsuleCollider.class);
+            if (origCapsule != null) {
+                CapsuleCollider cloneCapsule = new CapsuleCollider();
+                cloneCapsule.radius = origCapsule.radius; cloneCapsule.height = origCapsule.height;
+                cloneCapsule.offsetX = origCapsule.offsetX; cloneCapsule.offsetY = origCapsule.offsetY; cloneCapsule.offsetZ = origCapsule.offsetZ;
+                cloneCapsule.isTrigger = origCapsule.isTrigger;
+                cloned.addComponent(cloneCapsule);
             }
 
             copy.add(cloned);

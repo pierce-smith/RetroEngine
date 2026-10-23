@@ -3,6 +3,12 @@ package com.retro.engine.editor.ui;
 import com.retro.engine.editor.ui.InspectorProperty.PropertyType;
 import com.retro.engine.scene.components.Component;
 import com.retro.engine.scene.Entity;
+import com.retro.engine.scene.components.RigidBodyComponent;
+import com.retro.engine.scene.components.BoxCollider;
+import com.retro.engine.scene.components.SphereCollider;
+import com.retro.engine.scene.components.CapsuleCollider;
+import com.retro.engine.scene.components.Light;
+import com.retro.engine.scene.components.AudioSource;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.commands.ModifyPropertyCommand;
 import com.retro.engine.assets.AssetMeta;
@@ -13,9 +19,24 @@ import com.retro.engine.editor.dialogs.NativeFileDialog;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.util.ArrayList;
 import java.util.List;
 
 public class InspectorInputDelegate {
+
+    private static boolean isDraggingScrollbar = false;
+
+    public static void onMouseRelease() {
+        isDraggingScrollbar = false;
+    }
+
+    public static void processInspectorDrag(float ndcX, float ndcY, EditorWorkspace manager) {
+        if (isDraggingScrollbar) {
+            float ratio = (0.77f - ndcY) / 1.25f;
+            ratio = Math.max(0.0f, Math.min(1.0f, ratio));
+            InspectorPanel.setScrollOffset(ratio * InspectorPanel.getMaxScroll());
+        }
+    }
 
     public static void processInspectorClick(float ndcX, float ndcY, EditorWorkspace manager) {
         if (manager == null) return;
@@ -26,6 +47,15 @@ public class InspectorInputDelegate {
         if (ndcX >= 0.82f && ndcX <= 0.98f && ndcY >= 0.800f && ndcY <= 0.845f) {
             UISoundPlayer.play(UISound.OPEN_MODAL);
             manager.promptSaveSelectedAsPrefab();
+            return;
+        }
+
+        // Check scrollbar track/thumb click
+        if (ndcX >= 0.97f && ndcY >= -0.48f && ndcY <= 0.77f) {
+            isDraggingScrollbar = true;
+            float ratio = (0.77f - ndcY) / 1.25f;
+            ratio = Math.max(0.0f, Math.min(1.0f, ratio));
+            InspectorPanel.setScrollOffset(ratio * InspectorPanel.getMaxScroll());
             return;
         }
 
@@ -162,7 +192,8 @@ public class InspectorInputDelegate {
         if (drawAddBtnY <= 0.77f && drawAddBtnY - 0.04f >= -0.48f) {
             if (ndcX >= 0.58f && ndcX <= 0.98f && ndcY >= drawAddBtnY - 0.04f && ndcY <= drawAddBtnY + 0.01f) {
                 UISoundPlayer.play(UISound.OPEN_MODAL);
-                manager.openAssetPicker(AssetType.SCRIPT);
+                promptAddComponentMenu(manager, entity, ndcX, drawAddBtnY);
+                return;
             }
         }
     }
@@ -265,5 +296,55 @@ public class InspectorInputDelegate {
         } else {
             UISoundPlayer.play(UISound.CLOSE_MODAL);
         }
+    }
+
+    public static void promptAddComponentMenu(EditorWorkspace manager, Entity entity) {
+        promptAddComponentMenu(manager, entity, 0.68f, 0.20f);
+    }
+
+    public static void promptAddComponentMenu(EditorWorkspace manager, Entity entity, float ndcX, float ndcY) {
+        if (entity == null || manager == null) return;
+        List<MenuItem> items = new ArrayList<>();
+        items.add(new MenuItem("+ RigidBody", () -> {
+            if (entity.getComponent(RigidBodyComponent.class) == null) {
+                entity.addComponent(new RigidBodyComponent());
+                UISoundPlayer.play(UISound.SPAWN);
+            }
+        }));
+        items.add(new MenuItem("+ Box Collider", () -> {
+            if (entity.getComponent(BoxCollider.class) == null) {
+                entity.addComponent(new BoxCollider());
+                UISoundPlayer.play(UISound.SPAWN);
+            }
+        }));
+        items.add(new MenuItem("+ Sphere Collider", () -> {
+            if (entity.getComponent(SphereCollider.class) == null) {
+                entity.addComponent(new SphereCollider());
+                UISoundPlayer.play(UISound.SPAWN);
+            }
+        }));
+        items.add(new MenuItem("+ Capsule Collider", () -> {
+            if (entity.getComponent(CapsuleCollider.class) == null) {
+                entity.addComponent(new CapsuleCollider());
+                UISoundPlayer.play(UISound.SPAWN);
+            }
+        }));
+        items.add(new MenuItem("+ Light Source", () -> {
+            if (entity.getComponent(Light.class) == null) {
+                entity.addComponent(new Light());
+                UISoundPlayer.play(UISound.SPAWN);
+            }
+        }));
+        items.add(new MenuItem("+ Audio Source", () -> {
+            if (entity.getComponent(AudioSource.class) == null) {
+                entity.addComponent(new AudioSource());
+                UISoundPlayer.play(UISound.SPAWN);
+            }
+        }));
+        items.add(new MenuItem("+ Script Component", () -> {
+            manager.openAssetPicker(AssetType.SCRIPT);
+        }));
+
+        manager.openContextMenu(ndcX, ndcY, items);
     }
 }

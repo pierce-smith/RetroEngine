@@ -114,7 +114,13 @@ public class EngineContext {
                 }
             });
 
-            window.setOnScrollListener((xoffset, yoffset) -> cameraController.onScroll(yoffset));
+            window.setOnScrollListener((xoffset, yoffset) -> {
+                if (editorManager != null) {
+                    editorManager.handleScroll(yoffset);
+                } else if (cameraController != null) {
+                    cameraController.onScroll(yoffset);
+                }
+            });
         }
 
         if (!rhi.initialize(window.getWindowInfo())) {
