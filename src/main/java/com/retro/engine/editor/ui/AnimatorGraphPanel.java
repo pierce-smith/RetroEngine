@@ -3,20 +3,32 @@ package com.retro.engine.editor.ui;
 import com.retro.engine.animation.AnimatorCondition;
 import com.retro.engine.animation.AnimatorController;
 import com.retro.engine.animation.AnimatorParameter;
+import com.retro.engine.animation.AnimatorParameter.ParameterType;
 import com.retro.engine.animation.AnimatorState;
 import com.retro.engine.animation.AnimatorTransition;
+import com.retro.engine.editor.EditorWorkspace;
+import com.retro.engine.editor.audio.UISoundPlayer;
+import com.retro.engine.editor.audio.UISoundPlayer.UISound;
+import com.retro.engine.editor.dialogs.NativeFileDialog;
 
 import java.util.Collection;
 import java.util.List;
 
 /**
- * AnimatorGraphPanel renders a TRULY DYNAMIC 2D Animator State Machine Node Workspace:
- * 1. Reads states, motion clips, and node positions directly from AnimatorController.getStates().
- * 2. Draws transition arrows and condition rules dynamically from AnimatorTransition.conditions.
- * 3. Renders parameter rows dynamically from AnimatorController.getParameters().
- * 4. Renders state details and outgoing transitions dynamically from selected AnimatorState.
+ * AnimatorGraphPanel renders an Interactive & Dynamic 2D Animator State Machine Node Workspace:
+ * 1. Reads states, motion clips, and node positions directly from AnimatorController.
+ * 2. Interactive state node card dragging across canvas grid.
+ * 3. Interactive parameter value controls (boolean toggles, triggers, numeric prompt editing).
+ * 4. Add [+ PARAM] and [+ STATE] creation shortcuts.
  */
 public class AnimatorGraphPanel {
+
+    private static boolean isDraggingNode = false;
+    private static String draggedStateName = null;
+    private static float dragStartNdcX = 0.0f;
+    private static float dragStartNdcY = 0.0f;
+    private static float nodeStartGraphX = 0.0f;
+    private static float nodeStartGraphY = 0.0f;
 
     public static class NodePos {
         public float x;
@@ -42,7 +54,12 @@ public class AnimatorGraphPanel {
         UIGeometryBatch.addQuad(buffer, canvasX1, canvasY2 - 0.05f, canvasX2, canvasY2, 0.14f, 0.15f, 0.19f, 1.0f);
         UIGeometryBatch.addFrameBorder(buffer, canvasX1, canvasY2 - 0.05f, canvasX2, canvasY2, 0.002f, 0.22f, 0.25f, 0.32f, 1.0f);
         String ctrlName = (controller != null && controller.name != null) ? controller.name.toUpperCase() : "ANIMATOR CONTROLLER";
-        UIGeometryBatch.addBoundedText(buffer, "ANIMATOR GRAPH CANVAS [" + ctrlName + "]", canvasX1 + 0.02f, canvasY2 - 0.015f, canvasX2 - 0.02f, 1.1f, 0.3f, 0.8f, 1.0f, 1.0f);
+        UIGeometryBatch.addBoundedText(buffer, "ANIMATOR GRAPH [" + ctrlName + "]", canvasX1 + 0.02f, canvasY2 - 0.015f, canvasX2 - 0.20f, 1.1f, 0.3f, 0.8f, 1.0f, 1.0f);
+
+        // [+ STATE] button in canvas header
+        UIGeometryBatch.addQuad(buffer, canvasX2 - 0.18f, canvasY2 - 0.045f, canvasX2 - 0.01f, canvasY2 - 0.005f, 0.15f, 0.30f, 0.45f, 1.0f);
+        UIGeometryBatch.addFrameBorder(buffer, canvasX2 - 0.18f, canvasY2 - 0.045f, canvasX2 - 0.01f, canvasY2 - 0.005f, 0.001f, 0.0f, 0.7f, 1.0f, 1.0f);
+        UIGeometryBatch.addBoundedText(buffer, "+ STATE", canvasX2 - 0.17f, canvasY2 - 0.018f, canvasX2 - 0.015f, 0.95f, 1.0f, 1.0f, 1.0f, 1.0f);
 
         // Grid pattern inside canvas
         renderCanvasGrid(buffer, canvasX1, canvasY1 + 0.02f, canvasX2, canvasY2 - 0.05f);
@@ -113,6 +130,153 @@ public class AnimatorGraphPanel {
 
         // 5. Dynamic Inspector Sidebar (0.55f to 1.00f)
         renderInspectorSidebar(buffer, controller, selectedStateName, selectedTransition);
+    }
+
+    public static boolean handleMouseClick(float ndcX, float ndcY, int button, int action, EditorWorkspace manager) {
+        if (manager == null) return false;
+        AnimatorController controller = manager.getActiveAnimatorController();
+
+        if (action == 1 && button == 0) { // Press
+            // 1. Check [+ PARAM] button in Parameters Header
+            if (ndcX >= -0.72f && ndcX <= -0.56f && ndcY >= 0.81f && ndcY <= 0.86f) {
+                promptAddParameter(controller);
+                return true;
+            }
+
+            // 2. Check [+ STATE] button in Graph Canvas Header
+            if (ndcX >= 0.37f && ndcX <= 0.54f && ndcY >= 0.81f && ndcY <= 0.86f) {
+                promptAddState(controller);
+                return true;
+            }
+
+            // 3. Check Parameters Sidebar Item Clicks (-1.00f to -0.55f)
+            if (ndcX >= -1.00f && ndcX <= -0.55f && ndcY >= -0.50f && ndcY <= 0.80f) {
+                if (controller != null && processParameterClick(ndcX, ndcY, controller)) {
+                    UISoundPlayer.play(UISound.CLICK);
+                    return true;
+                }
+            }
+
+            // 4. Check Central Canvas Node Card Clicks (-0.55f to 0.55f)
+            if (ndcX >= -0.55f && ndcX <= 0.55f && ndcY >= -0.50f && ndcY <= 0.80f) {
+                if (controller != null) {
+                    for (AnimatorState state : controller.getStates().values()) {
+                        float x1 = state.graphX;
+                        float x2 = state.graphX + 0.22f;
+                        float y1 = state.graphY - 0.12f;
+                        float y2 = state.graphY;
+
+                        if (ndcX >= x1 && ndcX <= x2 && ndcY >= y1 && ndcY <= y2) {
+                            manager.setSelectedStateName(state.name);
+                            isDraggingNode = true;
+                            draggedStateName = state.name;
+                            dragStartNdcX = ndcX;
+                            dragStartNdcY = ndcY;
+                            nodeStartGraphX = state.graphX;
+                            nodeStartGraphY = state.graphY;
+                            UISoundPlayer.play(UISound.CLICK);
+                            return true;
+                        }
+                    }
+                }
+            }
+        } else if (action == 0 && button == 0) { // Release
+            if (isDraggingNode) {
+                isDraggingNode = false;
+                draggedStateName = null;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static boolean handleCursorPos(float ndcX, float ndcY, EditorWorkspace manager) {
+        if (isDraggingNode && draggedStateName != null && manager != null) {
+            AnimatorController controller = manager.getActiveAnimatorController();
+            if (controller != null) {
+                AnimatorState state = controller.getState(draggedStateName);
+                if (state != null) {
+                    float deltaX = ndcX - dragStartNdcX;
+                    float deltaY = ndcY - dragStartNdcY;
+
+                    // Clamp node coordinates inside canvas bounds
+                    state.graphX = Math.max(-0.53f, Math.min(0.31f, nodeStartGraphX + deltaX));
+                    state.graphY = Math.max(-0.38f, Math.min(0.85f, nodeStartGraphY + deltaY));
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean processParameterClick(float ndcX, float ndcY, AnimatorController controller) {
+        if (controller == null) return false;
+        float topY = 0.86f - 0.08f;
+
+        for (AnimatorParameter param : controller.getParameters().values()) {
+            float bottomY = topY - 0.055f;
+            if (ndcY >= bottomY && ndcY <= topY) {
+                switch (param.type) {
+                    case BOOL -> param.boolValue = !param.boolValue;
+                    case TRIGGER -> param.setTrigger();
+                    case FLOAT -> {
+                        String input = NativeFileDialog.promptInput("Edit Parameter", "Enter float value for '" + param.name + "':", String.format("%.2f", param.floatValue));
+                        if (input != null && !input.trim().isEmpty()) {
+                            try {
+                                param.floatValue = Float.parseFloat(input.trim());
+                            } catch (NumberFormatException ignored) {}
+                        }
+                    }
+                    case INT -> {
+                        String input = NativeFileDialog.promptInput("Edit Parameter", "Enter int value for '" + param.name + "':", String.valueOf(param.intValue));
+                        if (input != null && !input.trim().isEmpty()) {
+                            try {
+                                param.intValue = Integer.parseInt(input.trim());
+                            } catch (NumberFormatException ignored) {}
+                        }
+                    }
+                }
+                return true;
+            }
+            topY -= 0.07f;
+        }
+        return false;
+    }
+
+    private static void promptAddParameter(AnimatorController controller) {
+        if (controller == null) return;
+        UISoundPlayer.play(UISound.OPEN_MODAL);
+        String name = NativeFileDialog.promptInput("Add Parameter", "Enter parameter name:", "NewParam");
+        if (name != null && !name.trim().isEmpty()) {
+            String typeStr = NativeFileDialog.promptInput("Parameter Type", "Type (FLOAT, INT, BOOL, TRIGGER):", "FLOAT");
+            String trimmedName = name.trim();
+            if (typeStr != null && !typeStr.trim().isEmpty()) {
+                String typeUpper = typeStr.trim().toUpperCase();
+                switch (typeUpper) {
+                    case "INT" -> controller.setInt(trimmedName, 0);
+                    case "BOOL" -> controller.setBool(trimmedName, false);
+                    case "TRIGGER" -> controller.setTrigger(trimmedName);
+                    default -> controller.setFloat(trimmedName, 0.0f);
+                }
+                UISoundPlayer.play(UISound.SPAWN);
+            }
+        }
+    }
+
+    private static void promptAddState(AnimatorController controller) {
+        if (controller == null) return;
+        UISoundPlayer.play(UISound.OPEN_MODAL);
+        String name = NativeFileDialog.promptInput("Add State", "Enter new state name:", "NewState");
+        if (name != null && !name.trim().isEmpty()) {
+            String trimmed = name.trim();
+            if (controller.getState(trimmed) == null) {
+                AnimatorState state = new AnimatorState(trimmed, null);
+                state.graphX = 0.0f;
+                state.graphY = 0.50f;
+                controller.addState(state);
+                UISoundPlayer.play(UISound.SPAWN);
+            }
+        }
     }
 
     private static void renderCanvasGrid(UIGeometryBatch.Buffer buffer, float minX, float minY, float maxX, float maxY) {
@@ -201,9 +365,13 @@ public class AnimatorGraphPanel {
         // Sidebar Header
         UIGeometryBatch.addQuad(buffer, x1, y2 - 0.05f, x2, y2, 0.16f, 0.17f, 0.22f, 1.0f);
         UIGeometryBatch.addFrameBorder(buffer, x1, y2 - 0.05f, x2, y2, 0.002f, 0.22f, 0.25f, 0.32f, 1.0f);
-        UIGeometryBatch.addBoundedText(buffer, "PARAMETERS & LAYERS", x1 + 0.02f, y2 - 0.018f, x2 - 0.02f, 1.1f, 1.0f, 1.0f, 1.0f, 1.0f);
+        UIGeometryBatch.addBoundedText(buffer, "PARAMETERS", x1 + 0.02f, y2 - 0.018f, x1 + 0.26f, 1.1f, 1.0f, 1.0f, 1.0f, 1.0f);
 
-        // Dynamic Parameter List Items
+        // [+ PARAM] button
+        UIGeometryBatch.addQuad(buffer, x2 - 0.16f, y2 - 0.045f, x2 - 0.01f, y2 - 0.005f, 0.20f, 0.35f, 0.25f, 1.0f);
+        UIGeometryBatch.addFrameBorder(buffer, x2 - 0.16f, y2 - 0.045f, x2 - 0.01f, y2 - 0.005f, 0.001f, 0.3f, 0.8f, 0.4f, 1.0f);
+        UIGeometryBatch.addBoundedText(buffer, "+ PARAM", x2 - 0.155f, y2 - 0.018f, x2 - 0.015f, 0.95f, 1.0f, 1.0f, 1.0f, 1.0f);
+
         if (controller != null && !controller.getParameters().isEmpty()) {
             float itemY = y2 - 0.08f;
             for (AnimatorParameter param : controller.getParameters().values()) {
@@ -211,15 +379,14 @@ public class AnimatorGraphPanel {
                 String valStr = switch (param.type) {
                     case FLOAT -> String.format("%.2f", param.floatValue);
                     case INT -> String.valueOf(param.intValue);
-                    case BOOL -> String.valueOf(param.boolValue);
-                    case TRIGGER -> param.boolValue ? "SET" : "OFF";
+                    case BOOL, TRIGGER -> String.valueOf(param.boolValue);
                 };
                 renderParameterRow(buffer, x1 + 0.01f, itemY, x2 - 0.01f, typeStr, param.name, valStr);
                 itemY -= 0.07f;
                 if (itemY < y1 + 0.05f) break;
             }
         } else {
-            UIGeometryBatch.addBoundedText(buffer, "NO PARAMETERS DEFINED", x1 + 0.02f, y2 - 0.10f, x2 - 0.02f, 1.0f, 0.5f, 0.5f, 0.5f, 1.0f);
+            UIGeometryBatch.addBoundedText(buffer, "NO PARAMETERS DEFINED", x1 + 0.02f, y2 - 0.10f, x2 - 0.02f, 0.9f, 0.5f, 0.5f, 0.5f, 1.0f);
         }
     }
 

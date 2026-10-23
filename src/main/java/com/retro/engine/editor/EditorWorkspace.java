@@ -7,6 +7,7 @@ import com.retro.engine.editor.gizmos.GizmoState;
 import com.retro.engine.editor.gizmos.GizmoSystem;
 import com.retro.engine.editor.ui.*;
 import com.retro.engine.scene.Entity;
+import com.retro.engine.scene.EntitySpawner;
 import com.retro.engine.scene.EntityHandle;
 import com.retro.engine.scene.SceneWorld;
 import com.retro.engine.scene.SceneWorld.PlayState;
@@ -14,6 +15,7 @@ import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.animation.AnimatorController;
+import com.retro.engine.animation.AnimatorState;
 import com.retro.engine.animation.AnimatorTransition;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.scene.components.*;
@@ -43,7 +45,7 @@ public class EditorWorkspace {
 
     private WorkspaceTab activeWorkspaceTab = WorkspaceTab.SCENE_3D;
     private AnimatorController activeAnimatorController = null;
-    private String selectedStateName = "Walk";
+    private String selectedStateName = "Idle";
     private AnimatorTransition selectedTransition = null;
 
     private ViewportCamera cameraController;
@@ -69,7 +71,63 @@ public class EditorWorkspace {
     public WorkspaceTab getActiveWorkspaceTab() { return activeWorkspaceTab; }
     public void setActiveWorkspaceTab(WorkspaceTab tab) { if (tab != null) this.activeWorkspaceTab = tab; }
 
-    public AnimatorController getActiveAnimatorController() { return activeAnimatorController; }
+    public String getSelectedStateName() { return selectedStateName; }
+    public void setSelectedStateName(String name) { if (name != null) this.selectedStateName = name; }
+
+    public AnimatorController getActiveAnimatorController() {
+        Entity selected = getSelectedEntity();
+        if (selected != null) {
+            AnimatorComponent animator = selected.getComponent(AnimatorComponent.class);
+            if (animator == null && selected.getMeshAssetPath() != null && !selected.getMeshAssetPath().trim().isEmpty()) {
+                EntitySpawner.attachAnimatorIfRigged(selected, selected.getMeshAssetPath());
+                animator = selected.getComponent(AnimatorComponent.class);
+            }
+            if (animator != null && animator.controller != null && !animator.controller.getStates().isEmpty()) {
+                activeAnimatorController = animator.controller;
+                return animator.controller;
+            }
+        }
+
+        if (activeAnimatorController != null && !activeAnimatorController.getStates().isEmpty()) {
+            return activeAnimatorController;
+        }
+
+        for (Entity e : getSceneEntities()) {
+            AnimatorComponent anim = e.getComponent(AnimatorComponent.class);
+            if (anim != null && anim.controller != null && !anim.controller.getStates().isEmpty()) {
+                activeAnimatorController = anim.controller;
+                return anim.controller;
+            }
+        }
+
+        if (activeAnimatorController == null || activeAnimatorController.getStates().isEmpty()) {
+            activeAnimatorController = createDefaultAnimatorController();
+        }
+        return activeAnimatorController;
+    }
+
+    private AnimatorController createDefaultAnimatorController() {
+        AnimatorController ctrl = new AnimatorController("ArmsAnimatorController");
+        ctrl.setFloat("Speed", 1.25f);
+        ctrl.setBool("IsGrounded", true);
+
+        AnimatorState idle = new AnimatorState("Idle", null, 1.0f, true);
+        idle.graphX = -0.20f; idle.graphY = 0.65f;
+
+        AnimatorState walk = new AnimatorState("Walk", null, 1.0f, true);
+        walk.graphX = 0.18f; walk.graphY = 0.65f;
+
+        AnimatorState run = new AnimatorState("Run", null, 1.0f, true);
+        run.graphX = 0.18f; run.graphY = 0.25f;
+
+        ctrl.addState(idle);
+        ctrl.addState(walk);
+        ctrl.addState(run);
+        ctrl.setInitialState("Idle");
+
+        return ctrl;
+    }
+
     public void setActiveAnimatorController(AnimatorController controller) { this.activeAnimatorController = controller; }
 
     public void setWindowHandle(long handle) { this.windowHandle = handle; }
@@ -155,6 +213,7 @@ public class EditorWorkspace {
                     MeshFilter mc = entity.getComponent(MeshFilter.class);
                     if (mc != null && mc.meshAssetPath != null && !mc.meshAssetPath.trim().isEmpty()) {
                         assetDirectoryManager.addAssetDirectoryIfNotExists(mc.meshAssetPath, AssetType.MESH_3D);
+                        EntitySpawner.attachAnimatorIfRigged(entity, mc.meshAssetPath);
                     }
                     Material mat = entity.getComponent(Material.class);
                     if (mat != null && mat.textureAssetPath != null && !mat.textureAssetPath.trim().isEmpty()) {
@@ -328,6 +387,7 @@ public class EditorWorkspace {
         MeshFilter mc = selected.getComponent(MeshFilter.class);
         if (mc == null) return;
         modifyFieldViaCommand(mc, "meshAssetPath", mc.meshAssetPath, meshAsset.absolutePath, "MESH_3D");
+        EntitySpawner.attachAnimatorIfRigged(selected, meshAsset.absolutePath);
     }
 
     public void assignScriptToSelectedEntity(AssetMeta scriptAsset) {
@@ -493,12 +553,11 @@ public class EditorWorkspace {
             }
 
             if (activeWorkspaceTab == WorkspaceTab.ANIMATOR) {
-                // In Animator workspace, allow asset browser interactions at bottom
                 if (region == PanelRegion.ASSET_DIRECTORY) {
                     AssetBrowserInputDelegate.processAssetDirectoryClick(ndcX, ndcY, this);
                     return true;
                 }
-                return true;
+                return AnimatorGraphPanel.handleMouseClick(ndcX, ndcY, button, action, this);
             }
 
             switch (region) {
@@ -535,6 +594,10 @@ public class EditorWorkspace {
                 return true;
             }
 
+            if (activeWorkspaceTab == WorkspaceTab.ANIMATOR) {
+                return AnimatorGraphPanel.handleMouseClick(ndcX, ndcY, button, action, this);
+            }
+
             if (button == 0 && getActiveGizmoAxis() != GizmoAxis.NONE && getSelectedEntity() != null) {
                 Transform tc = getSelectedEntity().getTransform();
                 if (tc != null) {
@@ -564,6 +627,9 @@ public class EditorWorkspace {
         if (windowWidth > 0 && windowHeight > 0) {
             this.lastNdcX = (float) ((rawX / (double) windowWidth) * 2.0 - 1.0);
             this.lastNdcY = (float) (1.0 - (rawY / (double) windowHeight) * 2.0);
+        }
+        if (activeWorkspaceTab == WorkspaceTab.ANIMATOR) {
+            AnimatorGraphPanel.handleCursorPos(lastNdcX, lastNdcY, this);
         }
         return gizmoStateController.onCursorPos(rawX, rawY, this, overlayManager);
     }
@@ -609,7 +675,7 @@ public class EditorWorkspace {
             HierarchyPanel.render(uiGeometryBuffer, getSceneEntities());
             InspectorPanel.render(uiGeometryBuffer, getSelectedEntity(), getAssetDirectory());
         } else if (activeWorkspaceTab == WorkspaceTab.ANIMATOR) {
-            AnimatorGraphPanel.render(uiGeometryBuffer, activeAnimatorController, selectedStateName, selectedTransition);
+            AnimatorGraphPanel.render(uiGeometryBuffer, getActiveAnimatorController(), selectedStateName, selectedTransition);
         }
 
         AssetBrowserPanel.render(uiGeometryBuffer, getAssetDirectory(), getCurrentFolderPath());

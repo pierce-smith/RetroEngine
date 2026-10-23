@@ -175,13 +175,18 @@ public class EntitySpawner {
         if (entity == null || meshPath == null || meshPath.trim().isEmpty()) return;
         try {
             SkeletonImporter.SkeletonImportResult result = SkeletonImporter.loadSkeletonAndAnimations(meshPath);
-            if (result != null && result.skeleton() != null && result.skeleton().getBoneCount() > 0) {
+            boolean hasBones = (result != null && result.skeleton() != null && result.skeleton().getBoneCount() > 0);
+            boolean hasAnims = (result != null && result.animations() != null && !result.animations().isEmpty());
+
+            if (hasBones || hasAnims) {
                 AnimatorComponent animator = entity.getComponent(AnimatorComponent.class);
                 if (animator == null) {
                     animator = new AnimatorComponent();
                     entity.addComponent(animator);
                 }
-                animator.skeleton = result.skeleton();
+                if (hasBones) {
+                    animator.skeleton = result.skeleton();
+                }
 
                 AnimatorController controller = animator.controller;
                 if (controller == null) {
@@ -189,7 +194,7 @@ public class EntitySpawner {
                     animator.controller = controller;
                 }
 
-                if (result.animations() != null && !result.animations().isEmpty()) {
+                if (hasAnims) {
                     float gridX = -0.20f;
                     float gridY = 0.65f;
                     int col = 0;
