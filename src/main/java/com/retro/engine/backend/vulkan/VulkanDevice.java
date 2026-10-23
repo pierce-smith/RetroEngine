@@ -3,6 +3,7 @@ package com.retro.engine.backend.vulkan;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.glfw.GLFWVulkan;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.Platform;
 import org.lwjgl.vulkan.*;
 
 import java.nio.FloatBuffer;
@@ -17,6 +18,7 @@ import static org.lwjgl.system.MemoryStack.stackPush;
 /**
  * Handles Vulkan Instance creation, physical GPU selection, queue family discovery,
  * and logical VkDevice instantiation (with Vulkan 1.3 dynamic rendering enabled).
+ * Isolated for cross-platform execution across macOS (MoltenVK) and Windows/Linux (Native Vulkan).
  */
 public class VulkanDevice {
 
@@ -29,6 +31,12 @@ public class VulkanDevice {
 
     private int graphicsQueueFamilyIndex = -1;
     private int presentQueueFamilyIndex = -1;
+
+    public String getDriverName() {
+        return (Platform.get() == Platform.MACOSX)
+                ? "Modular Vulkan 1.3 Driver (MoltenVK / Apple Silicon)"
+                : "Modular Vulkan 1.3 Driver (Native Desktop GPU)";
+    }
 
     public boolean initialize(long windowHandle) {
         return createInstance();
@@ -50,33 +58,39 @@ public class VulkanDevice {
                 return false;
             }
 
-            Set<String> supportedExtensions = getSupportedInstanceExtensions(stack);
-            List<String> requiredExtensions = new ArrayList<>();
-            for (int i = 0; i < glfwExtensions.capacity(); i++) {
-                requiredExtensions.add(glfwExtensions.getStringUTF8(i));
-            }
-
-            boolean hasPortabilityEnum = supportedExtensions.contains(KHRPortabilityEnumeration.VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
-            if (hasPortabilityEnum) {
-                requiredExtensions.add(KHRPortabilityEnumeration.VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
-            }
-            if (supportedExtensions.contains(KHRGetPhysicalDeviceProperties2.VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME)) {
-                requiredExtensions.add(KHRGetPhysicalDeviceProperties2.VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
-            }
-
-            PointerBuffer ppEnabledExtensions = stack.mallocPointer(requiredExtensions.size());
-            for (String ext : requiredExtensions) {
-                ppEnabledExtensions.put(stack.UTF8(ext));
-            }
-            ppEnabledExtensions.flip();
-
             VkInstanceCreateInfo createInfo = VkInstanceCreateInfo.calloc(stack)
                     .sType$Default()
-                    .pApplicationInfo(appInfo)
-                    .ppEnabledExtensionNames(ppEnabledExtensions);
+                    .pApplicationInfo(appInfo);
 
-            if (hasPortabilityEnum) {
-                createInfo.flags(KHRPortabilityEnumeration.VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR);
+            if (Platform.get() == Platform.MACOSX) {
+                Set<String> supportedExtensions = getSupportedInstanceExtensions(stack);
+                List<String> requiredExtensions = new ArrayList<>();
+                for (int i = 0; i < glfwExtensions.capacity(); i++) {
+                    requiredExtensions.add(glfwExtensions.getStringUTF8(i));
+                }
+
+                boolean hasPortabilityEnum = supportedExtensions.contains(KHRPortabilityEnumeration.VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+                if (hasPortabilityEnum) {
+                    requiredExtensions.add(KHRPortabilityEnumeration.VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+                }
+                if (supportedExtensions.contains(KHRGetPhysicalDeviceProperties2.VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME)) {
+                    requiredExtensions.add(KHRGetPhysicalDeviceProperties2.VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+                }
+
+                PointerBuffer ppEnabledExtensions = stack.mallocPointer(requiredExtensions.size());
+                for (String ext : requiredExtensions) {
+                    ppEnabledExtensions.put(stack.UTF8(ext));
+                }
+                ppEnabledExtensions.flip();
+
+                createInfo.ppEnabledExtensionNames(ppEnabledExtensions);
+
+                if (hasPortabilityEnum) {
+                    createInfo.flags(KHRPortabilityEnumeration.VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR);
+                }
+            } else {
+                // Windows / Linux: bypass portability settings completely and pass required GLFW extensions directly
+                createInfo.ppEnabledExtensionNames(glfwExtensions);
             }
 
             PointerBuffer pInstance = stack.mallocPointer(1);
@@ -87,7 +101,7 @@ public class VulkanDevice {
             }
 
             instance = new VkInstance(pInstance.get(0), createInfo);
-            System.out.println("[VulkanDevice] VkInstance created successfully.");
+            System.out.println("[VulkanDevice] " + getDriverName() + " VkInstance created successfully.");
             return true;
         }
     }
@@ -96,11 +110,14 @@ public class VulkanDevice {
         Set<String> extensions = new HashSet<>();
         IntBuffer pCount = stack.mallocInt(1);
         VK10.vkEnumerateInstanceExtensionProperties((CharSequence) null, pCount, null);
-        if (pCount.get(0) > 0) {
-            VkExtensionProperties.Buffer props = VkExtensionProperties.malloc(pCount.get(0), stack);
-            VK10.vkEnumerateInstanceExtensionProperties((CharSequence) null, pCount, props);
-            for (int i = 0; i < props.capacity(); i++) {
-                extensions.add(props.get(i).extensionNameString());
+        int count = pCount.get(0);
+        if (count > 0) {
+            // Allocate off-heap on native heap to prevent LWJGL MemoryStack overflow on Windows GPUs with 100+ extensions
+            try (VkExtensionProperties.Buffer props = VkExtensionProperties.malloc(count)) {
+                VK10.vkEnumerateInstanceExtensionProperties((CharSequence) null, pCount, props);
+                for (int i = 0; i < props.capacity(); i++) {
+                    extensions.add(props.get(i).extensionNameString());
+                }
             }
         }
         return extensions;
@@ -134,7 +151,7 @@ public class VulkanDevice {
             List<String> enabledDeviceExtensions = new ArrayList<>();
             enabledDeviceExtensions.add(KHRSwapchain.VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 
-            if (supportedDeviceExtensions.contains("VK_KHR_portability_subset")) {
+            if (Platform.get() == Platform.MACOSX && supportedDeviceExtensions.contains("VK_KHR_portability_subset")) {
                 enabledDeviceExtensions.add("VK_KHR_portability_subset");
             }
 
@@ -174,7 +191,7 @@ public class VulkanDevice {
             VK10.vkGetDeviceQueue(device, presentQueueFamilyIndex, 0, pQueue);
             presentQueue = new VkQueue(pQueue.get(0), device);
 
-            System.out.println("[VulkanDevice] Logical VkDevice & Queues created successfully.");
+            System.out.println("[VulkanDevice] " + getDriverName() + " Logical VkDevice & Queues created successfully.");
             return true;
         }
     }
@@ -248,11 +265,14 @@ public class VulkanDevice {
         Set<String> extensions = new HashSet<>();
         IntBuffer pCount = stack.mallocInt(1);
         VK10.vkEnumerateDeviceExtensionProperties(pd, (CharSequence) null, pCount, null);
-        if (pCount.get(0) > 0) {
-            VkExtensionProperties.Buffer props = VkExtensionProperties.malloc(pCount.get(0), stack);
-            VK10.vkEnumerateDeviceExtensionProperties(pd, (CharSequence) null, pCount, props);
-            for (int i = 0; i < props.capacity(); i++) {
-                extensions.add(props.get(i).extensionNameString());
+        int count = pCount.get(0);
+        if (count > 0) {
+            // Allocate off-heap on native heap to prevent LWJGL MemoryStack overflow
+            try (VkExtensionProperties.Buffer props = VkExtensionProperties.malloc(count)) {
+                VK10.vkEnumerateDeviceExtensionProperties(pd, (CharSequence) null, pCount, props);
+                for (int i = 0; i < props.capacity(); i++) {
+                    extensions.add(props.get(i).extensionNameString());
+                }
             }
         }
         return extensions;
