@@ -1,7 +1,7 @@
 package com.retro.engine.editor.ui;
 
 import com.retro.engine.editor.ui.InspectorProperty.PropertyType;
-import com.retro.engine.scene.components.Component;
+import com.retro.engine.scene.components.*;
 import com.retro.engine.scene.Entity;
 import com.retro.engine.scene.components.RigidBodyComponent;
 import com.retro.engine.scene.components.BoxCollider;
@@ -343,6 +343,18 @@ public class InspectorInputDelegate {
         }));
         items.add(new MenuItem("+ Script Component", () -> {
             manager.openAssetPicker(AssetType.SCRIPT);
+        }));
+        items.add(new MenuItem("+ Character Controller", () -> {
+            if (entity.getComponent(CharacterControllerComponent.class) == null) {
+                entity.addComponent(new CharacterControllerComponent());
+                UISoundPlayer.play(UISound.SPAWN);
+            }
+        }));
+        items.add(new MenuItem("+ Vehicle Controller", () -> {
+            if (entity.getComponent(VehicleControllerComponent.class) == null) {
+                entity.addComponent(new VehicleControllerComponent());
+                UISoundPlayer.play(UISound.SPAWN);
+            }
         }));
 
         manager.openContextMenu(ndcX, ndcY, items);

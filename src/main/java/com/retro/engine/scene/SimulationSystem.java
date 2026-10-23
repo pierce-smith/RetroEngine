@@ -1,7 +1,6 @@
 package com.retro.engine.scene;
 
 import com.retro.engine.physics.PhysicsSystem;
-import com.retro.engine.scene.Entity;
 import com.retro.engine.scene.SceneWorld.PlayState;
 import com.retro.engine.scene.components.*;
 import com.retro.engine.scripting.ScriptEngine;
@@ -11,28 +10,31 @@ import java.util.List;
 
 /**
  * Delegate managing runtime PlayState simulation lifecycle (EDITING, SIMULATING, PAUSED),
- * taking scene snapshot clones on Play, restoring state on Stop, evaluating 60 Hz Jolt-style
- * 3D Physics stepping, spatial audio 3D Euclidean distance attenuation, and Gameplay Script ticks.
+ * taking scene snapshot clones on Play, restoring state on Stop, and evaluating 60 Hz
+ * physics solver ticks, Vice City vehicles/character controllers, and spatial audio.
  */
 public class SimulationSystem {
 
     private PlayState playState = PlayState.EDITING;
     private List<Entity> sceneSnapshot = null;
-    private final PhysicsSystem physicsEngine = new PhysicsSystem();
+    private final PhysicsSystem physicsWorld = new PhysicsSystem();
 
     public PlayState getPlayState() {
         return playState;
     }
 
-    public PhysicsSystem getPhysicsEngine() {
-        return physicsEngine;
+    public PhysicsSystem getPhysicsWorld() {
+        return physicsWorld;
     }
 
     public void play(List<Entity> activeEntities) {
         if (playState == PlayState.EDITING) {
             this.sceneSnapshot = cloneSceneEntities(activeEntities);
             this.playState = PlayState.SIMULATING;
-            physicsEngine.initWorld(activeEntities);
+
+            // Initialize 3D Physics World
+            physicsWorld.initWorld(activeEntities);
+
             ScriptEngine.initializeScripts(activeEntities, null);
             System.out.println("[SimulationSystem] Simulation started; physics world & gameplay scripts initialized.");
         } else if (playState == PlayState.PAUSED) {
@@ -50,7 +52,7 @@ public class SimulationSystem {
     public List<Entity> stop(List<Entity> activeEntities) {
         if (playState == PlayState.SIMULATING || playState == PlayState.PAUSED) {
             ScriptEngine.destroyScripts(activeEntities);
-            physicsEngine.cleanup();
+            physicsWorld.cleanup();
 
             List<Entity> restored = null;
             if (sceneSnapshot != null) {
@@ -58,7 +60,7 @@ public class SimulationSystem {
                 this.sceneSnapshot = null;
             }
             this.playState = PlayState.EDITING;
-            System.out.println("[SimulationSystem] Simulation stopped; gameplay scripts destroyed, physics cleaned up, and state restored.");
+            System.out.println("[SimulationSystem] Simulation stopped; gameplay scripts destroyed, physics world cleaned up, and state restored.");
             return restored;
         }
         return null;
@@ -66,8 +68,8 @@ public class SimulationSystem {
 
     public void update(float deltaTime, List<Entity> activeEntities) {
         if (playState == PlayState.SIMULATING && activeEntities != null) {
-            // 1. Step 60 Hz 3D Physics Simulation
-            physicsEngine.step(deltaTime, activeEntities);
+            // 1. Step 3D Physics Solver (RigidBodies, Character Controllers, Vehicles, Raycasts)
+            physicsWorld.step(deltaTime, activeEntities);
 
             // 2. Execute gameplay script frame ticks
             ScriptEngine.updateScripts(activeEntities, deltaTime, null);
@@ -232,6 +234,34 @@ public class SimulationSystem {
                 cloneCapsule.offsetX = origCapsule.offsetX; cloneCapsule.offsetY = origCapsule.offsetY; cloneCapsule.offsetZ = origCapsule.offsetZ;
                 cloneCapsule.isTrigger = origCapsule.isTrigger;
                 cloned.addComponent(cloneCapsule);
+            }
+
+            CharacterControllerComponent origChar = orig.getComponent(CharacterControllerComponent.class);
+            if (origChar != null) {
+                CharacterControllerComponent cloneChar = new CharacterControllerComponent();
+                cloneChar.moveSpeed = origChar.moveSpeed;
+                cloneChar.jumpForce = origChar.jumpForce;
+                cloneChar.stepOffset = origChar.stepOffset;
+                cloneChar.slopeLimit = origChar.slopeLimit;
+                cloneChar.gravityMultiplier = origChar.gravityMultiplier;
+                cloneChar.isGrounded = origChar.isGrounded;
+                cloned.addComponent(cloneChar);
+            }
+
+            VehicleControllerComponent origVeh = orig.getComponent(VehicleControllerComponent.class);
+            if (origVeh != null) {
+                VehicleControllerComponent cloneVeh = new VehicleControllerComponent();
+                cloneVeh.engineTorque = origVeh.engineTorque;
+                cloneVeh.maxSpeed = origVeh.maxSpeed;
+                cloneVeh.steeringAngle = origVeh.steeringAngle;
+                cloneVeh.brakeForce = origVeh.brakeForce;
+                cloneVeh.suspensionStiffness = origVeh.suspensionStiffness;
+                cloneVeh.suspensionDamping = origVeh.suspensionDamping;
+                cloneVeh.suspensionRestLength = origVeh.suspensionRestLength;
+                cloneVeh.wheelRadius = origVeh.wheelRadius;
+                cloneVeh.wheelTrackWidth = origVeh.wheelTrackWidth;
+                cloneVeh.wheelBase = origVeh.wheelBase;
+                cloned.addComponent(cloneVeh);
             }
 
             copy.add(cloned);

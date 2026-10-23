@@ -200,6 +200,24 @@ public class SceneSerializer {
                         dos.writeFloat(capsule.radius); dos.writeFloat(capsule.height);
                         dos.writeFloat(capsule.offsetX); dos.writeFloat(capsule.offsetY); dos.writeFloat(capsule.offsetZ);
                         dos.writeBoolean(capsule.isTrigger);
+                    } else if (comp instanceof CharacterControllerComponent cc) {
+                        dos.writeFloat(cc.moveSpeed);
+                        dos.writeFloat(cc.jumpForce);
+                        dos.writeFloat(cc.stepOffset);
+                        dos.writeFloat(cc.slopeLimit);
+                        dos.writeFloat(cc.gravityMultiplier);
+                        dos.writeBoolean(cc.isGrounded);
+                    } else if (comp instanceof VehicleControllerComponent vc) {
+                        dos.writeFloat(vc.engineTorque);
+                        dos.writeFloat(vc.maxSpeed);
+                        dos.writeFloat(vc.steeringAngle);
+                        dos.writeFloat(vc.brakeForce);
+                        dos.writeFloat(vc.suspensionStiffness);
+                        dos.writeFloat(vc.suspensionDamping);
+                        dos.writeFloat(vc.suspensionRestLength);
+                        dos.writeFloat(vc.wheelRadius);
+                        dos.writeFloat(vc.wheelTrackWidth);
+                        dos.writeFloat(vc.wheelBase);
                     }
                 }
             }
