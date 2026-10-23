@@ -10,6 +10,14 @@ import java.util.List;
  */
 public class ViewportPanel {
 
+    private static String rhiCanvasTitle = "3D VIEWPORT [RHI CANVAS]";
+
+    public static void setRhiCanvasTitle(String title) {
+        if (title != null && !title.trim().isEmpty()) {
+            rhiCanvasTitle = title;
+        }
+    }
+
     public static void renderFraming(UIGeometryBatch.Buffer buffer, WorkspaceTab activeTab) {
         // Viewport Header Bar (-0.55f to 0.55f, 0.86f to 0.92f)
         UIGeometryBatch.addQuad(buffer, -0.55f, 0.86f, 0.55f, 0.92f, 0.14f, 0.14f, 0.18f, 1.0f);
@@ -38,7 +46,7 @@ public class ViewportPanel {
         UIGeometryBatch.addBoundedText(buffer, "ANIMATOR GRAPH", -0.245f, 0.882f, -0.02f, 1.0f, !is3D ? 1.0f : 0.6f, !is3D ? 1.0f : 0.6f, !is3D ? 1.0f : 0.6f, 1.0f);
 
         // Canvas Title Header (0.02f to 0.53f)
-        String title = is3D ? "3D VIEWPORT [METAL RHI CANVAS]" : "ANIMATOR STATE MACHINE WORKSPACE";
+        String title = is3D ? rhiCanvasTitle : "ANIMATOR STATE MACHINE WORKSPACE";
         UIGeometryBatch.addBoundedText(buffer, title, 0.02f, 0.882f, 0.53f, 1.0f, 0.3f, 0.8f, 1.0f, 1.0f);
     }
 

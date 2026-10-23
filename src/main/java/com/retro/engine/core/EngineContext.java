@@ -6,6 +6,7 @@ import com.retro.engine.editor.EditorInputRouter;
 import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.input.HotkeyRouter;
 import com.retro.engine.editor.render.SceneRenderPipeline;
+import com.retro.engine.editor.ui.ViewportPanel;
 import com.retro.engine.rhi.IRenderBackend;
 import org.lwjgl.glfw.GLFW;
 
@@ -127,6 +128,11 @@ public class EngineContext {
             System.err.println("[Fatal] Failed to initialize RHI backend.");
             window.destroy();
             return false;
+        }
+
+        if (rhi != null && rhi.getAPI() != null) {
+            String apiName = rhi.getAPI().name().toUpperCase();
+            ViewportPanel.setRhiCanvasTitle("3D VIEWPORT [" + apiName + " RHI CANVAS]");
         }
 
         System.out.println("[Engine] Running. Virtual Thread Asset Streaming Active (RuntimeOnly: " + isRuntimeOnly + ").");
