@@ -75,6 +75,12 @@ public class AnimatorController {
         currentState = idleState;
     }
 
+    public void clearStates() {
+        states.clear();
+        currentState = null;
+        targetState = null;
+    }
+
     public void addState(AnimatorState state) {
         if (state == null || state.name == null) return;
         states.put(state.name, state);

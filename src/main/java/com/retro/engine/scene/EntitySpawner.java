@@ -171,7 +171,7 @@ public class EntitySpawner {
         ac.audioAssetPath = audioAsset.absolutePath;
     }
 
-    public static void attachAnimatorIfRigged(Entity entity, String meshPath) {
+        public static void attachAnimatorIfRigged(Entity entity, String meshPath) {
         if (entity == null || meshPath == null || meshPath.trim().isEmpty()) return;
         try {
             SkeletonImporter.SkeletonImportResult result = SkeletonImporter.loadSkeletonAndAnimations(meshPath);
@@ -195,6 +195,9 @@ public class EntitySpawner {
                 }
 
                 if (hasAnims) {
+                    // Clear default mock states (Idle, Walk, Run, Jump) if real imported clips exist
+                    controller.clearStates();
+
                     float gridX = -0.20f;
                     float gridY = 0.65f;
                     int col = 0;
@@ -208,9 +211,10 @@ public class EntitySpawner {
                             col++;
                         }
                     }
-                    if (animator.currentClip == null && !result.animations().isEmpty()) {
+                    if (!result.animations().isEmpty()) {
                         animator.currentClip = result.animations().get(0);
                         animator.activeClipName = animator.currentClip.name;
+                        controller.setInitialState(result.animations().get(0).name);
                     }
                 }
             }
@@ -219,7 +223,7 @@ public class EntitySpawner {
         }
     }
 
-    private Entity findEntityById(String id, List<Entity> sceneEntities) {
+private Entity findEntityById(String id, List<Entity> sceneEntities) {
         if (id == null || id.isEmpty() || sceneEntities == null) return null;
         for (Entity e : sceneEntities) {
             if (e.id != null && e.id.equalsIgnoreCase(id)) return e;

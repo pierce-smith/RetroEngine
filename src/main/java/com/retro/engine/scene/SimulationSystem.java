@@ -2,6 +2,7 @@ package com.retro.engine.scene;
 
 import com.retro.engine.scene.Entity;
 import com.retro.engine.scene.SceneWorld.PlayState;
+import com.retro.engine.scene.components.AnimatorComponent;
 import com.retro.engine.scene.components.AudioSource;
 import com.retro.engine.scene.components.Camera;
 import com.retro.engine.scene.components.Light;
@@ -172,6 +173,19 @@ public class SimulationSystem {
                 ScriptComponent cloneSc = new ScriptComponent(origSc.scriptAssetPath, origSc.scriptName);
                 cloneSc.enabled = origSc.enabled;
                 cloned.addComponent(cloneSc);
+            }
+
+            AnimatorComponent origAnim = orig.getComponent(AnimatorComponent.class);
+            if (origAnim != null) {
+                AnimatorComponent cloneAnim = new AnimatorComponent();
+                cloneAnim.skeleton = origAnim.skeleton;
+                cloneAnim.controller = origAnim.controller;
+                cloneAnim.currentClip = origAnim.currentClip;
+                cloneAnim.activeClipName = origAnim.activeClipName;
+                cloneAnim.playbackTime = origAnim.playbackTime;
+                cloneAnim.playbackSpeed = origAnim.playbackSpeed;
+                cloneAnim.isPlaying = origAnim.isPlaying;
+                cloned.addComponent(cloneAnim);
             }
 
             copy.add(cloned);
