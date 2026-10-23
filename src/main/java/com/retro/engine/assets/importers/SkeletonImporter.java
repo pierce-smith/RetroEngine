@@ -6,14 +6,13 @@ import com.retro.engine.animation.Skeleton;
 import org.lwjgl.assimp.*;
 
 import java.io.File;
-import java.nio.FloatBuffer;
 import java.util.*;
 
 import static org.lwjgl.assimp.Assimp.*;
 
 /**
  * High-performance Assimp importer extracting bone hierarchies,
- * inverse bind pose offset matrices, and embedded animation tracks (FBX, glTF, DAE).
+ * inverse bind pose offset matrices, and embedded animation tracks (FBX, glTF, DAE, GLB).
  */
 public class SkeletonImporter {
 
@@ -22,22 +21,69 @@ public class SkeletonImporter {
             List<AnimationClip> animations
     ) {}
 
+    public static File resolveModelFile(String filePath) {
+        if (filePath == null || filePath.trim().isEmpty()) return null;
+        File direct = new File(filePath);
+        if (direct.exists()) return direct;
+
+        String clean = filePath.replace('\\', '/').replace('/', File.separatorChar).trim();
+        File userDirFile = new File(System.getProperty("user.dir"), clean);
+        if (userDirFile.exists()) return userDirFile;
+
+        String rawClean = filePath.replace('\\', '/').trim();
+        if (rawClean.startsWith("Assets/")) {
+            String stripped = rawClean.substring(7);
+            File strippedFile = new File(System.getProperty("user.dir"), stripped);
+            if (strippedFile.exists()) return strippedFile;
+        }
+
+        String fileName = new File(clean).getName();
+        if (!fileName.isEmpty()) {
+            File found = findFileByName(new File(System.getProperty("user.dir")), fileName, 0);
+            if (found != null && found.exists()) return found;
+
+            String userHome = System.getProperty("user.home");
+            if (userHome != null) {
+                File homeFound = findFileByName(new File(userHome, "Downloads"), fileName, 0);
+                if (homeFound != null && homeFound.exists()) return homeFound;
+            }
+        }
+        return null;
+    }
+
+    private static File findFileByName(File dir, String name, int depth) {
+        if (dir == null || !dir.exists() || !dir.isDirectory() || depth > 5) return null;
+        File[] files = dir.listFiles();
+        if (files == null) return null;
+
+        for (File f : files) {
+            if (f.isFile() && f.getName().equalsIgnoreCase(name)) return f;
+            if (f.isDirectory() && !f.getName().startsWith(".") && !f.getName().equals("build") && !f.getName().equals("node_modules")) {
+                File sub = findFileByName(f, name, depth + 1);
+                if (sub != null) return sub;
+            }
+        }
+        return null;
+    }
+
     public static SkeletonImportResult loadSkeletonAndAnimations(String filePath) {
         if (filePath == null || filePath.trim().isEmpty()) return null;
 
-        File file = new File(filePath);
-        if (!file.exists()) {
+        File file = resolveModelFile(filePath);
+        if (file == null || !file.exists()) {
             System.err.println("[SkeletonImporter] Model file not found: " + filePath);
             return null;
         }
 
-        AIScene scene = aiImportFile(filePath,
+        String resolvedPath = file.getAbsolutePath();
+
+        AIScene scene = aiImportFile(resolvedPath,
                 aiProcess_Triangulate |
                 aiProcess_JoinIdenticalVertices |
                 aiProcess_LimitBoneWeights);
 
         if (scene == null || scene.mRootNode() == null) {
-            System.err.println("[SkeletonImporter] Failed to parse scene with Assimp: " + aiGetErrorString());
+            System.err.println("[SkeletonImporter] Failed to parse scene with Assimp for " + resolvedPath + ": " + aiGetErrorString());
             return null;
         }
 
@@ -63,20 +109,34 @@ public class SkeletonImporter {
             }
         }
 
-        // 2. Traverse scene graph hierarchy to resolve parent-child bone relationships
+        // 2. Scan animation channels for any additional node names that act as animated bones
+        int numAnimations = scene.mNumAnimations();
+        for (int a = 0; a < numAnimations; a++) {
+            AIAnimation aiAnim = AIAnimation.create(scene.mAnimations().get(a));
+            int numChannels = aiAnim.mNumChannels();
+            for (int c = 0; c < numChannels; c++) {
+                AINodeAnim channel = AINodeAnim.create(aiAnim.mChannels().get(c));
+                String nodeName = channel.mNodeName().dataString();
+                if (nodeName != null && !nodeName.isEmpty() && !boneNameToIndex.containsKey(nodeName)) {
+                    int boneId = skeleton.addBone(nodeName, -1, null, null);
+                    boneNameToIndex.put(nodeName, boneId);
+                }
+            }
+        }
+
+        // 3. Traverse scene graph hierarchy to resolve parent-child bone relationships
         if (skeleton.getBoneCount() > 0) {
             AINode rootNode = scene.mRootNode();
             buildSkeletonHierarchy(rootNode, -1, skeleton, boneNameToIndex);
         }
 
-        // 3. Extract embedded animation sequences
+        // 4. Extract embedded animation sequences
         List<AnimationClip> animations = new ArrayList<>();
-        int numAnimations = scene.mNumAnimations();
 
         for (int a = 0; a < numAnimations; a++) {
             AIAnimation aiAnim = AIAnimation.create(scene.mAnimations().get(a));
             String animName = aiAnim.mName().dataString();
-            if (animName == null || animName.isEmpty()) animName = "Anim_" + a;
+            if (animName == null || animName.trim().isEmpty()) animName = "Anim_" + a;
 
             float ticksPerSec = (float) (aiAnim.mTicksPerSecond() != 0.0 ? aiAnim.mTicksPerSecond() : 25.0);
             float durationSec = (float) (aiAnim.mDuration() / ticksPerSec);
