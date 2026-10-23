@@ -4,6 +4,7 @@ import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
 
+import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
@@ -111,24 +112,26 @@ public class VulkanPassEncoder {
         try (MemoryStack stack = stackPush()) {
 
             // Dynamic Viewport & Scissor Setup for Offscreen Viewport (Negative height for Vulkan Y-Inversion)
-            VkViewport offscreenViewport = VkViewport.calloc(stack)
+            VkViewport.Buffer offscreenViewport = VkViewport.calloc(1, stack);
+            offscreenViewport.get(0)
                     .x(0.0f).y((float) targetPass.getHeight())
                     .width((float) targetPass.getWidth()).height(-(float) targetPass.getHeight())
                     .minDepth(0.0f).maxDepth(1.0f);
 
-            VkRect2D offscreenScissor = VkRect2D.calloc(stack);
-            offscreenScissor.offset().set(0, 0);
-            offscreenScissor.extent().set(targetPass.getWidth(), targetPass.getHeight());
+            VkRect2D.Buffer offscreenScissor = VkRect2D.calloc(1, stack);
+            offscreenScissor.get(0).offset().set(0, 0);
+            offscreenScissor.get(0).extent().set(targetPass.getWidth(), targetPass.getHeight());
 
             // PASS 1, 2, 3: OFFSCREEN VIEWPORT RENDERING
-            VkRenderingAttachmentInfo.Buffer offscreenColorAttachment = VkRenderingAttachmentInfo.calloc(1, stack)
+            VkRenderingAttachmentInfo.Buffer offscreenColorAttachment = VkRenderingAttachmentInfo.calloc(1, stack);
+            offscreenColorAttachment.get(0)
                     .sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO)
                     .imageView(targetPass.getOffscreenImageView())
                     .imageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
                     .loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR)
                     .storeOp(VK_ATTACHMENT_STORE_OP_STORE);
 
-            offscreenColorAttachment.clearValue().color().float32(0, 0.10f).float32(1, 0.12f).float32(2, 0.15f).float32(3, 1.0f);
+            offscreenColorAttachment.get(0).clearValue().color().float32(0, 0.0f).float32(1, 0.0f).float32(2, 0.0f).float32(3, 1.0f);
 
             VkRenderingAttachmentInfo offscreenDepthAttachment = VkRenderingAttachmentInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO)
@@ -149,8 +152,8 @@ public class VulkanPassEncoder {
 
             vkCmdBeginRendering(cmd, offscreenRenderingInfo);
 
-            vkCmdSetViewport(cmd, 0, VkViewport.calloc(1, stack).put(0, offscreenViewport));
-            vkCmdSetScissor(cmd, 0, VkRect2D.calloc(1, stack).put(0, offscreenScissor));
+            vkCmdSetViewport(cmd, 0, offscreenViewport);
+            vkCmdSetScissor(cmd, 0, offscreenScissor);
 
             // PHASE 2A: 3D Scene Mesh Pass
             if (pipelineManager.getGraphicsPipeline3D() != 0L && sceneQueue != null && sceneQueueCount > 0) {
@@ -338,7 +341,7 @@ public class VulkanPassEncoder {
                     .srcAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)
                     .dstAccessMask(VK_ACCESS_SHADER_READ_BIT);
 
-            hingeBarrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+            hingeBarrier.get(0).subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, null, null, hingeBarrier);
 
             // ---------------------------------------------------------------------------------
@@ -357,7 +360,7 @@ public class VulkanPassEncoder {
                     .image(targetPass.getOffscreenImage())
                     .srcAccessMask(VK_ACCESS_SHADER_READ_BIT)
                     .dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT);
-            srcBarrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+            srcBarrier.get(0).subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
 
             VkImageMemoryBarrier.Buffer dstBarrier = VkImageMemoryBarrier.calloc(1, stack)
                     .sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER)
@@ -368,7 +371,7 @@ public class VulkanPassEncoder {
                     .image(currentSwapchainImage)
                     .srcAccessMask(0)
                     .dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT);
-            dstBarrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+            dstBarrier.get(0).subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
 
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, srcBarrier);
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, dstBarrier);
@@ -376,9 +379,9 @@ public class VulkanPassEncoder {
             int dstWidth = swapchainManager.getWidth();
             int dstHeight = swapchainManager.getHeight();
 
-            // Clear swapchain background VRAM to dark neutral gray prior to blitting
+            // Clear swapchain background VRAM to pitch black
             VkClearColorValue clearColor = VkClearColorValue.calloc(stack);
-            clearColor.float32(0, 0.05f).float32(1, 0.05f).float32(2, 0.06f).float32(3, 1.0f);
+            clearColor.float32(0, 0.0f).float32(1, 0.0f).float32(2, 0.0f).float32(3, 1.0f);
 
             VkImageSubresourceRange clearRange = VkImageSubresourceRange.calloc(stack)
                     .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
@@ -393,13 +396,13 @@ public class VulkanPassEncoder {
             int dstY1 = (int) ((1.0f - (-0.50f)) * 0.5f * dstHeight);
 
             VkImageBlit.Buffer blitRegion = VkImageBlit.calloc(1, stack);
-            blitRegion.srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
-            blitRegion.srcOffsets(0).set(0, 0, 0);
-            blitRegion.srcOffsets(1).set(targetPass.getWidth(), targetPass.getHeight(), 1);
+            blitRegion.get(0).srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+            blitRegion.get(0).srcOffsets(0).set(0, 0, 0);
+            blitRegion.get(0).srcOffsets(1).set(targetPass.getWidth(), targetPass.getHeight(), 1);
 
-            blitRegion.dstSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
-            blitRegion.dstOffsets(0).set(dstX0, dstY0, 0);
-            blitRegion.dstOffsets(1).set(dstX1, dstY1, 1);
+            blitRegion.get(0).dstSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+            blitRegion.get(0).dstOffsets(0).set(dstX0, dstY0, 0);
+            blitRegion.get(0).dstOffsets(1).set(dstX1, dstY1, 1);
 
             vkCmdBlitImage(cmd, targetPass.getOffscreenImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, currentSwapchainImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, blitRegion, VK_FILTER_LINEAR);
 
@@ -413,7 +416,7 @@ public class VulkanPassEncoder {
                     .image(currentSwapchainImage)
                     .srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)
                     .dstAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-            uiBarrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+            uiBarrier.get(0).subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
 
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, null, null, uiBarrier);
 
@@ -422,7 +425,8 @@ public class VulkanPassEncoder {
             int uiCount = gpuCache.getUiVertexCount();
 
             if (pipelineManager.getGraphicsPipelineUI() != 0L && uiVbo != 0L && uiCount > 0) {
-                VkRenderingAttachmentInfo.Buffer swapchainColorAttachment = VkRenderingAttachmentInfo.calloc(1, stack)
+                VkRenderingAttachmentInfo.Buffer swapchainColorAttachment = VkRenderingAttachmentInfo.calloc(1, stack);
+                swapchainColorAttachment.get(0)
                         .sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO)
                         .imageView(currentSwapchainImageView)
                         .imageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
@@ -439,17 +443,18 @@ public class VulkanPassEncoder {
                 vkCmdBeginRendering(cmd, swapchainRenderingInfo);
 
                 // Swapchain UI Viewport (Negative height for Y-Inversion)
-                VkViewport swapchainViewport = VkViewport.calloc(stack)
+                VkViewport.Buffer swapchainViewport = VkViewport.calloc(1, stack);
+                swapchainViewport.get(0)
                         .x(0.0f).y((float) swapchainManager.getHeight())
                         .width((float) swapchainManager.getWidth()).height(-(float) swapchainManager.getHeight())
                         .minDepth(0.0f).maxDepth(1.0f);
 
-                VkRect2D swapchainScissor = VkRect2D.calloc(stack);
-                swapchainScissor.offset().set(0, 0);
-                swapchainScissor.extent().set(swapchainManager.getWidth(), swapchainManager.getHeight());
+                VkRect2D.Buffer swapchainScissor = VkRect2D.calloc(1, stack);
+                swapchainScissor.get(0).offset().set(0, 0);
+                swapchainScissor.get(0).extent().set(swapchainManager.getWidth(), swapchainManager.getHeight());
 
-                vkCmdSetViewport(cmd, 0, VkViewport.calloc(1, stack).put(0, swapchainViewport));
-                vkCmdSetScissor(cmd, 0, VkRect2D.calloc(1, stack).put(0, swapchainScissor));
+                vkCmdSetViewport(cmd, 0, swapchainViewport);
+                vkCmdSetScissor(cmd, 0, swapchainScissor);
 
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getGraphicsPipelineUI());
 
@@ -473,7 +478,7 @@ public class VulkanPassEncoder {
                     .srcAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)
                     .dstAccessMask(0);
 
-            presentBarrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+            presentBarrier.get(0).subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, null, null, presentBarrier);
         }
     }
