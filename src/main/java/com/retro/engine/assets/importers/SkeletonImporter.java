@@ -63,14 +63,11 @@ public class SkeletonImporter {
             }
         }
 
-        if (skeleton.getBoneCount() == 0) {
-            aiReleaseImport(scene);
-            return new SkeletonImportResult(null, Collections.emptyList());
-        }
-
         // 2. Traverse scene graph hierarchy to resolve parent-child bone relationships
-        AINode rootNode = scene.mRootNode();
-        buildSkeletonHierarchy(rootNode, -1, skeleton, boneNameToIndex);
+        if (skeleton.getBoneCount() > 0) {
+            AINode rootNode = scene.mRootNode();
+            buildSkeletonHierarchy(rootNode, -1, skeleton, boneNameToIndex);
+        }
 
         // 3. Extract embedded animation sequences
         List<AnimationClip> animations = new ArrayList<>();
@@ -143,7 +140,7 @@ public class SkeletonImporter {
         }
 
         aiReleaseImport(scene);
-        return new SkeletonImportResult(skeleton, animations);
+        return new SkeletonImportResult(skeleton.getBoneCount() > 0 ? skeleton : null, animations);
     }
 
     private static void buildSkeletonHierarchy(AINode node, int parentBoneId, Skeleton skeleton, Map<String, Integer> boneNameToIndex) {
