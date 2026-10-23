@@ -150,6 +150,26 @@ public class PrefabSerializer {
                         dos.writeInt(stringTable.indexOf(cleanPath));
                         dos.writeInt(stringTable.indexOf(sc.scriptName != null ? sc.scriptName : ""));
                         dos.writeBoolean(sc.enabled);
+                    } else if (comp instanceof RigidBodyComponent rb) {
+                        dos.writeUTF(rb.motionType.name());
+                        dos.writeFloat(rb.mass);
+                        dos.writeBoolean(rb.useGravity);
+                        dos.writeFloat(rb.linearDrag);
+                        dos.writeFloat(rb.angularDrag);
+                        dos.writeFloat(rb.friction);
+                        dos.writeFloat(rb.restitution);
+                    } else if (comp instanceof BoxCollider box) {
+                        dos.writeFloat(box.sizeX); dos.writeFloat(box.sizeY); dos.writeFloat(box.sizeZ);
+                        dos.writeFloat(box.offsetX); dos.writeFloat(box.offsetY); dos.writeFloat(box.offsetZ);
+                        dos.writeBoolean(box.isTrigger);
+                    } else if (comp instanceof SphereCollider sphere) {
+                        dos.writeFloat(sphere.radius);
+                        dos.writeFloat(sphere.offsetX); dos.writeFloat(sphere.offsetY); dos.writeFloat(sphere.offsetZ);
+                        dos.writeBoolean(sphere.isTrigger);
+                    } else if (comp instanceof CapsuleCollider capsule) {
+                        dos.writeFloat(capsule.radius); dos.writeFloat(capsule.height);
+                        dos.writeFloat(capsule.offsetX); dos.writeFloat(capsule.offsetY); dos.writeFloat(capsule.offsetZ);
+                        dos.writeBoolean(capsule.isTrigger);
                     }
                 }
             }
@@ -268,6 +288,34 @@ public class PrefabSerializer {
                         ScriptComponent sc = new ScriptComponent(scriptPath, scriptName);
                         sc.enabled = enabled;
                         entity.addComponent(sc);
+                    } else if ("RigidBodyComponent".equalsIgnoreCase(typeName) || "RigidBody".equalsIgnoreCase(typeName)) {
+                        RigidBodyComponent rb = new RigidBodyComponent();
+                        try { rb.motionType = RigidBodyComponent.MotionType.valueOf(dis.readUTF()); } catch (Exception ignored) {}
+                        rb.mass = dis.readFloat();
+                        rb.useGravity = dis.readBoolean();
+                        rb.linearDrag = dis.readFloat();
+                        rb.angularDrag = dis.readFloat();
+                        rb.friction = dis.readFloat();
+                        rb.restitution = dis.readFloat();
+                        entity.addComponent(rb);
+                    } else if ("BoxCollider".equalsIgnoreCase(typeName) || "BoxColliderComponent".equalsIgnoreCase(typeName)) {
+                        BoxCollider box = new BoxCollider();
+                        box.sizeX = dis.readFloat(); box.sizeY = dis.readFloat(); box.sizeZ = dis.readFloat();
+                        box.offsetX = dis.readFloat(); box.offsetY = dis.readFloat(); box.offsetZ = dis.readFloat();
+                        box.isTrigger = dis.readBoolean();
+                        entity.addComponent(box);
+                    } else if ("SphereCollider".equalsIgnoreCase(typeName) || "SphereColliderComponent".equalsIgnoreCase(typeName)) {
+                        SphereCollider sphere = new SphereCollider();
+                        sphere.radius = dis.readFloat();
+                        sphere.offsetX = dis.readFloat(); sphere.offsetY = dis.readFloat(); sphere.offsetZ = dis.readFloat();
+                        sphere.isTrigger = dis.readBoolean();
+                        entity.addComponent(sphere);
+                    } else if ("CapsuleCollider".equalsIgnoreCase(typeName) || "CapsuleColliderComponent".equalsIgnoreCase(typeName)) {
+                        CapsuleCollider capsule = new CapsuleCollider();
+                        capsule.radius = dis.readFloat(); capsule.height = dis.readFloat();
+                        capsule.offsetX = dis.readFloat(); capsule.offsetY = dis.readFloat(); capsule.offsetZ = dis.readFloat();
+                        capsule.isTrigger = dis.readBoolean();
+                        entity.addComponent(capsule);
                     }
                 }
                 templateEntities.add(entity);
