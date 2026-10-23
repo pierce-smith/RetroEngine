@@ -1,8 +1,14 @@
 package com.retro.engine.backend.vulkan;
 
+import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 
@@ -14,10 +20,14 @@ import static org.lwjgl.vulkan.VK13.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_
  * Manages Vulkan 1.3 Graphics Pipelines for offscreen 3D Blinn-Phong geometry (88-byte 22-float stride),
  * infinite 3D grid rendering, dynamic ground shadow blobs, vertical Y-axis pillar lines,
  * and swapchain 2D UI composition using Dynamic Rendering (VK_KHR_dynamic_rendering).
+ * Features disk-backed VkPipelineCache serialization for instant shader compilation.
  */
 public class VulkanPipeline {
 
+    private static final String CACHE_FILE_NAME = "vulkan_pipeline_cache.bin";
+
     private long minUniformBufferOffsetAlignment = 64L;
+    private long pipelineCache = 0L;
 
     private long descriptorSetLayout3D = 0L;
     private long pipelineLayout3D = 0L;
@@ -48,6 +58,8 @@ public class VulkanPipeline {
             this.minUniformBufferOffsetAlignment = deviceProperties.limits().minUniformBufferOffsetAlignment();
             System.out.println("[VulkanPipeline] Hardware minUniformBufferOffsetAlignment: " + minUniformBufferOffsetAlignment + " bytes.");
         }
+
+        initPipelineCache(vkDevice);
 
         try (MemoryStack stack = stackPush()) {
             // 1. 3D Scene Pass Layout
@@ -114,6 +126,57 @@ public class VulkanPipeline {
         }
     }
 
+    private void initPipelineCache(VkDevice vkDevice) {
+        try (MemoryStack stack = stackPush()) {
+            VkPipelineCacheCreateInfo cacheCreateInfo = VkPipelineCacheCreateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO);
+
+            File cacheFile = new File(System.getProperty("user.dir"), CACHE_FILE_NAME);
+            if (cacheFile.exists() && cacheFile.length() > 0) {
+                try (FileInputStream fis = new FileInputStream(cacheFile)) {
+                    byte[] cacheData = fis.readAllBytes();
+                    ByteBuffer pInitialData = stack.malloc(cacheData.length);
+                    pInitialData.put(cacheData).flip();
+                    cacheCreateInfo.pInitialData(pInitialData);
+                    System.out.println("[VulkanPipeline] Loaded disk VkPipelineCache (" + cacheData.length + " bytes).");
+                } catch (Exception e) {
+                    System.err.println("[VulkanPipeline] Failed to read VkPipelineCache file, creating new cache: " + e.getMessage());
+                }
+            }
+
+            LongBuffer pCache = stack.mallocLong(1);
+            if (vkCreatePipelineCache(vkDevice, cacheCreateInfo, null, pCache) == VK_SUCCESS) {
+                pipelineCache = pCache.get(0);
+            }
+        }
+    }
+
+    private void savePipelineCache(VkDevice vkDevice) {
+        if (pipelineCache == 0L) return;
+
+        try (MemoryStack stack = stackPush()) {
+            PointerBuffer pSize = stack.mallocPointer(1);
+            if (vkGetPipelineCacheData(vkDevice, pipelineCache, pSize, null) == VK_SUCCESS) {
+                long size = pSize.get(0);
+                if (size > 0) {
+                    ByteBuffer buffer = MemoryUtil.memAlloc((int) size);
+                    if (vkGetPipelineCacheData(vkDevice, pipelineCache, pSize, buffer) == VK_SUCCESS) {
+                        byte[] bytes = new byte[(int) size];
+                        buffer.get(bytes);
+                        File cacheFile = new File(System.getProperty("user.dir"), CACHE_FILE_NAME);
+                        try (FileOutputStream fos = new FileOutputStream(cacheFile)) {
+                            fos.write(bytes);
+                            System.out.println("[VulkanPipeline] Saved disk VkPipelineCache (" + size + " bytes).");
+                        } catch (Exception e) {
+                            System.err.println("[VulkanPipeline] Failed to save VkPipelineCache to disk: " + e.getMessage());
+                        }
+                    }
+                    MemoryUtil.memFree(buffer);
+                }
+            }
+        }
+    }
+
     private void createGraphicsPipelines(VulkanDevice device) {
         VkDevice vkDevice = device.getLogicalDevice();
 
@@ -148,7 +211,7 @@ public class VulkanPipeline {
                         .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO).pNext(renderingCreateInfo.address()).pStages(shaderStages).pVertexInputState(vertexInputInfo).pInputAssemblyState(inputAssembly).pViewportState(viewportState).pRasterizationState(rasterizer).pMultisampleState(multisampling).pDepthStencilState(depthStencil).pColorBlendState(colorBlending).pDynamicState(dynamicState).layout(pipelineLayoutGrid).renderPass(VK_NULL_HANDLE).subpass(0);
 
                 LongBuffer pPipeline = stack.mallocLong(1);
-                if (vkCreateGraphicsPipelines(vkDevice, VK_NULL_HANDLE, pipelineInfo, null, pPipeline) == VK_SUCCESS) {
+                if (vkCreateGraphicsPipelines(vkDevice, pipelineCache, pipelineInfo, null, pPipeline) == VK_SUCCESS) {
                     graphicsPipelineGrid = pPipeline.get(0);
                 }
 
@@ -158,7 +221,7 @@ public class VulkanPipeline {
                         .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO).pNext(renderingCreateInfo.address()).pStages(shaderStages).pVertexInputState(vertexInputInfo).pInputAssemblyState(inputAssemblyLines).pViewportState(viewportState).pRasterizationState(rasterizer).pMultisampleState(multisampling).pDepthStencilState(depthStencil).pColorBlendState(colorBlending).pDynamicState(dynamicState).layout(pipelineLayoutGrid).renderPass(VK_NULL_HANDLE).subpass(0);
 
                 LongBuffer pPipelineLines = stack.mallocLong(1);
-                if (vkCreateGraphicsPipelines(vkDevice, VK_NULL_HANDLE, pipelineInfoLines, null, pPipelineLines) == VK_SUCCESS) {
+                if (vkCreateGraphicsPipelines(vkDevice, pipelineCache, pipelineInfoLines, null, pPipelineLines) == VK_SUCCESS) {
                     graphicsPipelineGridLines = pPipelineLines.get(0);
                 }
 
@@ -214,7 +277,7 @@ public class VulkanPipeline {
                         .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO).pNext(renderingCreateInfo.address()).pStages(shaderStages3D).pVertexInputState(vertexInputInfo3D).pInputAssemblyState(inputAssembly).pViewportState(viewportState).pRasterizationState(rasterizer).pMultisampleState(multisampling).pDepthStencilState(depthStencil3D).pColorBlendState(colorBlending3D).pDynamicState(dynamicState3D).layout(pipelineLayout3D).renderPass(VK_NULL_HANDLE).subpass(0);
 
                 LongBuffer pPipeline3D = stack.mallocLong(1);
-                if (vkCreateGraphicsPipelines(vkDevice, VK_NULL_HANDLE, pipelineInfo3D, null, pPipeline3D) == VK_SUCCESS) {
+                if (vkCreateGraphicsPipelines(vkDevice, pipelineCache, pipelineInfo3D, null, pPipeline3D) == VK_SUCCESS) {
                     graphicsPipeline3D = pPipeline3D.get(0);
                     System.out.println("[VulkanPipeline] Created Standard 3D Scene Blinn-Phong VkPipeline [0x" + Long.toHexString(graphicsPipeline3D) + "].");
                 }
@@ -264,7 +327,7 @@ public class VulkanPipeline {
                         .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO).pNext(renderingCreateInfoUI.address()).pStages(shaderStagesUI).pVertexInputState(vertexInputInfoUI).pInputAssemblyState(inputAssemblyUI).pViewportState(viewportStateUI).pRasterizationState(rasterizerUI).pMultisampleState(multisamplingUI).pDepthStencilState(depthStencilUI).pColorBlendState(colorBlendingUI).pDynamicState(dynamicStateUI).layout(pipelineLayoutUI).renderPass(VK_NULL_HANDLE).subpass(0);
 
                 LongBuffer pPipelineUI = stack.mallocLong(1);
-                if (vkCreateGraphicsPipelines(vkDevice, VK_NULL_HANDLE, pipelineInfoUI, null, pPipelineUI) == VK_SUCCESS) {
+                if (vkCreateGraphicsPipelines(vkDevice, pipelineCache, pipelineInfoUI, null, pPipelineUI) == VK_SUCCESS) {
                     graphicsPipelineUI = pPipelineUI.get(0);
                     System.out.println("[VulkanPipeline] Created 2D UI Overlay VkPipeline [0x" + Long.toHexString(graphicsPipelineUI) + "].");
                 }
@@ -292,6 +355,9 @@ public class VulkanPipeline {
     public void cleanup(VulkanDevice device) {
         if (device == null || device.getLogicalDevice() == null) return;
         VkDevice vkDevice = device.getLogicalDevice();
+
+        savePipelineCache(vkDevice);
+        if (pipelineCache != 0L) { vkDestroyPipelineCache(vkDevice, pipelineCache, null); pipelineCache = 0L; }
 
         if (graphicsPipeline3D != 0L) { vkDestroyPipeline(vkDevice, graphicsPipeline3D, null); graphicsPipeline3D = 0L; }
         if (pipelineLayout3D != 0L) { vkDestroyPipelineLayout(vkDevice, pipelineLayout3D, null); pipelineLayout3D = 0L; }

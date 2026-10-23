@@ -10,7 +10,7 @@ import static org.lwjgl.system.macosx.ObjCRuntime.*;
 /**
  * Manages triple-buffered uniform streaming and matrix calculations with locked
  * public static offset constants for byte-level GPU alignment.
- * Configures composition quad identity buffer with isUnlit = 2 for 1:1 pass-through sampling.
+ * Optimized for zero-allocation hot paths during per-entity matrix generation.
  */
 public class MetalUniformStream {
 
@@ -42,6 +42,7 @@ public class MetalUniformStream {
     private final float[] matV = new float[16];
     private final float[] matM = new float[16];
     private final float[] matMVP = new float[16];
+    private final float[] matVM = new float[16]; // Reusable buffer for View*Model matrix
     private final float[] matRotX = new float[16];
     private final float[] matRotY = new float[16];
     private final float[] matRotZ = new float[16];
@@ -186,7 +187,6 @@ public class MetalUniformStream {
         createCameraViewMatrix(panX, panY, zoom, pitch, yaw);
         createModelMatrix(px, py, pz, rx, ry, rz, sx, sy, sz);
 
-        float[] matVM = new float[16];
         multiplyMat4(matV, matM, matVM);
         multiplyMat4(matP, matVM, matMVP);
         return matMVP;

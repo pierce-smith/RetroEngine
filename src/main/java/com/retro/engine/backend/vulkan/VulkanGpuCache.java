@@ -7,9 +7,11 @@ import org.lwjgl.vulkan.*;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.LongBuffer;
+import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Queue;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
@@ -18,6 +20,7 @@ import static org.lwjgl.vulkan.VK10.*;
  * Handles VRAM allocations for 3D Mesh Vertex Buffers (VBOs), 2D Textures, Light UBOs,
  * 3-Slot Ring-Buffered 2D UI Overlay Buffers, 3-Slot Ring-Buffered 3D Grid Buffers,
  * and 22-float (88-byte stride) ground quad buffer for dynamic entity shadow blob projections.
+ * Hardened with fence-synchronized single-time commands and deferred Vulkan resource cleanup queues.
  */
 public class VulkanGpuCache {
 
@@ -49,8 +52,21 @@ public class VulkanGpuCache {
         }
     }
 
+    private static class DeferredVulkanResource {
+        final long bufferHandle;
+        final long memoryHandle;
+        final int frameEnqueued;
+
+        DeferredVulkanResource(long bufferHandle, long memoryHandle, int frameEnqueued) {
+            this.bufferHandle = bufferHandle;
+            this.memoryHandle = memoryHandle;
+            this.frameEnqueued = frameEnqueued;
+        }
+    }
+
     private final Map<String, VulkanBuffer> meshCache = Collections.synchronizedMap(new HashMap<>());
     private final Map<String, VulkanTexture> textureCache = Collections.synchronizedMap(new HashMap<>());
+    private final Queue<DeferredVulkanResource> deferredDisposalQueue = new ArrayDeque<>();
 
     private VulkanBuffer lightUniformBuffer = null;
     private VulkanTexture defaultWhiteTexture = null;
@@ -69,6 +85,8 @@ public class VulkanGpuCache {
     private final int[] gridVertexCapacityRing = new int[RING_SLOTS];
     private int gridRingIndex = 0;
     private int gridVertexCount = 0;
+
+    private int totalFrameCount = 0;
 
     public long getUiVertexBuffer() { return uiVertexBufferRing[uiRingIndex]; }
     public int getUiVertexCount() { return uiVertexCount; }
@@ -102,6 +120,9 @@ public class VulkanGpuCache {
             return;
         }
 
+        totalFrameCount++;
+        processDeferredDisposals(device);
+
         VkDevice vkDevice = device.getLogicalDevice();
         long bufferSize = (long) count * 6 * Float.BYTES;
 
@@ -114,8 +135,7 @@ public class VulkanGpuCache {
         try (MemoryStack stack = stackPush()) {
             if (currentBuffer == 0L || count > currentCap) {
                 if (currentBuffer != 0L) {
-                    vkDestroyBuffer(vkDevice, currentBuffer, null);
-                    vkFreeMemory(vkDevice, currentMemory, null);
+                    enqueueDeferredDisposal(currentBuffer, currentMemory);
                 }
 
                 int newCap = Math.max(count * 2, 16384);
@@ -169,6 +189,9 @@ public class VulkanGpuCache {
             return;
         }
 
+        totalFrameCount++;
+        processDeferredDisposals(device);
+
         VkDevice vkDevice = device.getLogicalDevice();
         long bufferSize = (long) vertices.length * Float.BYTES;
 
@@ -181,8 +204,7 @@ public class VulkanGpuCache {
         try (MemoryStack stack = stackPush()) {
             if (currentBuffer == 0L || vertices.length > currentCap) {
                 if (currentBuffer != 0L) {
-                    vkDestroyBuffer(vkDevice, currentBuffer, null);
-                    vkFreeMemory(vkDevice, currentMemory, null);
+                    enqueueDeferredDisposal(currentBuffer, currentMemory);
                 }
 
                 int newCap = Math.max(vertices.length, 2048 * 9);
@@ -226,6 +248,31 @@ public class VulkanGpuCache {
                 floatBuf.put(vertices, 0, vertices.length);
                 vkUnmapMemory(vkDevice, currentMemory);
                 this.gridVertexCount = count;
+            }
+        }
+    }
+
+    private void enqueueDeferredDisposal(long bufferHandle, long memoryHandle) {
+        if (bufferHandle == 0L) return;
+        synchronized (deferredDisposalQueue) {
+            deferredDisposalQueue.add(new DeferredVulkanResource(bufferHandle, memoryHandle, totalFrameCount));
+        }
+    }
+
+    private void processDeferredDisposals(VulkanDevice device) {
+        if (device == null || device.getLogicalDevice() == null) return;
+        VkDevice vkDevice = device.getLogicalDevice();
+
+        synchronized (deferredDisposalQueue) {
+            while (!deferredDisposalQueue.isEmpty()) {
+                DeferredVulkanResource res = deferredDisposalQueue.peek();
+                if (totalFrameCount - res.frameEnqueued >= RING_SLOTS) {
+                    deferredDisposalQueue.poll();
+                    if (res.bufferHandle != 0L) vkDestroyBuffer(vkDevice, res.bufferHandle, null);
+                    if (res.memoryHandle != 0L) vkFreeMemory(vkDevice, res.memoryHandle, null);
+                } else {
+                    break;
+                }
             }
         }
     }
@@ -633,12 +680,28 @@ public class VulkanGpuCache {
         try (MemoryStack stack = stackPush()) {
             vkEndCommandBuffer(cmd);
 
-            VkSubmitInfo submitInfo = VkSubmitInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
-                    .pCommandBuffers(stack.pointers(cmd));
+            VkFenceCreateInfo fenceInfo = VkFenceCreateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
 
-            vkQueueSubmit(device.getGraphicsQueue(), submitInfo, VK_NULL_HANDLE);
-            vkQueueWaitIdle(device.getGraphicsQueue());
+            LongBuffer pFence = stack.mallocLong(1);
+            if (vkCreateFence(vkDevice, fenceInfo, null, pFence) == VK_SUCCESS) {
+                long fence = pFence.get(0);
+
+                VkSubmitInfo submitInfo = VkSubmitInfo.calloc(stack)
+                        .sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
+                        .pCommandBuffers(stack.pointers(cmd));
+
+                vkQueueSubmit(device.getGraphicsQueue(), submitInfo, fence);
+                vkWaitForFences(vkDevice, fence, true, 1000000000L); // 1 sec timeout
+                vkDestroyFence(vkDevice, fence, null);
+            } else {
+                VkSubmitInfo submitInfo = VkSubmitInfo.calloc(stack)
+                        .sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
+                        .pCommandBuffers(stack.pointers(cmd));
+
+                vkQueueSubmit(device.getGraphicsQueue(), submitInfo, VK_NULL_HANDLE);
+                vkQueueWaitIdle(device.getGraphicsQueue());
+            }
         }
     }
 

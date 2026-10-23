@@ -1,7 +1,7 @@
 package com.retro.engine.editor.commands;
 
 /**
- * Universal interface for executable and undoable editor commands.
+ * Transactional command interface for double-buffered editor state mutations.
  */
 public interface ICommand {
     void execute();

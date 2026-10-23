@@ -16,23 +16,63 @@ import com.retro.engine.scene.components.Material;
 import com.retro.engine.scene.components.MeshFilter;
 import com.retro.engine.scene.components.Transform;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
  * High-level render pipeline processing 3D scene entities, view-frustum culling,
  * light state, GPU skeletal animation bone palette extraction, and downward-raycast ground shadows
  * through a vendor-agnostic IRenderBackend contract.
+ * Fully decoupled from EditorWorkspace via thread-safe RenderSceneSnapshot structures.
  */
 public class SceneRenderPipeline {
+
+    public record LightDescriptor(
+            int lightType,
+            float posX, float posY, float posZ,
+            float dirX, float dirY, float dirZ,
+            float r, float g, float b,
+            float intensity
+    ) {}
+
+    public record RenderEntityDescriptor(
+            String submitKey,
+            float[] vertices,
+            int vertexCount,
+            String texturePath,
+            byte[] pixels,
+            int texW, int texH,
+            float px, float py, float pz,
+            float rx, float ry, float rz,
+            float sx, float sy, float sz,
+            float groundY,
+            float reflectVal,
+            float[][] bonePalette
+    ) {}
+
+    public static class RenderSceneSnapshot {
+        public LightDescriptor activeLight = null;
+        public final List<RenderEntityDescriptor> entities = new ArrayList<>();
+        public boolean gridVisible = true;
+        public float[] gridVertices = null;
+        public int gridVertexCount = 0;
+        public float[] uiVertices = null;
+        public int uiVertexCount = 0;
+        public int totalDrawCalls = 0;
+        public int totalActiveVertices = 0;
+    }
 
     private final MeshBufferData fallbackCube = MeshImporter.createDefaultCube();
     private final FrustumCuller frustumCuller = new FrustumCuller();
 
-    public void submitFrame(EditorWorkspace editorManager, AssetStreamer streamingService, IRenderBackend rhi) {
-        if (editorManager == null || streamingService == null || rhi == null) return;
+    /**
+     * Extracts a decoupled, thread-safe RenderSceneSnapshot from the editor scene graph.
+     */
+    public RenderSceneSnapshot extractSnapshot(EditorWorkspace editorManager, AssetStreamer streamingService) {
+        RenderSceneSnapshot snapshot = new RenderSceneSnapshot();
+        if (editorManager == null || streamingService == null) return snapshot;
 
         streamingService.processCompletedUploads();
-        rhi.clearSceneQueue();
 
         ViewportCamera camera = editorManager.getCameraController();
         if (camera != null) {
@@ -49,7 +89,7 @@ public class SceneRenderPipeline {
 
         if (entities != null && !entities.isEmpty()) {
 
-            // 1. Scan and pass active Light component state to RHI
+            // 1. Scan and pass active Light component state to snapshot
             for (Entity entity : entities) {
                 Light light = entity.getComponent(Light.class);
                 Transform lightTransform = entity.getTransform();
@@ -73,8 +113,10 @@ public class SceneRenderPipeline {
                         case SPOT -> 2;
                     };
 
-                    rhi.setSceneLight(lightType, posX, posY, posZ, dirX, dirY, dirZ, 
-                                      light.r, light.g, light.b, light.intensity);
+                    snapshot.activeLight = new LightDescriptor(
+                            lightType, posX, posY, posZ, dirX, dirY, dirZ,
+                            light.r, light.g, light.b, light.intensity
+                    );
                     break;
                 }
             }
@@ -146,7 +188,7 @@ public class SceneRenderPipeline {
                     float reflectVal = (mat != null) ? mat.reflect : 0.0f;
                     float[][] bonePalette = (anim != null && anim.skeleton != null) ? anim.bonePaletteMatrices : null;
 
-                    rhi.submitEntity(
+                    snapshot.entities.add(new RenderEntityDescriptor(
                             submitKey,
                             verticesToSubmit,
                             vertexCountToSubmit,
@@ -157,17 +199,71 @@ public class SceneRenderPipeline {
                             wt.sx(), wt.sy(), wt.sz(),
                             groundY, reflectVal,
                             bonePalette
-                    );
+                    ));
                 }
             }
         }
 
-        if (editorManager.is3DGridVisible()) {
-            totalActiveVertices += editorManager.get3DGridVertexCount();
+        snapshot.gridVisible = editorManager.is3DGridVisible();
+        snapshot.gridVertices = editorManager.get3DGridVertices();
+        snapshot.gridVertexCount = editorManager.get3DGridVertexCount();
+        snapshot.uiVertices = editorManager.getUiVertices();
+        snapshot.uiVertexCount = editorManager.getUiVertexCount();
+
+        if (snapshot.gridVisible) {
+            totalActiveVertices += snapshot.gridVertexCount;
         }
 
-        int totalDrawCalls = entityDrawCalls + (editorManager.is3DGridVisible() ? 1 : 0) + 2;
-        EngineConsolePanel.updateTelemetry(totalDrawCalls, totalActiveVertices);
+        snapshot.totalDrawCalls = entityDrawCalls + (snapshot.gridVisible ? 1 : 0) + 2;
+        snapshot.totalActiveVertices = totalActiveVertices;
+
+        return snapshot;
+    }
+
+    /**
+     * Submits a decoupled RenderSceneSnapshot directly to RHI without touching EditorWorkspace.
+     */
+    public void submitFrame(RenderSceneSnapshot snapshot, IRenderBackend rhi) {
+        if (snapshot == null || rhi == null) return;
+
+        rhi.clearSceneQueue();
+
+        if (snapshot.activeLight != null) {
+            LightDescriptor l = snapshot.activeLight;
+            rhi.setSceneLight(
+                    l.lightType(), l.posX(), l.posY(), l.posZ(),
+                    l.dirX(), l.dirY(), l.dirZ(),
+                    l.r(), l.g(), l.b(), l.intensity()
+            );
+        }
+
+        for (RenderEntityDescriptor e : snapshot.entities) {
+            rhi.submitEntity(
+                    e.submitKey(),
+                    e.vertices(),
+                    e.vertexCount(),
+                    e.texturePath(),
+                    e.pixels(), e.texW(), e.texH(),
+                    e.px(), e.py(), e.pz(),
+                    e.rx(), e.ry(), e.rz(),
+                    e.sx(), e.sy(), e.sz(),
+                    e.groundY(), e.reflectVal(),
+                    e.bonePalette()
+            );
+        }
+
+        rhi.updateGridMesh(snapshot.gridVertices, snapshot.gridVertexCount);
+        rhi.updateUiMesh(snapshot.uiVertices, snapshot.uiVertexCount);
+
+        EngineConsolePanel.updateTelemetry(snapshot.totalDrawCalls, snapshot.totalActiveVertices);
+    }
+
+    /**
+     * Backward-compatible submitFrame overload extracting a snapshot and submitting to RHI.
+     */
+    public void submitFrame(EditorWorkspace editorManager, AssetStreamer streamingService, IRenderBackend rhi) {
+        RenderSceneSnapshot snapshot = extractSnapshot(editorManager, streamingService);
+        submitFrame(snapshot, rhi);
     }
 
     private float findGroundSurfaceY(Entity currentEntity, WorldTransform currentWt, List<Entity> allEntities, EditorWorkspace workspace) {
