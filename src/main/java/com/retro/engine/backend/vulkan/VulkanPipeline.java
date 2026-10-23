@@ -18,8 +18,9 @@ import static org.lwjgl.vulkan.VK13.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_
 
 /**
  * Manages Vulkan 1.3 Graphics Pipelines for offscreen 3D Blinn-Phong geometry (88-byte 22-float stride),
- * infinite 3D grid rendering, dynamic ground shadow blobs, vertical Y-axis pillar lines,
- * and swapchain 2D UI composition using Dynamic Rendering (VK_KHR_dynamic_rendering).
+ * infinite 3D grid rendering (36-byte 9-float stride VBO from GizmoState matching Metal backend),
+ * dynamic ground shadow blobs, vertical Y-axis pillar lines, and swapchain 2D UI composition
+ * using Dynamic Rendering (VK_KHR_dynamic_rendering).
  * Features disk-backed VkPipelineCache serialization for instant shader compilation.
  */
 public class VulkanPipeline {
@@ -88,7 +89,7 @@ public class VulkanPipeline {
             if (vkCreatePipelineLayout(vkDevice, layoutCreateInfo3D, null, pPipelineLayout3D) != VK_SUCCESS) return false;
             pipelineLayout3D = pPipelineLayout3D.get(0);
 
-            // 2. Infinite 3D Grid Pass Layout
+            // 2. Infinite 3D Grid Pass Layout (Push constants: View Matrix + Proj Matrix = 128 bytes)
             VkPushConstantRange.Buffer pushConstantsGrid = VkPushConstantRange.calloc(1, stack);
             pushConstantsGrid.get(0).stageFlags(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT).offset(0).size(128);
 
@@ -186,7 +187,7 @@ public class VulkanPipeline {
         VkDevice vkDevice = device.getLogicalDevice();
 
         try (MemoryStack stack = stackPush()) {
-            // 1A. Grid Pipeline (Triangle List for Floor Quad)
+            // 1A. Grid Pipeline (Triangle List for Floor Quad - 36-Byte 9-Float Stride)
             long vertGridModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/infinite_grid.vert.spv");
             long fragGridModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/infinite_grid.frag.spv");
 
@@ -195,7 +196,17 @@ public class VulkanPipeline {
                 shaderStages.get(0).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_VERTEX_BIT).module(vertGridModule).pName(stack.UTF8("main"));
                 shaderStages.get(1).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_FRAGMENT_BIT).module(fragGridModule).pName(stack.UTF8("main"));
 
-                VkPipelineVertexInputStateCreateInfo vertexInputInfo = VkPipelineVertexInputStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
+                VkVertexInputBindingDescription.Buffer bindingDescriptionGrid = VkVertexInputBindingDescription.calloc(1, stack).binding(0).stride(36).inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
+                VkVertexInputAttributeDescription.Buffer attributeDescriptionsGrid = VkVertexInputAttributeDescription.calloc(3, stack);
+                attributeDescriptionsGrid.get(0).binding(0).location(0).format(VK_FORMAT_R32G32B32_SFLOAT).offset(0);  // POS
+                attributeDescriptionsGrid.get(1).binding(0).location(1).format(VK_FORMAT_R32G32B32A32_SFLOAT).offset(12); // COL
+                attributeDescriptionsGrid.get(2).binding(0).location(2).format(VK_FORMAT_R32G32_SFLOAT).offset(28); // UV
+
+                VkPipelineVertexInputStateCreateInfo vertexInputInfo = VkPipelineVertexInputStateCreateInfo.calloc(stack)
+                        .sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO)
+                        .pVertexBindingDescriptions(bindingDescriptionGrid)
+                        .pVertexAttributeDescriptions(attributeDescriptionsGrid);
+
                 VkPipelineInputAssemblyStateCreateInfo inputAssembly = VkPipelineInputAssemblyStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO).topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST).primitiveRestartEnable(false);
                 VkPipelineViewportStateCreateInfo viewportState = VkPipelineViewportStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO).viewportCount(1).scissorCount(1);
                 VkPipelineRasterizationStateCreateInfo rasterizer = VkPipelineRasterizationStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO).polygonMode(VK_POLYGON_MODE_FILL).lineWidth(1.0f).cullMode(VK_CULL_MODE_NONE).frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);
@@ -369,7 +380,7 @@ public class VulkanPipeline {
         if (descriptorSetLayout3D != 0L) { vkDestroyDescriptorSetLayout(vkDevice, descriptorSetLayout3D, null); descriptorSetLayout3D = 0L; }
 
         if (graphicsPipelineGrid != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineGrid, null); graphicsPipelineGrid = 0L; }
-        if (graphicsPipelineGridLines != 0L) { vkDestroyPipelineLayout(vkDevice, pipelineLayoutGrid, null); pipelineLayoutGrid = 0L; }
+        if (graphicsPipelineGridLines != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineGridLines, null); graphicsPipelineGridLines = 0L; }
         if (pipelineLayoutGrid != 0L) { vkDestroyPipelineLayout(vkDevice, pipelineLayoutGrid, null); pipelineLayoutGrid = 0L; }
         if (descriptorSetLayoutGrid != 0L) { vkDestroyDescriptorSetLayout(vkDevice, descriptorSetLayoutGrid, null); descriptorSetLayoutGrid = 0L; }
 

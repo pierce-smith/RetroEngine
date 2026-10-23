@@ -64,6 +64,16 @@ public class VulkanGpuCache {
         }
     }
 
+    private static class SingleTimeCmdContext {
+        final VkCommandBuffer cmd;
+        final long pool;
+
+        SingleTimeCmdContext(VkCommandBuffer cmd, long pool) {
+            this.cmd = cmd;
+            this.pool = pool;
+        }
+    }
+
     private final Map<String, VulkanBuffer> meshCache = Collections.synchronizedMap(new HashMap<>());
     private final Map<String, VulkanTexture> textureCache = Collections.synchronizedMap(new HashMap<>());
     private final Queue<DeferredVulkanResource> deferredDisposalQueue = new ArrayDeque<>();
@@ -583,7 +593,7 @@ public class VulkanGpuCache {
         VkDevice vkDevice = device.getLogicalDevice();
 
         try (MemoryStack stack = stackPush()) {
-            VkCommandBuffer cmd = beginSingleTimeCommands(device);
+            SingleTimeCmdContext stc = beginSingleTimeCommands(device);
 
             VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.calloc(1, stack)
                     .sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER)
@@ -614,17 +624,18 @@ public class VulkanGpuCache {
                 sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
                 destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
             } else {
+                endSingleTimeCommands(device, stc);
                 return;
             }
 
-            vkCmdPipelineBarrier(cmd, sourceStage, destinationStage, 0, null, null, barrier);
-            endSingleTimeCommands(device, cmd);
+            vkCmdPipelineBarrier(stc.cmd, sourceStage, destinationStage, 0, null, null, barrier);
+            endSingleTimeCommands(device, stc);
         }
     }
 
     private void copyBufferToImage(VulkanDevice device, long buffer, long image, int width, int height) {
         try (MemoryStack stack = stackPush()) {
-            VkCommandBuffer cmd = beginSingleTimeCommands(device);
+            SingleTimeCmdContext stc = beginSingleTimeCommands(device);
 
             VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, stack)
                     .bufferOffset(0)
@@ -640,12 +651,12 @@ public class VulkanGpuCache {
             region.get(0).imageOffset().set(0, 0, 0);
             region.get(0).imageExtent().set(width, height, 1);
 
-            vkCmdCopyBufferToImage(cmd, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
-            endSingleTimeCommands(device, cmd);
+            vkCmdCopyBufferToImage(stc.cmd, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
+            endSingleTimeCommands(device, stc);
         }
     }
 
-    private VkCommandBuffer beginSingleTimeCommands(VulkanDevice device) {
+    private SingleTimeCmdContext beginSingleTimeCommands(VulkanDevice device) {
         VkDevice vkDevice = device.getLogicalDevice();
         try (MemoryStack stack = stackPush()) {
             VkCommandPoolCreateInfo poolInfo = VkCommandPoolCreateInfo.calloc(stack)
@@ -671,14 +682,15 @@ public class VulkanGpuCache {
                     .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
 
             vkBeginCommandBuffer(cmd, beginInfo);
-            return cmd;
+            return new SingleTimeCmdContext(cmd, pool);
         }
     }
 
-    private void endSingleTimeCommands(VulkanDevice device, VkCommandBuffer cmd) {
+    private void endSingleTimeCommands(VulkanDevice device, SingleTimeCmdContext stc) {
+        if (stc == null || device == null || device.getLogicalDevice() == null) return;
         VkDevice vkDevice = device.getLogicalDevice();
         try (MemoryStack stack = stackPush()) {
-            vkEndCommandBuffer(cmd);
+            vkEndCommandBuffer(stc.cmd);
 
             VkFenceCreateInfo fenceInfo = VkFenceCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
@@ -689,7 +701,7 @@ public class VulkanGpuCache {
 
                 VkSubmitInfo submitInfo = VkSubmitInfo.calloc(stack)
                         .sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
-                        .pCommandBuffers(stack.pointers(cmd));
+                        .pCommandBuffers(stack.pointers(stc.cmd));
 
                 vkQueueSubmit(device.getGraphicsQueue(), submitInfo, fence);
                 vkWaitForFences(vkDevice, fence, true, 1000000000L); // 1 sec timeout
@@ -697,10 +709,15 @@ public class VulkanGpuCache {
             } else {
                 VkSubmitInfo submitInfo = VkSubmitInfo.calloc(stack)
                         .sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
-                        .pCommandBuffers(stack.pointers(cmd));
+                        .pCommandBuffers(stack.pointers(stc.cmd));
 
                 vkQueueSubmit(device.getGraphicsQueue(), submitInfo, VK_NULL_HANDLE);
                 vkQueueWaitIdle(device.getGraphicsQueue());
+            }
+
+            if (stc.pool != 0L) {
+                vkFreeCommandBuffers(vkDevice, stc.pool, stc.cmd);
+                vkDestroyCommandPool(vkDevice, stc.pool, null);
             }
         }
     }

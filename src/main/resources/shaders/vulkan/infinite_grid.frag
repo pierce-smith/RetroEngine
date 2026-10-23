@@ -1,36 +1,18 @@
 #version 450
 
-layout(location = 0) in vec3 vNearPoint;
-layout(location = 1) in vec3 vFarPoint;
-layout(location = 2) in float vIsLine;
+layout(location = 0) in vec3 vWorldPos;
+layout(location = 1) in vec4 vColor;
 
 layout(location = 0) out vec4 outFragColor;
 
-layout(push_constant) uniform GridPushConstants {
-    mat4 view;
-    mat4 proj;
-} u_Grid;
-
-float ComputeDepth(vec3 pos) {
-    vec4 clip_space_pos = u_Grid.proj * u_Grid.view * vec4(pos.xyz, 1.0);
-    return (clip_space_pos.z / clip_space_pos.w);
-}
-
 void main() {
-    if (vIsLine > 0.5) {
+    // Vertical Green Y-Axis Pillar Line (y > 0.05)
+    if (vWorldPos.y > 0.05) {
         outFragColor = vec4(0.2, 1.0, 0.2, 1.0); // Vibrant Green Y-Axis Pillar
         return;
     }
 
-    float t = -vNearPoint.y / (vFarPoint.y - vNearPoint.y);
-    if (t < 0.0) {
-        discard;
-    }
-    
-    vec3 fragPos3D = vNearPoint + t * (vFarPoint - vNearPoint);
-    gl_FragDepth = ComputeDepth(fragPos3D);
-
-    vec2 coord = fragPos3D.xz;
+    vec2 coord = vWorldPos.xz;
     vec2 der = fwidth(coord);
     vec2 safeDer = max(der, vec2(0.00001));
 
@@ -45,8 +27,8 @@ void main() {
     float c10 = 1.0 - min(line10, 1.0);
 
     // Primary Axes (Red X-Axis at Z=0, Blue Z-Axis at X=0)
-    bool isXAxis = abs(fragPos3D.z) < max(der.y * 1.5, 0.08);
-    bool isZAxis = abs(fragPos3D.x) < max(der.x * 1.5, 0.08);
+    bool isXAxis = abs(vWorldPos.z) < max(der.y * 1.5, 0.08);
+    bool isZAxis = abs(vWorldPos.x) < max(der.x * 1.5, 0.08);
 
     vec4 gridColor = vec4(0.45, 0.48, 0.55, 0.35 * c1); // Minor 1m lines
     if (c10 > 0.01) {
@@ -63,10 +45,14 @@ void main() {
         discard;
     }
 
-    // Distance Horizon Fog Attenuation
-    float dist = length(fragPos3D.xz);
+    // Distance Horizon Fog Attenuation (450m limit matching Metal backend)
+    float dist = length(vWorldPos.xz);
     float fade = clamp(1.0 - (dist / 450.0), 0.0, 1.0);
     gridColor.a *= fade;
+
+    if (gridColor.a < 0.01) {
+        discard;
+    }
 
     outFragColor = gridColor;
 }
