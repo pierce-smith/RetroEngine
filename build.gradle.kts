@@ -49,13 +49,20 @@ java {
 
 application {
     mainClass.set("com.retro.engine.Main")
-    applicationDefaultJvmArgs = listOf(
-        "-XstartOnFirstThread",
+    val isMac = org.gradle.internal.os.OperatingSystem.current().isMacOsX
+    val jvmArgsList = mutableListOf(
         "-Xms256m",
         "-Xmx512m",
-        "-Dorg.lwjgl.vulkan.libname=${project.projectDir}/libs/macos/libMoltenVK.dylib",
+        "-Dorg.lwjgl.system.stack.size=128", // Boosts LWJGL thread stack capacity
         "--enable-native-access=ALL-UNNAMED"
     )
+
+    if (isMac) {
+        jvmArgsList.add("-XstartOnFirstThread")
+        jvmArgsList.add("-Dorg.lwjgl.vulkan.libname=${project.projectDir}/libs/macos/libMoltenVK.dylib")
+    }
+
+    applicationDefaultJvmArgs = jvmArgsList
 }
 
 tasks.withType<JavaCompile> {
@@ -63,27 +70,47 @@ tasks.withType<JavaCompile> {
 }
 
 fun findGlslcExecutable(): String? {
+    // 1. Check VULKAN_SDK environment variable (Windows glslc.exe and Unix glslc)
     val vulkanSdk = System.getenv("VULKAN_SDK")
     if (!vulkanSdk.isNullOrEmpty()) {
+        val sdkGlslcWin = file("$vulkanSdk/bin/glslc.exe")
+        if (sdkGlslcWin.exists()) return sdkGlslcWin.absolutePath
         val sdkGlslc = file("$vulkanSdk/bin/glslc")
         if (sdkGlslc.exists()) return sdkGlslc.absolutePath
     }
 
+    // 2. Scan standard Windows Vulkan SDK install directory (e.g. C:/VulkanSDK/1.3.296.0/Bin/glslc.exe)
+    val vulkanBaseDir = file("C:/VulkanSDK")
+    if (vulkanBaseDir.exists()) {
+        val subDirs = vulkanBaseDir.listFiles()?.filter { it.isDirectory } ?: emptyList()
+        for (dir in subDirs) {
+            val candidate = file("${dir.absolutePath}/Bin/glslc.exe")
+            if (candidate.exists()) return candidate.absolutePath
+        }
+    }
+
+    // 3. Fallback common paths
     val commonPaths = listOf(
         "/opt/homebrew/bin/glslc",
         "/usr/local/bin/glslc",
         "/usr/bin/glslc"
     )
     for (path in commonPaths) {
-        if (file(path).exists()) return path
+        val f = file(path)
+        if (f.exists()) return f.absolutePath
     }
 
-    return try {
-        val testProc = ProcessBuilder("glslc", "--version").start()
-        if (testProc.waitFor() == 0) "glslc" else null
-    } catch (e: Exception) {
-        null
+    // 4. System PATH execution check
+    for (cmdName in listOf("glslc.exe", "glslc")) {
+        try {
+            val testProc = ProcessBuilder(cmdName, "--version").start()
+            if (testProc.waitFor() == 0) return cmdName
+        } catch (e: Exception) {
+            // continue
+        }
     }
+
+    return null
 }
 
 tasks.register("compileShaders") {
@@ -146,8 +173,8 @@ tasks.register<JavaExec>("cookAssets") {
     dependsOn(tasks.named("classes"))
 
     mainClass.set("com.retro.engine.assets.cooker.RpackCookerCli")
-        classpath = sourceSets["main"].runtimeClasspath
-        args = listOf("--dir", "Assets", "--out", "Cooked")
+    classpath = sourceSets["main"].runtimeClasspath
+    args = listOf("--dir", "Assets", "--out", "Cooked")
 }
 
 // Automatically execute asset cooking whenever you run the engine
