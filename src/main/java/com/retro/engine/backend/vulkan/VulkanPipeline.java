@@ -127,6 +127,7 @@ public class VulkanPipeline {
     }
 
     private void initPipelineCache(VkDevice vkDevice) {
+        ByteBuffer pInitialData = null;
         try (MemoryStack stack = stackPush()) {
             VkPipelineCacheCreateInfo cacheCreateInfo = VkPipelineCacheCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO);
@@ -135,7 +136,7 @@ public class VulkanPipeline {
             if (cacheFile.exists() && cacheFile.length() > 0) {
                 try (FileInputStream fis = new FileInputStream(cacheFile)) {
                     byte[] cacheData = fis.readAllBytes();
-                    ByteBuffer pInitialData = stack.malloc(cacheData.length);
+                    pInitialData = MemoryUtil.memAlloc(cacheData.length);
                     pInitialData.put(cacheData).flip();
                     cacheCreateInfo.pInitialData(pInitialData);
                     System.out.println("[VulkanPipeline] Loaded disk VkPipelineCache (" + cacheData.length + " bytes).");
@@ -147,6 +148,10 @@ public class VulkanPipeline {
             LongBuffer pCache = stack.mallocLong(1);
             if (vkCreatePipelineCache(vkDevice, cacheCreateInfo, null, pCache) == VK_SUCCESS) {
                 pipelineCache = pCache.get(0);
+            }
+        } finally {
+            if (pInitialData != null) {
+                MemoryUtil.memFree(pInitialData);
             }
         }
     }
