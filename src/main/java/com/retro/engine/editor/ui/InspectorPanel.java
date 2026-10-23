@@ -32,6 +32,14 @@ public class InspectorPanel {
         return scrollOffset;
     }
 
+    public static float getMaxScroll() {
+        return maxScroll;
+    }
+
+    public static void setScrollOffset(float offset) {
+        scrollOffset = Math.max(0.0f, Math.min(maxScroll, offset));
+    }
+
     public static void scroll(float delta) {
         scrollOffset = Math.max(0.0f, Math.min(maxScroll, scrollOffset + delta));
     }
