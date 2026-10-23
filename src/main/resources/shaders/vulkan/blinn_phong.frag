@@ -10,7 +10,7 @@ layout(location = 5) in vec3 vBitangent;
 layout(location = 0) out vec4 outFragColor;
 
 struct DirectionalLight {
-    vec4 direction; // xyz = direction, w = padding
+    vec4 direction; // xyz = direction, w = intensity
     vec4 color;     // rgb = color, a = intensity
 };
 
@@ -57,7 +57,7 @@ vec3 CalculateDirectionalLight(DirectionalLight light, vec3 normal, vec3 viewDir
     vec3 lightCol = light.color.rgb;
     float lightIntensity = light.color.a;
     
-    vec3 ambient = 0.15 * lightCol * lightIntensity * albedo;
+    vec3 ambient = 0.35 * lightCol * lightIntensity * albedo;
     vec3 diffuse = diff * lightCol * lightIntensity * albedo;
     vec3 specular = spec * lightCol * lightIntensity * vec3(0.3);
     
@@ -84,7 +84,7 @@ vec3 CalculatePointLight(PointLight light, vec3 normal, vec3 fragPos, vec3 viewD
     vec3 lightCol = light.color.rgb;
     float intensity = light.color.a;
     
-    vec3 ambient = 0.15 * lightCol * intensity * albedo;
+    vec3 ambient = 0.35 * lightCol * intensity * albedo;
     vec3 diffuse = diff * lightCol * intensity * albedo;
     vec3 specular = spec * lightCol * intensity * vec3(0.3);
     
@@ -118,7 +118,7 @@ vec3 CalculateSpotLight(SpotLight light, vec3 normal, vec3 fragPos, vec3 viewDir
     vec3 lightCol = light.color.rgb;
     float intensity = light.color.a;
     
-    vec3 ambient = 0.15 * lightCol * intensity * albedo;
+    vec3 ambient = 0.35 * lightCol * intensity * albedo;
     vec3 diffuse = diff * lightCol * intensity * albedo;
     vec3 specular = spec * lightCol * intensity * vec3(0.3);
     
@@ -147,6 +147,9 @@ void main() {
     }
 
     vec3 albedo = texColor.rgb;
+    if (length(vColor.rgb) > 0.001) {
+        albedo *= vColor.rgb;
+    }
     
     // Fallback to neutral base color if texture color is black/unmapped
     if (length(albedo) < 0.001) {
@@ -170,7 +173,7 @@ void main() {
     } else if (u_Lights.numLights.x > 0.5) {
         result = CalculateDirectionalLight(u_Lights.dirLight, norm, viewDir, albedo);
     } else {
-        result = 0.05 * albedo;
+        result = 0.35 * albedo;
     }
     
     // Output SOLID OPAQUE 3D geometry (Alpha = 1.0) to prevent pipeline blend transparency

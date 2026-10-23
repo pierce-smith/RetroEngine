@@ -26,7 +26,7 @@ void main() {
         vIsLine = 1.0;
         vNearPoint = vec3(0.0);
         vFarPoint = vec3(0.0);
-        vec3 linePos = (gl_VertexIndex == 6) ? vec3(0.0, 0.0, 0.0) : vec3(0.0, 5.0, 0.0);
+        vec3 linePos = (gl_VertexIndex == 6) ? vec3(0.0, 0.0, 0.0) : vec3(0.0, 4.0, 0.0);
         gl_Position = u_Grid.proj * u_Grid.view * vec4(linePos, 1.0);
         return;
     }

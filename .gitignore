@@ -45,6 +45,7 @@ bin/
 ### Retro Engine Custom Builds ###
 *.pak
 *.bin
+*.metallib
 Thumbs.db
 
 ### Ignore engine asset metadata sidecars
