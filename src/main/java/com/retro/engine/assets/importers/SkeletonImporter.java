@@ -153,44 +153,47 @@ public class SkeletonImporter {
                 int boneIdx = skeleton.getBoneIndex(nodeName);
                 track.boneIndex = boneIdx;
 
-                // Extract Translation Keyframes
+                // Extract Translation Keyframes (Flat 1D float array)
                 int numPosKeys = channel.mNumPositionKeys();
                 track.positionTimes = new float[numPosKeys];
-                track.positions = new float[numPosKeys][3];
+                track.positions = new float[numPosKeys * 3];
                 for (int k = 0; k < numPosKeys; k++) {
                     AIVectorKey posKey = channel.mPositionKeys().get(k);
                     track.positionTimes[k] = (float) (posKey.mTime() / ticksPerSec);
                     AIVector3D val = posKey.mValue();
-                    track.positions[k][0] = val.x();
-                    track.positions[k][1] = val.y();
-                    track.positions[k][2] = val.z();
+                    int idx = k * 3;
+                    track.positions[idx]     = val.x();
+                    track.positions[idx + 1] = val.y();
+                    track.positions[idx + 2] = val.z();
                 }
 
-                // Extract Rotation Keyframes (Quaternions)
+                // Extract Rotation Keyframes (Quaternions - Flat 1D float array)
                 int numRotKeys = channel.mNumRotationKeys();
                 track.rotationTimes = new float[numRotKeys];
-                track.rotations = new float[numRotKeys][4];
+                track.rotations = new float[numRotKeys * 4];
                 for (int k = 0; k < numRotKeys; k++) {
                     AIQuatKey rotKey = channel.mRotationKeys().get(k);
                     track.rotationTimes[k] = (float) (rotKey.mTime() / ticksPerSec);
                     AIQuaternion val = rotKey.mValue();
-                    track.rotations[k][0] = val.x();
-                    track.rotations[k][1] = val.y();
-                    track.rotations[k][2] = val.z();
-                    track.rotations[k][3] = val.w();
+                    int idx = k * 4;
+                    track.rotations[idx]     = val.x();
+                    track.rotations[idx + 1] = val.y();
+                    track.rotations[idx + 2] = val.z();
+                    track.rotations[idx + 3] = val.w();
                 }
 
-                // Extract Scale Keyframes
+                // Extract Scale Keyframes (Flat 1D float array)
                 int numScaleKeys = channel.mNumScalingKeys();
                 track.scaleTimes = new float[numScaleKeys];
-                track.scales = new float[numScaleKeys][3];
+                track.scales = new float[numScaleKeys * 3];
                 for (int k = 0; k < numScaleKeys; k++) {
                     AIVectorKey scaleKey = channel.mScalingKeys().get(k);
                     track.scaleTimes[k] = (float) (scaleKey.mTime() / ticksPerSec);
                     AIVector3D val = scaleKey.mValue();
-                    track.scales[k][0] = val.x();
-                    track.scales[k][1] = val.y();
-                    track.scales[k][2] = val.z();
+                    int idx = k * 3;
+                    track.scales[idx]     = val.x();
+                    track.scales[idx + 1] = val.y();
+                    track.scales[idx + 2] = val.z();
                 }
 
                 clip.addTrack(track);

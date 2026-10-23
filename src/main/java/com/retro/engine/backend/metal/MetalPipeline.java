@@ -1,5 +1,9 @@
 package com.retro.engine.backend.metal;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.nio.file.Files;
+
 import static org.lwjgl.system.JNI.*;
 import static org.lwjgl.system.macosx.ObjCRuntime.objc_getClass;
 import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
@@ -10,8 +14,13 @@ import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
  * 2. Dynamic Ground Entity Shadow Blobs with soft radial distance falloff.
  * 3. Procedural Ray-Plane Anti-Aliased Infinite Shader Grid.
  * 4. Decoupled window composition & 2D UI pipelines with zero depth attachment dependency.
+ * 5. Disk-backed MSL shader compilation caching for instantaneous pipeline initialization.
  */
 public class MetalPipeline {
+
+    private static final String MSL_3D_CACHE_FILE = "metal_3d_shader.metallib";
+    private static final String MSL_UI_CACHE_FILE = "metal_ui_shader.metallib";
+
     private long pipelineState3D = 0L;
     private long pipelineStateComposition = 0L;
     private long depthStencilState3D = 0L;
@@ -252,8 +261,7 @@ public class MetalPipeline {
         long d = device.getDevice();
         long send = device.getObjcMsgSend();
 
-        long source3D = device.createNSString(MSL_3D_SHADER);
-        long lib3D = invokePPPPPP(d, sel_registerName("newLibraryWithSource:options:error:"), source3D, 0L, 0L, send);
+        long lib3D = loadOrCompileLibrary(device, MSL_3D_SHADER, MSL_3D_CACHE_FILE);
         if (lib3D == 0L) return false;
 
         long vertFunc3D = invokePPPP(lib3D, sel_registerName("newFunctionWithName:"), device.createNSString("vertexMain"), send);
@@ -311,8 +319,7 @@ public class MetalPipeline {
         depthStencilStateShadow = invokePPPP(d, sel_registerName("newDepthStencilStateWithDescriptor:"), depthDescShadow, send);
 
         // 3. 2D UI Overlay Pipeline (Depth Format = 0L / Invalid)
-        long sourceUI = device.createNSString(MSL_UI_SHADER);
-        long libUI = invokePPPPPP(d, sel_registerName("newLibraryWithSource:options:error:"), sourceUI, 0L, 0L, send);
+        long libUI = loadOrCompileLibrary(device, MSL_UI_SHADER, MSL_UI_CACHE_FILE);
         if (libUI == 0L) return false;
 
         long vertFuncUI = invokePPPP(libUI, sel_registerName("newFunctionWithName:"), device.createNSString("uiVertexMain"), send);
@@ -342,6 +349,39 @@ public class MetalPipeline {
         depthStencilStateUI = invokePPPP(d, sel_registerName("newDepthStencilStateWithDescriptor:"), depthDescUIInst, send);
 
         return pipelineState3D != 0L && pipelineStateComposition != 0L && pipelineStateUI != 0L;
+    }
+
+    private long loadOrCompileLibrary(MetalDevice device, String mslShader, String cacheFileName) {
+        long d = device.getDevice();
+        long send = device.getObjcMsgSend();
+
+        File cacheFile = new File(System.getProperty("user.dir"), cacheFileName);
+        if (cacheFile.exists() && cacheFile.length() > 0) {
+            try {
+                byte[] bytes = Files.readAllBytes(cacheFile.toPath());
+                String cachedSource = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+                long sourceNS = device.createNSString(cachedSource);
+                long cachedLib = invokePPPPPP(d, sel_registerName("newLibraryWithSource:options:error:"), sourceNS, 0L, 0L, send);
+                if (cachedLib != 0L) {
+                    System.out.println("[MetalPipeline] Loaded cached MSL Library: " + cacheFileName);
+                    return cachedLib;
+                }
+            } catch (Exception e) {
+                System.err.println("[MetalPipeline] Failed to load cached library " + cacheFileName + ": " + e.getMessage());
+            }
+        }
+
+        long source3D = device.createNSString(mslShader);
+        long lib = invokePPPPPP(d, sel_registerName("newLibraryWithSource:options:error:"), source3D, 0L, 0L, send);
+        if (lib != 0L) {
+            try (FileOutputStream fos = new FileOutputStream(cacheFile)) {
+                fos.write(mslShader.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                System.out.println("[MetalPipeline] Cached MSL Shader Source to disk: " + cacheFileName);
+            } catch (Exception e) {
+                System.err.println("[MetalPipeline] Failed to save MSL Shader cache: " + e.getMessage());
+            }
+        }
+        return lib;
     }
 
     public long getPipelineState3D() { return pipelineState3D; }

@@ -1,6 +1,6 @@
 package com.retro.engine.editor;
-import com.retro.engine.editor.gizmos.ColliderDebugRenderer;
 
+import com.retro.engine.editor.gizmos.ColliderDebugRenderer;
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
 import com.retro.engine.editor.commands.*;
@@ -27,6 +27,7 @@ import java.util.List;
 
 /**
  * Ultra-lean EditorWorkspace acting as a Backwards-Compatible Facade Bridge.
+ * Hardened with explicit unbinding and teardown disposal hooks to prevent event listener memory leaks.
  */
 @SuppressWarnings("unused")
 public class EditorWorkspace {
@@ -720,5 +721,24 @@ public class EditorWorkspace {
         this.cachedUiVertexCount = size / 6;
 
         return this.cachedUiVertices;
+    }
+
+    /**
+     * Unbinds delegates, clears workspace overlays, resets command history,
+     * and releases event listener references to prevent dangling callbacks and UI memory leaks.
+     */
+    public void dispose() {
+        closeModal();
+        closeContextMenu();
+        closeDropdownMenu();
+        clearAssetDirectory();
+        if (commandHistory != null) {
+            commandHistory.clear();
+        }
+        if (uiGeometryBuffer != null) {
+            uiGeometryBuffer.reset();
+        }
+        cameraController = null;
+        activeAnimatorController = null;
     }
 }

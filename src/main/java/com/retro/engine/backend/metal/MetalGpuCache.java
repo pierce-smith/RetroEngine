@@ -10,18 +10,33 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static org.lwjgl.system.JNI.invokePPP;
 import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 
 /**
  * Delegate managing GPU mesh VRAM buffer caches, texture handle caches, ring-buffered vertex mesh state,
- * and a 14-float ground quad buffer for dynamic entity shadow blob projections.
+ * 14-float ground quad buffer for dynamic entity shadow blob projections, and fence-guarded deferred resource disposal.
  */
 public class MetalGpuCache {
 
     private static final int RING_SLOTS = 3;
     private static final int DEFAULT_MAX_CACHE_ENTRIES = 128;
+
+    private static class DeferredHandle {
+        final long handle;
+        final long safeFrameIndex;
+
+        DeferredHandle(long handle, long safeFrameIndex) {
+            this.handle = handle;
+            this.safeFrameIndex = safeFrameIndex;
+        }
+    }
+
+    private final Queue<DeferredHandle> deferredDisposalQueue = new ConcurrentLinkedQueue<>();
+    private long currentFrameCounter = 0L;
 
     private final int maxMeshCacheSize;
     private final int maxTextureCacheSize;
@@ -56,6 +71,34 @@ public class MetalGpuCache {
         this.gpuTextureCache = Collections.synchronizedMap(
                 new LinkedHashMap<String, Long>(16, 0.75f, true)
         );
+    }
+
+    public void beginFrame(MetalDevice metalDevice, long frameIndex) {
+        this.currentFrameCounter = frameIndex;
+        processDeferredDisposals(metalDevice);
+    }
+
+    public void processDeferredDisposals(MetalDevice metalDevice) {
+        if (metalDevice == null || metalDevice.getObjcMsgSend() == 0L) return;
+        long send = metalDevice.getObjcMsgSend();
+        long selRelease = sel_registerName("release");
+
+        Iterator<DeferredHandle> it = deferredDisposalQueue.iterator();
+        while (it.hasNext()) {
+            DeferredHandle item = it.next();
+            if (currentFrameCounter >= item.safeFrameIndex) {
+                if (item.handle != 0L) {
+                    invokePPP(item.handle, selRelease, send);
+                }
+                it.remove();
+            }
+        }
+    }
+
+    private void enqueueDeferredDisposal(long handle) {
+        if (handle != 0L) {
+            deferredDisposalQueue.add(new DeferredHandle(handle, currentFrameCounter + RING_SLOTS));
+        }
     }
 
     public long getGridVertexBuffer() {
@@ -129,7 +172,7 @@ public class MetalGpuCache {
 
         if (currentBuffer == 0L || requiredFloats > currentCapacity) {
             if (currentBuffer != 0L) {
-                invokePPP(currentBuffer, sel_registerName("release"), send);
+                enqueueDeferredDisposal(currentBuffer);
             }
             int newCap = Math.max(requiredFloats, 2048 * 9);
             this.gridVertexCapacityRing[this.gridRingIndex] = newCap;
@@ -167,7 +210,7 @@ public class MetalGpuCache {
 
         if (currentBuffer == 0L || requiredFloats > currentCapacity) {
             if (currentBuffer != 0L) {
-                invokePPP(currentBuffer, sel_registerName("release"), send);
+                enqueueDeferredDisposal(currentBuffer);
             }
             int newCap = Math.max(requiredFloats, 16384 * 6);
             this.uiVertexCapacityRing[this.uiRingIndex] = newCap;
@@ -231,8 +274,8 @@ public class MetalGpuCache {
                 Long handle = lru.getValue();
                 it.remove();
 
-                if (handle != null && handle != 0L && metalDevice != null && metalDevice.getObjcMsgSend() != 0L) {
-                    invokePPP(handle, sel_registerName("release"), metalDevice.getObjcMsgSend());
+                if (handle != null && handle != 0L) {
+                    enqueueDeferredDisposal(handle);
                 }
             }
         }
@@ -248,8 +291,8 @@ public class MetalGpuCache {
                 Long handle = lru.getValue();
                 it.remove();
 
-                if (handle != null && handle != 0L && metalDevice != null && metalDevice.getObjcMsgSend() != 0L) {
-                    invokePPP(handle, sel_registerName("release"), metalDevice.getObjcMsgSend());
+                if (handle != null && handle != 0L) {
+                    enqueueDeferredDisposal(handle);
                 }
             }
         }

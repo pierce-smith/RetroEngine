@@ -136,3 +136,21 @@ tasks.register("compileShaders") {
 tasks.named("processResources") {
     dependsOn("compileShaders")
 }
+
+// ==============================================================================
+// Automatic VRAM Asset Cooking Task (.rpack)
+// ==============================================================================
+tasks.register<JavaExec>("cookAssets") {
+    group = "build"
+    description = "Automatically bakes raw Assets/ into binary .rpack packages using RpackCookerCli."
+    dependsOn(tasks.named("classes"))
+
+    mainClass.set("com.retro.engine.assets.cooker.RpackCookerCli")
+        classpath = sourceSets["main"].runtimeClasspath
+        args = listOf("--dir", "Assets", "--out", "Cooked")
+}
+
+// Automatically execute asset cooking whenever you run the engine
+tasks.named("run") {
+    dependsOn("cookAssets")
+}

@@ -16,7 +16,8 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /**
  * Modular Vulkan 1.3 IRenderBackend implementation. Integrates Apple Silicon / MoltenVK
- * dynamic buffer alignment rules and orchestrates the 4-Phase rendering pipeline with 3-slot ring buffers.
+ * dynamic buffer alignment rules, zero-allocation frame loops, and orchestrates
+ * the 4-Phase rendering pipeline with 3-slot ring buffers.
  */
 public class VulkanBackend implements IRenderBackend {
 
@@ -46,6 +47,10 @@ public class VulkanBackend implements IRenderBackend {
 
     private final List<VulkanPassEncoder.RenderEntity> sceneQueuePool = new ArrayList<>();
     private int activeSceneQueueCount = 0;
+
+    // Reusable Matrix Buffers for Zero-Allocation Frame Loops
+    private final float[] viewMatrix = new float[16];
+    private final float[] projMatrix = new float[16];
 
     @Override
     public boolean initialize(ViewportSpec windowInfo) {
@@ -115,8 +120,8 @@ public class VulkanBackend implements IRenderBackend {
 
             vkBeginCommandBuffer(cmd, beginInfo);
 
-            float[] viewMatrix = computeViewMatrix();
-            float[] projMatrix = computePerspectiveProjectionMatrix(50.0f, (float) targetPass.getWidth() / (float) targetPass.getHeight(), 0.1f, 100.0f);
+            computeViewMatrix();
+            computePerspectiveProjectionMatrix(50.0f, (float) targetPass.getWidth() / (float) targetPass.getHeight(), 0.1f, 100.0f);
 
             passEncoder.record4PhasePipeline(
                     cmd,
@@ -137,31 +142,25 @@ public class VulkanBackend implements IRenderBackend {
         }
     }
 
-    private float[] computeViewMatrix() {
+    private void computeViewMatrix() {
         float radYaw = (float) Math.toRadians(camYaw);
         float radPitch = (float) Math.toRadians(camPitch);
 
         float cy = (float) Math.cos(radYaw), sy = (float) Math.sin(radYaw);
         float cp = (float) Math.cos(radPitch), sp = (float) Math.sin(radPitch);
 
-        float[] view = new float[16];
-        view[0] = cy;        view[1] = sy * sp;   view[2] = sy * cp;   view[3] = 0.0f;
-        view[4] = 0.0f;      view[5] = cp;        view[6] = -sp;       view[7] = 0.0f;
-        view[8] = -sy;       view[9] = cy * sp;   view[10] = cy * cp;  view[11] = 0.0f;
-        view[12] = camPanX;  view[13] = camPanY;  view[14] = camZoom;  view[15] = 1.0f;
-
-        return view;
+        viewMatrix[0] = cy;        viewMatrix[1] = sy * sp;   viewMatrix[2] = sy * cp;   viewMatrix[3] = 0.0f;
+        viewMatrix[4] = 0.0f;      viewMatrix[5] = cp;        viewMatrix[6] = -sp;       viewMatrix[7] = 0.0f;
+        viewMatrix[8] = -sy;       viewMatrix[9] = cy * sp;   viewMatrix[10] = cy * cp;  viewMatrix[11] = 0.0f;
+        viewMatrix[12] = camPanX;  viewMatrix[13] = camPanY;  viewMatrix[14] = camZoom;  viewMatrix[15] = 1.0f;
     }
 
-    private float[] computePerspectiveProjectionMatrix(float fovDeg, float aspect, float zNear, float zFar) {
+    private void computePerspectiveProjectionMatrix(float fovDeg, float aspect, float zNear, float zFar) {
         float f = (float) (1.0 / Math.tan(Math.toRadians(fovDeg) / 2.0));
-        float[] proj = new float[16];
-        proj[0] = f / aspect;
-        proj[5] = f; // Positive f for Vulkan Negative Height Viewport
-        proj[10] = zFar / (zNear - zFar);
-        proj[11] = -1.0f;
-        proj[14] = (zNear * zFar) / (zNear - zFar);
-        return proj;
+        projMatrix[0] = f / aspect; projMatrix[1] = 0.0f; projMatrix[2] = 0.0f; projMatrix[3] = 0.0f;
+        projMatrix[4] = 0.0f;       projMatrix[5] = f;    projMatrix[6] = 0.0f; projMatrix[7] = 0.0f;
+        projMatrix[8] = 0.0f;       projMatrix[9] = 0.0f; projMatrix[10] = zFar / (zNear - zFar); projMatrix[11] = -1.0f;
+        projMatrix[12] = 0.0f;      projMatrix[13] = 0.0f;projMatrix[14] = (zNear * zFar) / (zNear - zFar); projMatrix[15] = 0.0f;
     }
 
     @Override

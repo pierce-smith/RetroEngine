@@ -16,6 +16,7 @@ import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 
 /**
  * MetalBackend Facade Bridge routing scene queue and downward-raycast shadow parameters to MetalPassEncoder.
+ * Hardened with zero-allocation scene queue views and triple-buffered uniform streaming.
  */
 public class MetalBackend implements IRenderBackend {
 
@@ -52,6 +53,7 @@ public class MetalBackend implements IRenderBackend {
     private float activeLightIntensity = 1.2f;
 
     private final List<MetalPassEncoder.RenderEntity> sceneQueuePool = new ArrayList<>();
+    private final List<MetalPassEncoder.RenderEntity> activeSceneQueueView = new ArrayList<>();
     private int activeSceneQueueCount = 0;
 
     @Override
@@ -103,7 +105,11 @@ public class MetalBackend implements IRenderBackend {
     @Override public void clearSceneQueue() { activeSceneQueueCount = 0; }
 
     public List<MetalPassEncoder.RenderEntity> getActiveSceneQueue() {
-        return sceneQueuePool.subList(0, activeSceneQueueCount);
+        activeSceneQueueView.clear();
+        for (int i = 0; i < activeSceneQueueCount; i++) {
+            activeSceneQueueView.add(sceneQueuePool.get(i));
+        }
+        return activeSceneQueueView;
     }
 
     @Override
