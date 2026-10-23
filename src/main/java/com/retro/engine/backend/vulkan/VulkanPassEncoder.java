@@ -517,9 +517,28 @@ public class VulkanPassEncoder {
         if (device == null || device.getLogicalDevice() == null) return;
         VkDevice vkDevice = device.getLogicalDevice();
 
-        if (inFlightFence != 0L) vkDestroyFence(vkDevice, inFlightFence, null);
-        if (imageAvailableSemaphore != 0L) vkDestroySemaphore(vkDevice, imageAvailableSemaphore, null);
-        if (renderFinishedSemaphore != 0L) vkDestroySemaphore(vkDevice, renderFinishedSemaphore, null);
-        if (commandPool != 0L) vkDestroyCommandPool(vkDevice, commandPool, null);
+        vkDeviceWaitIdle(vkDevice);
+
+        if (inFlightFence != 0L) {
+            vkDestroyFence(vkDevice, inFlightFence, null);
+            inFlightFence = 0L;
+        }
+        if (imageAvailableSemaphore != 0L) {
+            vkDestroySemaphore(vkDevice, imageAvailableSemaphore, null);
+            imageAvailableSemaphore = 0L;
+        }
+        if (renderFinishedSemaphore != 0L) {
+            vkDestroySemaphore(vkDevice, renderFinishedSemaphore, null);
+            renderFinishedSemaphore = 0L;
+        }
+        if (commandPool != 0L) {
+            if (commandBuffer != null) {
+                vkFreeCommandBuffers(vkDevice, commandPool, commandBuffer);
+                commandBuffer = null;
+            }
+            vkResetCommandPool(vkDevice, commandPool, VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT);
+            vkDestroyCommandPool(vkDevice, commandPool, null);
+            commandPool = 0L;
+        }
     }
 }
