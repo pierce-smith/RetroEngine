@@ -1,4 +1,5 @@
 package com.retro.engine.editor;
+import com.retro.engine.editor.gizmos.ColliderDebugRenderer;
 
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
@@ -670,6 +671,9 @@ public class EditorWorkspace {
 
         if (activeWorkspaceTab == WorkspaceTab.SCENE_3D) {
             ViewportPanel.renderToolbar(uiGeometryBuffer, getCurrentGizmoMode());
+
+            // 3D Viewport Collider Debug Wireframe Overlay Pass
+            ColliderDebugRenderer.renderColliderWireframes(uiGeometryBuffer, getSceneEntities(), getSelectedEntity(), cameraController, gizmoStateController.getCamPanX(), gizmoStateController.getCamPanY(), gizmoStateController.getCamZoom(), gizmoStateController.getCamPitch(), gizmoStateController.getCamYaw());
 
             Entity selected = getSelectedEntity();
             if (selected != null && getActiveModal() == ModalState.NONE) {
