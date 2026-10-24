@@ -119,7 +119,7 @@ public class VulkanGpuCache {
     public void updateGridMesh(VulkanDevice device, float[] vertices, int count) {
         totalFrameCount++;
         processDeferredDisposals(device);
-        gridRingBuffer.updateBuffer(device, vertices, count, 1, deferredDisposalQueue, totalFrameCount);
+        gridRingBuffer.updateBuffer(device, vertices, count, 9, deferredDisposalQueue, totalFrameCount);
     }
 
     private void processDeferredDisposals(VulkanDevice device) {
