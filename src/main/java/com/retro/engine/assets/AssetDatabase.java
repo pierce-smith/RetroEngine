@@ -3,7 +3,7 @@ package com.retro.engine.assets;
 import com.retro.engine.assets.importers.TextureImporter;
 import com.retro.engine.assets.importers.MeshImporter;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
-import com.retro.engine.scene.SceneSerializer;
+import com.retro.engine.scene.serialization.SceneSerializer;
 
 import java.io.File;
 import java.io.IOException;

@@ -11,8 +11,8 @@ import com.retro.engine.editor.ui.batch.PanelRegion;
 import com.retro.engine.editor.ui.overlays.ContextMenuOverlay;
 import com.retro.engine.editor.ui.overlays.OverlaySystem;
 import com.retro.engine.editor.ui.panels.InspectorPanel;
-import com.retro.engine.scene.components.Transform;
-import com.retro.engine.scene.Entity;
+import com.retro.engine.scene.components.transform.Transform;
+import com.retro.engine.scene.entity.Entity;
 
 /**
  * Single Authority for GLFW/LWJGL Editor Input Event Routing.

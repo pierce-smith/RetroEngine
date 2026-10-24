@@ -1,8 +1,12 @@
-package com.retro.engine.scene;
+package com.retro.engine.scene.world;
 
 import com.retro.engine.physics.PhysicsSystem;
-import com.retro.engine.scene.SceneWorld.PlayState;
-import com.retro.engine.scene.components.*;
+import com.retro.engine.scene.serialization.EntityStateBackupManager;
+import com.retro.engine.scene.world.SceneWorld.PlayState;
+import com.retro.engine.scene.components.media.AudioSource;
+import com.retro.engine.scene.components.rendering.Camera;
+import com.retro.engine.scene.components.transform.Transform;
+import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scripting.ScriptEngine;
 
 import java.util.List;

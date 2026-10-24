@@ -1,7 +1,7 @@
 package com.retro.engine.scripting;
 
-import com.retro.engine.scene.Entity;
-import com.retro.engine.scene.SceneWorld;
+import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.scene.world.SceneWorld;
 
 /**
  * Base abstract class for all gameplay logic scripts.

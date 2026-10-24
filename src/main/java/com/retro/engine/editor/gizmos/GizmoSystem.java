@@ -5,8 +5,8 @@ import com.retro.engine.editor.EditorWorkspace.GizmoAxis;
 import com.retro.engine.editor.EditorWorkspace.GizmoMode;
 import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
-import com.retro.engine.scene.Entity;
-import com.retro.engine.scene.SceneWorld;
+import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.scene.world.SceneWorld;
 
 import java.util.List;
 

@@ -1,6 +1,7 @@
-package com.retro.engine.scene.components;
+package com.retro.engine.scene.components.transform;
 
 import com.retro.engine.editor.ui.panels.InspectorProperty;
+import com.retro.engine.scene.components.Component;
 
 /**
  * Encapsulates 3D position, rotation (degrees), and scale.
