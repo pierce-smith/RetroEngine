@@ -8,60 +8,88 @@ import java.util.List;
 
 /**
  * HierarchyPanel handles rendering the Left Panel (Scene Manager & Indented Scene Graph Tree).
+ * Zero-allocation in-place flattened tree building and node pooling.
  */
 public class HierarchyPanel {
 
     public static class HierarchyNode {
-        public final Entity entity;
-        public final int depth;
-        public final boolean hasChildren;
+        public Entity entity;
+        public int depth;
+        public boolean hasChildren;
 
-        public HierarchyNode(Entity entity, int depth, boolean hasChildren) {
+        public HierarchyNode() {
+            this.entity = null;
+            this.depth = 0;
+            this.hasChildren = false;
+        }
+
+        public void set(Entity entity, int depth, boolean hasChildren) {
             this.entity = entity;
             this.depth = depth;
             this.hasChildren = hasChildren;
         }
     }
 
-    public static List<HierarchyNode> buildFlattenedTree(List<Entity> sceneEntities) {
-        List<HierarchyNode> visibleTree = new ArrayList<>();
-        if (sceneEntities == null || sceneEntities.isEmpty()) return visibleTree;
+    private static final List<HierarchyNode> nodePool = new ArrayList<>();
+    private static final List<HierarchyNode> visibleTreeScratch = new ArrayList<>();
 
+    public static List<HierarchyNode> buildFlattenedTree(List<Entity> sceneEntities) {
+        visibleTreeScratch.clear();
+        if (sceneEntities == null || sceneEntities.isEmpty()) return visibleTreeScratch;
+
+        int poolIdx = 0;
         // Collect top-level entities
-        for (Entity entity : sceneEntities) {
+        for (int i = 0; i < sceneEntities.size(); i++) {
+            Entity entity = sceneEntities.get(i);
+            if (entity == null) continue;
             if (entity.parentId == null || entity.parentId.trim().isEmpty() || findEntity(sceneEntities, entity.parentId) == null) {
-                appendNodeAndVisibleChildren(entity, 0, sceneEntities, visibleTree);
+                poolIdx = appendNodeAndVisibleChildren(entity, 0, sceneEntities, poolIdx);
             }
         }
-        return visibleTree;
+        return visibleTreeScratch;
     }
 
-    private static void appendNodeAndVisibleChildren(Entity entity, int depth, List<Entity> allEntities, List<HierarchyNode> result) {
-        List<Entity> children = getChildrenOf(entity, allEntities);
-        boolean hasChildren = !children.isEmpty();
+    private static int appendNodeAndVisibleChildren(Entity entity, int depth, List<Entity> allEntities, int poolIdx) {
+        boolean hasChildren = hasAnyChild(entity, allEntities);
 
-        result.add(new HierarchyNode(entity, depth, hasChildren));
+        HierarchyNode node;
+        if (poolIdx < nodePool.size()) {
+            node = nodePool.get(poolIdx);
+        } else {
+            node = new HierarchyNode();
+            nodePool.add(node);
+        }
+        node.set(entity, depth, hasChildren);
+        visibleTreeScratch.add(node);
+        poolIdx++;
 
         if (hasChildren && entity.expandedInHierarchy) {
-            for (Entity child : children) {
-                appendNodeAndVisibleChildren(child, depth + 1, allEntities, result);
+            for (int i = 0; i < allEntities.size(); i++) {
+                Entity child = allEntities.get(i);
+                if (child != null && entity.id != null && entity.id.equalsIgnoreCase(child.parentId)) {
+                    poolIdx = appendNodeAndVisibleChildren(child, depth + 1, allEntities, poolIdx);
+                }
             }
         }
+        return poolIdx;
     }
 
-    private static List<Entity> getChildrenOf(Entity parent, List<Entity> allEntities) {
-        List<Entity> list = new ArrayList<>();
-        for (Entity e : allEntities) {
-            if (parent.id.equalsIgnoreCase(e.parentId)) {
-                list.add(e);
+    private static boolean hasAnyChild(Entity parent, List<Entity> allEntities) {
+        if (parent == null || parent.id == null || allEntities == null) return false;
+        for (int i = 0; i < allEntities.size(); i++) {
+            Entity e = allEntities.get(i);
+            if (e != null && parent.id.equalsIgnoreCase(e.parentId)) {
+                return true;
             }
         }
-        return list;
+        return false;
     }
 
     private static Entity findEntity(List<Entity> allEntities, String id) {
-        for (Entity e : allEntities) {
-            if (e.id.equalsIgnoreCase(id)) return e;
+        if (id == null || allEntities == null) return null;
+        for (int i = 0; i < allEntities.size(); i++) {
+            Entity e = allEntities.get(i);
+            if (e != null && e.id != null && e.id.equalsIgnoreCase(id)) return e;
         }
         return null;
     }
@@ -80,10 +108,13 @@ public class HierarchyPanel {
             UIGeometryBatch.addBoundedText(buffer, "3D MESH TO START", -0.95f, 0.65f, -0.58f, 1.1f, 0.3f, 0.7f, 0.9f, 1.0f);
         } else {
             float itemY = 0.80f;
-            for (HierarchyNode node : visibleTree) {
+            for (int i = 0; i < visibleTree.size(); i++) {
+                HierarchyNode node = visibleTree.get(i);
                 if (itemY < -0.45f) break;
 
                 Entity entity = node.entity;
+                if (entity == null) continue;
+
                 float indentX = -0.96f + (node.depth * 0.04f);
                 if (indentX > -0.65f) indentX = -0.65f;
 
@@ -109,6 +140,7 @@ public class HierarchyPanel {
             }
         }
     }
+
     public static void render(List<Float> verts, List<Entity> sceneEntities) {
         UIGeometryBatch.Buffer tempBuf = new UIGeometryBatch.Buffer();
         render(tempBuf, sceneEntities);

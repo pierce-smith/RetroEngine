@@ -4,12 +4,16 @@ import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
  * AssetBrowserPanel handles rendering the Bottom Panel (Resource Cards & Nested Folders).
+ * Hardened with zero-allocation asset list filtering via static scratch buffer.
  */
 public class AssetBrowserPanel {
+
+    private static final List<AssetMeta> visibleAssetsScratch = new ArrayList<>(128);
 
     public static void render(UIGeometryBatch.Buffer buffer, List<AssetMeta> assetDirectory) {
         render(buffer, assetDirectory, "");
@@ -42,14 +46,20 @@ public class AssetBrowserPanel {
 
         String activePath = (currentFolderPath != null) ? currentFolderPath : "";
 
-        // Filter assets matching active directory level
-        List<AssetMeta> visibleAssets = (assetDirectory != null) ? assetDirectory.stream()
-                .filter(a -> a.parentFolderPath != null && a.parentFolderPath.equalsIgnoreCase(activePath))
-                .toList() : List.of();
+        // Zero-allocation loop replacing stream().filter().toList()
+        visibleAssetsScratch.clear();
+        if (assetDirectory != null) {
+            for (int i = 0; i < assetDirectory.size(); i++) {
+                AssetMeta a = assetDirectory.get(i);
+                if (a != null && a.parentFolderPath != null && a.parentFolderPath.equalsIgnoreCase(activePath)) {
+                    visibleAssetsScratch.add(a);
+                }
+            }
+        }
 
         boolean hasUpLevel = !activePath.isEmpty();
 
-        if (visibleAssets.isEmpty() && !hasUpLevel) {
+        if (visibleAssetsScratch.isEmpty() && !hasUpLevel) {
             UIGeometryBatch.addBoundedText(buffer, "NO ASSETS IN FOLDER - DRAG & DROP FILES OR CLICK [+ IMPORT ASSET]", -0.80f, -0.70f, 0.90f, 1.2f, 0.4f, 0.4f, 0.4f, 1.0f);
         } else {
             float cardX = -0.95f;
@@ -68,7 +78,8 @@ public class AssetBrowserPanel {
             }
 
             // 2. Render Children
-            for (AssetMeta asset : visibleAssets) {
+            for (int i = 0; i < visibleAssetsScratch.size(); i++) {
+                AssetMeta asset = visibleAssetsScratch.get(i);
                 if (cardX + 0.35f > 0.95f) break;
 
                 boolean isFolder = (asset.type == AssetType.FOLDER);

@@ -6,7 +6,6 @@ import com.retro.engine.scene.components.rendering.MeshFilter;
 import com.retro.engine.scene.components.transform.Transform;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 /**
@@ -49,7 +48,8 @@ public class Entity {
 
     @SuppressWarnings("unchecked")
     public <T extends Component> T getComponent(Class<T> componentClass) {
-        for (Component c : components) {
+        for (int i = 0; i < components.size(); i++) {
+            Component c = components.get(i);
             if (componentClass.isInstance(c)) {
                 return (T) c;
             }
@@ -58,7 +58,7 @@ public class Entity {
     }
 
     public List<Component> getAllComponents() {
-        return Collections.unmodifiableList(components);
+        return components;
     }
 
     public Transform getTransform() {
@@ -96,7 +96,7 @@ public class Entity {
 
     // --- Hierarchy Methods ---
     public List<String> getChildIds() {
-        return Collections.unmodifiableList(childIds);
+        return childIds;
     }
 
     public void addChildId(String childId) {
@@ -121,8 +121,9 @@ public class Entity {
         if (this.parentId == null) return false;
         if (this.parentId.equalsIgnoreCase(potentialAncestor.id)) return true;
 
-        for (Entity e : allEntities) {
-            if (e.id.equalsIgnoreCase(this.parentId)) {
+        for (int i = 0; i < allEntities.size(); i++) {
+            Entity e = allEntities.get(i);
+            if (e != null && e.id != null && e.id.equalsIgnoreCase(this.parentId)) {
                 return e.isDescendantOf(potentialAncestor, allEntities);
             }
         }

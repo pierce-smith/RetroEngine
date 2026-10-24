@@ -14,44 +14,98 @@ import java.util.Set;
  * Delegate managing recursive parent-child scene graph matrix propagation,
  * vector rotations, dirty-flag transform caching, and cycle detection.
  *
- * Hardened with zero per-frame JVM heap allocations and transform dirty-flag caching.
+ * Hardened with zero per-frame JVM heap allocations, mutable snapshot pooling,
+ * and transform dirty-flag caching.
  */
 public class HierarchySystem {
 
-    // Record storing local snapshot parameters for delta verification
-    private record LocalSnapshot(
-            float px, float py, float pz,
-            float rx, float ry, float rz,
-            float sx, float sy, float sz
-    ) {}
+    private static final WorldTransform DEFAULT_IDENTITY_TRANSFORM = new WorldTransform(0,0,0, 0,0,0, 1,1,1);
+
+    // Mutable snapshot structures for zero-allocation cache updates
+    private static class LocalSnapshot {
+        float px, py, pz;
+        float rx, ry, rz;
+        float sx, sy, sz;
+
+        LocalSnapshot(float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
+            set(px, py, pz, rx, ry, rz, sx, sy, sz);
+        }
+
+        void set(float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
+            this.px = px; this.py = py; this.pz = pz;
+            this.rx = rx; this.ry = ry; this.rz = rz;
+            this.sx = sx; this.sy = sy; this.sz = sz;
+        }
+    }
+
+    private static class ParentSnapshot {
+        float px, py, pz;
+        float rx, ry, rz;
+        float sx, sy, sz;
+
+        ParentSnapshot(float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
+            set(px, py, pz, rx, ry, rz, sx, sy, sz);
+        }
+
+        void set(float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
+            this.px = px; this.py = py; this.pz = pz;
+            this.rx = rx; this.ry = ry; this.rz = rz;
+            this.sx = sx; this.sy = sy; this.sz = sz;
+        }
+    }
 
     // Pre-allocated scratchpad vector for zero per-frame array allocations
     private final float[] rotScratch = new float[3];
 
-    // Pre-allocated reusable Map scratchpad to eliminate per-call HashMap instantiations
+    // Pre-allocated reusable Map scratchpads to eliminate per-call HashMap instantiations
     private final Map<String, Entity> entityMapScratch = new HashMap<>(256);
+    private final Set<String> visitedIdsScratch = new HashSet<>(256);
 
     // Transform Caches for zero-cost static matrix propagation
     private final Map<String, WorldTransform> worldTransformCache = new HashMap<>(256);
     private final Map<String, LocalSnapshot> localSnapshotMap = new HashMap<>(256);
-    private final Map<String, WorldTransform> parentSnapshotMap = new HashMap<>(256);
+    private final Map<String, ParentSnapshot> parentSnapshotMap = new HashMap<>(256);
 
     public void clearCache() {
         worldTransformCache.clear();
         localSnapshotMap.clear();
         parentSnapshotMap.clear();
+        entityMapScratch.clear();
+        visitedIdsScratch.clear();
+    }
+
+    private void putOrUpdateLocalSnapshot(String entityId, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
+        LocalSnapshot snap = localSnapshotMap.get(entityId);
+        if (snap != null) {
+            snap.set(px, py, pz, rx, ry, rz, sx, sy, sz);
+        } else {
+            localSnapshotMap.put(entityId, new LocalSnapshot(px, py, pz, rx, ry, rz, sx, sy, sz));
+        }
+    }
+
+    private void putOrUpdateParentSnapshot(String entityId, WorldTransform parentWt) {
+        ParentSnapshot snap = parentSnapshotMap.get(entityId);
+        if (snap != null) {
+            snap.set(parentWt.px(), parentWt.py(), parentWt.pz(), parentWt.rx(), parentWt.ry(), parentWt.rz(), parentWt.sx(), parentWt.sy(), parentWt.sz());
+        } else {
+            parentSnapshotMap.put(entityId, new ParentSnapshot(parentWt.px(), parentWt.py(), parentWt.pz(), parentWt.rx(), parentWt.ry(), parentWt.rz(), parentWt.sx(), parentWt.sy(), parentWt.sz()));
+        }
     }
 
     public WorldTransform getComputedWorldTransform(Entity entity, List<Entity> sceneEntities) {
-        if (entity == null) return new WorldTransform(0,0,0, 0,0,0, 1,1,1);
+        if (entity == null) return DEFAULT_IDENTITY_TRANSFORM;
         Transform tc = entity.getTransform();
-        if (tc == null) return new WorldTransform(0,0,0, 0,0,0, 1,1,1);
+        if (tc == null) return DEFAULT_IDENTITY_TRANSFORM;
 
         if (sceneEntities == null || sceneEntities.isEmpty()) {
-            return new WorldTransform(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ);
+            WorldTransform cached = worldTransformCache.get(entity.id);
+            if (cached != null && !tc.isDirty()) return cached;
+            WorldTransform wt = new WorldTransform(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ);
+            if (entity.id != null) worldTransformCache.put(entity.id, wt);
+            tc.setDirty(false);
+            return wt;
         }
 
-        // Re-use persistent Map scratchpad
         entityMapScratch.clear();
         for (int i = 0; i < sceneEntities.size(); i++) {
             Entity e = sceneEntities.get(i);
@@ -64,17 +118,17 @@ public class HierarchySystem {
     }
 
     private WorldTransform getComputedWorldTransformIndexed(Entity entity, Map<String, Entity> entityMap) {
-        if (entity == null) return new WorldTransform(0,0,0, 0,0,0, 1,1,1);
+        if (entity == null) return DEFAULT_IDENTITY_TRANSFORM;
         Transform tc = entity.getTransform();
-        if (tc == null) return new WorldTransform(0,0,0, 0,0,0, 1,1,1);
+        if (tc == null) return DEFAULT_IDENTITY_TRANSFORM;
 
         String entityId = entity.id != null ? entity.id : "";
         LocalSnapshot snapshot = localSnapshotMap.get(entityId);
 
         boolean localChanged = tc.isDirty() || snapshot == null ||
-                snapshot.px() != tc.posX || snapshot.py() != tc.posY || snapshot.pz() != tc.posZ ||
-                snapshot.rx() != tc.rotX || snapshot.ry() != tc.rotY || snapshot.rz() != tc.rotZ ||
-                snapshot.sx() != tc.scaleX || snapshot.sy() != tc.scaleY || snapshot.sz() != tc.scaleZ;
+                snapshot.px != tc.posX || snapshot.py != tc.posY || snapshot.pz != tc.posZ ||
+                snapshot.rx != tc.rotX || snapshot.ry != tc.rotY || snapshot.rz != tc.rotZ ||
+                snapshot.sx != tc.scaleX || snapshot.sy != tc.scaleY || snapshot.sz != tc.scaleZ;
 
         // Check if root entity
         if (entity.parentId == null || entity.parentId.isEmpty()) {
@@ -85,7 +139,7 @@ public class HierarchySystem {
 
             WorldTransform wt = new WorldTransform(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ);
             worldTransformCache.put(entityId, wt);
-            localSnapshotMap.put(entityId, new LocalSnapshot(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ));
+            putOrUpdateLocalSnapshot(entityId, tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ);
             tc.setDirty(false);
             return wt;
         }
@@ -108,7 +162,7 @@ public class HierarchySystem {
 
             WorldTransform wt = new WorldTransform(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ);
             worldTransformCache.put(entityId, wt);
-            localSnapshotMap.put(entityId, new LocalSnapshot(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ));
+            putOrUpdateLocalSnapshot(entityId, tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ);
             tc.setDirty(false);
             return wt;
         }
@@ -116,12 +170,12 @@ public class HierarchySystem {
         // Recursively evaluate parent
         WorldTransform parentWt = getComputedWorldTransformIndexed(parent, entityMap);
         WorldTransform cached = worldTransformCache.get(entityId);
-        WorldTransform lastParentWt = parentSnapshotMap.get(entityId);
+        ParentSnapshot lastParentWt = parentSnapshotMap.get(entityId);
 
         boolean parentChanged = (lastParentWt == null ||
-                lastParentWt.px() != parentWt.px() || lastParentWt.py() != parentWt.py() || lastParentWt.pz() != parentWt.pz() ||
-                lastParentWt.rx() != parentWt.rx() || lastParentWt.ry() != parentWt.ry() || lastParentWt.rz() != parentWt.rz() ||
-                lastParentWt.sx() != parentWt.sx() || lastParentWt.sy() != parentWt.sy() || lastParentWt.sz() != parentWt.sz());
+                lastParentWt.px != parentWt.px() || lastParentWt.py != parentWt.py() || lastParentWt.pz != parentWt.pz() ||
+                lastParentWt.rx != parentWt.rx() || lastParentWt.ry != parentWt.ry() || lastParentWt.rz != parentWt.rz() ||
+                lastParentWt.sx != parentWt.sx() || lastParentWt.sy != parentWt.sy() || lastParentWt.sz != parentWt.sz());
 
         if (!localChanged && !parentChanged && cached != null) {
             return cached;
@@ -147,8 +201,8 @@ public class HierarchySystem {
 
         WorldTransform wt = new WorldTransform(px, py, pz, rx, ry, rz, sx, sy, sz);
         worldTransformCache.put(entityId, wt);
-        localSnapshotMap.put(entityId, new LocalSnapshot(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ));
-        parentSnapshotMap.put(entityId, parentWt);
+        putOrUpdateLocalSnapshot(entityId, tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ);
+        putOrUpdateParentSnapshot(entityId, parentWt);
         tc.setDirty(false);
 
         return wt;
@@ -187,11 +241,11 @@ public class HierarchySystem {
 
     public boolean hasHierarchyCycle(Entity startEntity, List<Entity> sceneEntities) {
         if (startEntity == null) return false;
-        Set<String> visitedIds = new HashSet<>();
+        visitedIdsScratch.clear();
         Entity current = startEntity;
 
         while (current != null && current.parentId != null && !current.parentId.trim().isEmpty()) {
-            if (!visitedIds.add(current.id)) {
+            if (!visitedIdsScratch.add(current.id)) {
                 return true;
             }
             current = findEntityById(current.parentId, sceneEntities);

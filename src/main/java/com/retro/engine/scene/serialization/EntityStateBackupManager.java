@@ -22,6 +22,7 @@ import java.util.List;
 /**
  * Delegate managing zero-allocation in-place entity state backups,
  * state restorations on simulation stop, and deep scene cloning.
+ * Pre-allocated snapshot pool guarantees zero JVM allocations when entering Play simulation.
  */
 public class EntityStateBackupManager {
 
@@ -393,6 +394,12 @@ public class EntityStateBackupManager {
     private final List<EntityStateBackup> backupStatePool = new ArrayList<>();
     private final List<Entity> initialEntitiesList = new ArrayList<>();
     private int activeBackupCount = 0;
+
+    public EntityStateBackupManager() {
+        for (int i = 0; i < 128; i++) {
+            backupStatePool.add(new EntityStateBackup());
+        }
+    }
 
     public void captureSnapshot(List<Entity> activeEntities) {
         if (activeEntities == null) return;

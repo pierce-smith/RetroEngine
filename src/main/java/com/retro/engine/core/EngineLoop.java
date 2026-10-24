@@ -11,6 +11,7 @@ import com.retro.engine.rhi.IRenderBackend;
  * EngineLoop manages sub-millisecond frame pacing, GLFW event polling,
  * delta time smoothing via rolling history window, camera state synchronization,
  * double-buffered command flushing, and RHI rendering ticks at a rock-solid 60 FPS.
+ * Tightened spin-wait threshold and frame-delta snapping prevent thread-sleep overshoots.
  */
 public class EngineLoop {
 
@@ -58,6 +59,12 @@ public class EngineLoop {
 
             float smoothedDelta = calculateSmoothedDelta();
 
+            // Direct frame delta: use clampedDelta snapped to 60Hz if within 2% to match display flips exactly
+            float frameDelta = clampedDelta;
+            if (Math.abs(clampedDelta - (1.0f / 60.0f)) < 0.0005f) {
+                frameDelta = 1.0f / 60.0f;
+            }
+
             // 0. Double-Buffered Transactional Editor Command Flush at Frame Boundary
             if (editorManager != null && editorManager.getCommandHistory() != null) {
                 editorManager.getCommandHistory().flushPendingCommands();
@@ -65,7 +72,7 @@ public class EngineLoop {
 
             // Process Keyboard Hotkeys, Gizmo Snapping, and Flying Camera State
             if (hotkeyHandler != null && cameraController != null) {
-                hotkeyHandler.processInput(window, editorManager, cameraController, smoothedDelta);
+                hotkeyHandler.processInput(window, editorManager, cameraController, frameDelta);
             }
 
             // Synchronize Camera MVP Parameters across RHI and EditorWorkspace
@@ -86,19 +93,14 @@ public class EngineLoop {
                 );
             }
 
-            // Per-frame smooth delta update for simulation & viewport telemetry
+            // Per-frame delta update for simulation & viewport telemetry using actual frame delta
             if (editorManager != null) {
-                editorManager.update(smoothedDelta);
+                editorManager.update(frameDelta);
             }
 
-            // 1-Line Scene Graph & Virtual Thread Streaming Render Pass
+            // Single Scene Graph & Virtual Thread Streaming Render Pass
             if (renderSubmitter != null) {
                 renderSubmitter.submitFrame(editorManager, streamingService, rhi);
-            }
-
-            if (editorManager != null && rhi != null) {
-                rhi.updateGridMesh(editorManager.getGizmoStateController().get3DGridVertices(), editorManager.getGizmoStateController().get3DGridVertexCount());
-                rhi.updateUiMesh(editorManager.getUiVertices(), editorManager.getUiVertexCount());
             }
 
             if (rhi != null) {
@@ -119,9 +121,10 @@ public class EngineLoop {
             long sleepNs = targetNextFrameNs - nowNs;
             if (sleepNs > 0) {
                 long sleepMs = sleepNs / 1_000_000L;
-                if (sleepMs > 2) {
+                // Sleep only if remaining time > 4ms, with 3ms safety margin to eliminate OS thread-sleep overshoots
+                if (sleepMs > 4) {
                     try {
-                        Thread.sleep(sleepMs - 1);
+                        Thread.sleep(sleepMs - 3);
                     } catch (InterruptedException ignored) {
                         Thread.currentThread().interrupt();
                     }
