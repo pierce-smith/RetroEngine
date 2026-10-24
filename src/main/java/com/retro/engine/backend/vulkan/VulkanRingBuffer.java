@@ -37,7 +37,8 @@ public class VulkanRingBuffer {
         }
 
         VkDevice vkDevice = device.getLogicalDevice();
-        long bufferSize = (long) count * strideFloats * Float.BYTES;
+        int neededCap = count * strideFloats;
+        long bufferSize = (long) neededCap * Float.BYTES;
 
         this.ringIndex = (this.ringIndex + 1) % RING_SLOTS;
 
@@ -46,7 +47,6 @@ public class VulkanRingBuffer {
         int currentCap = capacityRing[ringIndex];
 
         try (MemoryStack stack = stackPush()) {
-            int neededCap = count * strideFloats;
             if (currentBuffer == 0L || neededCap > currentCap) {
                 if (currentBuffer != 0L && disposalQueue != null) {
                     synchronized (disposalQueue) {
@@ -91,8 +91,8 @@ public class VulkanRingBuffer {
 
             PointerBuffer pData = stack.mallocPointer(1);
             if (vkMapMemory(vkDevice, currentMemory, 0, bufferSize, 0, pData) == VK_SUCCESS) {
-                FloatBuffer floatBuf = pData.getFloatBuffer(0, vertices.length);
-                floatBuf.put(vertices, 0, vertices.length);
+                FloatBuffer floatBuf = pData.getFloatBuffer(0, neededCap);
+                floatBuf.put(vertices, 0, neededCap);
                 vkUnmapMemory(vkDevice, currentMemory);
                 this.vertexCount = count;
             }
