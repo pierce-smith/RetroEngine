@@ -68,7 +68,6 @@ public class VulkanBackend implements IRenderBackend {
 
         if (!queueSubmitter.initialize(deviceManager)) return false;
         if (!swapchainManager.createSwapchain(deviceManager, surfaceManager, width, height)) return false;
-        if (!passEncoder.initialize(deviceManager)) return false;
 
         targetPass.initFramebuffer(deviceManager, 712, 488);
         if (!pipelineManager.initialize(deviceManager, swapchainManager)) return false;
@@ -197,7 +196,6 @@ public class VulkanBackend implements IRenderBackend {
         targetPass.cleanup(deviceManager);
         pipelineManager.cleanup(deviceManager);
         gpuCache.cleanup(deviceManager);
-        passEncoder.cleanup(deviceManager);
         swapchainManager.cleanup(deviceManager);
         surfaceManager.cleanup(deviceManager);
         deviceManager.cleanup();
