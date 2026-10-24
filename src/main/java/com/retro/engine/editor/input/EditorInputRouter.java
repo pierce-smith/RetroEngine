@@ -14,6 +14,7 @@ import com.retro.engine.scene.Entity;
  * Single Authority for GLFW/LWJGL Editor Input Event Routing.
  * Evaluates screen-to-NDC projections, panel region hit-testing,
  * viewport tab switching, 3D gizmo interactions, and viewport scrolling.
+ * Hardened with explicit dispose() unbind hooks.
  */
 public class EditorInputRouter {
 
@@ -30,6 +31,10 @@ public class EditorInputRouter {
 
     public ViewportCamera getCameraController() {
         return cameraController;
+    }
+
+    public void dispose() {
+        this.cameraController = null;
     }
 
     private static class PointerCoordinates {
@@ -196,7 +201,7 @@ public class EditorInputRouter {
             }
 
             if (workspace.getActiveWorkspaceTab() == EditorWorkspace.WorkspaceTab.ANIMATOR) {
-                return AnimatorGraphPanel.handleMouseClick(ndcX, ndcY, button, action, workspace);
+                return AnimatorGraphPanel.handleMouseClick(ndcX, ndcX, button, action, workspace);
             }
 
             if (button == 0 && gizmoStateController.getActiveAxis() != EditorWorkspace.GizmoAxis.NONE && workspace.getSelectedEntity() != null) {
