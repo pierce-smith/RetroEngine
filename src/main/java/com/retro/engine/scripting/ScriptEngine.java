@@ -6,27 +6,57 @@ import com.retro.engine.scene.components.gameplay.ScriptComponent;
 
 import javax.tools.JavaCompiler;
 import javax.tools.ToolProvider;
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
- * Manages instantiation, lifecycle ticks (onStart, onUpdate, onDestroy),
- * dynamic runtime compilation of .java source files on disk,
- * and cleanup of EntityScript instances during scene simulation.
+ * Hardened ScriptEngine managing script instantiation, lifecycle ticks,
+ * reflection lookups, ClassLoader caching, dynamic runtime compilation,
+ * and hot-loop exception suppression.
  */
 public class ScriptEngine {
 
+    // Caches successfully loaded classes by clean simple name / key
     private static final Map<String, Class<?>> compiledClassCache = new ConcurrentHashMap<>();
+    
+    // Negative failure cache preventing hot-loop re-compilation/re-resolution on every frame tick
+    private static final Set<String> failedScriptCache = ConcurrentHashMap.newKeySet();
+
+    // Reusable URLClassLoader to prevent Metaspace and classloader leaks across re-compilations
+    private static URLClassLoader scriptClassLoader;
+
+    private static final Pattern PACKAGE_PATTERN = Pattern.compile("^\\s*package\\s+([a-zA-Z0-9_.]+)\\s*;");
+
+    /**
+     * Resets caches and closes open ClassLoaders. Call this when re-compiling or reloading scripts.
+     */
+    public static void clearCache() {
+        compiledClassCache.clear();
+        failedScriptCache.clear();
+        if (scriptClassLoader != null) {
+            try {
+                scriptClassLoader.close();
+            } catch (IOException ignored) {}
+            scriptClassLoader = null;
+        }
+    }
 
     public static void initializeScripts(List<Entity> entities, SceneWorld sceneWorld) {
         if (entities == null) return;
         for (Entity entity : entities) {
+            if (entity == null) continue;
             ScriptComponent sc = entity.getComponent(ScriptComponent.class);
-            if (sc != null && sc.enabled) {
+            if (sc != null && sc.enabled && sc.activeScriptInstance == null) {
                 instantiateAndStartScript(entity, sc, sceneWorld);
             }
         }
@@ -35,6 +65,7 @@ public class ScriptEngine {
     public static void updateScripts(List<Entity> entities, float deltaTime, SceneWorld sceneWorld) {
         if (entities == null) return;
         for (Entity entity : entities) {
+            if (entity == null) continue;
             ScriptComponent sc = entity.getComponent(ScriptComponent.class);
             if (sc != null && sc.enabled) {
                 if (sc.activeScriptInstance == null) {
@@ -44,7 +75,10 @@ public class ScriptEngine {
                     try {
                         sc.activeScriptInstance.onUpdate(deltaTime);
                     } catch (Exception e) {
-                        System.err.println("[ScriptEngine] Error updating script on entity '" + entity.name + "': " + e.getMessage());
+                        System.err.println("[ScriptEngine] Exception during onUpdate() on Entity '" + entity.name + "': " + e.getMessage());
+                        // Disable script instance after runtime failure to prevent thrashing stderr on every frame
+                        sc.activeScriptInstance = null;
+                        sc.enabled = false;
                     }
                 }
             }
@@ -54,12 +88,13 @@ public class ScriptEngine {
     public static void destroyScripts(List<Entity> entities) {
         if (entities == null) return;
         for (Entity entity : entities) {
+            if (entity == null) continue;
             ScriptComponent sc = entity.getComponent(ScriptComponent.class);
             if (sc != null && sc.activeScriptInstance != null) {
                 try {
                     sc.activeScriptInstance.onDestroy();
                 } catch (Exception e) {
-                    System.err.println("[ScriptEngine] Error destroying script on entity '" + entity.name + "': " + e.getMessage());
+                    System.err.println("[ScriptEngine] Exception during onDestroy() on Entity '" + entity.name + "': " + e.getMessage());
                 }
                 sc.activeScriptInstance = null;
             }
@@ -71,7 +106,6 @@ public class ScriptEngine {
         String rawName = (sc.scriptName != null && !sc.scriptName.trim().isEmpty()) ? sc.scriptName : sc.scriptAssetPath;
         if (rawName == null || rawName.trim().isEmpty()) return;
 
-        // Clean path separators and extensions to get exact simple class name
         File sourceFile = new File(rawName);
         String fileName = sourceFile.getName().trim();
 
@@ -82,7 +116,15 @@ public class ScriptEngine {
             cleanClassName = cleanClassName.substring(0, cleanClassName.length() - 6);
         }
 
-        // Locate .java file on disk if available
+        // 1. Check negative cache: if resolution failed previously, skip immediately
+        if (failedScriptCache.contains(cleanClassName)) {
+            return;
+        }
+
+        // 2. Check positive cache
+        Class<?> clazz = compiledClassCache.get(cleanClassName);
+
+        // Resolve source file location on disk
         File diskScriptFile = null;
         if (sc.scriptAssetPath != null && !sc.scriptAssetPath.trim().isEmpty()) {
             File f = new File(sc.scriptAssetPath);
@@ -96,15 +138,28 @@ public class ScriptEngine {
             if (alt.exists()) diskScriptFile = alt;
         }
 
-        Class<?> clazz = compiledClassCache.get(cleanClassName);
+        // Parse package header from disk source file
+        String declaredPackage = parsePackageDeclaration(diskScriptFile);
 
         if (clazz == null) {
-            // 1. Try static classpath resolution first
-            String[] candidateClassNames = new String[]{
-                "com.retro.engine.scripting.user." + cleanClassName,
-                "com.retro.engine.scripting." + cleanClassName,
-                cleanClassName
-            };
+            // Static classpath lookups using parsed package and expanded sub-package list
+            String[] candidateClassNames;
+            if (declaredPackage != null && !declaredPackage.isEmpty()) {
+                candidateClassNames = new String[]{
+                    declaredPackage + "." + cleanClassName,
+                    "com.retro.engine.scripting.user." + cleanClassName,
+                    "com.retro.engine.scripting." + cleanClassName,
+                    "com.retro.engine.scene.components.gameplay." + cleanClassName,
+                    cleanClassName
+                };
+            } else {
+                candidateClassNames = new String[]{
+                    "com.retro.engine.scripting.user." + cleanClassName,
+                    "com.retro.engine.scripting." + cleanClassName,
+                    "com.retro.engine.scene.components.gameplay." + cleanClassName,
+                    cleanClassName
+                };
+            }
 
             for (String candidate : candidateClassNames) {
                 try {
@@ -117,16 +172,18 @@ public class ScriptEngine {
             }
         }
 
-        // 2. If not found on static classpath, attempt dynamic runtime compilation of .java file from disk
+        // 3. Dynamic runtime compilation if class is not on static classpath
         if (clazz == null && diskScriptFile != null && diskScriptFile.exists()) {
-            clazz = compileAndLoadJavaFile(diskScriptFile, cleanClassName);
+            clazz = compileAndLoadJavaFile(diskScriptFile, cleanClassName, declaredPackage);
             if (clazz != null) {
                 compiledClassCache.put(cleanClassName, clazz);
             }
         }
 
         if (clazz == null) {
-            System.err.println("[ScriptEngine] Could not resolve or compile script class for '" + fileName + "'.");
+            // Record failure in negative cache to prevent re-compilation on subsequent frames
+            failedScriptCache.add(cleanClassName);
+            System.err.println("[ScriptEngine] Could not resolve or compile script class for '" + fileName + "'. Skipping further attempts.");
             return;
         }
 
@@ -138,46 +195,79 @@ public class ScriptEngine {
                 script.onStart();
                 System.out.println("[ScriptEngine] Successfully initialized script '" + clazz.getSimpleName() + "' on Entity '" + entity.name + "'");
             } else {
+                failedScriptCache.add(cleanClassName);
                 System.err.println("[ScriptEngine] Class '" + clazz.getName() + "' does not extend EntityScript!");
             }
         } catch (Exception e) {
+            failedScriptCache.add(cleanClassName);
             System.err.println("[ScriptEngine] Failed to instantiate script '" + clazz.getName() + "' on Entity '" + entity.name + "': " + e.getMessage());
         }
     }
 
-    private static Class<?> compileAndLoadJavaFile(File scriptFile, String className) {
+    private static String parsePackageDeclaration(File file) {
+        if (file == null || !file.exists()) return null;
+        try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                Matcher matcher = PACKAGE_PATTERN.matcher(line);
+                if (matcher.find()) {
+                    return matcher.group(1).trim();
+                }
+            }
+        } catch (IOException ignored) {}
+        return null;
+    }
+
+    private static Class<?> compileAndLoadJavaFile(File scriptFile, String className, String declaredPackage) {
         try {
             JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
             if (compiler == null) {
-                System.err.println("[ScriptEngine] JDK JavaCompiler unavailable in current JRE.");
+                System.err.println("[ScriptEngine] JDK JavaCompiler unavailable in current JRE execution environment.");
                 return null;
             }
 
             File outputDir = new File(System.getProperty("java.io.tmpdir"), "retro_compiled_scripts");
             if (!outputDir.exists()) outputDir.mkdirs();
 
-            System.out.println("[ScriptEngine] Compiling runtime gameplay script: " + scriptFile.getAbsolutePath());
+            String currentClasspath = System.getProperty("java.class.path");
 
+            System.out.println("[ScriptEngine] Dynamic compilation triggered for script: " + scriptFile.getAbsolutePath());
+
+            // Bind explicit system application classpath so engine types resolve cleanly
             int exitCode = compiler.run(null, null, null,
+                "-classpath", currentClasspath,
                 "-d", outputDir.getAbsolutePath(),
                 scriptFile.getAbsolutePath()
             );
 
             if (exitCode == 0) {
-                URLClassLoader classLoader = new URLClassLoader(
-                    new URL[]{ outputDir.toURI().toURL() },
-                    EntityScript.class.getClassLoader()
-                );
+                URL outputUrl = outputDir.toURI().toURL();
+                if (scriptClassLoader == null) {
+                    scriptClassLoader = new URLClassLoader(
+                        new URL[]{ outputUrl },
+                        EntityScript.class.getClassLoader()
+                    );
+                }
 
-                String[] candidates = new String[]{
-                    "com.retro.engine.scripting.user." + className,
-                    "com.retro.engine.scripting." + className,
-                    className
-                };
+                String[] candidates;
+                if (declaredPackage != null && !declaredPackage.isEmpty()) {
+                    candidates = new String[]{
+                        declaredPackage + "." + className,
+                        "com.retro.engine.scripting.user." + className,
+                        "com.retro.engine.scripting." + className,
+                        className
+                    };
+                } else {
+                    candidates = new String[]{
+                        "com.retro.engine.scripting.user." + className,
+                        "com.retro.engine.scripting." + className,
+                        className
+                    };
+                }
 
                 for (String c : candidates) {
                     try {
-                        return classLoader.loadClass(c);
+                        return scriptClassLoader.loadClass(c);
                     } catch (ClassNotFoundException ignored) {}
                 }
             } else {

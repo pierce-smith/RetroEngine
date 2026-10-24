@@ -31,6 +31,10 @@ public class SimulationSystem {
     }
 
     public void play(List<Entity> activeEntities) {
+        play(activeEntities, null);
+    }
+
+    public void play(List<Entity> activeEntities, SceneWorld sceneWorld) {
         if (playState == PlayState.EDITING) {
             if (activeEntities != null) {
                 backupManager.captureSnapshot(activeEntities);
@@ -41,7 +45,7 @@ public class SimulationSystem {
             // Initialize 3D Physics World
             physicsWorld.initWorld(activeEntities);
 
-            ScriptEngine.initializeScripts(activeEntities, null);
+            ScriptEngine.initializeScripts(activeEntities, sceneWorld);
             System.out.println("[SimulationSystem] Simulation started; physics world & gameplay scripts initialized (Zero-Allocation Snapshot).");
         } else if (playState == PlayState.PAUSED) {
             this.playState = PlayState.SIMULATING;
@@ -72,12 +76,16 @@ public class SimulationSystem {
     }
 
     public void update(float deltaTime, List<Entity> activeEntities) {
+        update(deltaTime, activeEntities, null);
+    }
+
+    public void update(float deltaTime, List<Entity> activeEntities, SceneWorld sceneWorld) {
         if (playState == PlayState.SIMULATING && activeEntities != null) {
             // 1. Step 3D Physics Solver (RigidBodies, Character Controllers, Vehicles, Raycasts)
             physicsWorld.step(deltaTime, activeEntities);
 
             // 2. Execute gameplay script frame ticks
-            ScriptEngine.updateScripts(activeEntities, deltaTime, null);
+            ScriptEngine.updateScripts(activeEntities, deltaTime, sceneWorld);
 
             // 3. Evaluate 3D Spatial Audio Gain Attenuation
             updateSpatialAudio(activeEntities);

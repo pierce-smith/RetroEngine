@@ -1,10 +1,12 @@
 package com.retro.engine.scripting.user;
 
+import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.scene.components.transform.Transform;
 import com.retro.engine.scripting.EntityScript;
-import com.retro.engine.scene.components.Transform;
 
 /**
  * Example gameplay script that rotates an entity continuously on its Y axis.
+ * Hardened with post-migration sub-package imports for Entity and Transform.
  */
 public class RotateObjectScript extends EntityScript {
 
@@ -20,7 +22,7 @@ public class RotateObjectScript extends EntityScript {
         if (entity != null) {
             Transform tc = entity.getTransform();
             if (tc != null) {
-                tc.rotY = (tc.rotY + rotationSpeed * deltaTime) % 360.0f;
+                tc.setRotation(tc.rotX, (tc.rotY + rotationSpeed * deltaTime) % 360.0f, tc.rotZ);
             }
         }
     }

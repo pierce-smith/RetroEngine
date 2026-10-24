@@ -49,7 +49,7 @@ public class AssetDatabase {
     }
 
     public void setCurrentFolderPath(String path) {
-        String cleanPath = (path != null) ? path.trim() : "";
+        final String cleanPath = (path != null) ? path.trim() : "";
         assert (cleanPath.isEmpty() || assetDirectory.stream().anyMatch(a -> a.type == AssetType.FOLDER && a.absolutePath.equalsIgnoreCase(cleanPath)))
             : "[FATAL] AssetDatabase currentFolderPath set to non-existent virtual folder: " + cleanPath;
         this.currentFolderPath = cleanPath;
@@ -87,7 +87,39 @@ public class AssetDatabase {
         if (resolvedMesh != null && resolvedMesh.exists()) {
             return resolvedMesh.getAbsolutePath();
         }
+        if (meta.type == AssetType.SCRIPT) {
+            File resolvedScript = resolveScriptFile(meta.absolutePath != null ? meta.absolutePath : meta.name);
+            if (resolvedScript != null && resolvedScript.exists()) {
+                return resolvedScript.getAbsolutePath();
+            }
+        }
         return meta.absolutePath;
+    }
+
+    private File resolveScriptFile(String rawPathOrName) {
+        if (rawPathOrName == null || rawPathOrName.trim().isEmpty()) return null;
+        File direct = new File(rawPathOrName);
+        if (direct.exists()) return direct;
+
+        String baseName = direct.getName();
+        final String targetFileName = baseName.toLowerCase().endsWith(".java") ? baseName : baseName + ".java";
+
+        String searchRoot = (activeProjectPath != null && !activeProjectPath.isEmpty()) ? activeProjectPath : "Assets";
+        File rootDir = new File(searchRoot);
+        if (rootDir.exists() && rootDir.isDirectory()) {
+            try {
+                final Path rootPath = rootDir.toPath();
+                Path found = Files.walk(rootPath)
+                    .filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().equalsIgnoreCase(targetFileName))
+                    .findFirst()
+                    .orElse(null);
+                if (found != null) {
+                    return found.toFile();
+                }
+            } catch (IOException ignored) {}
+        }
+        return null;
     }
 
     public String resolveUuidByPath(String path) {
@@ -181,7 +213,7 @@ public class AssetDatabase {
 
     public void restoreAssetDirectory(List<AssetMeta> entries) {
         if (entries == null) return;
-        for (AssetMeta entry : entries) {
+        for (final AssetMeta entry : entries) {
             if (entry == null) continue;
             boolean exists = assetDirectory.stream().anyMatch(e ->
                 (e.absolutePath != null && e.absolutePath.equalsIgnoreCase(entry.absolutePath)) ||
@@ -247,7 +279,7 @@ public class AssetDatabase {
         System.out.println("[AssetDatabase] Scanning workspace directory for raw assets & .rmeta sidecars: " + activeProjectPath);
 
         try {
-            Path rootPath = rootDir.toPath();
+            final Path rootPath = rootDir.toPath();
             Files.walk(rootPath)
                 .filter(Files::isRegularFile)
                 .forEach(path -> {
