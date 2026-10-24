@@ -3,7 +3,9 @@ package com.retro.engine.editor;
 import com.retro.engine.editor.gizmos.ColliderDebugRenderer;
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
-import com.retro.engine.editor.commands.*;
+import com.retro.engine.editor.commands.EditorCommands;
+import com.retro.engine.editor.commands.CommandStack;
+import com.retro.engine.editor.commands.ICommand;
 import com.retro.engine.editor.gizmos.GizmoState;
 import com.retro.engine.editor.gizmos.GizmoSystem;
 import com.retro.engine.editor.ui.*;
@@ -306,7 +308,7 @@ public class EditorWorkspace {
         String input = NativeFileDialog.promptInput("Rename Entity", "Enter new entity name:", entity.name);
         if (input != null && !input.trim().isEmpty() && !input.trim().equalsIgnoreCase(entity.name)) {
             String newName = input.trim();
-            EntityRenameCommand cmd = new EntityRenameCommand(entity, entity.name, newName);
+            EditorCommands.EntityRenameCommand cmd = new EditorCommands.EntityRenameCommand(entity, entity.name, newName);
             commandHistory.executeCommand(cmd);
             EngineConsolePanel.log(EngineConsolePanel.LogLevel.INFO, "[Scene] Renamed entity to '" + newName + "'");
         }
@@ -316,7 +318,7 @@ public class EditorWorkspace {
         Entity selected = getSelectedEntity();
         if (selected != null) {
             String entityName = selected.name;
-            EntityDeleteCommand cmd = new EntityDeleteCommand(this, selected);
+            EditorCommands.EntityDeleteCommand cmd = new EditorCommands.EntityDeleteCommand(this, selected);
             commandHistory.executeCommand(cmd);
             UISoundPlayer.play(UISound.DELETE);
             EngineConsolePanel.log(EngineConsolePanel.LogLevel.INFO, "[Scene] Deleted entity '" + entityName + "'.");
@@ -328,7 +330,7 @@ public class EditorWorkspace {
             sceneManager.duplicateSelectedEntity();
             Entity newlySpawned = getSelectedEntity();
             if (newlySpawned != null) {
-                EntitySpawnCommand cmd = new EntitySpawnCommand(this, newlySpawned);
+                EditorCommands.EntitySpawnCommand cmd = new EditorCommands.EntitySpawnCommand(this, newlySpawned);
                 commandHistory.executeCommand(cmd);
             }
             UISoundPlayer.play(UISound.DUPLICATE);
@@ -339,7 +341,7 @@ public class EditorWorkspace {
         sceneManager.spawnDefaultCube();
         Entity newlySpawned = getSelectedEntity();
         if (newlySpawned != null) {
-            EntitySpawnCommand cmd = new EntitySpawnCommand(this, newlySpawned);
+            EditorCommands.EntitySpawnCommand cmd = new EditorCommands.EntitySpawnCommand(this, newlySpawned);
             commandHistory.executeCommand(cmd);
         }
         UISoundPlayer.play(UISound.SPAWN);
@@ -349,7 +351,7 @@ public class EditorWorkspace {
         sceneManager.spawnLightSource();
         Entity newlySpawned = getSelectedEntity();
         if (newlySpawned != null) {
-            EntitySpawnCommand cmd = new EntitySpawnCommand(this, newlySpawned);
+            EditorCommands.EntitySpawnCommand cmd = new EditorCommands.EntitySpawnCommand(this, newlySpawned);
             commandHistory.executeCommand(cmd);
         }
         UISoundPlayer.play(UISound.SPAWN);
@@ -359,7 +361,7 @@ public class EditorWorkspace {
         sceneManager.spawnCameraEntity();
         Entity newlySpawned = getSelectedEntity();
         if (newlySpawned != null) {
-            EntitySpawnCommand cmd = new EntitySpawnCommand(this, newlySpawned);
+            EditorCommands.EntitySpawnCommand cmd = new EditorCommands.EntitySpawnCommand(this, newlySpawned);
             commandHistory.executeCommand(cmd);
         }
         UISoundPlayer.play(UISound.SPAWN);
@@ -369,7 +371,7 @@ public class EditorWorkspace {
         sceneManager.spawnEntityFromAsset(meshAsset);
         Entity newlySpawned = getSelectedEntity();
         if (newlySpawned != null) {
-            EntitySpawnCommand cmd = new EntitySpawnCommand(this, newlySpawned);
+            EditorCommands.EntitySpawnCommand cmd = new EditorCommands.EntitySpawnCommand(this, newlySpawned);
             commandHistory.executeCommand(cmd);
         }
         UISoundPlayer.play(UISound.SPAWN);
@@ -400,7 +402,7 @@ public class EditorWorkspace {
         String oldName = (sc != null) ? sc.scriptName : null;
         String newPath = (scriptAsset != null) ? scriptAsset.absolutePath : null;
         String newName = (scriptAsset != null) ? scriptAsset.name : null;
-        ScriptAssignCommand cmd = new ScriptAssignCommand(selected, oldPath, oldName, newPath, newName);
+        EditorCommands.ScriptAssignCommand cmd = new EditorCommands.ScriptAssignCommand(selected, oldPath, oldName, newPath, newName);
         commandHistory.executeCommand(cmd);
         InspectorPanel.resetScroll();
     }
@@ -409,7 +411,7 @@ public class EditorWorkspace {
         sceneManager.spawnAudioSource();
         Entity newlySpawned = getSelectedEntity();
         if (newlySpawned != null) {
-            EntitySpawnCommand cmd = new EntitySpawnCommand(this, newlySpawned);
+            EditorCommands.EntitySpawnCommand cmd = new EditorCommands.EntitySpawnCommand(this, newlySpawned);
             commandHistory.executeCommand(cmd);
         }
         UISoundPlayer.play(UISound.SPAWN);
@@ -431,7 +433,7 @@ public class EditorWorkspace {
     private void modifyFieldViaCommand(Component comp, String fieldName, Object oldVal, Object newVal, String label) {
         try {
             Field field = comp.getClass().getDeclaredField(fieldName);
-            ModifyPropertyCommand cmd = new ModifyPropertyCommand(comp, field, oldVal, newVal, label);
+            EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, oldVal, newVal, label);
             commandHistory.executeCommand(cmd);
         } catch (Exception e) {
             e.printStackTrace();
@@ -449,7 +451,7 @@ public class EditorWorkspace {
                 }
             }
         }
-        ParentChangeCommand cmd = new ParentChangeCommand(this, child, oldParent, parent);
+        EditorCommands.ParentChangeCommand cmd = new EditorCommands.ParentChangeCommand(this, child, oldParent, parent);
         commandHistory.executeCommand(cmd);
     }
 
@@ -465,7 +467,7 @@ public class EditorWorkspace {
         parent.expandedInHierarchy = true;
         Transform tc = child.getTransform();
         if (tc != null) { tc.posX = 1.0f; tc.posY = 0.0f; tc.posZ = 0.0f; }
-        EntitySpawnCommand cmd = new EntitySpawnCommand(this, child);
+        EditorCommands.EntitySpawnCommand cmd = new EditorCommands.EntitySpawnCommand(this, child);
         commandHistory.executeCommand(cmd);
         UISoundPlayer.play(UISound.SPAWN);
     }
@@ -479,7 +481,7 @@ public class EditorWorkspace {
         child.parentId = parent.id;
         parent.addChildId(child.id);
         parent.expandedInHierarchy = true;
-        EntitySpawnCommand cmd = new EntitySpawnCommand(this, child);
+        EditorCommands.EntitySpawnCommand cmd = new EditorCommands.EntitySpawnCommand(this, child);
         commandHistory.executeCommand(cmd);
         UISoundPlayer.play(UISound.SPAWN);
     }
@@ -608,7 +610,7 @@ public class EditorWorkspace {
                         tc.rotX != gizmoStateController.getDragStartRx() || tc.rotY != gizmoStateController.getDragStartRy() || tc.rotZ != gizmoStateController.getDragStartRz() ||
                         tc.scaleX != gizmoStateController.getDragStartSx() || tc.scaleY != gizmoStateController.getDragStartSy() || tc.scaleZ != gizmoStateController.getDragStartSz()) {
 
-                        TransformCommand cmd = new TransformCommand(tc,
+                        EditorCommands.TransformCommand cmd = new EditorCommands.TransformCommand(tc,
                             gizmoStateController.getDragStartPx(), gizmoStateController.getDragStartPy(), gizmoStateController.getDragStartPz(),
                             gizmoStateController.getDragStartRx(), gizmoStateController.getDragStartRy(), gizmoStateController.getDragStartRz(),
                             gizmoStateController.getDragStartSx(), gizmoStateController.getDragStartSy(), gizmoStateController.getDragStartSz(),
