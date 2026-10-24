@@ -12,7 +12,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * Double-buffered transactional CommandStack managing Undo/Redo queues for editor state mutations.
  * Enqueues mutation intent from UI/input threads into thread-safe pending queues and flushes
- * transactions deterministically at core engine tick boundaries.
+ * transactions deterministically at core engine tick boundaries with zero allocations.
  */
 public class CommandStack {
 
@@ -25,20 +25,43 @@ public class CommandStack {
 
     public static class PendingTransaction {
         public enum Type { EXECUTE, UNDO, REDO }
-        public final Type type;
-        public final ICommand command;
+        public Type type;
+        public ICommand command;
+
+        public PendingTransaction() {
+            this.type = Type.EXECUTE;
+            this.command = null;
+        }
 
         public PendingTransaction(Type type, ICommand command) {
             this.type = type;
             this.command = command;
         }
+
+        public void set(Type type, ICommand command) {
+            this.type = type;
+            this.command = command;
+        }
     }
+
+    // Pre-allocated Pool for zero per-transaction JVM heap allocations
+    private static final int TRANSACTION_POOL_SIZE = 256;
+    private final PendingTransaction[] transactionPool = new PendingTransaction[TRANSACTION_POOL_SIZE];
+    private final Queue<PendingTransaction> poolFreeList = new ConcurrentLinkedQueue<>();
 
     private final Queue<PendingTransaction> pendingQueue = new ConcurrentLinkedQueue<>();
     private final Deque<ICommand> undoStack = new ArrayDeque<>();
     private final Deque<ICommand> redoStack = new ArrayDeque<>();
     private final List<CommandListener> listeners = new CopyOnWriteArrayList<>();
     private static final int MAX_CAPACITY = 50;
+
+    public CommandStack() {
+        for (int i = 0; i < TRANSACTION_POOL_SIZE; i++) {
+            PendingTransaction tx = new PendingTransaction();
+            transactionPool[i] = tx;
+            poolFreeList.add(tx);
+        }
+    }
 
     public void addListener(CommandListener listener) {
         if (listener != null && !listeners.contains(listener)) {
@@ -52,12 +75,28 @@ public class CommandStack {
         }
     }
 
+    private PendingTransaction obtainTransaction(PendingTransaction.Type type, ICommand cmd) {
+        PendingTransaction tx = poolFreeList.poll();
+        if (tx == null) {
+            tx = new PendingTransaction();
+        }
+        tx.set(type, cmd);
+        return tx;
+    }
+
+    private void recycleTransaction(PendingTransaction tx) {
+        if (tx != null && poolFreeList.size() < TRANSACTION_POOL_SIZE) {
+            tx.set(PendingTransaction.Type.EXECUTE, null);
+            poolFreeList.add(tx);
+        }
+    }
+
     /**
      * Enqueues a command for double-buffered transactional execution at the next frame boundary.
      */
     public void executeCommand(ICommand cmd) {
         if (cmd == null) return;
-        pendingQueue.add(new PendingTransaction(PendingTransaction.Type.EXECUTE, cmd));
+        pendingQueue.add(obtainTransaction(PendingTransaction.Type.EXECUTE, cmd));
     }
 
     /**
@@ -86,7 +125,7 @@ public class CommandStack {
      * Enqueues an undo request for double-buffered execution at the next frame boundary.
      */
     public boolean undo() {
-        pendingQueue.add(new PendingTransaction(PendingTransaction.Type.UNDO, null));
+        pendingQueue.add(obtainTransaction(PendingTransaction.Type.UNDO, null));
         return true;
     }
 
@@ -94,7 +133,7 @@ public class CommandStack {
      * Enqueues a redo request for double-buffered execution at the next frame boundary.
      */
     public boolean redo() {
-        pendingQueue.add(new PendingTransaction(PendingTransaction.Type.REDO, null));
+        pendingQueue.add(obtainTransaction(PendingTransaction.Type.REDO, null));
         return true;
     }
 
@@ -111,6 +150,8 @@ public class CommandStack {
                 case UNDO -> undoTransactionNow();
                 case REDO -> redoTransactionNow();
             }
+
+            recycleTransaction(tx);
         }
     }
 

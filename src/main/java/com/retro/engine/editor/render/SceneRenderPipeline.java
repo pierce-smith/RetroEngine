@@ -23,7 +23,8 @@ import java.util.List;
  * High-level render pipeline processing 3D scene entities, view-frustum culling,
  * light state, GPU skeletal animation bone palette extraction, and downward-raycast ground shadows
  * through a vendor-agnostic IRenderBackend contract.
- * Fully decoupled from EditorWorkspace via thread-safe RenderSceneSnapshot structures.
+ * Fully decoupled from EditorWorkspace via thread-safe RenderSceneSnapshot structures with zero per-frame heap allocations
+ * using an auto-expanding descriptor pool.
  */
 public class SceneRenderPipeline {
 
@@ -50,9 +51,44 @@ public class SceneRenderPipeline {
             float[][] bonePalette
     ) {}
 
+    public static class MutableRenderEntityDescriptor {
+        public String submitKey;
+        public float[] vertices;
+        public int vertexCount;
+        public String texturePath;
+        public byte[] pixels;
+        public int texW, texH;
+        public float px, py, pz;
+        public float rx, ry, rz;
+        public float sx, sy, sz;
+        public float groundY;
+        public float reflectVal;
+        public float[][] bonePalette;
+
+        public void set(String submitKey, float[] vertices, int vertexCount, String texturePath,
+                        byte[] pixels, int texW, int texH, float px, float py, float pz,
+                        float rx, float ry, float rz, float sx, float sy, float sz,
+                        float groundY, float reflectVal, float[][] bonePalette) {
+            this.submitKey = submitKey;
+            this.vertices = vertices;
+            this.vertexCount = vertexCount;
+            this.texturePath = texturePath;
+            this.pixels = pixels;
+            this.texW = texW; this.texH = texH;
+            this.px = px; this.py = py; this.pz = pz;
+            this.rx = rx; this.ry = ry; this.rz = rz;
+            this.sx = sx; this.sy = sy; this.sz = sz;
+            this.groundY = groundY;
+            this.reflectVal = reflectVal;
+            this.bonePalette = bonePalette;
+        }
+    }
+
     public static class RenderSceneSnapshot {
         public LightDescriptor activeLight = null;
         public final List<RenderEntityDescriptor> entities = new ArrayList<>();
+        public final List<MutableRenderEntityDescriptor> pooledEntities = new ArrayList<>();
+        public int activeEntityCount = 0;
         public boolean gridVisible = true;
         public float[] gridVertices = null;
         public int gridVertexCount = 0;
@@ -60,16 +96,51 @@ public class SceneRenderPipeline {
         public int uiVertexCount = 0;
         public int totalDrawCalls = 0;
         public int totalActiveVertices = 0;
+
+        public RenderSceneSnapshot() {
+            for (int i = 0; i < 1024; i++) {
+                pooledEntities.add(new MutableRenderEntityDescriptor());
+            }
+        }
+
+        public MutableRenderEntityDescriptor obtainDescriptor(int index) {
+            while (pooledEntities.size() <= index) {
+                pooledEntities.add(new MutableRenderEntityDescriptor());
+            }
+            return pooledEntities.get(index);
+        }
+
+        public void reset() {
+            activeLight = null;
+            entities.clear();
+            activeEntityCount = 0;
+            gridVisible = true;
+            gridVertices = null;
+            gridVertexCount = 0;
+            uiVertices = null;
+            uiVertexCount = 0;
+            totalDrawCalls = 0;
+            totalActiveVertices = 0;
+        }
     }
+
+    // Double-buffered persistent snapshots to avoid per-frame heap allocations
+    private final RenderSceneSnapshot[] doubleBufferedSnapshots = new RenderSceneSnapshot[]{
+            new RenderSceneSnapshot(), new RenderSceneSnapshot()
+    };
+    private int snapshotBufferIndex = 0;
 
     private final MeshBufferData fallbackCube = MeshImporter.createDefaultCube();
     private final FrustumCuller frustumCuller = new FrustumCuller();
 
     /**
-     * Extracts a decoupled, thread-safe RenderSceneSnapshot from the editor scene graph.
+     * Extracts a decoupled, thread-safe RenderSceneSnapshot from the editor scene graph with zero heap allocations.
      */
     public RenderSceneSnapshot extractSnapshot(EditorWorkspace editorManager, AssetStreamer streamingService) {
-        RenderSceneSnapshot snapshot = new RenderSceneSnapshot();
+        snapshotBufferIndex = (snapshotBufferIndex + 1) % 2;
+        RenderSceneSnapshot snapshot = doubleBufferedSnapshots[snapshotBufferIndex];
+        snapshot.reset();
+
         if (editorManager == null || streamingService == null) return snapshot;
 
         streamingService.processCompletedUploads();
@@ -188,18 +259,16 @@ public class SceneRenderPipeline {
                     float reflectVal = (mat != null) ? mat.reflect : 0.0f;
                     float[][] bonePalette = (anim != null && anim.skeleton != null) ? anim.bonePaletteMatrices : null;
 
-                    snapshot.entities.add(new RenderEntityDescriptor(
-                            submitKey,
-                            verticesToSubmit,
-                            vertexCountToSubmit,
-                            texturePath,
-                            pixels, texW, texH,
+                    MutableRenderEntityDescriptor desc = snapshot.obtainDescriptor(snapshot.activeEntityCount);
+                    desc.set(
+                            submitKey, verticesToSubmit, vertexCountToSubmit,
+                            texturePath, pixels, texW, texH,
                             wt.px(), wt.py(), wt.pz(),
                             wt.rx(), wt.ry(), wt.rz(),
                             wt.sx(), wt.sy(), wt.sz(),
-                            groundY, reflectVal,
-                            bonePalette
-                    ));
+                            groundY, reflectVal, bonePalette
+                    );
+                    snapshot.activeEntityCount++;
                 }
             }
         }
@@ -237,18 +306,22 @@ public class SceneRenderPipeline {
             );
         }
 
+        for (int i = 0; i < snapshot.activeEntityCount; i++) {
+            MutableRenderEntityDescriptor e = snapshot.pooledEntities.get(i);
+            rhi.submitEntity(
+                    e.submitKey, e.vertices, e.vertexCount,
+                    e.texturePath, e.pixels, e.texW, e.texH,
+                    e.px, e.py, e.pz, e.rx, e.ry, e.rz, e.sx, e.sy, e.sz,
+                    e.groundY, e.reflectVal, e.bonePalette
+            );
+        }
+
         for (RenderEntityDescriptor e : snapshot.entities) {
             rhi.submitEntity(
-                    e.submitKey(),
-                    e.vertices(),
-                    e.vertexCount(),
-                    e.texturePath(),
-                    e.pixels(), e.texW(), e.texH(),
-                    e.px(), e.py(), e.pz(),
-                    e.rx(), e.ry(), e.rz(),
-                    e.sx(), e.sy(), e.sz(),
-                    e.groundY(), e.reflectVal(),
-                    e.bonePalette()
+                    e.submitKey(), e.vertices(), e.vertexCount(),
+                    e.texturePath(), e.pixels(), e.texW(), e.texH(),
+                    e.px(), e.py(), e.pz(), e.rx(), e.ry(), e.rz(), e.sx(), e.sy(), e.sz(),
+                    e.groundY(), e.reflectVal(), e.bonePalette()
             );
         }
 
