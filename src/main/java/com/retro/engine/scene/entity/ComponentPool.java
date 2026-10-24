@@ -1,4 +1,4 @@
-package com.retro.engine.scene;
+package com.retro.engine.scene.entity;
 
 import com.retro.engine.scene.components.Component;
 

@@ -1,10 +1,21 @@
-package com.retro.engine.scene;
+package com.retro.engine.scene.serialization;
 
 import com.retro.engine.assets.AssetDatabase;
-import com.retro.engine.assets.AssetMeta;
-import com.retro.engine.assets.importers.MeshImporter;
-import com.retro.engine.assets.importers.TextureImporter;
-import com.retro.engine.scene.components.*;
+import com.retro.engine.scene.components.gameplay.CharacterControllerComponent;
+import com.retro.engine.scene.components.gameplay.ScriptComponent;
+import com.retro.engine.scene.components.gameplay.VehicleControllerComponent;
+import com.retro.engine.scene.components.media.AudioSource;
+import com.retro.engine.scene.components.physics.BoxCollider;
+import com.retro.engine.scene.components.physics.CapsuleCollider;
+import com.retro.engine.scene.components.physics.RigidBodyComponent;
+import com.retro.engine.scene.components.physics.SphereCollider;
+import com.retro.engine.scene.components.rendering.Camera;
+import com.retro.engine.scene.components.rendering.Light;
+import com.retro.engine.scene.components.rendering.Material;
+import com.retro.engine.scene.components.rendering.MeshFilter;
+import com.retro.engine.scene.components.transform.Transform;
+import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.scene.world.SceneWorld;
 
 import java.io.*;
 import java.util.*;

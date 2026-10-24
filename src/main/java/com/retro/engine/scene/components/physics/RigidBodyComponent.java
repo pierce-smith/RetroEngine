@@ -1,7 +1,8 @@
-package com.retro.engine.scene.components;
+package com.retro.engine.scene.components.physics;
 
 import com.retro.engine.editor.ui.panels.InspectorProperty;
 import com.retro.engine.editor.ui.panels.InspectorProperty.PropertyType;
+import com.retro.engine.scene.components.Component;
 
 /**
  * ECS component holding 3D rigid body dynamic parameters.

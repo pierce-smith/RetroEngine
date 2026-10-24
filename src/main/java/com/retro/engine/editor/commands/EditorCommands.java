@@ -1,8 +1,10 @@
 package com.retro.engine.editor.commands;
 
 import com.retro.engine.editor.EditorWorkspace;
-import com.retro.engine.scene.Entity;
+import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.components.*;
+import com.retro.engine.scene.components.gameplay.ScriptComponent;
+import com.retro.engine.scene.components.transform.Transform;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;

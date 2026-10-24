@@ -1,7 +1,8 @@
-package com.retro.engine.scene.components;
+package com.retro.engine.scene.components.gameplay;
 
 import com.retro.engine.editor.ui.panels.InspectorProperty;
 import com.retro.engine.editor.ui.panels.InspectorProperty.PropertyType;
+import com.retro.engine.scene.components.Component;
 import com.retro.engine.scripting.EntityScript;
 
 /**

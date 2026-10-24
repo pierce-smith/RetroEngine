@@ -1,6 +1,6 @@
 package com.retro.engine.editor.input;
 
-import com.retro.engine.scene.Entity;
+import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.EditorWorkspace.DropdownMenu;
 import com.retro.engine.assets.AssetMeta;

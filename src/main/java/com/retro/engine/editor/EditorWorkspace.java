@@ -15,10 +15,11 @@ import com.retro.engine.editor.ui.overlays.ContextMenuOverlay;
 import com.retro.engine.editor.ui.overlays.ModalDialogOverlay;
 import com.retro.engine.editor.ui.overlays.OverlaySystem;
 import com.retro.engine.editor.ui.panels.*;
-import com.retro.engine.scene.Entity;
-import com.retro.engine.scene.EntitySpawner;
-import com.retro.engine.scene.SceneWorld;
-import com.retro.engine.scene.SceneWorld.PlayState;
+import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.scene.entity.EntitySpawner;
+import com.retro.engine.scene.world.SceneWorld;
+import com.retro.engine.scene.world.SceneWorld.PlayState;
+import com.retro.engine.scene.components.media.AnimatorComponent;
 
 import java.util.List;
 
@@ -108,10 +109,10 @@ public class EditorWorkspace {
     public AnimatorController getActiveAnimatorController() {
         Entity selected = sceneManager.getSelectedEntity();
         if (selected != null) {
-            com.retro.engine.scene.components.AnimatorComponent animator = selected.getComponent(com.retro.engine.scene.components.AnimatorComponent.class);
+            AnimatorComponent animator = selected.getComponent(AnimatorComponent.class);
             if (animator == null && selected.getMeshAssetPath() != null && !selected.getMeshAssetPath().trim().isEmpty()) {
                 EntitySpawner.attachAnimatorIfRigged(selected, selected.getMeshAssetPath());
-                animator = selected.getComponent(com.retro.engine.scene.components.AnimatorComponent.class);
+                animator = selected.getComponent(AnimatorComponent.class);
             }
             if (animator != null && animator.controller != null && !animator.controller.getStates().isEmpty()) {
                 activeAnimatorController = animator.controller;
@@ -124,7 +125,7 @@ public class EditorWorkspace {
         }
 
         for (Entity e : sceneManager.getSceneEntities()) {
-            com.retro.engine.scene.components.AnimatorComponent anim = e.getComponent(com.retro.engine.scene.components.AnimatorComponent.class);
+            AnimatorComponent anim = e.getComponent(AnimatorComponent.class);
             if (anim != null && anim.controller != null && !anim.controller.getStates().isEmpty()) {
                 activeAnimatorController = anim.controller;
                 return anim.controller;

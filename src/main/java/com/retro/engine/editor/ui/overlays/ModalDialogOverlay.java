@@ -1,7 +1,7 @@
 package com.retro.engine.editor.ui.overlays;
 
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
-import com.retro.engine.scene.Entity;
+import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 

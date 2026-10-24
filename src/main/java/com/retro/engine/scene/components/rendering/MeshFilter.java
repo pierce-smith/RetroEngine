@@ -1,7 +1,8 @@
-package com.retro.engine.scene.components;
+package com.retro.engine.scene.components.rendering;
 
 import com.retro.engine.editor.ui.panels.InspectorProperty;
 import com.retro.engine.editor.ui.panels.InspectorProperty.PropertyType;
+import com.retro.engine.scene.components.Component;
 
 /**
  * Links an Entity to its 3D geometry asset handle with RenderWare 3.5+ Multi-Atomic Clump support

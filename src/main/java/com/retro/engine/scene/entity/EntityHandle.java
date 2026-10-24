@@ -1,4 +1,4 @@
-package com.retro.engine.scene;
+package com.retro.engine.scene.entity;
 
 /**
  * 64-bit Generational Entity Handle (32-bit Index | 32-bit Generation).

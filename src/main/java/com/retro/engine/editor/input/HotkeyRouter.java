@@ -7,7 +7,7 @@ import com.retro.engine.editor.audio.UISoundPlayer.UISound;
 import com.retro.engine.core.WindowHost;
 import com.retro.engine.editor.gizmos.GizmoInteractor;
 import com.retro.engine.editor.ui.panels.EngineConsolePanel;
-import com.retro.engine.scene.Entity;
+import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.editor.commands.EditorCommands;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 

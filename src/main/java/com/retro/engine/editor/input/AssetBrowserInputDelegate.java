@@ -1,9 +1,9 @@
 package com.retro.engine.editor.input;
 
 import com.retro.engine.editor.ui.panels.InspectorPanel;
-import com.retro.engine.scene.Entity;
-import com.retro.engine.scene.components.Material;
-import com.retro.engine.scene.components.ScriptComponent;
+import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.scene.components.rendering.Material;
+import com.retro.engine.scene.components.gameplay.ScriptComponent;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;

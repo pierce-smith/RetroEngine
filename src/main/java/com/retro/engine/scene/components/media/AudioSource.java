@@ -1,7 +1,8 @@
-package com.retro.engine.scene.components;
+package com.retro.engine.scene.components.media;
 
 import com.retro.engine.editor.ui.panels.InspectorProperty;
 import com.retro.engine.editor.ui.panels.InspectorProperty.PropertyType;
+import com.retro.engine.scene.components.Component;
 import org.lwjgl.stb.STBVorbis;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;

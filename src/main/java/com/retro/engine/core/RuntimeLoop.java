@@ -3,8 +3,8 @@ package com.retro.engine.core;
 import com.retro.engine.assets.AssetStreamer;
 import com.retro.engine.editor.render.SceneRenderPipeline;
 import com.retro.engine.rhi.IRenderBackend;
-import com.retro.engine.scene.SceneWorld;
-import com.retro.engine.scene.SceneWorld.PlayState;
+import com.retro.engine.scene.world.SceneWorld;
+import com.retro.engine.scene.world.SceneWorld.PlayState;
 
 /**
  * Decoupled Standalone Game Runtime Execution Loop.

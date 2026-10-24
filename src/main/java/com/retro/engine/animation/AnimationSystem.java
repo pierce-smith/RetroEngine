@@ -1,6 +1,6 @@
 package com.retro.engine.animation;
 
-import com.retro.engine.scene.components.AnimatorComponent;
+import com.retro.engine.scene.components.media.AnimatorComponent;
 
 /**
  * System executing per-frame skeletal animation updates, keyframe sampling,

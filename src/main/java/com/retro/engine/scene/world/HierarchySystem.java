@@ -1,8 +1,8 @@
-package com.retro.engine.scene;
+package com.retro.engine.scene.world;
 
-import com.retro.engine.scene.Entity;
-import com.retro.engine.scene.SceneWorld.WorldTransform;
-import com.retro.engine.scene.components.Transform;
+import com.retro.engine.scene.world.SceneWorld.WorldTransform;
+import com.retro.engine.scene.components.transform.Transform;
+import com.retro.engine.scene.entity.Entity;
 
 import java.util.HashMap;
 import java.util.HashSet;

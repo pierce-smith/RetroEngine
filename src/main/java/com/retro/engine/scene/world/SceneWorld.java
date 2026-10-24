@@ -1,4 +1,4 @@
-package com.retro.engine.scene;
+package com.retro.engine.scene.world;
 
 import com.retro.engine.animation.AnimationSystem;
 import com.retro.engine.assets.AssetDatabase;
@@ -7,10 +7,15 @@ import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
-import com.retro.engine.scene.SceneSerializer.SceneLoadData;
-import com.retro.engine.scene.components.AnimatorComponent;
-import com.retro.engine.scene.components.AudioSource;
+import com.retro.engine.scene.serialization.PrefabSerializer;
+import com.retro.engine.scene.serialization.SceneSerializer;
+import com.retro.engine.scene.components.media.AnimatorComponent;
+import com.retro.engine.scene.components.media.AudioSource;
 import com.retro.engine.scene.components.Component;
+import com.retro.engine.scene.entity.ComponentPool;
+import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.scene.entity.EntityHandle;
+import com.retro.engine.scene.entity.EntitySpawner;
 
 import java.io.File;
 import java.util.ArrayList;

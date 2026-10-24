@@ -1,8 +1,8 @@
 package com.retro.engine.scripting;
 
-import com.retro.engine.scene.Entity;
-import com.retro.engine.scene.SceneWorld;
-import com.retro.engine.scene.components.ScriptComponent;
+import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.scene.world.SceneWorld;
+import com.retro.engine.scene.components.gameplay.ScriptComponent;
 
 import javax.tools.JavaCompiler;
 import javax.tools.ToolProvider;

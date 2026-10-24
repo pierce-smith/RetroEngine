@@ -1,10 +1,9 @@
-package com.retro.engine.scene;
+package com.retro.engine.scene.entity;
 
 import com.retro.engine.scene.components.Component;
-import com.retro.engine.scene.components.Light;
-import com.retro.engine.scene.components.Material;
-import com.retro.engine.scene.components.MeshFilter;
-import com.retro.engine.scene.components.Transform;
+import com.retro.engine.scene.components.rendering.Material;
+import com.retro.engine.scene.components.rendering.MeshFilter;
+import com.retro.engine.scene.components.transform.Transform;
 
 import java.util.ArrayList;
 import java.util.Collections;

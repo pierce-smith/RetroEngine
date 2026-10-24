@@ -1,4 +1,4 @@
-package com.retro.engine.scene;
+package com.retro.engine.scene.entity;
 
 import com.retro.engine.animation.AnimationClip;
 import com.retro.engine.animation.AnimatorController;
@@ -6,12 +6,12 @@ import com.retro.engine.animation.AnimatorState;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.assets.importers.SkeletonImporter;
-import com.retro.engine.scene.components.AnimatorComponent;
-import com.retro.engine.scene.components.AudioSource;
-import com.retro.engine.scene.components.Camera;
-import com.retro.engine.scene.components.Light;
-import com.retro.engine.scene.components.Material;
-import com.retro.engine.scene.components.Transform;
+import com.retro.engine.scene.components.media.AnimatorComponent;
+import com.retro.engine.scene.components.media.AudioSource;
+import com.retro.engine.scene.components.rendering.Camera;
+import com.retro.engine.scene.components.rendering.Light;
+import com.retro.engine.scene.components.rendering.Material;
+import com.retro.engine.scene.components.transform.Transform;
 
 import java.util.List;
 

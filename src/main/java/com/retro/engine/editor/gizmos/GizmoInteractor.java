@@ -4,9 +4,9 @@ import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.EditorWorkspace.GizmoAxis;
 import com.retro.engine.editor.EditorWorkspace.GizmoMode;
 import com.retro.engine.editor.ViewportCamera;
-import com.retro.engine.scene.Entity;
-import com.retro.engine.scene.SceneWorld;
-import com.retro.engine.scene.components.Transform;
+import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.scene.world.SceneWorld;
+import com.retro.engine.scene.components.transform.Transform;
 
 /**
  * Single-Responsibility Interactor Delegate for 3D Gizmo Raycasting / Axis Picking,

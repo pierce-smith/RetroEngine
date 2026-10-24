@@ -1,8 +1,9 @@
-package com.retro.engine.scene.components;
+package com.retro.engine.scene.components.media;
 
 import com.retro.engine.animation.AnimationClip;
 import com.retro.engine.animation.AnimatorController;
 import com.retro.engine.animation.Skeleton;
+import com.retro.engine.scene.components.Component;
 
 /**
  * Entity Component storing skeleton reference, active animation clip, state machine controller,

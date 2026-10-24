@@ -1,7 +1,7 @@
 package com.retro.engine.editor.ui.panels;
 
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
-import com.retro.engine.scene.Entity;
+import com.retro.engine.scene.entity.Entity;
 
 import java.util.ArrayList;
 import java.util.List;
