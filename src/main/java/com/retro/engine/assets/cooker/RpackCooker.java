@@ -6,9 +6,11 @@ import com.retro.engine.assets.importers.PixelBufferData;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
-import java.io.*;
+import java.io.File;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
@@ -20,16 +22,17 @@ import java.util.UUID;
  *
  * Package Layout (.rpack):
  * - Magic Header: 'R' 'P' 'A' 'C' 'K' '1' '0' '\0' (8 Bytes)
- * - Asset Type: Int32 (1 = MESH_3D, 2 = TEXTURE_2D)
+ * - Asset Type: Int32 (1 = MESH_3D, 2 = TEXTURE_2D) (Big-Endian)
  * - Asset UUID: 16 Bytes (128-bit)
- * - MESH_3D Payloads: Stride (Int32), VertexCount (Int32), Vertices Float32 Array
- * - TEXTURE_2D Payloads: Width (Int32), Height (Int32), RGBA Byte Array
+ * - MESH_3D Payloads: Stride (Int32), VertexCount (Int32), Vertices FloatCount (Int32), Float32 Array
+ * - TEXTURE_2D Payloads: Width (Int32), Height (Int32), ByteLength (Int32), RGBA Byte Array
  */
 public class RpackCooker {
 
     public static final byte[] RPACK_MAGIC = new byte[]{'R', 'P', 'A', 'C', 'K', '1', '0', 0};
     public static final int TYPE_MESH = 1;
     public static final int TYPE_TEXTURE = 2;
+    private static final int HEADER_SIZE = 8 + 4 + 16 + 4 + 4 + 4; // 40 Bytes
 
     public static boolean cookMeshToRpack(String modelFilePath, String rpackOutputPath) {
         return cookMeshToRpack(modelFilePath, rpackOutputPath, null);
@@ -57,22 +60,34 @@ public class RpackCooker {
             assetUuid = UUID.randomUUID();
         }
 
-        try (DataOutputStream out = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(outFile)))) {
-            out.write(RPACK_MAGIC);
-            out.writeInt(TYPE_MESH);
+        int floatCount = meshData.vertices.length;
+        long payloadBytes = (long) floatCount * 4L;
 
-            out.writeLong(assetUuid.getMostSignificantBits());
-            out.writeLong(assetUuid.getLeastSignificantBits());
+        try (FileChannel channel = FileChannel.open(Paths.get(rpackOutputPath),
+                StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
 
-            out.writeInt(stride);
-            out.writeInt(meshData.vertexCount);
-            out.writeInt(meshData.vertices.length);
+            // Write 40-byte header in Big-Endian format
+            ByteBuffer header = ByteBuffer.allocate(HEADER_SIZE).order(ByteOrder.BIG_ENDIAN);
+            header.put(RPACK_MAGIC);
+            header.putInt(TYPE_MESH);
+            header.putLong(assetUuid.getMostSignificantBits());
+            header.putLong(assetUuid.getLeastSignificantBits());
+            header.putInt(stride);
+            header.putInt(meshData.vertexCount);
+            header.putInt(floatCount);
+            header.flip();
 
-            for (float v : meshData.vertices) {
-                out.writeFloat(v);
-            }
+            channel.write(header);
 
-            out.flush();
+            // Fast Bulk Direct ByteBuffer write for float array payload
+            ByteBuffer payloadBuf = ByteBuffer.allocateDirect((int) payloadBytes).order(ByteOrder.BIG_ENDIAN);
+            FloatBuffer floatView = payloadBuf.asFloatBuffer();
+            floatView.put(meshData.vertices);
+            payloadBuf.position(0);
+            payloadBuf.limit((int) payloadBytes);
+
+            channel.write(payloadBuf);
+
             System.out.println("[RpackCooker] Successfully cooked mesh '" + new File(modelFilePath).getName() +
                     "' -> '" + outFile.getName() + "' (" + meshData.vertexCount + " verts, " + stride + "-float stride).");
             return true;
@@ -86,7 +101,7 @@ public class RpackCooker {
         if (rpackFilePath == null || !new File(rpackFilePath).exists()) return null;
 
         try (FileChannel channel = FileChannel.open(Paths.get(rpackFilePath), StandardOpenOption.READ)) {
-            ByteBuffer header = ByteBuffer.allocate(8 + 4 + 16 + 4 + 4 + 4).order(ByteOrder.BIG_ENDIAN);
+            ByteBuffer header = ByteBuffer.allocate(HEADER_SIZE).order(ByteOrder.BIG_ENDIAN);
             channel.read(header);
             header.flip();
 
@@ -106,7 +121,8 @@ public class RpackCooker {
             int vertexCount = header.getInt();
             int floatCount = header.getInt();
 
-            ByteBuffer floatBufBytes = ByteBuffer.allocateDirect(floatCount * 4).order(ByteOrder.nativeOrder());
+            // Match Big-Endian byte order written during cooking
+            ByteBuffer floatBufBytes = ByteBuffer.allocateDirect(floatCount * 4).order(ByteOrder.BIG_ENDIAN);
             channel.read(floatBufBytes);
             floatBufBytes.flip();
 
@@ -160,19 +176,27 @@ public class RpackCooker {
                 assetUuid = UUID.randomUUID();
             }
 
-            try (DataOutputStream out = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(outFile)))) {
-                out.write(RPACK_MAGIC);
-                out.writeInt(TYPE_TEXTURE);
+            try (FileChannel channel = FileChannel.open(Paths.get(rpackOutputPath),
+                    StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
 
-                out.writeLong(assetUuid.getMostSignificantBits());
-                out.writeLong(assetUuid.getLeastSignificantBits());
+                ByteBuffer header = ByteBuffer.allocate(HEADER_SIZE).order(ByteOrder.BIG_ENDIAN);
+                header.put(RPACK_MAGIC);
+                header.putInt(TYPE_TEXTURE);
+                header.putLong(assetUuid.getMostSignificantBits());
+                header.putLong(assetUuid.getLeastSignificantBits());
+                header.putInt(w);
+                header.putInt(h);
+                header.putInt(pixelsByte.length);
+                header.flip();
 
-                out.writeInt(w);
-                out.writeInt(h);
-                out.writeInt(pixelsByte.length);
-                out.write(pixelsByte);
+                channel.write(header);
 
-                out.flush();
+                ByteBuffer pixelBuf = ByteBuffer.allocateDirect(pixelsByte.length);
+                pixelBuf.put(pixelsByte);
+                pixelBuf.flip();
+
+                channel.write(pixelBuf);
+
                 System.out.println("[RpackCooker] Successfully cooked texture '" + srcFile.getName() +
                         "' -> '" + outFile.getName() + "' (" + w + "x" + h + " RGBA).");
                 return true;
@@ -187,7 +211,7 @@ public class RpackCooker {
         if (rpackFilePath == null || !new File(rpackFilePath).exists()) return null;
 
         try (FileChannel channel = FileChannel.open(Paths.get(rpackFilePath), StandardOpenOption.READ)) {
-            ByteBuffer header = ByteBuffer.allocate(8 + 4 + 16 + 4 + 4 + 4).order(ByteOrder.BIG_ENDIAN);
+            ByteBuffer header = ByteBuffer.allocate(HEADER_SIZE).order(ByteOrder.BIG_ENDIAN);
             channel.read(header);
             header.flip();
 

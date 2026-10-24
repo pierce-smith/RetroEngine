@@ -298,8 +298,34 @@ public class MetalGpuCache {
         }
     }
 
-    public void clearCaches() {
-        gpuMeshCache.clear();
-        gpuTextureCache.clear();
+    
+    public void clearCaches(MetalDevice metalDevice) {
+        if (metalDevice != null && metalDevice.getObjcMsgSend() != 0L) {
+            long send = metalDevice.getObjcMsgSend();
+            long selRelease = sel_registerName("release");
+
+            synchronized (gpuMeshCache) {
+                for (Long handle : gpuMeshCache.values()) {
+                    if (handle != null && handle != 0L) {
+                        invokePPP(handle, selRelease, send);
+                    }
+                }
+                gpuMeshCache.clear();
+            }
+
+            synchronized (gpuTextureCache) {
+                for (Long handle : gpuTextureCache.values()) {
+                    if (handle != null && handle != 0L) {
+                        invokePPP(handle, selRelease, send);
+                    }
+                }
+                gpuTextureCache.clear();
+            }
+        } else {
+            gpuMeshCache.clear();
+            gpuTextureCache.clear();
+        }
+        System.out.println("[MetalGpuCache] VRAM mesh and texture caches released.");
     }
+
 }

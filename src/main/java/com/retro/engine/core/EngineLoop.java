@@ -8,13 +8,26 @@ import com.retro.engine.editor.render.SceneRenderPipeline;
 import com.retro.engine.rhi.IRenderBackend;
 
 /**
- * EngineLoop manages frame delta timing with sub-millisecond precision, event polling,
- * input processing, camera state synchronization, double-buffered command flushing, and RHI rendering ticks.
+ * EngineLoop manages sub-millisecond frame pacing, GLFW event polling,
+ * delta time smoothing via rolling history window, camera state synchronization,
+ * double-buffered command flushing, and RHI rendering ticks at a rock-solid 60 FPS.
  */
 public class EngineLoop {
 
-    private static final long TARGET_FRAME_TIME_NS = 16_666_667L; // 60 FPS (16.666 ms)
-    private static final float MAX_FRAME_TIME = 0.1f; // Sanity cap (100ms) to prevent giant time spikes
+    private static final long TARGET_FRAME_TIME_NS = 16_666_667L; // 60.00 FPS target (16.666 ms)
+    private static final float MAX_FRAME_TIME = 0.1f;              // Cap (100ms) against OS focus/gesture spikes
+
+    // 8-Frame Rolling Average Window for Frame Delta Time Smoothing
+    private static final int SMOOTHING_SAMPLES = 8;
+    private final float[] deltaHistory = new float[SMOOTHING_SAMPLES];
+    private int deltaIndex = 0;
+    private boolean historyFilled = false;
+
+    public EngineLoop() {
+        for (int i = 0; i < SMOOTHING_SAMPLES; i++) {
+            deltaHistory[i] = 1.0f / 60.0f; // Pre-fill with 16.66ms
+        }
+    }
 
     public void run(EngineContext context) {
         WindowHost window = context.getWindow();
@@ -25,17 +38,25 @@ public class EngineLoop {
         SceneRenderPipeline renderSubmitter = context.getRenderSubmitter();
         IRenderBackend rhi = context.getRhi();
 
-        long lastTime = System.nanoTime();
+        long targetNextFrameNs = System.nanoTime();
+        long lastTimeNs = System.nanoTime();
 
         while (!window.shouldClose()) {
             window.pollEvents();
 
-            long currentTime = System.nanoTime();
-            float rawDeltaTime = (currentTime - lastTime) / 1_000_000_000.0f;
-            lastTime = currentTime;
+            long currentTimeNs = System.nanoTime();
+            float rawDeltaTime = (currentTimeNs - lastTimeNs) / 1_000_000_000.0f;
+            lastTimeNs = currentTimeNs;
 
-            // Clamp delta time to protect against window gestures or focus spikes
-            float deltaTime = Math.min(Math.max(rawDeltaTime, 0.0001f), MAX_FRAME_TIME);
+            // Clamp raw delta time to guard against focus loss / window drag spikes
+            float clampedDelta = Math.min(Math.max(rawDeltaTime, 0.0001f), MAX_FRAME_TIME);
+
+            // Calculate smoothed delta time via 8-frame rolling window average
+            deltaHistory[deltaIndex] = clampedDelta;
+            deltaIndex = (deltaIndex + 1) % SMOOTHING_SAMPLES;
+            if (deltaIndex == 0) historyFilled = true;
+
+            float smoothedDelta = calculateSmoothedDelta();
 
             // 0. Double-Buffered Transactional Editor Command Flush at Frame Boundary
             if (editorManager != null && editorManager.getCommandHistory() != null) {
@@ -43,53 +64,80 @@ public class EngineLoop {
             }
 
             // Process Keyboard Hotkeys, Gizmo Snapping, and Flying Camera State
-            hotkeyHandler.processInput(window, editorManager, cameraController, deltaTime);
+            if (hotkeyHandler != null && cameraController != null) {
+                hotkeyHandler.processInput(window, editorManager, cameraController, smoothedDelta);
+            }
 
             // Synchronize Camera MVP Parameters across RHI and EditorWorkspace
-            rhi.setCameraTransform(
-                    cameraController.getPanX(),
-                    cameraController.getPanY(),
-                    cameraController.getZoom(),
-                    cameraController.getPitch(),
-                    cameraController.getYaw()
-            );
-            editorManager.setCameraState(
-                    cameraController.getPanX(),
-                    cameraController.getPanY(),
-                    cameraController.getZoom(),
-                    cameraController.getPitch(),
-                    cameraController.getYaw()
-            );
+            if (cameraController != null && editorManager != null) {
+                rhi.setCameraTransform(
+                        cameraController.getPanX(),
+                        cameraController.getPanY(),
+                        cameraController.getZoom(),
+                        cameraController.getPitch(),
+                        cameraController.getYaw()
+                );
+                editorManager.setCameraState(
+                        cameraController.getPanX(),
+                        cameraController.getPanY(),
+                        cameraController.getZoom(),
+                        cameraController.getPitch(),
+                        cameraController.getYaw()
+                );
+            }
 
             // Per-frame smooth delta update for simulation & viewport telemetry
-            editorManager.update(deltaTime);
+            if (editorManager != null) {
+                editorManager.update(smoothedDelta);
+            }
 
             // 1-Line Scene Graph & Virtual Thread Streaming Render Pass
-            renderSubmitter.submitFrame(editorManager, streamingService, rhi);
+            if (renderSubmitter != null) {
+                renderSubmitter.submitFrame(editorManager, streamingService, rhi);
+            }
 
-            rhi.updateGridMesh(editorManager.get3DGridVertices(), editorManager.get3DGridVertexCount());
-            rhi.updateUiMesh(editorManager.getUiVertices(), editorManager.getUiVertexCount());
+            if (editorManager != null) {
+                rhi.updateGridMesh(editorManager.get3DGridVertices(), editorManager.get3DGridVertexCount());
+                rhi.updateUiMesh(editorManager.getUiVertices(), editorManager.getUiVertexCount());
+            }
 
             rhi.beginFrame();
             rhi.endFrame();
             rhi.present();
 
-            // Sub-millisecond Frame Pacing (Pacing loop to achieve stable 60 FPS)
-            long frameEndTime = System.nanoTime();
-            long elapsedNs = frameEndTime - currentTime;
-            long sleepNs = TARGET_FRAME_TIME_NS - elapsedNs;
+            // --- Sub-Millisecond Precision Frame Pacing Loop ---
+            targetNextFrameNs += TARGET_FRAME_TIME_NS;
+            long nowNs = System.nanoTime();
 
+            // If behind schedule by more than 2 frames, resync anchor target to prevent catch-up spiral
+            if (nowNs > targetNextFrameNs + (TARGET_FRAME_TIME_NS * 2)) {
+                targetNextFrameNs = nowNs;
+            }
+
+            long sleepNs = targetNextFrameNs - nowNs;
             if (sleepNs > 0) {
                 long sleepMs = sleepNs / 1_000_000L;
                 if (sleepMs > 2) {
                     try {
                         Thread.sleep(sleepMs - 1);
-                    } catch (InterruptedException ignored) {}
+                    } catch (InterruptedException ignored) {
+                        Thread.currentThread().interrupt();
+                    }
                 }
-                while (System.nanoTime() - currentTime < TARGET_FRAME_TIME_NS) {
+                // High-precision spin-wait for remaining sub-millisecond duration
+                while (System.nanoTime() < targetNextFrameNs) {
                     Thread.onSpinWait();
                 }
             }
         }
+    }
+
+    private float calculateSmoothedDelta() {
+        int count = historyFilled ? SMOOTHING_SAMPLES : Math.max(1, deltaIndex);
+        float sum = 0.0f;
+        for (int i = 0; i < count; i++) {
+            sum += deltaHistory[i];
+        }
+        return sum / count;
     }
 }
