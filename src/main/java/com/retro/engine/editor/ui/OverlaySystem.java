@@ -12,7 +12,11 @@ import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.gizmos.GizmoSystem;
+import com.retro.engine.editor.dialogs.NativeFileDialog;
+import com.retro.engine.editor.commands.EditorCommands;
 
+import java.io.File;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -106,11 +110,19 @@ public class OverlaySystem {
         this.rightClickPressNdcY = ndcY;
         this.rightClickDragDistance = 0.0;
 
-        this.pressCamPitch = (cameraController != null) ? cameraController.getPitch() : camPitch;
-        this.pressCamYaw = (cameraController != null) ? cameraController.getYaw() : camYaw;
-        this.pressCamPanX = (cameraController != null) ? cameraController.getPanX() : camPanX;
-        this.pressCamPanY = (cameraController != null) ? cameraController.getPanY() : camPanY;
-        this.pressCamZoom = (cameraController != null) ? cameraController.getZoom() : camZoom;
+        if (cameraController != null) {
+            this.pressCamPitch = cameraController.getPitch();
+            this.pressCamYaw = cameraController.getYaw();
+            this.pressCamPanX = cameraController.getPanX();
+            this.pressCamPanY = cameraController.getPanY();
+            this.pressCamZoom = cameraController.getZoom();
+        } else {
+            this.pressCamPitch = camPitch;
+            this.pressCamYaw = camYaw;
+            this.pressCamPanX = camPanX;
+            this.pressCamPanY = camPanY;
+            this.pressCamZoom = camZoom;
+        }
     }
 
     public void addRightClickDragDistance(double dist) {
@@ -119,246 +131,145 @@ public class OverlaySystem {
         }
     }
 
-    public void onRightClickRelease(double refX, double refY, EditorWorkspace manager, ViewportCamera cameraController, float currentPitch, float currentYaw, float currentPanX, float currentPanY, float currentZoom, long lastOrbitTime) {
+    public void onRightClickRelease(double refX, double refY, EditorWorkspace manager, ViewportCamera cameraController, float currentCamPitch, float currentCamYaw, float currentCamPanX, float currentCamPanY, float currentCamZoom, long lastOrbitTime) {
         if (!isRightMouseDown) return;
         this.isRightMouseDown = false;
 
-        double directDragDist = Math.hypot(refX - rightClickPressX, refY - rightClickPressY);
+        double dx = refX - rightClickPressX;
+        double dy = refY - rightClickPressY;
+        this.rightClickDragDistance = Math.sqrt(dx * dx + dy * dy);
 
-        float activePitch = (cameraController != null) ? cameraController.getPitch() : currentPitch;
-        float activeYaw = (cameraController != null) ? cameraController.getYaw() : currentYaw;
-        float activePanX = (cameraController != null) ? cameraController.getPanX() : currentPanX;
-        float activePanY = (cameraController != null) ? cameraController.getPanY() : currentPanY;
-        float activeZoom = (cameraController != null) ? cameraController.getZoom() : currentZoom;
+        long timeSinceOrbit = System.currentTimeMillis() - lastOrbitTime;
+        boolean recentlyOrbiting = (timeSinceOrbit < 150L);
 
-        boolean cameraMoved = Math.abs(activePitch - pressCamPitch) > 0.1f ||
-                              Math.abs(activeYaw - pressCamYaw) > 0.1f ||
-                              Math.abs(activePanX - pressCamPanX) > 0.01f ||
-                              Math.abs(activePanY - pressCamPanY) > 0.01f ||
-                              Math.abs(activeZoom - pressCamZoom) > 0.01f;
-
-        boolean recentOrbit = (System.currentTimeMillis() - lastOrbitTime) < 350;
-
-        if (!cameraMoved && !recentOrbit && rightClickDragDistance < 12.0 && directDragDist < 12.0) {
-            buildAndShowContextMenu(rightClickPressNdcX, rightClickPressNdcY, rightClickPressX, rightClickPressY, manager);
+        if (rightClickDragDistance < 8.0 && !recentlyOrbiting && manager != null) {
+            buildAndShowContextMenuAt(rightClickPressNdcX, rightClickPressNdcY, manager);
         }
     }
 
-    public void buildAndShowContextMenu(float ndcX, float ndcY, double refX, double refY, EditorWorkspace manager) {
+    private void buildAndShowContextMenuAt(float ndcX, float ndcY, EditorWorkspace manager) {
+        if (manager == null) return;
         List<MenuItem> items = new ArrayList<>();
 
-        if (ndcY >= 0.92f) {
-            items.add(new MenuItem("New Scene", manager::newScene));
-            items.add(new MenuItem("Open Scene... (Cmd+O)", manager::promptOpenSceneWithNativeDialog));
-            items.add(new MenuItem("Save Scene... (Cmd+S)", manager::promptSaveSceneWithNativeDialog));
-        } else if (ndcY <= -0.42f) {
-            String activePath = manager.getCurrentFolderPath();
-            List<AssetMeta> allDirectoryAssets = manager.getAssetDirectory();
-            List<AssetMeta> visibleAssets = new ArrayList<>();
-            if (allDirectoryAssets != null) {
-                for (int i = 0; i < allDirectoryAssets.size(); i++) {
-                    AssetMeta a = allDirectoryAssets.get(i);
-                    if (a != null && a.parentFolderPath != null && a.parentFolderPath.equalsIgnoreCase(activePath)) {
-                        visibleAssets.add(a);
-                    }
-                }
-            }
+        PanelRegion region = PanelRegion.getRegionAt(ndcX, ndcY, this);
 
-            boolean hasUpLevel = !activePath.isEmpty();
+        if (region == PanelRegion.ASSET_DIRECTORY) {
+            String activePath = manager.getAssetDatabase().getCurrentFolderPath();
+            List<AssetMeta> allDirectoryAssets = manager.getAssetDatabase().getAssetDirectory();
+            AssetMeta targetAsset = null;
+
+            List<AssetMeta> visibleAssets = (allDirectoryAssets != null) ? allDirectoryAssets.stream()
+                    .filter(a -> a.parentFolderPath != null && a.parentFolderPath.equalsIgnoreCase(activePath))
+                    .toList() : List.of();
+
             float cardX = -0.95f;
-            AssetMeta hitCard = null;
-            boolean hitUpLevel = false;
+            if (!activePath.isEmpty()) cardX += 0.36f;
 
-            if (hasUpLevel) {
+            for (AssetMeta asset : visibleAssets) {
+                if (cardX + 0.35f > 0.95f) break;
                 if (ndcX >= cardX && ndcX <= cardX + 0.32f && ndcY >= -0.92f && ndcY <= -0.55f) {
-                    hitUpLevel = true;
+                    targetAsset = asset;
+                    break;
                 }
                 cardX += 0.36f;
             }
 
-            if (!hitUpLevel) {
-                for (AssetMeta asset : visibleAssets) {
-                    if (cardX + 0.35f > 0.95f) break;
-                    if (ndcX >= cardX && ndcX <= cardX + 0.32f && ndcY >= -0.92f && ndcY <= -0.55f) {
-                        hitCard = asset;
-                        break;
-                    }
-                    cardX += 0.36f;
-                }
-            }
-
-            if (hitUpLevel) {
-                items.add(new MenuItem(".. Return to Parent Folder", manager::navigateUpFolder));
-                items.add(new MenuItem("+ Create Folder Here", manager::createNewFolder));
-                items.add(new MenuItem("+ Import Asset Here...", manager::promptImportAssetForDirectory));
-            } else if (hitCard != null) {
-                AssetMeta targetAsset = hitCard;
-                if (targetAsset.type == AssetType.FOLDER) {
-                    String folderName = targetAsset.name;
-                    String childPath = activePath.isEmpty() ? folderName : activePath + "/" + folderName;
-                    items.add(new MenuItem("Open Folder '" + folderName + "'", () -> manager.setCurrentFolderPath(childPath)));
-                    items.add(new MenuItem("Rename Folder", () -> manager.promptRenameFolder(targetAsset)));
-                    items.add(new MenuItem("Delete Folder", () -> manager.deleteFolder(targetAsset)));
-                } else if (targetAsset.type == AssetType.PREFAB) {
-                    items.add(new MenuItem("Spawn Prefab Entity", () -> manager.spawnPrefabFromAsset(targetAsset)));
-                    items.add(new MenuItem("Rename Prefab", () -> manager.promptRenameAsset(targetAsset)));
-                    items.add(new MenuItem("Remove Asset from Directory", () -> manager.removeAssetFromDirectory(targetAsset)));
+            if (targetAsset != null) {
+                final AssetMeta finalAsset = targetAsset;
+                if (finalAsset.type == AssetType.FOLDER) {
+                    final String folderName = finalAsset.name;
+                    final String childPath = activePath.isEmpty() ? folderName : activePath + "/" + folderName;
+                    items.add(new MenuItem("Open Folder '" + folderName + "'", () -> manager.getAssetDatabase().setCurrentFolderPath(childPath)));
+                    items.add(new MenuItem("Rename Folder", () -> manager.getAssetDatabase().promptRenameFolder(finalAsset)));
+                    items.add(new MenuItem("Delete Folder", () -> manager.getAssetDatabase().deleteFolder(finalAsset)));
                 } else {
-                    if (targetAsset.type == AssetType.MESH_3D) {
-                        items.add(new MenuItem("Spawn Mesh Entity", () -> manager.spawnEntityFromAsset(targetAsset)));
+                    if (targetAsset.type == AssetType.PREFAB) {
+                        items.add(new MenuItem("Spawn Prefab Entity", () -> spawnPrefabFromAsset(manager, finalAsset)));
+                        items.add(new MenuItem("Rename Prefab", () -> manager.getAssetDatabase().promptRenameAsset(finalAsset)));
+                        items.add(new MenuItem("Remove Asset from Directory", () -> manager.getAssetDatabase().removeAssetFromDirectory(finalAsset)));
+                    } else if (targetAsset.type == AssetType.MESH_3D) {
+                        items.add(new MenuItem("Spawn Mesh Entity", () -> spawnEntityFromAsset(manager, finalAsset)));
+                        items.add(new MenuItem("Rename Asset", () -> manager.getAssetDatabase().promptRenameAsset(finalAsset)));
+                        items.add(new MenuItem("Remove Asset from Directory", () -> manager.getAssetDatabase().removeAssetFromDirectory(finalAsset)));
                     } else if (targetAsset.type == AssetType.TEXTURE) {
-                        items.add(new MenuItem("Link Texture to Selected", () -> manager.assignTextureToSelectedEntity(targetAsset)));
-                    } else if (targetAsset.type == AssetType.AUDIO) {
-                        items.add(new MenuItem("Link Audio to Selected", () -> manager.assignAudioToSelectedEntity(targetAsset)));
+                        items.add(new MenuItem("Link Texture to Selected", () -> assignTextureToSelectedEntity(manager, finalAsset)));
+                        items.add(new MenuItem("Rename Asset", () -> manager.getAssetDatabase().promptRenameAsset(finalAsset)));
+                        items.add(new MenuItem("Remove Asset from Directory", () -> manager.getAssetDatabase().removeAssetFromDirectory(finalAsset)));
                     } else if (targetAsset.type == AssetType.SCRIPT) {
-                        items.add(new MenuItem("Link Script to Selected", () -> manager.assignScriptToSelectedEntity(targetAsset)));
+                        items.add(new MenuItem("Link Script to Selected", () -> assignScriptToSelectedEntity(manager, finalAsset)));
+                        items.add(new MenuItem("Rename Asset", () -> manager.getAssetDatabase().promptRenameAsset(finalAsset)));
+                        items.add(new MenuItem("Remove Asset from Directory", () -> manager.getAssetDatabase().removeAssetFromDirectory(finalAsset)));
                     }
-                    items.add(new MenuItem("Rename Asset", () -> manager.promptRenameAsset(targetAsset)));
-                    items.add(new MenuItem("Remove Asset from Directory", () -> manager.removeAssetFromDirectory(targetAsset)));
                 }
             } else {
-                items.add(new MenuItem("+ Create Folder", manager::createNewFolder));
-                items.add(new MenuItem("+ Import Asset...", manager::promptImportAssetForDirectory));
-                items.add(new MenuItem("+ Import Texture...", manager::promptImportTexture));
-                items.add(new MenuItem("+ Import 3D Mesh...", manager::promptImportMesh));
-                items.add(new MenuItem("+ Import Audio...", manager::promptImportAudio));
-                items.add(new MenuItem("+ Import Script...", manager::promptImportScript));
-                if (!manager.getCurrentFolderPath().isEmpty()) {
-                    items.add(new MenuItem(".. Up Level (" + manager.getCurrentFolderPath() + ")", manager::navigateUpFolder));
+                items.add(new MenuItem("+ New Folder", () -> manager.getAssetDatabase().createNewFolder()));
+                items.add(new MenuItem("+ Import Asset...", () -> InspectorInputDelegate.promptImportAssetForDirectory(manager)));
+                if (!manager.getAssetDatabase().getCurrentFolderPath().isEmpty()) {
+                    items.add(new MenuItem(".. Up Level (" + manager.getAssetDatabase().getCurrentFolderPath() + ")", () -> manager.getAssetDatabase().navigateUpFolder()));
                 }
             }
-        } else if (ndcX <= -0.55f) {
+
+        } else if (region == PanelRegion.SCENE_HIERARCHY) {
             List<Entity> entities = manager.getSceneEntities();
-            List<HierarchyPanel.HierarchyNode> visibleTree = HierarchyPanel.buildFlattenedTree(entities);
-            int index = (int) ((0.85f - ndcY) / 0.08f);
+            if (entities != null && !entities.isEmpty()) {
+                List<HierarchyPanel.HierarchyNode> visibleTree = HierarchyPanel.buildFlattenedTree(entities);
+                int index = (int) ((0.85f - ndcY) / 0.08f);
+                if (index >= 0 && index < visibleTree.size()) {
+                    final Entity hitEntity = visibleTree.get(index).entity;
+                    manager.selectEntity(hitEntity);
 
-            if (index >= 0 && index < visibleTree.size()) {
-                Entity hitEntity = visibleTree.get(index).entity;
-                manager.selectEntity(hitEntity);
-
-                items.add(new MenuItem("Rename Entity", () -> manager.promptRenameEntity(hitEntity)));
-                items.add(new MenuItem("Duplicate Entity (Cmd+D)", manager::duplicateSelectedEntity));
-                items.add(new MenuItem("Delete Entity (Del)", manager::deleteSelectedEntity));
-                items.add(new MenuItem("Save as Prefab...", manager::promptSaveSelectedAsPrefab));
-                items.add(new MenuItem("+ Add Script Component", () -> manager.openAssetPicker(AssetType.SCRIPT)));
-                items.add(new MenuItem("+ Add Character Controller", () -> {
-                    if (hitEntity.getComponent(CharacterControllerComponent.class) == null) {
-                        hitEntity.addComponent(new CharacterControllerComponent());
-                        UISoundPlayer.play(UISound.SPAWN);
-                    }
-                }));
-                items.add(new MenuItem("+ Add Vehicle Controller", () -> {
-                    if (hitEntity.getComponent(VehicleControllerComponent.class) == null) {
-                        hitEntity.addComponent(new VehicleControllerComponent());
-                        UISoundPlayer.play(UISound.SPAWN);
-                    }
-                }));
-                items.add(new MenuItem("+ Add Child Cube", () -> manager.spawnChildEntity(hitEntity, "Cube", "Assets/Models/cube.obj")));
-                items.add(new MenuItem("+ Add Child Light", () -> manager.spawnChildLight(hitEntity)));
-
-                if (hitEntity.parentId != null && !hitEntity.parentId.isEmpty()) {
-                    items.add(new MenuItem("Unparent (Move to Root)", () -> manager.unparentEntity(hitEntity)));
+                    items.add(new MenuItem("Rename Entity", () -> promptRenameEntity(manager, hitEntity)));
+                    items.add(new MenuItem("+ Add Script Component", () -> openAssetPicker(AssetType.SCRIPT)));
+                    items.add(new MenuItem("+ Add Child Cube", () -> spawnChildEntity(manager, hitEntity, "Cube", "Assets/Models/cube.obj")));
+                    items.add(new MenuItem("+ Add Child Light", () -> spawnChildLight(manager, hitEntity)));
+                    items.add(new MenuItem("Unparent (Move to Root)", () -> unparentEntity(manager, hitEntity)));
+                    items.add(new MenuItem("Set Parent...", () -> openParentPicker(hitEntity)));
+                } else {
+                    items.add(new MenuItem("Deselect All", () -> manager.selectEntity(null)));
                 }
-
-                items.add(new MenuItem("Set Parent...", () -> manager.openParentPicker(hitEntity)));
-                items.add(new MenuItem("Deselect All", () -> manager.selectEntity(null)));
             } else {
-                items.add(new MenuItem("+ Spawn 3D Cube", manager::spawnDefaultCube));
-                items.add(new MenuItem("+ Spawn Light Source", manager::spawnLightSource));
-                items.add(new MenuItem("+ Spawn Camera", manager::spawnCameraEntity));
-                items.add(new MenuItem("+ Spawn Audio Source", manager::spawnAudioSource));
-                items.add(new MenuItem("New Scene", manager::newScene));
+                items.add(new MenuItem("Deselect All", () -> manager.selectEntity(null)));
             }
-        } else if (ndcX >= 0.55f) {
-            Entity selected = manager.getSelectedEntity();
-            if (selected != null) {
-                items.add(new MenuItem("Rename Entity", () -> manager.promptRenameEntity(selected)));
-                items.add(new MenuItem("Duplicate Entity (Cmd+D)", manager::duplicateSelectedEntity));
-                items.add(new MenuItem("Delete Entity (Del)", manager::deleteSelectedEntity));
-                items.add(new MenuItem("Save as Prefab...", manager::promptSaveSelectedAsPrefab));
-                items.add(new MenuItem("+ Add Script Component", () -> manager.openAssetPicker(AssetType.SCRIPT)));
-                items.add(new MenuItem("+ Add Character Controller", () -> {
-                    if (selected.getComponent(CharacterControllerComponent.class) == null) {
-                        selected.addComponent(new CharacterControllerComponent());
-                        UISoundPlayer.play(UISound.SPAWN);
-                    }
-                }));
-                items.add(new MenuItem("+ Add Vehicle Controller", () -> {
-                    if (selected.getComponent(VehicleControllerComponent.class) == null) {
-                        selected.addComponent(new VehicleControllerComponent());
-                        UISoundPlayer.play(UISound.SPAWN);
-                    }
-                }));
-            }
-            items.add(new MenuItem("+ Import Asset...", manager::promptImportAssetForDirectory));
-        } else {
+
+        } else if (region == PanelRegion.VIEWPORT) {
             Entity bestEntity = null;
-            double minDistance = 60.0;
+            float bestDistSq = Float.MAX_VALUE;
 
             List<Entity> sceneEntities = manager.getSceneEntities();
             if (sceneEntities != null) {
-                for (int i = 0; i < sceneEntities.size(); i++) {
-                    Entity entity = sceneEntities.get(i);
+                for (Entity entity : sceneEntities) {
                     if (entity == null) continue;
-                    Transform tc = entity.getTransform();
-                    if (tc == null) continue;
-
                     SceneWorld.WorldTransform wt = manager.getSceneManager().getComputedWorldTransform(entity);
                     float[] p0 = GizmoSystem.projectWorldToNdc(wt.px(), wt.py(), wt.pz(), manager.getCameraController(), 0.0f, 0.25f, -5.0f, 0.0f, 0.0f);
-                    double cx = ((p0[0] + 1.0) / 2.0) * 1280.0;
-                    double cy = ((1.0 - p0[1]) / 2.0) * 720.0;
-
-                    double dist = Math.hypot(refX - cx, refY - cy);
-                    if (dist < minDistance) {
-                        minDistance = dist;
-                        bestEntity = entity;
+                    if (p0 != null) {
+                        float dx = ndcX - p0[0];
+                        float dy = ndcY - p0[1];
+                        float distSq = dx * dx + dy * dy;
+                        if (distSq < 0.04f && distSq < bestDistSq) {
+                            bestDistSq = distSq;
+                            bestEntity = entity;
+                        }
                     }
                 }
             }
 
             if (bestEntity != null) {
                 manager.selectEntity(bestEntity);
-                Entity hitEntity = bestEntity;
-
-                items.add(new MenuItem("Rename Entity", () -> manager.promptRenameEntity(hitEntity)));
-                items.add(new MenuItem("Duplicate Object (Cmd+D)", manager::duplicateSelectedEntity));
-                items.add(new MenuItem("Delete Object (Del)", manager::deleteSelectedEntity));
-                items.add(new MenuItem("Save as Prefab...", manager::promptSaveSelectedAsPrefab));
-                items.add(new MenuItem("+ Add Script Component", () -> manager.openAssetPicker(AssetType.SCRIPT)));
-                items.add(new MenuItem("+ Add Character Controller", () -> {
-                    if (hitEntity.getComponent(CharacterControllerComponent.class) == null) {
-                        hitEntity.addComponent(new CharacterControllerComponent());
-                        UISoundPlayer.play(UISound.SPAWN);
-                    }
-                }));
-                items.add(new MenuItem("+ Add Vehicle Controller", () -> {
-                    if (hitEntity.getComponent(VehicleControllerComponent.class) == null) {
-                        hitEntity.addComponent(new VehicleControllerComponent());
-                        UISoundPlayer.play(UISound.SPAWN);
-                    }
-                }));
-                items.add(new MenuItem("+ Add Child Cube", () -> manager.spawnChildEntity(hitEntity, "Cube", "Assets/Models/cube.obj")));
-
-                if (hitEntity.parentId != null && !hitEntity.parentId.isEmpty()) {
-                    items.add(new MenuItem("Unparent (Move to Root)", () -> manager.unparentEntity(hitEntity)));
-                }
-
-                items.add(new MenuItem("Reset Position", () -> {
-                    if (manager.getSelectedEntity() != null && manager.getSelectedEntity().getTransform() != null) {
-                        Transform tc = manager.getSelectedEntity().getTransform();
-                        tc.posX = 0.0f; tc.posY = 0.0f; tc.posZ = 0.0f;
-                    }
-                }));
-            } else {
-                items.add(new MenuItem("+ Spawn 3D Cube", manager::spawnDefaultCube));
-                items.add(new MenuItem("+ Spawn Light Source", manager::spawnLightSource));
-                items.add(new MenuItem("+ Spawn Camera", manager::spawnCameraEntity));
-                items.add(new MenuItem("+ Spawn Audio Source", manager::spawnAudioSource));
-                items.add(new MenuItem("Toggle 3D Grid", manager::toggle3DGrid));
+                final Entity hitEntity = bestEntity;
+                items.add(new MenuItem("Rename Entity", () -> promptRenameEntity(manager, hitEntity)));
+                items.add(new MenuItem("+ Add Script Component", () -> openAssetPicker(AssetType.SCRIPT)));
+                items.add(new MenuItem("+ Add Child Cube", () -> spawnChildEntity(manager, hitEntity, "Cube", "Assets/Models/cube.obj")));
+                items.add(new MenuItem("Unparent (Move to Root)", () -> unparentEntity(manager, hitEntity)));
+            } else if (manager.getSelectedEntity() != null && manager.getSelectedEntity().getTransform() != null) {
+                final Entity selected = manager.getSelectedEntity();
+                items.add(new MenuItem("Rename Entity", () -> promptRenameEntity(manager, selected)));
+                items.add(new MenuItem("+ Add Script Component", () -> openAssetPicker(AssetType.SCRIPT)));
             }
         }
 
-        openContextMenu(ndcX, ndcY, items);
+        if (!items.isEmpty()) {
+            openContextMenu(ndcX, ndcY, items);
+        }
     }
 
     public void processParentPickerModalClick(float ndcX, float ndcY, EditorWorkspace manager) {
@@ -366,45 +277,150 @@ public class OverlaySystem {
         float cardMinY = -0.45f, cardMaxY = 0.45f;
 
         if (ndcX < cardMinX || ndcX > cardMaxX || ndcY < cardMinY || ndcY > cardMaxY) {
+            UISoundPlayer.play(UISound.CLOSE_MODAL);
             closeModal();
             return;
         }
+
         if (ndcX >= cardMaxX - 0.08f && ndcX <= cardMaxX - 0.02f && ndcY >= cardMaxY - 0.08f && ndcY <= cardMaxY - 0.02f) {
+            UISoundPlayer.play(UISound.CLOSE_MODAL);
             closeModal();
             return;
         }
 
-        if (parentPickerTargetEntity == null) {
+        if (parentPickerTargetEntity == null || manager == null) {
             closeModal();
             return;
         }
 
-        if (ndcX >= cardMinX + 0.03f && ndcX <= cardMaxX - 0.03f && ndcY >= cardMaxY - 0.18f && ndcY <= cardMaxY - 0.11f) {
-            manager.unparentEntity(parentPickerTargetEntity);
+        if (ndcX >= -0.42f && ndcX <= -0.07f && ndcY >= 0.27f && ndcY <= 0.33f) {
+            unparentEntity(manager, parentPickerTargetEntity);
+            UISoundPlayer.play(UISound.CLICK);
             closeModal();
             return;
         }
 
         List<Entity> allEntities = manager.getSceneEntities();
-        List<Entity> candidates = new ArrayList<>();
-        if (allEntities != null) {
-            for (int i = 0; i < allEntities.size(); i++) {
-                Entity e = allEntities.get(i);
-                if (e != null && !e.id.equalsIgnoreCase(parentPickerTargetEntity.id) && !e.isDescendantOf(parentPickerTargetEntity, manager.getSceneEntities())) {
-                    candidates.add(e);
-                }
-            }
-        }
+        List<Entity> candidateParents = (allEntities != null) ? allEntities.stream()
+                .filter(e -> e != null && !e.id.equalsIgnoreCase(parentPickerTargetEntity.id) && !e.isDescendantOf(parentPickerTargetEntity, manager.getSceneEntities()))
+                .toList() : List.of();
 
-        float listY = cardMaxY - 0.24f;
-        for (Entity parentCandidate : candidates) {
-            if (listY < cardMinY + 0.05f) break;
-            if (ndcY >= listY - 0.05f && ndcY <= listY + 0.03f) {
-                manager.setParentEntity(parentPickerTargetEntity, parentCandidate);
+        float listY = 0.20f;
+        for (Entity parentCandidate : candidateParents) {
+            if (listY < -0.38f) break;
+            if (ndcX >= -0.42f && ndcX <= 0.42f && ndcY >= listY - 0.05f && ndcY <= listY + 0.03f) {
+                UISoundPlayer.play(UISound.CLICK);
+                setParentEntity(manager, parentPickerTargetEntity, parentCandidate);
                 closeModal();
                 return;
             }
             listY -= 0.10f;
         }
+    }
+
+    // --- Helper Entity Action Dispatchers ---
+    private void spawnPrefabFromAsset(EditorWorkspace manager, AssetMeta asset) {
+        if (manager == null || asset == null) return;
+        List<Entity> spawned = manager.getSceneManager().instantiatePrefab(asset.absolutePath, manager.getAssetDatabase());
+        if (spawned != null && !spawned.isEmpty()) {
+            manager.getAssetDatabase().addAssetDirectoryIfNotExists(asset.absolutePath, AssetType.PREFAB);
+        }
+    }
+
+    private void spawnEntityFromAsset(EditorWorkspace manager, AssetMeta asset) {
+        if (manager == null || asset == null) return;
+        manager.getSceneManager().spawnEntityFromAsset(asset);
+        Entity newlySpawned = manager.getSelectedEntity();
+        if (newlySpawned != null) {
+            EditorCommands.EntitySpawnCommand cmd = new EditorCommands.EntitySpawnCommand(manager, newlySpawned);
+            manager.getCommandHistory().executeCommand(cmd);
+        }
+        UISoundPlayer.play(UISound.SPAWN);
+    }
+
+    private void assignTextureToSelectedEntity(EditorWorkspace manager, AssetMeta asset) {
+        if (manager == null || asset == null) return;
+        final Entity selected = manager.getSelectedEntity();
+        if (selected == null) return;
+        Material mat = selected.getComponent(Material.class);
+        if (mat == null) return;
+        try {
+            Field field = Material.class.getDeclaredField("textureAssetPath");
+            EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(mat, field, mat.textureAssetPath, asset.absolutePath, "TEXTURE");
+            manager.getCommandHistory().executeCommand(cmd);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void assignScriptToSelectedEntity(EditorWorkspace manager, AssetMeta asset) {
+        if (manager == null) return;
+        final Entity selected = manager.getSelectedEntity();
+        if (selected == null) return;
+        ScriptComponent sc = selected.getComponent(ScriptComponent.class);
+        String oldPath = (sc != null) ? sc.scriptAssetPath : null;
+        String oldName = (sc != null) ? sc.scriptName : null;
+        String newPath = (asset != null) ? asset.absolutePath : null;
+        String newName = (asset != null) ? asset.name : null;
+        EditorCommands.ScriptAssignCommand cmd = new EditorCommands.ScriptAssignCommand(selected, oldPath, oldName, newPath, newName);
+        manager.getCommandHistory().executeCommand(cmd);
+        InspectorPanel.resetScroll();
+    }
+
+    private void promptRenameEntity(EditorWorkspace manager, Entity entity) {
+        if (entity == null || manager == null) return;
+        String input = NativeFileDialog.promptInput("Rename Entity", "Enter new entity name:", entity.name);
+        if (input != null && !input.trim().isEmpty() && !input.trim().equalsIgnoreCase(entity.name)) {
+            String newName = input.trim();
+            EditorCommands.EntityRenameCommand cmd = new EditorCommands.EntityRenameCommand(entity, entity.name, newName);
+            manager.getCommandHistory().executeCommand(cmd);
+            EngineConsolePanel.log(EngineConsolePanel.LogLevel.INFO, "[Scene] Renamed entity to '" + newName + "'");
+        }
+    }
+
+    private void setParentEntity(EditorWorkspace manager, Entity child, Entity parent) {
+        if (child == null || manager == null) return;
+        Entity oldParent = null;
+        if (child.parentId != null && !child.parentId.isEmpty()) {
+            for (Entity e : manager.getSceneEntities()) {
+                if (e.id.equalsIgnoreCase(child.parentId)) {
+                    oldParent = e;
+                    break;
+                }
+            }
+        }
+        EditorCommands.ParentChangeCommand cmd = new EditorCommands.ParentChangeCommand(manager, child, oldParent, parent);
+        manager.getCommandHistory().executeCommand(cmd);
+    }
+
+    private void unparentEntity(EditorWorkspace manager, Entity child) { setParentEntity(manager, child, null); }
+
+    private void spawnChildEntity(EditorWorkspace manager, Entity parent, String namePrefix, String meshAssetPath) {
+        if (parent == null || manager == null) return;
+        String entityId = "entity_" + (manager.getSceneEntities().size() + 1);
+        String name = namePrefix + "_" + (manager.getSceneEntities().size() + 1);
+        Entity child = new Entity(entityId, name, meshAssetPath);
+        child.parentId = parent.id;
+        parent.addChildId(child.id);
+        parent.expandedInHierarchy = true;
+        Transform tc = child.getTransform();
+        if (tc != null) { tc.posX = 1.0f; tc.posY = 0.0f; tc.posZ = 0.0f; }
+        EditorCommands.EntitySpawnCommand cmd = new EditorCommands.EntitySpawnCommand(manager, child);
+        manager.getCommandHistory().executeCommand(cmd);
+        UISoundPlayer.play(UISound.SPAWN);
+    }
+
+    private void spawnChildLight(EditorWorkspace manager, Entity parent) {
+        if (parent == null || manager == null) return;
+        String entityId = "light_" + (manager.getSceneEntities().size() + 1);
+        String name = "Light_" + (manager.getSceneEntities().size() + 1);
+        Entity child = new Entity(entityId, name, null);
+        child.addComponent(new Light());
+        child.parentId = parent.id;
+        parent.addChildId(child.id);
+        parent.expandedInHierarchy = true;
+        EditorCommands.EntitySpawnCommand cmd = new EditorCommands.EntitySpawnCommand(manager, child);
+        manager.getCommandHistory().executeCommand(cmd);
+        UISoundPlayer.play(UISound.SPAWN);
     }
 }

@@ -14,10 +14,9 @@ import com.retro.engine.rhi.IRenderBackend;
  */
 public class EngineLoop {
 
-    private static final long TARGET_FRAME_TIME_NS = 16_666_667L; // 60.00 FPS target (16.666 ms)
-    private static final float MAX_FRAME_TIME = 0.1f;              // Cap (100ms) against OS focus/gesture spikes
+    private static final long TARGET_FRAME_TIME_NS = 16_666_667L; // 60 FPS
+    private static final float MAX_FRAME_TIME = 0.1f;
 
-    // 8-Frame Rolling Average Window for Frame Delta Time Smoothing
     private static final int SMOOTHING_SAMPLES = 8;
     private final float[] deltaHistory = new float[SMOOTHING_SAMPLES];
     private int deltaIndex = 0;
@@ -25,11 +24,12 @@ public class EngineLoop {
 
     public EngineLoop() {
         for (int i = 0; i < SMOOTHING_SAMPLES; i++) {
-            deltaHistory[i] = 1.0f / 60.0f; // Pre-fill with 16.66ms
+            deltaHistory[i] = 1.0f / 60.0f;
         }
     }
 
     public void run(EngineContext context) {
+        if (context == null) return;
         WindowHost window = context.getWindow();
         EditorWorkspace editorManager = context.getEditorManager();
         ViewportCamera cameraController = context.getCameraController();
@@ -41,7 +41,7 @@ public class EngineLoop {
         long targetNextFrameNs = System.nanoTime();
         long lastTimeNs = System.nanoTime();
 
-        while (!window.shouldClose()) {
+        while (window != null && !window.shouldClose()) {
             window.pollEvents();
 
             long currentTimeNs = System.nanoTime();
@@ -69,7 +69,7 @@ public class EngineLoop {
             }
 
             // Synchronize Camera MVP Parameters across RHI and EditorWorkspace
-            if (cameraController != null && editorManager != null) {
+            if (cameraController != null && editorManager != null && rhi != null) {
                 rhi.setCameraTransform(
                         cameraController.getPanX(),
                         cameraController.getPanY(),
@@ -77,7 +77,7 @@ public class EngineLoop {
                         cameraController.getPitch(),
                         cameraController.getYaw()
                 );
-                editorManager.setCameraState(
+                editorManager.getGizmoStateController().setCameraState(
                         cameraController.getPanX(),
                         cameraController.getPanY(),
                         cameraController.getZoom(),
@@ -96,14 +96,16 @@ public class EngineLoop {
                 renderSubmitter.submitFrame(editorManager, streamingService, rhi);
             }
 
-            if (editorManager != null) {
-                rhi.updateGridMesh(editorManager.get3DGridVertices(), editorManager.get3DGridVertexCount());
+            if (editorManager != null && rhi != null) {
+                rhi.updateGridMesh(editorManager.getGizmoStateController().get3DGridVertices(), editorManager.getGizmoStateController().get3DGridVertexCount());
                 rhi.updateUiMesh(editorManager.getUiVertices(), editorManager.getUiVertexCount());
             }
 
-            rhi.beginFrame();
-            rhi.endFrame();
-            rhi.present();
+            if (rhi != null) {
+                rhi.beginFrame();
+                rhi.endFrame();
+                rhi.present();
+            }
 
             // --- Sub-Millisecond Precision Frame Pacing Loop ---
             targetNextFrameNs += TARGET_FRAME_TIME_NS;

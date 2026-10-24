@@ -7,6 +7,11 @@ import com.retro.engine.editor.audio.UISoundPlayer.UISound;
 import com.retro.engine.core.WindowHost;
 import com.retro.engine.editor.gizmos.GizmoInteractor;
 import com.retro.engine.editor.ui.EngineConsolePanel;
+import com.retro.engine.scene.Entity;
+import com.retro.engine.editor.commands.EditorCommands;
+import com.retro.engine.editor.dialogs.NativeFileDialog;
+
+import java.io.File;
 
 import static org.lwjgl.glfw.GLFW.*;
 
@@ -64,9 +69,9 @@ public class HotkeyRouter {
         if (isCtrlDown && isZ) {
             if (!undoKeyPressedLastFrame) {
                 if (isShiftDown) {
-                    editorManager.redo();
+                    editorManager.getCommandHistory().redo();
                 } else {
-                    editorManager.undo();
+                    editorManager.getCommandHistory().undo();
                 }
                 UISoundPlayer.play(UISound.TOGGLE);
                 undoKeyPressedLastFrame = true;
@@ -79,7 +84,10 @@ public class HotkeyRouter {
         if (isCtrlDown && isS) {
             if (!saveKeyPressedLastFrame) {
                 UISoundPlayer.play(UISound.OPEN_MODAL);
-                editorManager.promptSaveSceneWithNativeDialog();
+                editorManager.getSceneManager().promptSaveSceneWithNativeDialog(
+                    editorManager.getAssetDatabase().getMutableAssetDirectory(),
+                    editorManager.getAssetDatabase()
+                );
                 saveKeyPressedLastFrame = true;
             }
         } else {
@@ -90,7 +98,16 @@ public class HotkeyRouter {
         if (isCtrlDown && isO) {
             if (!loadKeyPressedLastFrame) {
                 UISoundPlayer.play(UISound.OPEN_MODAL);
-                editorManager.promptOpenSceneWithNativeDialog();
+                String defaultDir = new File("Assets/Scenes").getAbsolutePath();
+                String importedPath = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.rscene)", "rscene");
+                if (importedPath != null && !importedPath.trim().isEmpty()) {
+                    UISoundPlayer.play(UISound.SPAWN);
+                    editorManager.getAssetDatabase().clear();
+                    editorManager.getAssetDatabase().scanWorkspaceDirectory("Assets");
+                    editorManager.getSceneManager().loadSceneFromFile(importedPath, editorManager.getAssetDatabase());
+                } else {
+                    UISoundPlayer.play(UISound.CLOSE_MODAL);
+                }
                 loadKeyPressedLastFrame = true;
             }
         } else {
@@ -100,7 +117,15 @@ public class HotkeyRouter {
         // Cmd+D / Ctrl+D: Duplicate Selected Entity
         if (isCtrlDown && isD) {
             if (!duplicateKeyPressedLastFrame) {
-                editorManager.duplicateSelectedEntity(); // EditorWorkspace plays UISound.DUPLICATE;
+                if (editorManager.getSelectedEntity() != null) {
+                    editorManager.getSceneManager().duplicateSelectedEntity();
+                    Entity newlySpawned = editorManager.getSelectedEntity();
+                    if (newlySpawned != null) {
+                        EditorCommands.EntitySpawnCommand cmd = new EditorCommands.EntitySpawnCommand(editorManager, newlySpawned);
+                        editorManager.getCommandHistory().executeCommand(cmd);
+                    }
+                    UISoundPlayer.play(UISound.DUPLICATE);
+                }
                 duplicateKeyPressedLastFrame = true;
             }
         } else {
@@ -110,7 +135,14 @@ public class HotkeyRouter {
         // Delete / Backspace: Remove Selected Entity
         if (isDelete) {
             if (!deleteKeyPressedLastFrame) {
-                editorManager.deleteSelectedEntity(); // EditorWorkspace plays UISound.DELETE
+                Entity selected = editorManager.getSelectedEntity();
+                if (selected != null) {
+                    String entityName = selected.name;
+                    EditorCommands.EntityDeleteCommand cmd = new EditorCommands.EntityDeleteCommand(editorManager, selected);
+                    editorManager.getCommandHistory().executeCommand(cmd);
+                    UISoundPlayer.play(UISound.DELETE);
+                    EngineConsolePanel.log(EngineConsolePanel.LogLevel.INFO, "[Scene] Deleted entity '" + entityName + "'.");
+                }
                 deleteKeyPressedLastFrame = true;
             }
         } else {
@@ -118,9 +150,9 @@ public class HotkeyRouter {
         }
 
         if (cameraController != null && !isCtrlDown && !cameraController.isDraggingRmb() && !cameraController.isDraggingMmb()) {
-            if (is1 || isW) editorManager.setCurrentGizmoMode(EditorWorkspace.GizmoMode.TRANSLATE);
-            if (is2 || isE) editorManager.setCurrentGizmoMode(EditorWorkspace.GizmoMode.ROTATE);
-            if (is3 || isR) editorManager.setCurrentGizmoMode(EditorWorkspace.GizmoMode.SCALE);
+            if (is1 || isW) editorManager.getGizmoStateController().setGizmoMode(EditorWorkspace.GizmoMode.TRANSLATE);
+            if (is2 || isE) editorManager.getGizmoStateController().setGizmoMode(EditorWorkspace.GizmoMode.ROTATE);
+            if (is3 || isR) editorManager.getGizmoStateController().setGizmoMode(EditorWorkspace.GizmoMode.SCALE);
         }
 
         if (cameraController != null) {

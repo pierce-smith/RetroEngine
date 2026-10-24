@@ -1,13 +1,17 @@
 package com.retro.engine.editor.ui;
 
 import com.retro.engine.scene.Entity;
+import com.retro.engine.scene.components.Material;
+import com.retro.engine.scene.components.ScriptComponent;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
 import com.retro.engine.editor.ui.HierarchyPanel;
+import com.retro.engine.editor.commands.EditorCommands;
 
+import java.lang.reflect.Field;
 import java.util.List;
 
 public class AssetBrowserInputDelegate {
@@ -35,11 +39,13 @@ public class AssetBrowserInputDelegate {
     }
 
     public static void processAssetDirectoryClick(float ndcX, float ndcY, EditorWorkspace manager) {
+        if (manager == null) return;
+
         // 1. Header Buttons
         // [+ NEW FOLDER] Button
         if (ndcX >= 0.30f && ndcX <= 0.62f && ndcY >= -0.50f && ndcY <= -0.42f) {
             UISoundPlayer.play(UISound.CLICK);
-            manager.createNewFolder();
+            manager.getAssetDatabase().createNewFolder();
             return;
         }
 
@@ -50,8 +56,8 @@ public class AssetBrowserInputDelegate {
             return;
         }
 
-        String activePath = manager.getCurrentFolderPath();
-        List<AssetMeta> assetDirectory = manager.getAssetDirectory();
+        String activePath = manager.getAssetDatabase().getCurrentFolderPath();
+        List<AssetMeta> assetDirectory = manager.getAssetDatabase().getAssetDirectory();
 
         List<AssetMeta> visibleAssets = (assetDirectory != null) ? assetDirectory.stream()
                 .filter(a -> a.parentFolderPath != null && a.parentFolderPath.equalsIgnoreCase(activePath))
@@ -69,7 +75,7 @@ public class AssetBrowserInputDelegate {
         if (hasUpLevel) {
             if (ndcX >= cardX && ndcX <= cardX + 0.32f && ndcY >= -0.92f && ndcY <= -0.55f) {
                 UISoundPlayer.play(UISound.CLICK);
-                manager.navigateUpFolder();
+                manager.getAssetDatabase().navigateUpFolder();
                 return;
             }
             cardX += 0.36f;
@@ -81,19 +87,47 @@ public class AssetBrowserInputDelegate {
                 if (asset.type == AssetType.FOLDER) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     String newPath = activePath.isEmpty() ? asset.name : activePath + "/" + asset.name;
-                    manager.setCurrentFolderPath(newPath);
+                    manager.getAssetDatabase().setCurrentFolderPath(newPath);
                 } else if (asset.type == AssetType.PREFAB) {
                     UISoundPlayer.play(UISound.SPAWN);
-                    manager.spawnPrefabFromAsset(asset);
+                    List<Entity> spawned = manager.getSceneManager().instantiatePrefab(asset.absolutePath, manager.getAssetDatabase());
+                    if (spawned != null && !spawned.isEmpty()) {
+                        manager.getAssetDatabase().addAssetDirectoryIfNotExists(asset.absolutePath, AssetType.PREFAB);
+                    }
                 } else if (asset.type == AssetType.MESH_3D) {
                     UISoundPlayer.play(UISound.SPAWN);
-                    manager.spawnEntityFromAsset(asset);
+                    manager.getSceneManager().spawnEntityFromAsset(asset);
+                    Entity newlySpawned = manager.getSelectedEntity();
+                    if (newlySpawned != null) {
+                        EditorCommands.EntitySpawnCommand cmd = new EditorCommands.EntitySpawnCommand(manager, newlySpawned);
+                        manager.getCommandHistory().executeCommand(cmd);
+                    }
                 } else if (asset.type == AssetType.TEXTURE) {
                     UISoundPlayer.play(UISound.CLICK);
-                    manager.assignTextureToSelectedEntity(asset);
+                    Entity selected = manager.getSelectedEntity();
+                    if (selected != null) {
+                        Material mat = selected.getComponent(Material.class);
+                        if (mat != null) {
+                            try {
+                                Field field = Material.class.getDeclaredField("textureAssetPath");
+                                EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(mat, field, mat.textureAssetPath, asset.absolutePath, "TEXTURE");
+                                manager.getCommandHistory().executeCommand(cmd);
+                            } catch (Exception e) {
+                                e.printStackTrace();
+                            }
+                        }
+                    }
                 } else if (asset.type == AssetType.SCRIPT) {
                     UISoundPlayer.play(UISound.CLICK);
-                    manager.assignScriptToSelectedEntity(asset);
+                    Entity selected = manager.getSelectedEntity();
+                    if (selected != null) {
+                        ScriptComponent sc = selected.getComponent(ScriptComponent.class);
+                        String oldPath = (sc != null) ? sc.scriptAssetPath : null;
+                        String oldName = (sc != null) ? sc.scriptName : null;
+                        EditorCommands.ScriptAssignCommand cmd = new EditorCommands.ScriptAssignCommand(selected, oldPath, oldName, asset.absolutePath, asset.name);
+                        manager.getCommandHistory().executeCommand(cmd);
+                        InspectorPanel.resetScroll();
+                    }
                 }
                 break;
             }

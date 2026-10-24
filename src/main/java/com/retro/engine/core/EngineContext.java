@@ -8,6 +8,7 @@ import com.retro.engine.editor.input.HotkeyRouter;
 import com.retro.engine.editor.render.SceneRenderPipeline;
 import com.retro.engine.editor.ui.ViewportPanel;
 import com.retro.engine.rhi.IRenderBackend;
+import com.retro.engine.core.BackendLoader;
 import org.lwjgl.glfw.GLFW;
 
 /**
@@ -91,14 +92,14 @@ public class EngineContext {
         });
 
         window.setOnFileDropListener(filePaths -> {
-            editorManager.onFilesDropped(filePaths);
+            editorManager.getAssetDatabase().onFilesDropped(filePaths);
             System.out.println("[Asset Directory] Ingested " + filePaths.size() + " asset(s).");
         });
 
         if (!isRuntimeOnly) {
             window.setOnMouseClickListener((mouseX, mouseY, button, action) -> {
-                boolean handled = selectionController.handleMouseClick(mouseX, mouseY, button, action, editorManager);
-                boolean inViewport = selectionController.isCursorInViewport(mouseX, mouseY, editorManager);
+                boolean handled = selectionController.handleMouseClick(mouseX, mouseY, button, action);
+                boolean inViewport = selectionController.isCursorInViewport(mouseX, mouseY);
                 
                 // Forward to camera controller if not handled by UI, OR if right-clicking inside the 3D viewport
                 if (!handled || (button == 1 && inViewport)) {
@@ -107,8 +108,8 @@ public class EngineContext {
             });
 
             window.setOnCursorPosListener((x, y) -> {
-                boolean handledByGizmo = selectionController.onCursorPos(x, y, editorManager);
-                if (!handledByGizmo && selectionController.isCursorInViewport(x, y, editorManager)) {
+                boolean handledByGizmo = selectionController.onCursorPos(x, y);
+                if (!handledByGizmo && selectionController.isCursorInViewport(x, y)) {
                     boolean isShiftDown = window.isKeyDown(GLFW.GLFW_KEY_LEFT_SHIFT) || window.isKeyDown(GLFW.GLFW_KEY_RIGHT_SHIFT);
                     boolean isAltDown = window.isKeyDown(GLFW.GLFW_KEY_LEFT_ALT) || window.isKeyDown(GLFW.GLFW_KEY_RIGHT_ALT);
                     cameraController.onCursorPos(x, y, isShiftDown, isAltDown);
@@ -116,8 +117,8 @@ public class EngineContext {
             });
 
             window.setOnScrollListener((xoffset, yoffset) -> {
-                if (editorManager != null) {
-                    editorManager.handleScroll(yoffset);
+                if (selectionController != null) {
+                    selectionController.handleScroll(yoffset);
                 } else if (cameraController != null) {
                     cameraController.onScroll(yoffset);
                 }

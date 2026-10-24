@@ -76,13 +76,13 @@ public class EditorCommands {
         @Override
         public void execute() {
             if (manager == null || entity == null) return;
-            manager.deleteEntity(entity);
+            manager.getSceneManager().deleteEntity(entity);
         }
 
         @Override
         public void undo() {
             if (manager == null || entity == null) return;
-            manager.addEntity(entity, originalIndex);
+            manager.getSceneManager().addEntity(entity, originalIndex);
 
             for (Entity child : childEntities) {
                 if (child != null) {
@@ -113,13 +113,13 @@ public class EditorCommands {
         @Override
         public void execute() {
             if (manager == null || entity == null) return;
-            manager.addEntity(entity, -1);
+            manager.getSceneManager().addEntity(entity, -1);
         }
 
         @Override
         public void undo() {
             if (manager == null || entity == null) return;
-            manager.deleteEntity(entity);
+            manager.getSceneManager().deleteEntity(entity);
         }
 
         @Override
