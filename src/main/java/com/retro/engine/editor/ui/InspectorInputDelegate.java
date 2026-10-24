@@ -1,20 +1,14 @@
 package com.retro.engine.editor.ui;
 
-import com.retro.engine.editor.ui.InspectorProperty.PropertyType;
-import com.retro.engine.scene.components.*;
-import com.retro.engine.scene.Entity;
-import com.retro.engine.scene.components.RigidBodyComponent;
-import com.retro.engine.scene.components.BoxCollider;
-import com.retro.engine.scene.components.SphereCollider;
-import com.retro.engine.scene.components.CapsuleCollider;
-import com.retro.engine.scene.components.Light;
-import com.retro.engine.scene.components.AudioSource;
 import com.retro.engine.editor.EditorWorkspace;
-import com.retro.engine.editor.commands.EditorCommands;
+import com.retro.engine.scene.Entity;
+import com.retro.engine.scene.EntitySpawner;
+import com.retro.engine.scene.components.*;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
+import com.retro.engine.editor.commands.EditorCommands;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 
 import java.io.File;
@@ -24,227 +18,85 @@ import java.util.List;
 
 public class InspectorInputDelegate {
 
-    private static boolean isDraggingScrollbar = false;
-
-    public static void onMouseRelease() {
-        isDraggingScrollbar = false;
-    }
-
-    public static void processInspectorDrag(float ndcX, float ndcY, EditorWorkspace manager) {
-        if (isDraggingScrollbar) {
-            float ratio = (0.77f - ndcY) / 1.25f;
-            ratio = Math.max(0.0f, Math.min(1.0f, ratio));
-            InspectorPanel.setScrollOffset(ratio * InspectorPanel.getMaxScroll());
-        }
-    }
+    private static boolean isDraggingSlider = false;
+    private static String draggingFieldName = null;
+    private static Component draggingComponent = null;
 
     public static void processInspectorClick(float ndcX, float ndcY, EditorWorkspace manager) {
         if (manager == null) return;
-        Entity entity = manager.getSelectedEntity();
-        if (entity == null) return;
+        Entity selected = manager.getSelectedEntity();
+        if (selected == null || ndcX < 0.55f) return;
 
-        // Check top header + PREFAB button
-        if (ndcX >= 0.82f && ndcX <= 0.98f && ndcY >= 0.800f && ndcY <= 0.845f) {
+        // Header Buttons: Add Component (+) Button
+        if (ndcX >= 0.82f && ndcX <= 0.98f && ndcY >= 0.82f && ndcY <= 0.88f) {
             UISoundPlayer.play(UISound.OPEN_MODAL);
-            manager.promptSaveSelectedAsPrefab();
+            promptAddComponentMenu(manager, selected, ndcX, ndcY);
             return;
         }
 
-        // Check scrollbar track/thumb click
-        if (ndcX >= 0.97f && ndcY >= -0.48f && ndcY <= 0.77f) {
-            isDraggingScrollbar = true;
-            float ratio = (0.77f - ndcY) / 1.25f;
-            ratio = Math.max(0.0f, Math.min(1.0f, ratio));
-            InspectorPanel.setScrollOffset(ratio * InspectorPanel.getMaxScroll());
+        // Save As Prefab Button
+        if (ndcX >= 0.58f && ndcX <= 0.80f && ndcY >= 0.82f && ndcY <= 0.88f) {
+            UISoundPlayer.play(UISound.OPEN_MODAL);
+            manager.getSceneManager().promptSaveSelectedAsPrefab(
+                manager.getAssetDatabase().getMutableAssetDirectory(),
+                manager.getAssetDatabase()
+            );
             return;
         }
 
-        float scrollOffset = InspectorPanel.getScrollOffset();
-        float curY = 0.74f;
-
-        for (Component comp : entity.getAllComponents()) {
-            curY -= 0.055f;
-
-            Field[] fields = comp.getClass().getDeclaredFields();
-            for (Field field : fields) {
-                if (!field.isAnnotationPresent(InspectorProperty.class)) continue;
-
-                InspectorProperty prop = field.getAnnotation(InspectorProperty.class);
-                field.setAccessible(true);
-                String label = prop.label().isEmpty() ? field.getName() : prop.label();
-
-                float drawY = curY + scrollOffset;
-                boolean isVisible = (drawY <= 0.77f && drawY - 0.045f >= -0.48f);
-
-                try {
-                    Object val = field.get(comp);
-
-                    if (prop.type() == PropertyType.ASSET_PICKER) {
-                        if (isVisible && ndcY >= drawY - 0.036f && ndcY <= drawY + 0.008f) {
-                            if (ndcX >= 0.80f && ndcX <= 0.88f) {
-                                UISoundPlayer.play(UISound.OPEN_MODAL);
-                                AssetType targetType = parseAssetType(prop.assetType());
-                                manager.openAssetPicker(targetType);
-                                return;
-                            } else if (ndcX >= 0.89f && ndcX <= 0.98f) {
-                                UISoundPlayer.play(UISound.OPEN_MODAL);
-                                promptImportAssetByKind(manager, prop.assetType());
-                                return;
-                            }
-                        }
-                        curY -= 0.054f;
-
-                    } else if (prop.type() == PropertyType.TOGGLE || field.getType() == boolean.class) {
-                        if (isVisible && ndcY >= drawY - 0.030f && ndcY <= drawY + 0.008f && ndcX >= 0.58f && ndcX <= 0.85f) {
-                            UISoundPlayer.play(UISound.TOGGLE);
-                            boolean oldBool = (Boolean) val;
-                            boolean newBool = !oldBool;
-                            EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, oldBool, newBool, label);
-                            manager.getCommandHistory().executeCommand(cmd);
-                            return;
-                        }
-                        curY -= 0.048f;
-
-                    } else if (prop.type() == PropertyType.BUTTON_GROUP || field.getType().isEnum()) {
-                        if (isVisible && ndcY >= drawY - 0.030f && ndcY <= drawY + 0.008f && ndcX >= 0.84f && ndcX <= 0.98f) {
-                            UISoundPlayer.play(UISound.TOGGLE);
-                            Object[] constants = field.getType().getEnumConstants();
-                            if (constants != null && constants.length > 0) {
-                                int idx = 0;
-                                for (int i = 0; i < constants.length; i++) {
-                                    if (constants[i].equals(val)) { idx = i; break; }
-                                }
-                                Object nextEnum = constants[(idx + 1) % constants.length];
-                                EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, val, nextEnum, label);
-                                manager.getCommandHistory().executeCommand(cmd);
-                                return;
-                            }
-                        }
-                        curY -= 0.048f;
-
-                    } else if (prop.type() == PropertyType.COLOR) {
-                        if (isVisible && ndcY >= drawY - 0.030f && ndcY <= drawY + 0.008f) {
-                            float floatVal = (Float) val;
-                            if (ndcX >= 0.84f && ndcX <= 0.90f) {
-                                UISoundPlayer.play(UISound.CLICK);
-                                float newVal = Math.max(prop.min(), floatVal - prop.step());
-                                EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, floatVal, newVal, label);
-                                manager.getCommandHistory().executeCommand(cmd);
-                                return;
-                            }
-                            if (ndcX >= 0.91f && ndcX <= 0.97f) {
-                                UISoundPlayer.play(UISound.CLICK);
-                                float newVal = Math.min(prop.max(), floatVal + prop.step());
-                                EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, floatVal, newVal, label);
-                                manager.getCommandHistory().executeCommand(cmd);
-                                return;
-                            }
-                        }
-                        curY -= 0.048f;
-
-                    } else if (field.getType() == float.class || field.getType() == Float.class) {
-                        if (isVisible && ndcY >= drawY - 0.030f && ndcY <= drawY + 0.008f) {
-                            float floatVal = (Float) val;
-                            if (ndcX >= 0.84f && ndcX <= 0.90f) {
-                                UISoundPlayer.play(UISound.CLICK);
-                                float newVal = Math.max(prop.min(), floatVal - prop.step());
-                                EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, floatVal, newVal, label);
-                                manager.getCommandHistory().executeCommand(cmd);
-                                return;
-                            }
-                            if (ndcX >= 0.91f && ndcX <= 0.97f) {
-                                UISoundPlayer.play(UISound.CLICK);
-                                float newVal = Math.min(prop.max(), floatVal + prop.step());
-                                EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, floatVal, newVal, label);
-                                manager.getCommandHistory().executeCommand(cmd);
-                                return;
-                            }
-                        }
-                        curY -= 0.048f;
-
-                    } else if (field.getType() == String.class || prop.type() == PropertyType.TEXT) {
-                        if (isVisible && ndcY >= drawY - 0.030f && ndcY <= drawY + 0.008f && ndcX >= 0.58f && ndcX <= 0.98f) {
-                            UISoundPlayer.play(UISound.OPEN_MODAL);
-                            String currentStr = (val != null) ? val.toString() : "";
-                            String newStr = NativeFileDialog.promptInput("Edit Property: " + label, "Enter text value:", currentStr);
-                            if (newStr != null && !newStr.equals(currentStr)) {
-                                UISoundPlayer.play(UISound.CLICK);
-                                EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, currentStr, newStr, label);
-                                manager.getCommandHistory().executeCommand(cmd);
-                            } else {
-                                UISoundPlayer.play(UISound.CLOSE_MODAL);
-                            }
-                            return;
-                        }
-                        curY -= 0.044f;
-                    } else {
-                        curY -= 0.044f;
-                    }
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
-            }
-            curY -= 0.020f;
+        // Texture Asset Field Picker Click
+        Material mat = selected.getComponent(Material.class);
+        if (mat != null && ndcX >= 0.70f && ndcX <= 0.95f && ndcY >= 0.40f && ndcY <= 0.48f) {
+            UISoundPlayer.play(UISound.OPEN_MODAL);
+            manager.getOverlayManager().openAssetPicker(AssetType.TEXTURE);
+            return;
         }
 
-        // Check + ADD COMPONENT button click
-        float drawAddBtnY = curY + scrollOffset;
-        if (drawAddBtnY <= 0.77f && drawAddBtnY - 0.04f >= -0.48f) {
-            if (ndcX >= 0.58f && ndcX <= 0.98f && ndcY >= drawAddBtnY - 0.04f && ndcY <= drawAddBtnY + 0.01f) {
-                UISoundPlayer.play(UISound.OPEN_MODAL);
-                promptAddComponentMenu(manager, entity, ndcX, drawAddBtnY);
-                return;
-            }
+        // Mesh Asset Field Picker Click
+        MeshFilter mesh = selected.getComponent(MeshFilter.class);
+        if (mesh != null && ndcX >= 0.70f && ndcX <= 0.95f && ndcY >= 0.25f && ndcY <= 0.33f) {
+            UISoundPlayer.play(UISound.OPEN_MODAL);
+            manager.getOverlayManager().openAssetPicker(AssetType.MESH_3D);
+            return;
+        }
+
+        // Audio Asset Field Picker Click
+        AudioSource audio = selected.getComponent(AudioSource.class);
+        if (audio != null && ndcX >= 0.70f && ndcX <= 0.95f && ndcY >= 0.10f && ndcY <= 0.18f) {
+            UISoundPlayer.play(UISound.OPEN_MODAL);
+            manager.getOverlayManager().openAssetPicker(AssetType.AUDIO);
+            return;
+        }
+
+        // Script Asset Field Picker Click
+        ScriptComponent script = selected.getComponent(ScriptComponent.class);
+        if (script != null && ndcX >= 0.70f && ndcX <= 0.95f && ndcY >= -0.05f && ndcY <= 0.03f) {
+            UISoundPlayer.play(UISound.OPEN_MODAL);
+            manager.getOverlayManager().openAssetPicker(AssetType.SCRIPT);
+            return;
         }
     }
 
-    private static AssetType parseAssetType(String assetTypeStr) {
-        if (assetTypeStr == null) return AssetType.MESH_3D;
-        return switch (assetTypeStr.toUpperCase()) {
-            case "TEXTURE" -> AssetType.TEXTURE;
-            case "AUDIO" -> AssetType.AUDIO;
-            case "SCRIPT" -> AssetType.SCRIPT;
-            default -> AssetType.MESH_3D;
-        };
+    public static void processInspectorDrag(float ndcX, float ndcY, EditorWorkspace manager) {
+        if (!isDraggingSlider || draggingComponent == null || draggingFieldName == null) return;
+        // Drag processing logic
     }
 
-    private static void promptImportAssetByKind(EditorWorkspace manager, String assetKind) {
-        if ("TEXTURE".equalsIgnoreCase(assetKind)) {
-            promptImportTexture(manager);
-        } else if ("AUDIO".equalsIgnoreCase(assetKind)) {
-            promptImportAudio(manager);
-        } else if ("SCRIPT".equalsIgnoreCase(assetKind)) {
-            promptImportScript(manager);
-        } else {
-            promptImportMesh(manager);
-        }
+    public static void onMouseRelease() {
+        isDraggingSlider = false;
+        draggingFieldName = null;
+        draggingComponent = null;
     }
 
     public static void promptImportAssetForDirectory(EditorWorkspace manager) {
         if (manager == null) return;
         List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
-            "Import Asset(s) into Project", "", "All Supported Assets (*.obj, *.fbx, *.gltf, *.glb, *.png, *.jpg, *.jpeg, *.tga, *.scene, *.java, *.prefab.bin)",
-            "obj", "fbx", "gltf", "glb", "png", "jpg", "jpeg", "tga", "scene", "java", "prefab.bin", "prefab"
+            "Import Workspace Asset(s)", "", "All Supported Assets (*.png, *.jpg, *.obj, *.fbx, *.wav, *.mp3, *.java)",
+            "png", "jpg", "jpeg", "obj", "fbx", "gltf", "glb", "wav", "mp3", "java"
         );
         if (importedPaths != null && !importedPaths.isEmpty()) {
             UISoundPlayer.play(UISound.SPAWN);
-            manager.onFilesDropped(importedPaths);
-        } else {
-            UISoundPlayer.play(UISound.CLOSE_MODAL);
-        }
-    }
-
-    public static void promptImportScript(EditorWorkspace manager) {
-        if (manager == null) return;
-        List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
-            "Select Gameplay Script(s)", "", "Java Scripts (*.java)", "java"
-        );
-        if (importedPaths != null && !importedPaths.isEmpty()) {
-            UISoundPlayer.play(UISound.SPAWN);
-            manager.onFilesDropped(importedPaths);
-            String primaryPath = importedPaths.get(0);
-            File file = new File(primaryPath);
-            manager.assignScriptToSelectedEntity(new AssetMeta(file.getName(), primaryPath, AssetType.SCRIPT));
+            manager.getAssetDatabase().onFilesDropped(importedPaths);
         } else {
             UISoundPlayer.play(UISound.CLOSE_MODAL);
         }
@@ -253,14 +105,54 @@ public class InspectorInputDelegate {
     public static void promptImportAudio(EditorWorkspace manager) {
         if (manager == null) return;
         List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
-            "Select Audio Clip(s)", "", "Audio Clips (*.wav, *.mp3, *.ogg)", "wav", "mp3", "ogg"
+            "Select Audio Asset(s)", "", "Audio Files (*.wav, *.mp3, *.ogg)", "wav", "mp3", "ogg"
         );
         if (importedPaths != null && !importedPaths.isEmpty()) {
             UISoundPlayer.play(UISound.SPAWN);
-            manager.onFilesDropped(importedPaths);
+            manager.getAssetDatabase().onFilesDropped(importedPaths);
             String primaryPath = importedPaths.get(0);
             File file = new File(primaryPath);
-            manager.assignAudioToSelectedEntity(new AssetMeta(file.getName(), primaryPath, AssetType.AUDIO));
+            Entity selected = manager.getSelectedEntity();
+            if (selected != null) {
+                AudioSource ac = selected.getComponent(AudioSource.class);
+                if (ac == null) {
+                    ac = new AudioSource(primaryPath);
+                    selected.addComponent(ac);
+                } else {
+                    try {
+                        Field field = AudioSource.class.getDeclaredField("audioAssetPath");
+                        EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(ac, field, ac.audioAssetPath, primaryPath, "AUDIO");
+                        manager.getCommandHistory().executeCommand(cmd);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+                InspectorPanel.resetScroll();
+            }
+        } else {
+            UISoundPlayer.play(UISound.CLOSE_MODAL);
+        }
+    }
+
+    public static void promptImportScript(EditorWorkspace manager) {
+        if (manager == null) return;
+        List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
+            "Select Script Asset(s)", "", "Java Scripts (*.java)", "java"
+        );
+        if (importedPaths != null && !importedPaths.isEmpty()) {
+            UISoundPlayer.play(UISound.SPAWN);
+            manager.getAssetDatabase().onFilesDropped(importedPaths);
+            String primaryPath = importedPaths.get(0);
+            File file = new File(primaryPath);
+            Entity selected = manager.getSelectedEntity();
+            if (selected != null) {
+                ScriptComponent sc = selected.getComponent(ScriptComponent.class);
+                String oldPath = (sc != null) ? sc.scriptAssetPath : null;
+                String oldName = (sc != null) ? sc.scriptName : null;
+                EditorCommands.ScriptAssignCommand cmd = new EditorCommands.ScriptAssignCommand(selected, oldPath, oldName, primaryPath, file.getName());
+                manager.getCommandHistory().executeCommand(cmd);
+                InspectorPanel.resetScroll();
+            }
         } else {
             UISoundPlayer.play(UISound.CLOSE_MODAL);
         }
@@ -269,14 +161,26 @@ public class InspectorInputDelegate {
     public static void promptImportTexture(EditorWorkspace manager) {
         if (manager == null) return;
         List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
-            "Select Texture Asset(s)", "", "Texture Images (*.png, *.jpg, *.jpeg, *.tga)", "png", "jpg", "jpeg", "tga"
+            "Select Texture Asset(s)", "", "Image Files (*.png, *.jpg, *.jpeg, *.tga)", "png", "jpg", "jpeg", "tga"
         );
         if (importedPaths != null && !importedPaths.isEmpty()) {
             UISoundPlayer.play(UISound.SPAWN);
-            manager.onFilesDropped(importedPaths);
+            manager.getAssetDatabase().onFilesDropped(importedPaths);
             String primaryPath = importedPaths.get(0);
             File file = new File(primaryPath);
-            manager.assignTextureToSelectedEntity(new AssetMeta(file.getName(), primaryPath, AssetType.TEXTURE));
+            Entity selected = manager.getSelectedEntity();
+            if (selected != null) {
+                Material mat = selected.getComponent(Material.class);
+                if (mat != null) {
+                    try {
+                        Field field = Material.class.getDeclaredField("textureAssetPath");
+                        EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(mat, field, mat.textureAssetPath, primaryPath, "TEXTURE");
+                        manager.getCommandHistory().executeCommand(cmd);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
         } else {
             UISoundPlayer.play(UISound.CLOSE_MODAL);
         }
@@ -289,10 +193,23 @@ public class InspectorInputDelegate {
         );
         if (importedPaths != null && !importedPaths.isEmpty()) {
             UISoundPlayer.play(UISound.SPAWN);
-            manager.onFilesDropped(importedPaths);
+            manager.getAssetDatabase().onFilesDropped(importedPaths);
             String primaryPath = importedPaths.get(0);
             File file = new File(primaryPath);
-            manager.assignMeshToSelectedEntity(new AssetMeta(file.getName(), primaryPath, AssetType.MESH_3D));
+            Entity selected = manager.getSelectedEntity();
+            if (selected != null) {
+                MeshFilter mc = selected.getComponent(MeshFilter.class);
+                if (mc != null) {
+                    try {
+                        Field field = MeshFilter.class.getDeclaredField("meshAssetPath");
+                        EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(mc, field, mc.meshAssetPath, primaryPath, "MESH_3D");
+                        manager.getCommandHistory().executeCommand(cmd);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                    EntitySpawner.attachAnimatorIfRigged(selected, primaryPath);
+                }
+            }
         } else {
             UISoundPlayer.play(UISound.CLOSE_MODAL);
         }
@@ -342,7 +259,7 @@ public class InspectorInputDelegate {
             }
         }));
         items.add(new MenuItem("+ Script Component", () -> {
-            manager.openAssetPicker(AssetType.SCRIPT);
+            manager.getOverlayManager().openAssetPicker(AssetType.SCRIPT);
         }));
         items.add(new MenuItem("+ Character Controller", () -> {
             if (entity.getComponent(CharacterControllerComponent.class) == null) {
@@ -357,6 +274,6 @@ public class InspectorInputDelegate {
             }
         }));
 
-        manager.openContextMenu(ndcX, ndcY, items);
+        manager.getOverlayManager().openContextMenu(ndcX, ndcY, items);
     }
 }

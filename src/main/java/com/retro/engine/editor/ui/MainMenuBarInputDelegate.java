@@ -8,43 +8,49 @@ import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
+import com.retro.engine.editor.dialogs.NativeFileDialog;
+import com.retro.engine.editor.commands.EditorCommands;
 
+import java.io.File;
 import java.util.List;
 
 public class MainMenuBarInputDelegate {
 
     public static void processTopBarClick(float ndcX, EditorWorkspace manager) {
+        if (manager == null) return;
+        DropdownMenu current = manager.getOverlayManager().getActiveDropdownMenu();
         if (ndcX >= -0.72f && ndcX <= -0.62f) {
             UISoundPlayer.play(UISound.CLICK);
-            manager.setActiveDropdownMenu((manager.getActiveDropdownMenu() == DropdownMenu.FILE) ? DropdownMenu.NONE : DropdownMenu.FILE);
+            manager.getOverlayManager().setActiveDropdownMenu((current == DropdownMenu.FILE) ? DropdownMenu.NONE : DropdownMenu.FILE);
         } else if (ndcX >= -0.61f && ndcX <= -0.51f) {
             UISoundPlayer.play(UISound.CLICK);
-            manager.setActiveDropdownMenu((manager.getActiveDropdownMenu() == DropdownMenu.EDIT) ? DropdownMenu.NONE : DropdownMenu.EDIT);
+            manager.getOverlayManager().setActiveDropdownMenu((current == DropdownMenu.EDIT) ? DropdownMenu.NONE : DropdownMenu.EDIT);
         } else if (ndcX >= -0.50f && ndcX <= -0.38f) {
             UISoundPlayer.play(UISound.CLICK);
-            manager.setActiveDropdownMenu((manager.getActiveDropdownMenu() == DropdownMenu.ENTITY) ? DropdownMenu.NONE : DropdownMenu.ENTITY);
+            manager.getOverlayManager().setActiveDropdownMenu((current == DropdownMenu.ENTITY) ? DropdownMenu.NONE : DropdownMenu.ENTITY);
         } else if (ndcX >= -0.37f && ndcX <= -0.27f) {
             UISoundPlayer.play(UISound.CLICK);
-            manager.setActiveDropdownMenu((manager.getActiveDropdownMenu() == DropdownMenu.VIEW) ? DropdownMenu.NONE : DropdownMenu.VIEW);
+            manager.getOverlayManager().setActiveDropdownMenu((current == DropdownMenu.VIEW) ? DropdownMenu.NONE : DropdownMenu.VIEW);
         } else if (ndcX >= -0.14f && ndcX <= -0.02f) {
             UISoundPlayer.play(UISound.TOGGLE);
-            manager.setActiveDropdownMenu(DropdownMenu.NONE);
+            manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
             manager.play();
         } else if (ndcX >= -0.01f && ndcX <= 0.10f) {
             UISoundPlayer.play(UISound.TOGGLE);
-            manager.setActiveDropdownMenu(DropdownMenu.NONE);
+            manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
             manager.pause();
         } else if (ndcX >= 0.11f && ndcX <= 0.22f) {
             UISoundPlayer.play(UISound.TOGGLE);
-            manager.setActiveDropdownMenu(DropdownMenu.NONE);
+            manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
             manager.stop();
         } else {
-            manager.setActiveDropdownMenu(DropdownMenu.NONE);
+            manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
         }
     }
 
     public static boolean processDropdownOverlayClick(float ndcX, float ndcY, EditorWorkspace manager) {
-        DropdownMenu activeDropdownMenu = manager.getActiveDropdownMenu();
+        if (manager == null) return false;
+        DropdownMenu activeDropdownMenu = manager.getOverlayManager().getActiveDropdownMenu();
         float minX = switch (activeDropdownMenu) {
             case FILE -> -0.72f;
             case EDIT -> -0.61f;
@@ -60,21 +66,63 @@ public class MainMenuBarInputDelegate {
             int itemIndex = (int) ((maxY - ndcY) / 0.09f);
 
             if (activeDropdownMenu == DropdownMenu.FILE) {
-                if (itemIndex == 0) { UISoundPlayer.play(UISound.CLICK); manager.newScene(); }
-                else if (itemIndex == 1) { manager.promptOpenSceneWithNativeDialog(); }
-                else if (itemIndex == 2) { manager.promptSaveSceneWithNativeDialog(); }
+                if (itemIndex == 0) {
+                    UISoundPlayer.play(UISound.CLICK);
+                    manager.getSceneManager().newScene();
+                    manager.getAssetDatabase().clear();
+                    manager.getAssetDatabase().scanWorkspaceDirectory("Assets");
+                } else if (itemIndex == 1) {
+                    UISoundPlayer.play(UISound.OPEN_MODAL);
+                    String defaultDir = new File("Assets/Scenes").getAbsolutePath();
+                    String importedPath = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.rscene)", "rscene");
+                    if (importedPath != null && !importedPath.trim().isEmpty()) {
+                        UISoundPlayer.play(UISound.SPAWN);
+                        manager.getAssetDatabase().clear();
+                        manager.getAssetDatabase().scanWorkspaceDirectory("Assets");
+                        var data = manager.getSceneManager().loadSceneFromFile(importedPath, manager.getAssetDatabase());
+                        if (data != null && data.assetDirectory() != null && !data.assetDirectory().isEmpty()) {
+                            manager.getAssetDatabase().restoreAssetDirectory(data.assetDirectory());
+                        }
+                    } else {
+                        UISoundPlayer.play(UISound.CLOSE_MODAL);
+                    }
+                } else if (itemIndex == 2) {
+                    UISoundPlayer.play(UISound.OPEN_MODAL);
+                    manager.getSceneManager().promptSaveSceneWithNativeDialog(manager.getAssetDatabase().getMutableAssetDirectory(), manager.getAssetDatabase());
+                }
             } else if (activeDropdownMenu == DropdownMenu.EDIT) {
-                if (itemIndex == 0) { UISoundPlayer.play(UISound.CLICK); manager.undo(); }
-                else if (itemIndex == 1) { UISoundPlayer.play(UISound.CLICK); manager.redo(); }
-                else if (itemIndex == 2) { UISoundPlayer.play(UISound.DELETE); manager.deleteSelectedEntity(); }
+                if (itemIndex == 0) { UISoundPlayer.play(UISound.CLICK); manager.getCommandHistory().undo(); }
+                else if (itemIndex == 1) { UISoundPlayer.play(UISound.CLICK); manager.getCommandHistory().redo(); }
+                else if (itemIndex == 2) {
+                    Entity sel = manager.getSelectedEntity();
+                    if (sel != null) {
+                        manager.getCommandHistory().executeCommand(new EditorCommands.EntityDeleteCommand(manager, sel));
+                        UISoundPlayer.play(UISound.DELETE);
+                    }
+                }
             } else if (activeDropdownMenu == DropdownMenu.ENTITY) {
-                if (itemIndex == 0) { UISoundPlayer.play(UISound.SPAWN); manager.spawnDefaultCube(); }
-                else if (itemIndex == 1) { UISoundPlayer.play(UISound.SPAWN); manager.spawnLightSource(); }
-                else if (itemIndex == 2) { UISoundPlayer.play(UISound.SPAWN); manager.spawnCameraEntity(); }
-                else if (itemIndex == 3) { manager.promptSaveSelectedAsPrefab(); }
+                if (itemIndex == 0) {
+                    manager.getSceneManager().spawnDefaultCube();
+                    Entity newly = manager.getSelectedEntity();
+                    if (newly != null) manager.getCommandHistory().executeCommand(new EditorCommands.EntitySpawnCommand(manager, newly));
+                    UISoundPlayer.play(UISound.SPAWN);
+                } else if (itemIndex == 1) {
+                    manager.getSceneManager().spawnLightSource();
+                    Entity newly = manager.getSelectedEntity();
+                    if (newly != null) manager.getCommandHistory().executeCommand(new EditorCommands.EntitySpawnCommand(manager, newly));
+                    UISoundPlayer.play(UISound.SPAWN);
+                } else if (itemIndex == 2) {
+                    manager.getSceneManager().spawnCameraEntity();
+                    Entity newly = manager.getSelectedEntity();
+                    if (newly != null) manager.getCommandHistory().executeCommand(new EditorCommands.EntitySpawnCommand(manager, newly));
+                    UISoundPlayer.play(UISound.SPAWN);
+                } else if (itemIndex == 3) {
+                    UISoundPlayer.play(UISound.OPEN_MODAL);
+                    manager.getSceneManager().promptSaveSelectedAsPrefab(manager.getAssetDatabase().getMutableAssetDirectory(), manager.getAssetDatabase());
+                }
             } else if (activeDropdownMenu == DropdownMenu.VIEW) {
                 if (itemIndex == 0) { UISoundPlayer.play(UISound.CLICK); manager.resetViewportCamera(); }
-                else if (itemIndex == 1) { UISoundPlayer.play(UISound.TOGGLE); manager.toggle3DGrid(); }
+                else if (itemIndex == 1) { UISoundPlayer.play(UISound.TOGGLE); manager.getGizmoStateController().toggle3DGrid(); }
             }
             return true;
         }
@@ -82,21 +130,22 @@ public class MainMenuBarInputDelegate {
     }
 
     public static void processModalClick(float ndcX, float ndcY, EditorWorkspace manager) {
+        if (manager == null) return;
         float cardMinX = -0.45f, cardMaxX = 0.45f;
         float cardMinY = -0.45f, cardMaxY = 0.45f;
 
         if (ndcX < cardMinX || ndcX > cardMaxX || ndcY < cardMinY || ndcY > cardMaxY) {
             UISoundPlayer.play(UISound.CLOSE_MODAL);
-            manager.closeModal();
+            manager.getOverlayManager().closeModal();
             return;
         }
         if (ndcX >= cardMaxX - 0.08f && ndcX <= cardMaxX - 0.02f && ndcY >= cardMaxY - 0.08f && ndcY <= cardMaxY - 0.02f) {
             UISoundPlayer.play(UISound.CLOSE_MODAL);
-            manager.closeModal();
+            manager.getOverlayManager().closeModal();
             return;
         }
 
-        AssetType pickerFilterType = manager.getPickerFilterType();
+        AssetType pickerFilterType = manager.getOverlayManager().getPickerFilterType();
 
         if (ndcX >= -0.42f && ndcX <= -0.07f && ndcY >= 0.27f && ndcY <= 0.33f) {
             Entity selected = manager.getSelectedEntity();
@@ -108,11 +157,11 @@ public class MainMenuBarInputDelegate {
                 }
             }
             UISoundPlayer.play(UISound.CLICK);
-            manager.closeModal();
+            manager.getOverlayManager().closeModal();
             return;
         }
 
-        List<AssetMeta> allAssets = manager.getAssetDirectory();
+        List<AssetMeta> allAssets = manager.getAssetDatabase().getAssetDirectory();
         List<AssetMeta> filteredAssets = (allAssets != null) ? allAssets.stream()
                 .filter(a -> a.type == pickerFilterType)
                 .toList() : List.of();
@@ -125,16 +174,12 @@ public class MainMenuBarInputDelegate {
                 Entity selected = manager.getSelectedEntity();
                 if (selected != null) {
                     if (pickerFilterType == AssetType.TEXTURE) {
-                        manager.assignTextureToSelectedEntity(asset);
+                        selected.setTextureAsset(asset.absolutePath, asset.name);
                     } else if (pickerFilterType == AssetType.MESH_3D) {
-                        manager.assignMeshToSelectedEntity(asset);
-                    } else if (pickerFilterType == AssetType.AUDIO) {
-                        manager.assignAudioToSelectedEntity(asset);
-                    } else if (pickerFilterType == AssetType.SCRIPT) {
-                        manager.assignScriptToSelectedEntity(asset);
+                        selected.setMeshAssetPath(asset.absolutePath);
                     }
                 }
-                manager.closeModal();
+                manager.getOverlayManager().closeModal();
                 return;
             }
             listY -= 0.10f;

@@ -47,7 +47,7 @@ public class RuntimeLoop {
      */
     public void run(EngineContext context, SceneWorld sceneWorld) {
         if (context == null || sceneWorld == null) {
-            System.err.println("[RuntimeLoop] Error: Invalid EngineContext or SceneWorld provided to RuntimeLoop.");
+            System.err.println("[RuntimeLoop] Error: Invalid EngineContext or SceneWorld provided.");
             return;
         }
 

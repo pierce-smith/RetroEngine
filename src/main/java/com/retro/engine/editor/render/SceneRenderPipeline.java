@@ -208,7 +208,7 @@ public class SceneRenderPipeline {
                 float scaleRadius = Math.max(Math.abs(wt.sx()), Math.max(Math.abs(wt.sy()), Math.abs(wt.sz())));
                 float sphereRadius = Math.max(scaleRadius * 1.5f, 1.0f);
                 if (!frustumCuller.isSphereVisible(wt.px(), wt.py(), wt.pz(), sphereRadius)) {
-                    continue; // Culled: Entity outside camera view frustum
+                    continue;
                 }
 
                 String meshPath = mc.meshAssetPath;
@@ -273,9 +273,9 @@ public class SceneRenderPipeline {
             }
         }
 
-        snapshot.gridVisible = editorManager.is3DGridVisible();
-        snapshot.gridVertices = editorManager.get3DGridVertices();
-        snapshot.gridVertexCount = editorManager.get3DGridVertexCount();
+        snapshot.gridVisible = editorManager.getGizmoStateController().is3DGridVisible();
+        snapshot.gridVertices = editorManager.getGizmoStateController().get3DGridVertices();
+        snapshot.gridVertexCount = editorManager.getGizmoStateController().get3DGridVertexCount();
         snapshot.uiVertices = editorManager.getUiVertices();
         snapshot.uiVertexCount = editorManager.getUiVertexCount();
 
