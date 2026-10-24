@@ -1,6 +1,11 @@
-package com.retro.engine.editor.ui;
+package com.retro.engine.editor.ui.overlays;
 
 import com.retro.engine.editor.input.InspectorInputDelegate;
+import com.retro.engine.editor.ui.batch.PanelRegion;
+import com.retro.engine.editor.ui.panels.EngineConsolePanel;
+import com.retro.engine.editor.ui.panels.HierarchyPanel;
+import com.retro.engine.editor.ui.panels.InspectorPanel;
+import com.retro.engine.editor.ui.panels.MenuItem;
 import com.retro.engine.scene.Entity;
 import com.retro.engine.scene.SceneWorld;
 import com.retro.engine.scene.components.*;

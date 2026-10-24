@@ -1,6 +1,6 @@
 package com.retro.engine.scene.components;
 
-import com.retro.engine.editor.ui.InspectorProperty;
+import com.retro.engine.editor.ui.panels.InspectorProperty;
 
 /**
  * ECS component holding Vice City 4-wheel raycast suspension vehicle dynamics.

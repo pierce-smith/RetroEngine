@@ -1,4 +1,4 @@
-package com.retro.engine.editor.ui;
+package com.retro.engine.editor.ui.panels;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;

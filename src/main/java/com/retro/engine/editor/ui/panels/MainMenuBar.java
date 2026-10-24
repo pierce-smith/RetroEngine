@@ -1,10 +1,10 @@
-package com.retro.engine.editor.ui;
+package com.retro.engine.editor.ui.panels;
 
 import com.retro.engine.editor.EditorWorkspace.DropdownMenu;
 import com.retro.engine.editor.commands.CommandStack;
+import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.scene.SceneWorld.PlayState;
 
-import java.io.File;
 import java.util.List;
 
 /**

@@ -1,10 +1,7 @@
-package com.retro.engine.editor.ui;
-
-import com.retro.engine.editor.EditorWorkspace.DropdownMenu;
-import com.retro.engine.editor.EditorWorkspace.ModalState;
+package com.retro.engine.editor.ui.batch;
 
 import com.retro.engine.editor.EditorWorkspace;
-import com.retro.engine.editor.ui.OverlaySystem;
+import com.retro.engine.editor.ui.overlays.OverlaySystem;
 
 /**
  * PanelRegion defines explicit screen-space NDC bounds for all editor panels,
