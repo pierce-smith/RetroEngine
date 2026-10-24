@@ -1,5 +1,6 @@
-package com.retro.engine.editor.ui;
+package com.retro.engine.editor.input;
 
+import com.retro.engine.editor.ui.InspectorPanel;
 import com.retro.engine.scene.Entity;
 import com.retro.engine.scene.components.Material;
 import com.retro.engine.scene.components.ScriptComponent;

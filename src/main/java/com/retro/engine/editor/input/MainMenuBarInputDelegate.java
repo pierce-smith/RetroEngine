@@ -1,7 +1,6 @@
-package com.retro.engine.editor.ui;
+package com.retro.engine.editor.input;
 
 import com.retro.engine.scene.Entity;
-import com.retro.engine.scene.components.AudioSource;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.EditorWorkspace.DropdownMenu;
 import com.retro.engine.assets.AssetMeta;

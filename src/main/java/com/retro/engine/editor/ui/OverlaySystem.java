@@ -1,5 +1,6 @@
 package com.retro.engine.editor.ui;
 
+import com.retro.engine.editor.input.InspectorInputDelegate;
 import com.retro.engine.scene.Entity;
 import com.retro.engine.scene.SceneWorld;
 import com.retro.engine.scene.components.*;
@@ -15,7 +16,6 @@ import com.retro.engine.editor.gizmos.GizmoSystem;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.editor.commands.EditorCommands;
 
-import java.io.File;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
