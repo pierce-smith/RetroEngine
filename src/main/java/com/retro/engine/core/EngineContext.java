@@ -2,13 +2,12 @@ package com.retro.engine.core;
 
 import com.retro.engine.assets.AssetStreamer;
 import com.retro.engine.editor.EditorWorkspace;
-import com.retro.engine.editor.EditorInputRouter;
+import com.retro.engine.editor.input.EditorInputRouter;
 import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.input.HotkeyRouter;
 import com.retro.engine.editor.render.SceneRenderPipeline;
 import com.retro.engine.editor.ui.ViewportPanel;
 import com.retro.engine.rhi.IRenderBackend;
-import com.retro.engine.core.BackendLoader;
 import org.lwjgl.glfw.GLFW;
 
 /**
