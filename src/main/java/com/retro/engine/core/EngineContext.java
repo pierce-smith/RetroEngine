@@ -13,6 +13,7 @@ import org.lwjgl.glfw.GLFW;
 /**
  * EngineContext manages subsystem bootstrapping, window creation,
  * listener wiring, and RHI backend initialization.
+ * Hardened with explicit listener unbinding and workspace disposal hooks.
  */
 public class EngineContext {
 
@@ -78,7 +79,7 @@ public class EngineContext {
         BackendLoader loader = new BackendLoader();
         if (!loader.loadTargetBackend(cliArgs)) {
             System.err.println("[Fatal] Target backend failed to load. Halting execution.");
-            window.destroy();
+            shutdown();
             return false;
         }
 
@@ -86,17 +87,22 @@ public class EngineContext {
 
         // Listen for window resizes and update editorManager dimensions
         window.setOnWindowSizeListener((w, h) -> {
-            editorManager.setWindowDimensions(w, h);
-            System.out.println("[Engine] Window Resized -> " + w + "x" + h);
+            if (editorManager != null) {
+                editorManager.setWindowDimensions(w, h);
+                System.out.println("[Engine] Window Resized -> " + w + "x" + h);
+            }
         });
 
         window.setOnFileDropListener(filePaths -> {
-            editorManager.getAssetDatabase().onFilesDropped(filePaths);
-            System.out.println("[Asset Directory] Ingested " + filePaths.size() + " asset(s).");
+            if (editorManager != null && editorManager.getAssetDatabase() != null) {
+                editorManager.getAssetDatabase().onFilesDropped(filePaths);
+                System.out.println("[Asset Directory] Ingested " + filePaths.size() + " asset(s).");
+            }
         });
 
         if (!isRuntimeOnly) {
             window.setOnMouseClickListener((mouseX, mouseY, button, action) -> {
+                if (selectionController == null || cameraController == null) return;
                 boolean handled = selectionController.handleMouseClick(mouseX, mouseY, button, action);
                 boolean inViewport = selectionController.isCursorInViewport(mouseX, mouseY);
                 
@@ -107,6 +113,7 @@ public class EngineContext {
             });
 
             window.setOnCursorPosListener((x, y) -> {
+                if (selectionController == null || cameraController == null || window == null) return;
                 boolean handledByGizmo = selectionController.onCursorPos(x, y);
                 if (!handledByGizmo && selectionController.isCursorInViewport(x, y)) {
                     boolean isShiftDown = window.isKeyDown(GLFW.GLFW_KEY_LEFT_SHIFT) || window.isKeyDown(GLFW.GLFW_KEY_RIGHT_SHIFT);
@@ -126,7 +133,7 @@ public class EngineContext {
 
         if (!rhi.initialize(window.getWindowInfo())) {
             System.err.println("[Fatal] Failed to initialize RHI backend.");
-            window.destroy();
+            shutdown();
             return false;
         }
 
@@ -150,16 +157,37 @@ public class EngineContext {
     public SceneRenderPipeline getRenderSubmitter() { return renderSubmitter; }
     public IRenderBackend getRhi() { return rhi; }
 
+    public void unbindWindowListeners() {
+        if (window != null) {
+            window.unbindAllListeners();
+        }
+    }
+
     public void shutdown() {
+        unbindWindowListeners();
+        if (editorManager != null) {
+            editorManager.dispose();
+            editorManager = null;
+        }
         if (streamingService != null) {
             streamingService.shutdown();
+            streamingService = null;
         }
         if (rhi != null) {
             rhi.shutdown();
+            rhi = null;
         }
         if (window != null) {
             window.destroy();
+            window = null;
         }
-        System.out.println("[Engine] Shutdown complete.");
+        if (selectionController != null) {
+            selectionController.dispose();
+            selectionController = null;
+        }
+        cameraController = null;
+        hotkeyHandler = null;
+        renderSubmitter = null;
+        System.out.println("[EngineContext] Shutdown complete and references unbound.");
     }
 }

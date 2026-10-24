@@ -15,6 +15,11 @@ import java.util.function.Consumer;
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.system.MemoryUtil.NULL;
 
+/**
+ * WindowHost encapsulates GLFW window lifecycle, screen-to-backing projections,
+ * and decoupling of platform native callbacks via functional interfaces.
+ * Hardened with explicit unbind hooks to eliminate GC retention leaks.
+ */
 public class WindowHost {
 
     @FunctionalInterface
@@ -192,7 +197,7 @@ public class WindowHost {
             }
         });
 
-        // Window Size Callback - updates screen point dimensions and triggers listener
+        // Window Size Callback
         glfwSetWindowSizeCallback(windowHandle, (window, w, h) -> {
             this.width = w;
             this.height = h;
@@ -313,8 +318,29 @@ public class WindowHost {
         }
     }
 
+    public void unbindAllListeners() {
+        this.windowSizeListener = null;
+        this.fileDropListener = null;
+        this.mouseClickListener = null;
+        this.mouseClick3ArgListener = null;
+        this.mouseClickBiConsumer = null;
+        this.cursorPosListener = null;
+        this.cursorPos2ArgListener = null;
+        this.scrollListener = null;
+        this.singleScrollListener = null;
+        this.keyListener = null;
+        this.keyPressListener = null;
+    }
+
     public void destroy() {
+        unbindAllListeners();
         if (windowHandle != NULL) {
+            glfwSetKeyCallback(windowHandle, null);
+            glfwSetWindowSizeCallback(windowHandle, null);
+            glfwSetDropCallback(windowHandle, null);
+            glfwSetMouseButtonCallback(windowHandle, null);
+            glfwSetCursorPosCallback(windowHandle, null);
+            glfwSetScrollCallback(windowHandle, null);
             glfwDestroyWindow(windowHandle);
             windowHandle = NULL;
         }
@@ -324,6 +350,6 @@ public class WindowHost {
         if (old != null) {
             old.free();
         }
-        System.out.println("[GLFW] Window resources released.");
+        System.out.println("[GLFW] Window resources released and callbacks unbound.");
     }
 }
