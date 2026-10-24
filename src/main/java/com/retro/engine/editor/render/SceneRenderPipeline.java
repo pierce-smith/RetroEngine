@@ -24,7 +24,7 @@ import java.util.List;
  * light state, GPU skeletal animation bone palette extraction, and downward-raycast ground shadows
  * through a vendor-agnostic IRenderBackend contract.
  * Fully decoupled from EditorWorkspace via thread-safe RenderSceneSnapshot structures with zero per-frame heap allocations
- * using an auto-expanding descriptor pool.
+ * using an auto-expanding descriptor pool and pooled LightDescriptor state.
  */
 public class SceneRenderPipeline {
 
@@ -35,6 +35,30 @@ public class SceneRenderPipeline {
             float r, float g, float b,
             float intensity
     ) {}
+
+    public static class MutableLightDescriptor {
+        public int lightType;
+        public float posX, posY, posZ;
+        public float dirX, dirY, dirZ;
+        public float r, g, b;
+        public float intensity;
+        public boolean active = false;
+
+        public void set(int lightType, float posX, float posY, float posZ,
+                        float dirX, float dirY, float dirZ,
+                        float r, float g, float b, float intensity) {
+            this.lightType = lightType;
+            this.posX = posX; this.posY = posY; this.posZ = posZ;
+            this.dirX = dirX; this.dirY = dirY; this.dirZ = dirZ;
+            this.r = r; this.g = g; this.b = b;
+            this.intensity = intensity;
+            this.active = true;
+        }
+
+        public void reset() {
+            this.active = false;
+        }
+    }
 
     public record RenderEntityDescriptor(
             String submitKey,
@@ -86,6 +110,7 @@ public class SceneRenderPipeline {
 
     public static class RenderSceneSnapshot {
         public LightDescriptor activeLight = null;
+        public final MutableLightDescriptor pooledLight = new MutableLightDescriptor();
         public final List<RenderEntityDescriptor> entities = new ArrayList<>();
         public final List<MutableRenderEntityDescriptor> pooledEntities = new ArrayList<>();
         public int activeEntityCount = 0;
@@ -112,6 +137,7 @@ public class SceneRenderPipeline {
 
         public void reset() {
             activeLight = null;
+            pooledLight.reset();
             entities.clear();
             activeEntityCount = 0;
             gridVisible = true;
@@ -160,7 +186,7 @@ public class SceneRenderPipeline {
 
         if (entities != null && !entities.isEmpty()) {
 
-            // 1. Scan and pass active Light component state to snapshot
+            // 1. Scan and pass active Light component state to snapshot using pooled light descriptor
             for (Entity entity : entities) {
                 Light light = entity.getComponent(Light.class);
                 Transform lightTransform = entity.getTransform();
@@ -184,7 +210,7 @@ public class SceneRenderPipeline {
                         case SPOT -> 2;
                     };
 
-                    snapshot.activeLight = new LightDescriptor(
+                    snapshot.pooledLight.set(
                             lightType, posX, posY, posZ, dirX, dirY, dirZ,
                             light.r, light.g, light.b, light.intensity
                     );
@@ -297,7 +323,14 @@ public class SceneRenderPipeline {
 
         rhi.clearSceneQueue();
 
-        if (snapshot.activeLight != null) {
+        if (snapshot.pooledLight.active) {
+            MutableLightDescriptor l = snapshot.pooledLight;
+            rhi.setSceneLight(
+                    l.lightType, l.posX, l.posY, l.posZ,
+                    l.dirX, l.dirY, l.dirZ,
+                    l.r, l.g, l.b, l.intensity
+            );
+        } else if (snapshot.activeLight != null) {
             LightDescriptor l = snapshot.activeLight;
             rhi.setSceneLight(
                     l.lightType(), l.posX(), l.posY(), l.posZ(),

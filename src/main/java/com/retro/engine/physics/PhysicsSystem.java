@@ -21,11 +21,13 @@ import java.util.Map;
  * - NarrowphaseSolver: Collision shape overlap manifolds & positional separation
  * - CharacterControllerSolver: Vice City ground snapping & movement stepping
  * - VehicleSuspensionSolver: 4-wheel raycast suspension & vehicle dynamics
+ * Hardened with selective kinematic/scripted transform synchronization guards.
  */
 public class PhysicsSystem {
 
     public static final float FIXED_TIMESTEP = 1.0f / 60.0f; // 60 Hz
     public static final float GRAVITY = -9.81f; // m/s^2
+    public static final int MAX_PHYSICS_STEPS = 2; // Guard against accumulator catch-up spirals
 
     public static class PhysicsBody {
         public Entity entity;
@@ -152,13 +154,29 @@ public class PhysicsSystem {
 
         accumulator += Math.min(deltaTime, 0.1f);
 
-        while (accumulator >= FIXED_TIMESTEP) {
+        int steps = 0;
+        boolean physicsRan = false;
+        while (accumulator >= FIXED_TIMESTEP && steps < MAX_PHYSICS_STEPS) {
             fixedUpdate(FIXED_TIMESTEP);
             accumulator -= FIXED_TIMESTEP;
+            steps++;
+            physicsRan = true;
         }
 
-        for (PhysicsBody body : activeBodies) {
-            body.syncToTransform();
+        if (steps >= MAX_PHYSICS_STEPS) {
+            accumulator = 0.0f; // Flush residual accumulator to prevent catch-up spirals
+        }
+
+        // Only write back to transform if physics solver actually stepped,
+        // and only for DYNAMIC bodies or active character/vehicle controllers
+        if (physicsRan) {
+            for (PhysicsBody body : activeBodies) {
+                if (body.rigidBody != null && body.rigidBody.motionType == RigidBodyComponent.MotionType.DYNAMIC) {
+                    body.syncToTransform();
+                } else if (body.characterController != null || body.vehicleController != null) {
+                    body.syncToTransform();
+                }
+            }
         }
     }
 
