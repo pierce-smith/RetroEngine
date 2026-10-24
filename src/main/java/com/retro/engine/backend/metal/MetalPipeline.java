@@ -253,7 +253,11 @@ public class MetalPipeline {
             }
 
             fragment float4 uiFragmentMain(VertexOut in [[stage_in]]) {
-                return in.color;
+                float a = in.color.a;
+                if (a > 0.0f && a < 1.0f) {
+                    a = pow(a, 0.70f);
+                }
+                return float4(in.color.rgb, a);
             }
             """;
 
@@ -297,7 +301,7 @@ public class MetalPipeline {
         long colorAttachComp0 = invokePPPP(colorAttachComp, sel_registerName("objectAtIndexedSubscript:"), 0L, send);
         invokePPPP(colorAttachComp0, sel_registerName("setPixelFormat:"), 80L, send);
 
-        invokePPPP(colorAttachComp0, sel_registerName("setBlendingEnabled:"), 1L, send);
+        invokePPPP(colorAttachComp0, sel_registerName("setBlendingEnabled:"), 0L, send);
         invokePPPP(colorAttachComp0, sel_registerName("setSourceRGBBlendFactor:"), 4L, send);
         invokePPPP(colorAttachComp0, sel_registerName("setDestinationRGBBlendFactor:"), 5L, send);
         invokePPPP(colorAttachComp0, sel_registerName("setSourceAlphaBlendFactor:"), 4L, send);
@@ -336,8 +340,8 @@ public class MetalPipeline {
         invokePPPP(colorAttachUI0, sel_registerName("setBlendingEnabled:"), 1L, send);
         invokePPPP(colorAttachUI0, sel_registerName("setSourceRGBBlendFactor:"), 4L, send);
         invokePPPP(colorAttachUI0, sel_registerName("setDestinationRGBBlendFactor:"), 5L, send);
-        invokePPPP(colorAttachUI0, sel_registerName("setSourceAlphaBlendFactor:"), 4L, send);
-        invokePPPP(colorAttachUI0, sel_registerName("setDestinationAlphaBlendFactor:"), 5L, send);
+        invokePPPP(colorAttachUI0, sel_registerName("setSourceAlphaBlendFactor:"), 1L, send);
+        invokePPPP(colorAttachUI0, sel_registerName("setDestinationAlphaBlendFactor:"), 0L, send);
 
         invokePPPP(pipeDescUI, sel_registerName("setDepthAttachmentPixelFormat:"), 0L, send); // NO DEPTH ATTACHMENT
 
@@ -360,11 +364,15 @@ public class MetalPipeline {
             try {
                 byte[] bytes = Files.readAllBytes(cacheFile.toPath());
                 String cachedSource = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
-                long sourceNS = device.createNSString(cachedSource);
-                long cachedLib = invokePPPPPP(d, sel_registerName("newLibraryWithSource:options:error:"), sourceNS, 0L, 0L, send);
-                if (cachedLib != 0L) {
-                    System.out.println("[MetalPipeline] Loaded cached MSL Library: " + cacheFileName);
-                    return cachedLib;
+                if (cachedSource.equals(mslShader)) {
+                    long sourceNS = device.createNSString(cachedSource);
+                    long cachedLib = invokePPPPPP(d, sel_registerName("newLibraryWithSource:options:error:"), sourceNS, 0L, 0L, send);
+                    if (cachedLib != 0L) {
+                        System.out.println("[MetalPipeline] Loaded cached MSL Library: " + cacheFileName);
+                        return cachedLib;
+                    }
+                } else {
+                    System.out.println("[MetalPipeline] MSL shader source updated, recompiling cache: " + cacheFileName);
                 }
             } catch (Exception e) {
                 System.err.println("[MetalPipeline] Failed to load cached library " + cacheFileName + ": " + e.getMessage());

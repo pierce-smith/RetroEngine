@@ -15,6 +15,11 @@ public class MetalTargetPass {
     private long offscreenColorTexture = 0L;
     private long offscreenDepthTexture = 0L;
     private long windowDepthTexture = 0L;
+    private int width = 712;
+    private int height = 488;
+
+    public int getWidth() { return width; }
+    public int getHeight() { return height; }
 
     public long getOffscreenColorTexture() {
         return offscreenColorTexture;
@@ -30,6 +35,8 @@ public class MetalTargetPass {
 
     public void initFramebuffer(MetalDevice metalDevice, int width, int height) {
         if (metalDevice == null) return;
+        this.width = width;
+        this.height = height;
         long d = metalDevice.getDevice();
         long send = metalDevice.getObjcMsgSend();
         if (d == 0L || send == 0L) return;
@@ -111,6 +118,8 @@ public class MetalTargetPass {
 
     public void dispose(MetalDevice metalDevice) {
         if (metalDevice == null) return;
+        this.width = width;
+        this.height = height;
         long send = metalDevice.getObjcMsgSend();
         if (send == 0L) return;
         long selRelease = sel_registerName("release");

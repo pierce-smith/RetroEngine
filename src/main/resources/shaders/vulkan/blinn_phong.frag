@@ -6,6 +6,7 @@ layout(location = 2) in vec2 vTexCoord;
 layout(location = 3) in vec4 vColor;
 layout(location = 4) in vec3 vTangent;
 layout(location = 5) in vec3 vBitangent;
+layout(location = 6) in float vViewDist;
 
 layout(location = 0) out vec4 outFragColor;
 
@@ -151,10 +152,7 @@ void main() {
         albedo *= vColor.rgb;
     }
     
-    // Fallback to neutral base color if texture color is black/unmapped
-    if (length(albedo) < 0.001) {
-        albedo = vec3(0.75, 0.80, 0.85);
-    }
+    // (Removed forced black texture override to match Metal)
     
     vec3 norm = normalize(vNormal);
     if (length(norm) < 0.001) norm = vec3(0.0, 1.0, 0.0);
@@ -176,6 +174,13 @@ void main() {
         result = 0.35 * albedo;
     }
     
+    // Distance Horizon Fog Attenuation (Matching Metal backend)
+    float fogStart = 20.0;
+    float fogEnd = 150.0;
+    float fogFactor = clamp((vViewDist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
+    vec3 fogColor = vec3(0.12, 0.13, 0.16);
+    result = mix(result, fogColor, fogFactor);
+
     // Output SOLID OPAQUE 3D geometry (Alpha = 1.0) to prevent pipeline blend transparency
     outFragColor = vec4(result, 1.0);
 }

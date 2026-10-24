@@ -61,7 +61,7 @@ public class MetalBackend implements IRenderBackend {
         if (!metalDevice.initialize(windowInfo)) return false;
         if (!metalPipeline.initialize(metalDevice)) return false;
 
-        framebuffer.initFramebuffer(metalDevice, 712, 488);
+        framebuffer.initFramebuffer(metalDevice, windowInfo.width() > 0 ? windowInfo.width() : 712, windowInfo.height() > 0 ? windowInfo.height() : 488);
         resourceCache.initViewportQuad(metalDevice);
         metalTexture.initDefaultTextureAndSampler(metalDevice.getDevice(), metalDevice.getObjcMsgSend());
 
