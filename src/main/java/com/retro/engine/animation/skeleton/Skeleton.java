@@ -1,4 +1,4 @@
-package com.retro.engine.animation;
+package com.retro.engine.animation.skeleton;
 
 import java.util.ArrayList;
 import java.util.HashMap;

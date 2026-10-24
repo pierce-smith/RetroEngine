@@ -1,7 +1,7 @@
 package com.retro.engine.editor.ui.animator;
 
-import com.retro.engine.animation.AnimatorController;
-import com.retro.engine.animation.AnimatorParameter;
+import com.retro.engine.animation.state.AnimatorController;
+import com.retro.engine.animation.state.AnimatorParameter;
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
 import com.retro.engine.editor.dialogs.NativeFileDialog;

@@ -1,4 +1,4 @@
-package com.retro.engine.animation;
+package com.retro.engine.animation.state;
 
 /**
  * Condition evaluated against an AnimatorParameter to trigger a state machine transition.

@@ -1,8 +1,8 @@
 package com.retro.engine.scene.entity;
 
-import com.retro.engine.animation.AnimationClip;
-import com.retro.engine.animation.AnimatorController;
-import com.retro.engine.animation.AnimatorState;
+import com.retro.engine.animation.clips.AnimationClip;
+import com.retro.engine.animation.state.AnimatorController;
+import com.retro.engine.animation.state.AnimatorState;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.assets.importers.SkeletonImporter;

@@ -1,8 +1,8 @@
 package com.retro.engine.assets.importers;
 
-import com.retro.engine.animation.AnimationClip;
-import com.retro.engine.animation.KeyframeTrack;
-import com.retro.engine.animation.Skeleton;
+import com.retro.engine.animation.clips.AnimationClip;
+import com.retro.engine.animation.clips.KeyframeTrack;
+import com.retro.engine.animation.skeleton.Skeleton;
 import org.lwjgl.assimp.*;
 
 import java.io.File;

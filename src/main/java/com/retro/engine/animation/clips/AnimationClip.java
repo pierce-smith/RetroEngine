@@ -1,4 +1,4 @@
-package com.retro.engine.animation;
+package com.retro.engine.animation.clips;
 
 import java.util.Collection;
 import java.util.HashMap;
