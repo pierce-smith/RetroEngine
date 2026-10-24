@@ -10,7 +10,7 @@ import com.retro.engine.scene.components.CapsuleCollider;
 import com.retro.engine.scene.components.Light;
 import com.retro.engine.scene.components.AudioSource;
 import com.retro.engine.editor.EditorWorkspace;
-import com.retro.engine.editor.commands.ModifyPropertyCommand;
+import com.retro.engine.editor.commands.EditorCommands;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.audio.UISoundPlayer;
@@ -99,7 +99,7 @@ public class InspectorInputDelegate {
                             UISoundPlayer.play(UISound.TOGGLE);
                             boolean oldBool = (Boolean) val;
                             boolean newBool = !oldBool;
-                            ModifyPropertyCommand cmd = new ModifyPropertyCommand(comp, field, oldBool, newBool, label);
+                            EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, oldBool, newBool, label);
                             manager.getCommandHistory().executeCommand(cmd);
                             return;
                         }
@@ -115,7 +115,7 @@ public class InspectorInputDelegate {
                                     if (constants[i].equals(val)) { idx = i; break; }
                                 }
                                 Object nextEnum = constants[(idx + 1) % constants.length];
-                                ModifyPropertyCommand cmd = new ModifyPropertyCommand(comp, field, val, nextEnum, label);
+                                EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, val, nextEnum, label);
                                 manager.getCommandHistory().executeCommand(cmd);
                                 return;
                             }
@@ -128,14 +128,14 @@ public class InspectorInputDelegate {
                             if (ndcX >= 0.84f && ndcX <= 0.90f) {
                                 UISoundPlayer.play(UISound.CLICK);
                                 float newVal = Math.max(prop.min(), floatVal - prop.step());
-                                ModifyPropertyCommand cmd = new ModifyPropertyCommand(comp, field, floatVal, newVal, label);
+                                EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, floatVal, newVal, label);
                                 manager.getCommandHistory().executeCommand(cmd);
                                 return;
                             }
                             if (ndcX >= 0.91f && ndcX <= 0.97f) {
                                 UISoundPlayer.play(UISound.CLICK);
                                 float newVal = Math.min(prop.max(), floatVal + prop.step());
-                                ModifyPropertyCommand cmd = new ModifyPropertyCommand(comp, field, floatVal, newVal, label);
+                                EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, floatVal, newVal, label);
                                 manager.getCommandHistory().executeCommand(cmd);
                                 return;
                             }
@@ -148,14 +148,14 @@ public class InspectorInputDelegate {
                             if (ndcX >= 0.84f && ndcX <= 0.90f) {
                                 UISoundPlayer.play(UISound.CLICK);
                                 float newVal = Math.max(prop.min(), floatVal - prop.step());
-                                ModifyPropertyCommand cmd = new ModifyPropertyCommand(comp, field, floatVal, newVal, label);
+                                EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, floatVal, newVal, label);
                                 manager.getCommandHistory().executeCommand(cmd);
                                 return;
                             }
                             if (ndcX >= 0.91f && ndcX <= 0.97f) {
                                 UISoundPlayer.play(UISound.CLICK);
                                 float newVal = Math.min(prop.max(), floatVal + prop.step());
-                                ModifyPropertyCommand cmd = new ModifyPropertyCommand(comp, field, floatVal, newVal, label);
+                                EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, floatVal, newVal, label);
                                 manager.getCommandHistory().executeCommand(cmd);
                                 return;
                             }
@@ -169,7 +169,7 @@ public class InspectorInputDelegate {
                             String newStr = NativeFileDialog.promptInput("Edit Property: " + label, "Enter text value:", currentStr);
                             if (newStr != null && !newStr.equals(currentStr)) {
                                 UISoundPlayer.play(UISound.CLICK);
-                                ModifyPropertyCommand cmd = new ModifyPropertyCommand(comp, field, currentStr, newStr, label);
+                                EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, currentStr, newStr, label);
                                 manager.getCommandHistory().executeCommand(cmd);
                             } else {
                                 UISoundPlayer.play(UISound.CLOSE_MODAL);
