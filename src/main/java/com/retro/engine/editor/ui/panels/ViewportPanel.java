@@ -1,7 +1,8 @@
-package com.retro.engine.editor.ui;
+package com.retro.engine.editor.ui.panels;
 
 import com.retro.engine.editor.EditorWorkspace.WorkspaceTab;
 import com.retro.engine.editor.EditorWorkspace.GizmoMode;
+import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 
 import java.util.List;
 

@@ -6,7 +6,7 @@ import com.retro.engine.editor.input.EditorInputRouter;
 import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.input.HotkeyRouter;
 import com.retro.engine.editor.render.SceneRenderPipeline;
-import com.retro.engine.editor.ui.ViewportPanel;
+import com.retro.engine.editor.ui.panels.ViewportPanel;
 import com.retro.engine.rhi.IRenderBackend;
 import org.lwjgl.glfw.GLFW;
 

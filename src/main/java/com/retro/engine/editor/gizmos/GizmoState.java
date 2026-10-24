@@ -4,13 +4,10 @@ import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.EditorWorkspace.GizmoAxis;
 import com.retro.engine.editor.EditorWorkspace.GizmoMode;
 import com.retro.engine.editor.ViewportCamera;
-import com.retro.engine.editor.ui.OverlaySystem;
+import com.retro.engine.editor.ui.overlays.OverlaySystem;
 import com.retro.engine.scene.Entity;
 import com.retro.engine.scene.SceneWorld;
 import com.retro.engine.scene.components.Transform;
-
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * Delegate managing 3D transform gizmo modes, active selection axes, transform drag start vectors,

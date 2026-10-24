@@ -1,7 +1,9 @@
-package com.retro.engine.editor.ui;
+package com.retro.engine.editor.ui.overlays;
 
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
+import com.retro.engine.editor.ui.batch.UIGeometryBatch;
+import com.retro.engine.editor.ui.panels.MenuItem;
 
 import java.util.List;
 

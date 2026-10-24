@@ -1,7 +1,7 @@
 package com.retro.engine.scene.components;
 
-import com.retro.engine.editor.ui.InspectorProperty;
-import com.retro.engine.editor.ui.InspectorProperty.PropertyType;
+import com.retro.engine.editor.ui.panels.InspectorProperty;
+import com.retro.engine.editor.ui.panels.InspectorProperty.PropertyType;
 
 /**
  * Links an Entity to its shader and 2D texture resources.

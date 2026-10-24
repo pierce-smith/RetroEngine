@@ -6,7 +6,11 @@ import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
 import com.retro.engine.editor.commands.EditorCommands;
 import com.retro.engine.editor.gizmos.GizmoState;
-import com.retro.engine.editor.ui.*;
+import com.retro.engine.editor.ui.animator.AnimatorGraphPanel;
+import com.retro.engine.editor.ui.batch.PanelRegion;
+import com.retro.engine.editor.ui.overlays.ContextMenuOverlay;
+import com.retro.engine.editor.ui.overlays.OverlaySystem;
+import com.retro.engine.editor.ui.panels.InspectorPanel;
 import com.retro.engine.scene.components.Transform;
 import com.retro.engine.scene.Entity;
 

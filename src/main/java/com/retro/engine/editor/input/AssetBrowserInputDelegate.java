@@ -1,6 +1,6 @@
 package com.retro.engine.editor.input;
 
-import com.retro.engine.editor.ui.InspectorPanel;
+import com.retro.engine.editor.ui.panels.InspectorPanel;
 import com.retro.engine.scene.Entity;
 import com.retro.engine.scene.components.Material;
 import com.retro.engine.scene.components.ScriptComponent;
@@ -9,7 +9,7 @@ import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
-import com.retro.engine.editor.ui.HierarchyPanel;
+import com.retro.engine.editor.ui.panels.HierarchyPanel;
 import com.retro.engine.editor.commands.EditorCommands;
 
 import java.lang.reflect.Field;

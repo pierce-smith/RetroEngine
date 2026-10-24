@@ -1,4 +1,6 @@
-package com.retro.engine.editor.ui;
+package com.retro.engine.editor.ui.panels;
+
+import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 
 import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;

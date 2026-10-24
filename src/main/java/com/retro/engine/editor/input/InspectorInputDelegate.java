@@ -1,9 +1,9 @@
 package com.retro.engine.editor.input;
 
 import com.retro.engine.editor.EditorWorkspace;
-import com.retro.engine.editor.ui.InspectorPanel;
-import com.retro.engine.editor.ui.InspectorProperty;
-import com.retro.engine.editor.ui.MenuItem;
+import com.retro.engine.editor.ui.panels.InspectorPanel;
+import com.retro.engine.editor.ui.panels.InspectorProperty;
+import com.retro.engine.editor.ui.panels.MenuItem;
 import com.retro.engine.scene.Entity;
 import com.retro.engine.scene.EntitySpawner;
 import com.retro.engine.scene.components.*;

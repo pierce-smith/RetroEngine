@@ -6,7 +6,7 @@ import com.retro.engine.assets.importers.MeshImporter;
 import com.retro.engine.assets.importers.PixelBufferData;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ViewportCamera;
-import com.retro.engine.editor.ui.EngineConsolePanel;
+import com.retro.engine.editor.ui.panels.EngineConsolePanel;
 import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.scene.Entity;
 import com.retro.engine.scene.SceneWorld.WorldTransform;

@@ -1,7 +1,8 @@
-package com.retro.engine.editor.ui;
+package com.retro.engine.editor.ui.panels;
 
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
+import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 
 import java.util.List;
 
