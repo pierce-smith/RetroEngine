@@ -47,85 +47,6 @@ layout(push_constant) uniform MeshPushConstants {
     mat4 lightSpaceMatrix;
 } u_PushConstants;
 
-vec3 CalculateDirectionalLight(DirectionalLight light, vec3 normal, vec3 viewDir, vec3 albedo) {
-    if (light.color.a < 0.001) return vec3(0.0);
-    
-    vec3 lightDir = normalize(-light.direction.xyz);
-    float diff = max(dot(normal, lightDir), 0.0);
-    vec3 halfwayDir = normalize(lightDir + viewDir);
-    float spec = pow(max(dot(normal, halfwayDir), 0.0), 32.0);
-    
-    vec3 lightCol = light.color.rgb;
-    float lightIntensity = light.color.a;
-    
-    vec3 ambient = 0.35 * lightCol * lightIntensity * albedo;
-    vec3 diffuse = diff * lightCol * lightIntensity * albedo;
-    vec3 specular = spec * lightCol * lightIntensity * vec3(0.3);
-    
-    return ambient + diffuse + specular;
-}
-
-vec3 CalculatePointLight(PointLight light, vec3 normal, vec3 fragPos, vec3 viewDir, vec3 albedo) {
-    if (light.color.a < 0.001) return vec3(0.0);
-
-    vec3 lightVector = light.position.xyz - fragPos;
-    float dist = length(lightVector);
-    if (dist < 0.0001) return vec3(0.0);
-    vec3 lightDir = normalize(lightVector);
-    
-    float attConstant = light.params.x > 0.0 ? light.params.x : 1.0;
-    float attLinear = light.params.y > 0.0 ? light.params.y : 0.09;
-    float attQuad = light.params.z > 0.0 ? light.params.z : 0.032;
-    float attenuation = 1.0 / (attConstant + attLinear * dist + attQuad * dist * dist);
-    
-    float diff = max(dot(normal, lightDir), 0.0);
-    vec3 halfwayDir = normalize(lightDir + viewDir);
-    float spec = pow(max(dot(normal, halfwayDir), 0.0), 32.0);
-    
-    vec3 lightCol = light.color.rgb;
-    float intensity = light.color.a;
-    
-    vec3 ambient = 0.35 * lightCol * intensity * albedo;
-    vec3 diffuse = diff * lightCol * intensity * albedo;
-    vec3 specular = spec * lightCol * intensity * vec3(0.3);
-    
-    return (ambient + diffuse + specular) * attenuation;
-}
-
-vec3 CalculateSpotLight(SpotLight light, vec3 normal, vec3 fragPos, vec3 viewDir, vec3 albedo) {
-    if (light.color.a < 0.001) return vec3(0.0);
-
-    vec3 lightVector = light.position.xyz - fragPos;
-    float dist = length(lightVector);
-    if (dist < 0.0001) return vec3(0.0);
-    vec3 lightDir = normalize(lightVector);
-    
-    float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
-    
-    vec3 spotDir = normalize(-light.direction.xyz);
-    float theta = dot(lightDir, spotDir);
-    float innerCutoff = light.position.w > 0.0 ? light.position.w : 0.93;
-    float outerCutoff = light.direction.w > 0.0 ? light.direction.w : 0.82;
-    float epsilon = max(innerCutoff - outerCutoff, 0.0001);
-    float spotIntensity = clamp((theta - outerCutoff) / epsilon, 0.0, 1.0);
-    attenuation *= spotIntensity;
-    
-    if (attenuation < 0.001) return vec3(0.0);
-
-    float diff = max(dot(normal, lightDir), 0.0);
-    vec3 halfwayDir = normalize(lightDir + viewDir);
-    float spec = pow(max(dot(normal, halfwayDir), 0.0), 32.0);
-    
-    vec3 lightCol = light.color.rgb;
-    float intensity = light.color.a;
-    
-    vec3 ambient = 0.35 * lightCol * intensity * albedo;
-    vec3 diffuse = diff * lightCol * intensity * albedo;
-    vec3 specular = spec * lightCol * intensity * vec3(0.3);
-    
-    return (ambient + diffuse + specular) * attenuation;
-}
-
 void main() {
     // Dynamic Ground Shadow Blob Pass (PassFlags == 1.0)
     if (u_PushConstants.shadowParams.x > 0.5) {
@@ -147,40 +68,74 @@ void main() {
         discard;
     }
 
-    vec3 albedo = texColor.rgb;
+    vec4 baseColor = vec4(texColor.rgb, texColor.a);
     if (length(vColor.rgb) > 0.001) {
-        albedo *= vColor.rgb;
+        baseColor.rgb *= vColor.rgb;
     }
     
-    // (Removed forced black texture override to match Metal)
-    
-    vec3 norm = normalize(vNormal);
-    if (length(norm) < 0.001) norm = vec3(0.0, 1.0, 0.0);
-    
-    vec3 viewDir = normalize(u_Lights.viewPos.xyz - vFragPos);
-    if (length(u_Lights.viewPos.xyz) < 0.001) {
-        viewDir = normalize(vec3(0.0, 2.0, 5.0) - vFragPos);
-    }
-    
-    vec3 result = vec3(0.0);
-    
+    vec3 N = normalize(vNormal);
+    if (length(N) < 0.001) N = vec3(0.0, 1.0, 0.0);
+
+    vec3 L = vec3(0.0, 1.0, 0.0);
+    float attenuation = 1.0;
+    vec3 lightColor = vec3(1.0, 1.0, 1.0);
+    float intensity = 1.0;
+
     if (u_Lights.numLights.z > 0.5) {
-        result = CalculateSpotLight(u_Lights.spotLights, norm, vFragPos, viewDir, albedo);
+        // Spot Light
+        vec3 lightVector = u_Lights.spotLights.position.xyz - vFragPos;
+        float dist = length(lightVector);
+        L = normalize(lightVector);
+        attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
+
+        vec3 spotDir = normalize(-u_Lights.spotLights.direction.xyz);
+        float theta = dot(L, spotDir);
+        float innerCutoff = u_Lights.spotLights.position.w > 0.0 ? u_Lights.spotLights.position.w : 0.93;
+        float outerCutoff = u_Lights.spotLights.direction.w > 0.0 ? u_Lights.spotLights.direction.w : 0.82;
+        float spotIntensity = clamp((theta - outerCutoff) / max(innerCutoff - outerCutoff, 0.0001), 0.0, 1.0);
+        attenuation *= spotIntensity;
+
+        lightColor = u_Lights.spotLights.color.rgb;
+        intensity = u_Lights.spotLights.color.a;
     } else if (u_Lights.numLights.y > 0.5) {
-        result = CalculatePointLight(u_Lights.pointLights, norm, vFragPos, viewDir, albedo);
+        // Point Light
+        vec3 lightVector = u_Lights.pointLights.position.xyz - vFragPos;
+        float dist = length(lightVector);
+        L = normalize(lightVector);
+        attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
+
+        lightColor = u_Lights.pointLights.color.rgb;
+        intensity = u_Lights.pointLights.color.a;
     } else if (u_Lights.numLights.x > 0.5) {
-        result = CalculateDirectionalLight(u_Lights.dirLight, norm, viewDir, albedo);
-    } else {
-        result = 0.35 * albedo;
+        // Directional Light
+        L = normalize(-u_Lights.dirLight.direction.xyz);
+        lightColor = u_Lights.dirLight.color.rgb;
+        intensity = u_Lights.dirLight.color.a;
     }
-    
-    // Distance Horizon Fog Attenuation (Matching Metal backend)
+
+    float diff = max(dot(N, L), 0.0);
+    vec3 diffuse = diff * lightColor * intensity * attenuation;
+    vec3 ambient = max(u_Lights.dirLight.color.rgb * 0.35, vec3(0.35, 0.35, 0.38));
+
+    vec3 finalRGB = (ambient + diffuse) * baseColor.rgb;
+
+    // Hemisphere Sky/Ground Environment Reflection Pass
+    float reflectStrength = u_PushConstants.shadowParams.z;
+    if (reflectStrength > 0.0) {
+        vec3 V = normalize(u_Lights.viewPos.xyz - vFragPos);
+        vec3 R = reflect(-V, N);
+        vec3 envSky = vec3(0.85, 0.90, 1.0);
+        vec3 envGround = vec3(0.15, 0.20, 0.30);
+        vec3 envColor = mix(envGround, envSky, clamp(R.y * 0.5 + 0.5, 0.0, 1.0));
+        finalRGB = mix(finalRGB, envColor, clamp(reflectStrength, 0.0, 1.0) * 0.4);
+    }
+
+    // Distance Fog Attenuation (20m to 150m)
     float fogStart = 20.0;
     float fogEnd = 150.0;
     float fogFactor = clamp((vViewDist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
     vec3 fogColor = vec3(0.12, 0.13, 0.16);
-    result = mix(result, fogColor, fogFactor);
+    finalRGB = mix(finalRGB, fogColor, fogFactor);
 
-    // Output SOLID OPAQUE 3D geometry (Alpha = 1.0) to prevent pipeline blend transparency
-    outFragColor = vec4(result, 1.0);
+    outFragColor = vec4(finalRGB, baseColor.a);
 }

@@ -155,7 +155,45 @@ public class VulkanPassEncoder {
             vkCmdSetViewport(cmd, 0, offscreenViewport);
             vkCmdSetScissor(cmd, 0, offscreenScissor);
 
-            // PHASE 2A: 3D Scene Mesh Pass
+            // ---------------------------------------------------------------------------------
+            // STEP 1: Infinite 3D Grid Pass & Vertical Green Y-Axis Pillar Line (Background Floor)
+            // ---------------------------------------------------------------------------------
+            long gridVbo = gpuCache.getGridVertexBuffer();
+            int gridCount = gpuCache.getGridVertexCount();
+
+            if (gridVbo != 0L && gridCount > 0) {
+                FloatBuffer pushData = stack.mallocFloat(32);
+                if (viewMatrix != null && viewMatrix.length == 16) pushData.put(viewMatrix);
+                else pushData.put(new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,-5,1});
+
+                if (projMatrix != null && projMatrix.length == 16) pushData.put(projMatrix);
+                else pushData.put(new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1});
+
+                pushData.flip();
+
+                LongBuffer pGridBuffers = stack.longs(gridVbo);
+                LongBuffer pGridOffsets = stack.longs(0L);
+
+                // 1A. Draw 6 vertices for infinite grid floor quad (TRIANGLE_LIST)
+                if (pipelineManager.getGraphicsPipelineGrid() != 0L) {
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getGraphicsPipelineGrid());
+                    vkCmdPushConstants(cmd, pipelineManager.getPipelineLayoutGrid(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, pushData);
+                    vkCmdBindVertexBuffers(cmd, 0, pGridBuffers, pGridOffsets);
+                    vkCmdDraw(cmd, 6, 1, 0, 0);
+                }
+
+                // 1B. Draw 2 vertices for vertical green Y-axis line (LINE_LIST)
+                if (gridCount >= 8 && pipelineManager.getGraphicsPipelineGridLines() != 0L) {
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getGraphicsPipelineGridLines());
+                    vkCmdPushConstants(cmd, pipelineManager.getPipelineLayoutGrid(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, pushData);
+                    vkCmdBindVertexBuffers(cmd, 0, pGridBuffers, pGridOffsets);
+                    vkCmdDraw(cmd, 2, 1, 6, 0);
+                }
+            }
+
+            // ---------------------------------------------------------------------------------
+            // STEP 2: 3D Scene Mesh Pass
+            // ---------------------------------------------------------------------------------
             if (pipelineManager.getGraphicsPipeline3D() != 0L && sceneQueue != null && sceneQueueCount > 0) {
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getGraphicsPipeline3D());
 
@@ -221,10 +259,15 @@ public class VulkanPassEncoder {
                 }
             }
 
-            // PHASE 2B: Dynamic Ground Entity Shadow Blobs Pass
+            // ---------------------------------------------------------------------------------
+            // STEP 3: Dynamic Ground Entity Shadow Blobs Pass
+            // ---------------------------------------------------------------------------------
             long groundQuadBuf = gpuCache.getGroundQuadBuffer(deviceManager);
-            if (pipelineManager.getGraphicsPipeline3D() != 0L && sceneQueue != null && sceneQueueCount > 0 && groundQuadBuf != 0L) {
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getGraphicsPipeline3D());
+            long shadowPipeline = pipelineManager.getGraphicsPipelineShadow();
+            if (shadowPipeline == 0L) shadowPipeline = pipelineManager.getGraphicsPipeline3D();
+
+            if (shadowPipeline != 0L && sceneQueue != null && sceneQueueCount > 0 && groundQuadBuf != 0L) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline);
 
                 VkDevice vkDevice = deviceManager.getDevice();
                 VulkanGpuCache.VulkanTexture whiteTex = gpuCache.getDefaultWhiteTexture(deviceManager);
@@ -291,40 +334,6 @@ public class VulkanPassEncoder {
                     vkCmdDraw(cmd, 6, 1, 0, 0);
 
                     shadowIndex++;
-                }
-            }
-
-            // PHASE 3: Infinite 3D Grid Pass & Vertical Green Y-Axis Pillar Line
-            long gridVbo = gpuCache.getGridVertexBuffer();
-            int gridCount = gpuCache.getGridVertexCount();
-
-            if (gridVbo != 0L && gridCount > 0) {
-                FloatBuffer pushData = stack.mallocFloat(32);
-                if (viewMatrix != null && viewMatrix.length == 16) pushData.put(viewMatrix);
-                else pushData.put(new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,-5,1});
-
-                if (projMatrix != null && projMatrix.length == 16) pushData.put(projMatrix);
-                else pushData.put(new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1});
-
-                pushData.flip();
-
-                LongBuffer pGridBuffers = stack.longs(gridVbo);
-                LongBuffer pGridOffsets = stack.longs(0L);
-
-                // 3A. Draw 6 vertices for infinite grid floor quad (TRIANGLE_LIST)
-                if (pipelineManager.getGraphicsPipelineGrid() != 0L) {
-                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getGraphicsPipelineGrid());
-                    vkCmdPushConstants(cmd, pipelineManager.getPipelineLayoutGrid(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, pushData);
-                    vkCmdBindVertexBuffers(cmd, 0, pGridBuffers, pGridOffsets);
-                    vkCmdDraw(cmd, 6, 1, 0, 0);
-                }
-
-                // 3B. Draw 2 vertices for vertical green Y-axis line (LINE_LIST)
-                if (gridCount >= 8 && pipelineManager.getGraphicsPipelineGridLines() != 0L) {
-                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getGraphicsPipelineGridLines());
-                    vkCmdPushConstants(cmd, pipelineManager.getPipelineLayoutGrid(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, pushData);
-                    vkCmdBindVertexBuffers(cmd, 0, pGridBuffers, pGridOffsets);
-                    vkCmdDraw(cmd, 2, 1, 6, 0);
                 }
             }
 
