@@ -28,7 +28,7 @@ public class VulkanBackend implements IRenderBackend {
     private final VulkanPipeline pipelineManager = new VulkanPipeline();
     private final VulkanGpuCache gpuCache = new VulkanGpuCache();
     private final VulkanTargetPass targetPass = new VulkanTargetPass();
-    private final VulkanDescriptorPool descriptorPool = new VulkanDescriptorPool();
+    private final VulkanQueueSubmitter queueSubmitter = new VulkanQueueSubmitter();
 
     private int activeImageIndex = 0;
     private long minUniformAlignment = 16L;
@@ -66,7 +66,7 @@ public class VulkanBackend implements IRenderBackend {
 
         queryPhysicalDeviceLimits();
 
-        if (!descriptorPool.initialize(deviceManager.getDevice())) return false;
+        if (!queueSubmitter.initialize(deviceManager)) return false;
         if (!swapchainManager.createSwapchain(deviceManager, surfaceManager, width, height)) return false;
         if (!passEncoder.initialize(deviceManager)) return false;
 
@@ -91,12 +91,12 @@ public class VulkanBackend implements IRenderBackend {
         VkDevice device = deviceManager.getDevice();
         if (device == null) return;
 
-        descriptorPool.resetPool(device);
+        queueSubmitter.resetDescriptorPool(device);
 
-        vkWaitForFences(device, passEncoder.getInFlightFence(), true, Long.MAX_VALUE);
-        vkResetFences(device, passEncoder.getInFlightFence());
+        vkWaitForFences(device, queueSubmitter.getInFlightFence(), true, Long.MAX_VALUE);
+        vkResetFences(device, queueSubmitter.getInFlightFence());
 
-        activeImageIndex = swapchainManager.acquireNextImage(deviceManager, passEncoder.getImageAvailableSemaphore());
+        activeImageIndex = swapchainManager.acquireNextImage(deviceManager, queueSubmitter.getImageAvailableSemaphore());
         if (activeImageIndex < 0) return;
 
         gpuCache.updateLightUniformBuffer(
@@ -110,7 +110,7 @@ public class VulkanBackend implements IRenderBackend {
                 0.0f
         );
 
-        VkCommandBuffer cmd = passEncoder.getCommandBuffer();
+        VkCommandBuffer cmd = queueSubmitter.getCommandBuffer();
         vkResetCommandBuffer(cmd, 0);
 
         try (MemoryStack stack = stackPush()) {
@@ -130,7 +130,7 @@ public class VulkanBackend implements IRenderBackend {
                     activeImageIndex,
                     pipelineManager,
                     gpuCache,
-                    descriptorPool,
+                    queueSubmitter.getDescriptorPoolHandle(),
                     deviceManager,
                     viewMatrix,
                     projMatrix,
@@ -166,24 +166,24 @@ public class VulkanBackend implements IRenderBackend {
     @Override
     public void endFrame() {
         if (activeImageIndex < 0) return;
-        VkCommandBuffer cmd = passEncoder.getCommandBuffer();
+        VkCommandBuffer cmd = queueSubmitter.getCommandBuffer();
 
         try (MemoryStack stack = stackPush()) {
             VkSubmitInfo submitInfo = VkSubmitInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
-                    .pWaitSemaphores(stack.longs(passEncoder.getImageAvailableSemaphore()))
+                    .pWaitSemaphores(stack.longs(queueSubmitter.getImageAvailableSemaphore()))
                     .pWaitDstStageMask(stack.ints(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT))
                     .pCommandBuffers(stack.pointers(cmd))
-                    .pSignalSemaphores(stack.longs(passEncoder.getRenderFinishedSemaphore()));
+                    .pSignalSemaphores(stack.longs(queueSubmitter.getRenderFinishedSemaphore()));
 
-            vkQueueSubmit(deviceManager.getGraphicsQueue(), submitInfo, passEncoder.getInFlightFence());
+            vkQueueSubmit(deviceManager.getGraphicsQueue(), submitInfo, queueSubmitter.getInFlightFence());
         }
     }
 
     @Override
     public void present() {
         if (activeImageIndex < 0) return;
-        swapchainManager.presentImage(deviceManager, activeImageIndex, passEncoder.getRenderFinishedSemaphore());
+        swapchainManager.presentImage(deviceManager, activeImageIndex, queueSubmitter.getRenderFinishedSemaphore());
     }
 
     @Override
@@ -193,7 +193,7 @@ public class VulkanBackend implements IRenderBackend {
             vkDeviceWaitIdle(device);
         }
 
-        descriptorPool.cleanup(device);
+        queueSubmitter.cleanup(deviceManager);
         targetPass.cleanup(deviceManager);
         pipelineManager.cleanup(deviceManager);
         gpuCache.cleanup(deviceManager);
