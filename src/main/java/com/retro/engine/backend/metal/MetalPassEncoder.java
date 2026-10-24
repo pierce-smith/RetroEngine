@@ -60,7 +60,7 @@ public class MetalPassEncoder {
 
         long encoder3D = invokePPPP(commandBuffer, sel_registerName("renderCommandEncoderWithDescriptor:"), offscreenPassDesc, send);
 
-        float aspect = 712.0f / 488.0f;
+        float aspect = (framebuffer.getWidth() > 0 && framebuffer.getHeight() > 0) ? ((float) framebuffer.getWidth() / (float) framebuffer.getHeight()) : (712.0f / 488.0f);
         long currentSlotOffset = streamer.getCurrentSlotOffset();
         long streamingUniformBuffer = streamer.getStreamingUniformBuffer();
         long pBufferContents = invokePPP(streamingUniformBuffer, sel_registerName("contents"), send);

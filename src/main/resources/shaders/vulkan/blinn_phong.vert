@@ -14,6 +14,7 @@ layout(location = 2) out vec2 vTexCoord;
 layout(location = 3) out vec4 vColor;
 layout(location = 4) out vec3 vTangent;
 layout(location = 5) out vec3 vBitangent;
+layout(location = 6) out float vViewDist;
 
 layout(push_constant) uniform MeshPushConstants {
     mat4 model;
@@ -35,5 +36,7 @@ void main() {
     vTexCoord = aTexCoord;
     vColor = aColor;
     
-    gl_Position = u_PushConstants.proj * u_PushConstants.view * worldPos;
+    vec4 clipPos = u_PushConstants.proj * u_PushConstants.view * worldPos;
+    vViewDist = clipPos.w;
+    gl_Position = clipPos;
 }

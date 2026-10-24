@@ -121,7 +121,7 @@ public class VulkanBackend implements IRenderBackend {
             vkBeginCommandBuffer(cmd, beginInfo);
 
             computeViewMatrix();
-            computePerspectiveProjectionMatrix(50.0f, (float) targetPass.getWidth() / (float) targetPass.getHeight(), 0.1f, 100.0f);
+            computePerspectiveProjectionMatrix(50.0f, (float) targetPass.getWidth() / (float) targetPass.getHeight(), 0.1f, 500.0f);
 
             passEncoder.record4PhasePipeline(
                     cmd,

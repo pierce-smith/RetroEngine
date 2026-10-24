@@ -49,8 +49,8 @@ public class MetalTexture {
         long samplerDescClass = objc_getClass("MTLSamplerDescriptor");
         long samplerDesc = invokePPP(samplerDescClass, sel_registerName("new"), objc_msgSend);
         // 0L = MTLSamplerMinMagFilterNearest for sharp, crisp UI quads, text, and vector lines
-        invokePPPP(samplerDesc, sel_registerName("setMinFilter:"), 0L, objc_msgSend);
-        invokePPPP(samplerDesc, sel_registerName("setMagFilter:"), 0L, objc_msgSend);
+        invokePPPP(samplerDesc, sel_registerName("setMinFilter:"), 1L, objc_msgSend);
+        invokePPPP(samplerDesc, sel_registerName("setMagFilter:"), 1L, objc_msgSend);
         samplerStateHandle = invokePPPP(device, sel_registerName("newSamplerStateWithDescriptor:"), samplerDesc, objc_msgSend);
     }
 
