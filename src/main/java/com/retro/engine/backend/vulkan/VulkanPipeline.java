@@ -33,6 +33,7 @@ public class VulkanPipeline {
     private long descriptorSetLayout3D = 0L;
     private long pipelineLayout3D = 0L;
     private long graphicsPipeline3D = 0L;
+    private long graphicsPipelineShadow = 0L;
 
     private long descriptorSetLayoutGrid = 0L;
     private long pipelineLayoutGrid = 0L;
@@ -297,6 +298,34 @@ public class VulkanPipeline {
                     graphicsPipeline3D = pPipeline3D.get(0);
                     System.out.println("[VulkanPipeline] Created Standard 3D Scene Blinn-Phong VkPipeline [0x" + Long.toHexString(graphicsPipeline3D) + "].");
                 }
+                // 2B. Dedicated Shadow Blob Pipeline (Depth-Writes OFF for Soft Radial Alpha Blending)
+                VkPipelineDepthStencilStateCreateInfo depthStencilShadow = VkPipelineDepthStencilStateCreateInfo.calloc(stack)
+                        .sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO)
+                        .depthTestEnable(true)
+                        .depthWriteEnable(false)
+                        .depthCompareOp(VK_COMPARE_OP_LESS_OR_EQUAL);
+
+                VkGraphicsPipelineCreateInfo.Buffer pipelineInfoShadow = VkGraphicsPipelineCreateInfo.calloc(1, stack)
+                        .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO)
+                        .pNext(renderingCreateInfo.address())
+                        .pStages(shaderStages3D)
+                        .pVertexInputState(vertexInputInfo3D)
+                        .pInputAssemblyState(inputAssembly)
+                        .pViewportState(viewportState)
+                        .pRasterizationState(rasterizer)
+                        .pMultisampleState(multisampling)
+                        .pDepthStencilState(depthStencilShadow)
+                        .pColorBlendState(colorBlending3D)
+                        .pDynamicState(dynamicState3D)
+                        .layout(pipelineLayout3D)
+                        .renderPass(VK_NULL_HANDLE)
+                        .subpass(0);
+
+                LongBuffer pPipelineShadow = stack.mallocLong(1);
+                if (vkCreateGraphicsPipelines(vkDevice, pipelineCache, pipelineInfoShadow, null, pPipelineShadow) == VK_SUCCESS) {
+                    graphicsPipelineShadow = pPipelineShadow.get(0);
+                    System.out.println("[VulkanPipeline] Created Dedicated Shadow Blob VkPipeline [0x" + Long.toHexString(graphicsPipelineShadow) + "].");
+                }
 
                 VulkanShaderLoader.destroyShaderModule(vkDevice, vert3DModule);
                 VulkanShaderLoader.destroyShaderModule(vkDevice, frag3DModule);
@@ -358,6 +387,7 @@ public class VulkanPipeline {
     public long getDescriptorSetLayout3D() { return descriptorSetLayout3D; }
     public long getPipelineLayout3D() { return pipelineLayout3D; }
     public long getGraphicsPipeline3D() { return graphicsPipeline3D; }
+    public long getGraphicsPipelineShadow() { return graphicsPipelineShadow != 0L ? graphicsPipelineShadow : graphicsPipeline3D; }
 
     public long getDescriptorSetLayoutGrid() { return descriptorSetLayoutGrid; }
     public long getPipelineLayoutGrid() { return pipelineLayoutGrid; }
@@ -376,6 +406,7 @@ public class VulkanPipeline {
         if (pipelineCache != 0L) { vkDestroyPipelineCache(vkDevice, pipelineCache, null); pipelineCache = 0L; }
 
         if (graphicsPipeline3D != 0L) { vkDestroyPipeline(vkDevice, graphicsPipeline3D, null); graphicsPipeline3D = 0L; }
+        if (graphicsPipelineShadow != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineShadow, null); graphicsPipelineShadow = 0L; }
         if (pipelineLayout3D != 0L) { vkDestroyPipelineLayout(vkDevice, pipelineLayout3D, null); pipelineLayout3D = 0L; }
         if (descriptorSetLayout3D != 0L) { vkDestroyDescriptorSetLayout(vkDevice, descriptorSetLayout3D, null); descriptorSetLayout3D = 0L; }
 
