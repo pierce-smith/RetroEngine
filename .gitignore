@@ -43,7 +43,8 @@ bin/
 .DS_Store
 
 ### Retro Engine Custom Builds ###
-*.pak
+*.rpack
+*.rscene
 *.bin
 *.metallib
 Thumbs.db
