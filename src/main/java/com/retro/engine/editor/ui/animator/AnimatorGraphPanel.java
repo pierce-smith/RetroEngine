@@ -1,7 +1,7 @@
 package com.retro.engine.editor.ui.animator;
 
-import com.retro.engine.animation.AnimatorController;
-import com.retro.engine.animation.AnimatorTransition;
+import com.retro.engine.animation.state.AnimatorController;
+import com.retro.engine.animation.state.AnimatorTransition;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 

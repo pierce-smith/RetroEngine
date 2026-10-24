@@ -1,8 +1,8 @@
 package com.retro.engine.scene.components.media;
 
-import com.retro.engine.animation.AnimationClip;
-import com.retro.engine.animation.AnimatorController;
-import com.retro.engine.animation.Skeleton;
+import com.retro.engine.animation.clips.AnimationClip;
+import com.retro.engine.animation.state.AnimatorController;
+import com.retro.engine.animation.skeleton.Skeleton;
 import com.retro.engine.scene.components.Component;
 
 /**

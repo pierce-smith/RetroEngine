@@ -1,5 +1,10 @@
 package com.retro.engine.animation;
 
+import com.retro.engine.animation.clips.AnimationClip;
+import com.retro.engine.animation.clips.KeyframeTrack;
+import com.retro.engine.animation.skeleton.Skeleton;
+import com.retro.engine.animation.state.AnimatorController;
+import com.retro.engine.animation.state.AnimatorState;
 import com.retro.engine.scene.components.media.AnimatorComponent;
 
 /**

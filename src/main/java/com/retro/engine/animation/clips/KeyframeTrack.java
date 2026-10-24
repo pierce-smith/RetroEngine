@@ -1,4 +1,4 @@
-package com.retro.engine.animation;
+package com.retro.engine.animation.clips;
 
 /**
  * Stores keyframe samples for translation, rotation (quaternion), and scale

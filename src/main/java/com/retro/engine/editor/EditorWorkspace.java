@@ -1,8 +1,8 @@
 package com.retro.engine.editor;
 
-import com.retro.engine.animation.AnimatorController;
-import com.retro.engine.animation.AnimatorState;
-import com.retro.engine.animation.AnimatorTransition;
+import com.retro.engine.animation.state.AnimatorController;
+import com.retro.engine.animation.state.AnimatorState;
+import com.retro.engine.animation.state.AnimatorTransition;
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.editor.commands.CommandStack;

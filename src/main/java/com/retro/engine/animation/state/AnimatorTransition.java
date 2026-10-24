@@ -1,4 +1,4 @@
-package com.retro.engine.animation;
+package com.retro.engine.animation.state;
 
 import java.util.ArrayList;
 import java.util.List;

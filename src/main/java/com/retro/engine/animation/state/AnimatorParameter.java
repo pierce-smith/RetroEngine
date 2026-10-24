@@ -1,4 +1,4 @@
-package com.retro.engine.animation;
+package com.retro.engine.animation.state;
 
 /**
  * Parameter stored within an AnimatorController used to drive state machine transitions.

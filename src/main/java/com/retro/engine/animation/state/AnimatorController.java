@@ -1,4 +1,6 @@
-package com.retro.engine.animation;
+package com.retro.engine.animation.state;
+
+import com.retro.engine.animation.clips.AnimationClip;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
