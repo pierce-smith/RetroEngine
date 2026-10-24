@@ -1,11 +1,5 @@
 package com.retro.engine.backend.metal;
 
-import com.retro.engine.backend.metal.MetalBuffer;
-import com.retro.engine.backend.metal.MetalDevice;
-import com.retro.engine.backend.metal.MetalTexture;
-import org.lwjgl.system.MemoryUtil;
-
-import java.nio.FloatBuffer;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -17,19 +11,20 @@ import static org.lwjgl.system.JNI.invokePPP;
 import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 
 /**
- * Delegate managing GPU mesh VRAM buffer caches, texture handle caches, ring-buffered vertex mesh state,
- * 14-float ground quad buffer for dynamic entity shadow blob projections, and fence-guarded deferred resource disposal.
+ * Service Registry & VRAM Coordinator (SRP Pattern matching VulkanGpuCache and EditorWorkspace):
+ * Coordinates static VBO mesh buffers, viewport quad, ground quad VBOs, and delegates texture
+ * management to MetalTextureRegistry and dynamic geometry buffering to MetalRingBuffer.
  */
 public class MetalGpuCache {
 
     private static final int RING_SLOTS = 3;
     private static final int DEFAULT_MAX_CACHE_ENTRIES = 128;
 
-    private static class DeferredHandle {
-        final long handle;
-        final long safeFrameIndex;
+    public static class DeferredHandle {
+        public final long handle;
+        public final long safeFrameIndex;
 
-        DeferredHandle(long handle, long safeFrameIndex) {
+        public DeferredHandle(long handle, long safeFrameIndex) {
             this.handle = handle;
             this.safeFrameIndex = safeFrameIndex;
         }
@@ -39,20 +34,12 @@ public class MetalGpuCache {
     private long currentFrameCounter = 0L;
 
     private final int maxMeshCacheSize;
-    private final int maxTextureCacheSize;
-
     private final Map<String, Long> gpuMeshCache;
-    private final Map<String, Long> gpuTextureCache;
 
-    private final long[] gridVertexBufferRing = new long[RING_SLOTS];
-    private final int[] gridVertexCapacityRing = new int[RING_SLOTS];
-    private int gridRingIndex = 0;
-    private int gridVertexCount = 0;
-
-    private final long[] uiVertexBufferRing = new long[RING_SLOTS];
-    private final int[] uiVertexCapacityRing = new int[RING_SLOTS];
-    private int uiRingIndex = 0;
-    private int uiVertexCount = 0;
+    // Subsystem Domain Managers
+    private final MetalTextureRegistry textureRegistry;
+    private final MetalRingBuffer gridRingBuffer = new MetalRingBuffer();
+    private final MetalRingBuffer uiRingBuffer = new MetalRingBuffer();
 
     private long viewportQuadBuffer = 0L;
     private long groundQuadBuffer = 0L;
@@ -63,12 +50,9 @@ public class MetalGpuCache {
 
     public MetalGpuCache(int maxMeshCacheSize, int maxTextureCacheSize) {
         this.maxMeshCacheSize = Math.max(8, maxMeshCacheSize);
-        this.maxTextureCacheSize = Math.max(8, maxTextureCacheSize);
+        this.textureRegistry = new MetalTextureRegistry(maxTextureCacheSize);
 
         this.gpuMeshCache = Collections.synchronizedMap(
-                new LinkedHashMap<String, Long>(16, 0.75f, true)
-        );
-        this.gpuTextureCache = Collections.synchronizedMap(
                 new LinkedHashMap<String, Long>(16, 0.75f, true)
         );
     }
@@ -95,26 +79,26 @@ public class MetalGpuCache {
         }
     }
 
-    private void enqueueDeferredDisposal(long handle) {
+    public void enqueueDeferredDisposal(long handle) {
         if (handle != 0L) {
             deferredDisposalQueue.add(new DeferredHandle(handle, currentFrameCounter + RING_SLOTS));
         }
     }
 
     public long getGridVertexBuffer() {
-        return gridVertexBufferRing[gridRingIndex];
+        return gridRingBuffer.getCurrentBufferHandle();
     }
 
     public int getGridVertexCount() {
-        return gridVertexCount;
+        return gridRingBuffer.getVertexCount();
     }
 
     public long getUiVertexBuffer() {
-        return uiVertexBufferRing[uiRingIndex];
+        return uiRingBuffer.getCurrentBufferHandle();
     }
 
     public int getUiVertexCount() {
-        return uiVertexCount;
+        return uiRingBuffer.getVertexCount();
     }
 
     public long getViewportQuadBuffer() {
@@ -141,7 +125,6 @@ public class MetalGpuCache {
 
         // 14-float stride ground quad for dynamic entity shadow blob projections
         float[] groundVerts = new float[] {
-            // X, Y, Z,  NX, NY, NZ,  R, G, B, A,  U1, V1,  U2, V2
             -1.0f, 0.005f, -1.0f,  0.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f, 1.0f,  0.0f, 0.0f,  0.0f, 0.0f,
             -1.0f, 0.005f,  1.0f,  0.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f, 1.0f,  0.0f, 1.0f,  0.0f, 1.0f,
              1.0f, 0.005f,  1.0f,  0.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f, 1.0f,  1.0f, 1.0f,  1.0f, 1.0f,
@@ -152,82 +135,16 @@ public class MetalGpuCache {
         };
         MetalBuffer groundBuf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), groundVerts, 14);
         this.groundQuadBuffer = groundBuf.getHandle();
+
+        textureRegistry.initDefaultTextureAndSampler(metalDevice);
     }
 
     public void updateGridMesh(MetalDevice metalDevice, float[] vertices, int count) {
-        if (vertices == null || count <= 0 || metalDevice == null) {
-            this.gridVertexCount = 0;
-            return;
-        }
-
-        long device = metalDevice.getDevice();
-        long send = metalDevice.getObjcMsgSend();
-        if (device == 0L || send == 0L) return;
-
-        this.gridRingIndex = (this.gridRingIndex + 1) % RING_SLOTS;
-
-        int requiredFloats = vertices.length;
-        long currentBuffer = this.gridVertexBufferRing[this.gridRingIndex];
-        int currentCapacity = this.gridVertexCapacityRing[this.gridRingIndex];
-
-        if (currentBuffer == 0L || requiredFloats > currentCapacity) {
-            if (currentBuffer != 0L) {
-                enqueueDeferredDisposal(currentBuffer);
-            }
-            int newCap = Math.max(requiredFloats, 2048 * 9);
-            this.gridVertexCapacityRing[this.gridRingIndex] = newCap;
-            long byteSize = (long) newCap * 4L;
-            currentBuffer = MetalBuffer.createUniformBuffer(device, send, byteSize);
-            this.gridVertexBufferRing[this.gridRingIndex] = currentBuffer;
-        }
-
-        if (currentBuffer != 0L) {
-            long pContents = invokePPP(currentBuffer, sel_registerName("contents"), send);
-            if (pContents != 0L) {
-                FloatBuffer fb = MemoryUtil.memFloatBuffer(pContents, vertices.length);
-                fb.clear();
-                fb.put(vertices);
-            }
-            this.gridVertexCount = count;
-        }
+        gridRingBuffer.updateBuffer(metalDevice, vertices, count, 9, deferredDisposalQueue, currentFrameCounter);
     }
 
     public void updateUiMesh(MetalDevice metalDevice, float[] vertices, int count) {
-        if (vertices == null || count <= 0 || metalDevice == null) {
-            this.uiVertexCount = 0;
-            return;
-        }
-
-        long device = metalDevice.getDevice();
-        long send = metalDevice.getObjcMsgSend();
-        if (device == 0L || send == 0L) return;
-
-        this.uiRingIndex = (this.uiRingIndex + 1) % RING_SLOTS;
-
-        int requiredFloats = vertices.length;
-        long currentBuffer = this.uiVertexBufferRing[this.uiRingIndex];
-        int currentCapacity = this.uiVertexCapacityRing[this.uiRingIndex];
-
-        if (currentBuffer == 0L || requiredFloats > currentCapacity) {
-            if (currentBuffer != 0L) {
-                enqueueDeferredDisposal(currentBuffer);
-            }
-            int newCap = Math.max(requiredFloats, 16384 * 6);
-            this.uiVertexCapacityRing[this.uiRingIndex] = newCap;
-            long byteSize = (long) newCap * 4L;
-            currentBuffer = MetalBuffer.createUniformBuffer(device, send, byteSize);
-            this.uiVertexBufferRing[this.uiRingIndex] = currentBuffer;
-        }
-
-        if (currentBuffer != 0L) {
-            long pContents = invokePPP(currentBuffer, sel_registerName("contents"), send);
-            if (pContents != 0L) {
-                FloatBuffer fb = MemoryUtil.memFloatBuffer(pContents, vertices.length);
-                fb.clear();
-                fb.put(vertices);
-            }
-            this.uiVertexCount = count;
-        }
+        uiRingBuffer.updateBuffer(metalDevice, vertices, count, 6, deferredDisposalQueue, currentFrameCounter);
     }
 
     public long getOrCreateMeshBuffer(MetalDevice metalDevice, String meshPath, float[] vertices) {
@@ -248,20 +165,7 @@ public class MetalGpuCache {
     }
 
     public long getOrCreateTexture(MetalDevice metalDevice, String texturePath, byte[] pixels, int texW, int texH) {
-        if (texturePath == null || pixels == null || pixels.length == 0) return 0L;
-
-        Long existing = gpuTextureCache.get(texturePath);
-        if (existing != null) return existing;
-
-        evictLruTexturesIfNeeded(metalDevice);
-
-        MetalTexture tex = new MetalTexture();
-        tex.uploadTexture(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), pixels, texW, texH);
-        long handle = tex.getBindableTexture();
-        if (handle != 0L) {
-            gpuTextureCache.put(texturePath, handle);
-        }
-        return handle;
+        return textureRegistry.getOrCreateTexture(metalDevice, texturePath, pixels, texW, texH, deferredDisposalQueue, currentFrameCounter);
     }
 
     private void evictLruMeshesIfNeeded(MetalDevice metalDevice) {
@@ -281,24 +185,6 @@ public class MetalGpuCache {
         }
     }
 
-    private void evictLruTexturesIfNeeded(MetalDevice metalDevice) {
-        synchronized (gpuTextureCache) {
-            while (gpuTextureCache.size() >= maxTextureCacheSize) {
-                Iterator<Map.Entry<String, Long>> it = gpuTextureCache.entrySet().iterator();
-                if (!it.hasNext()) break;
-
-                Map.Entry<String, Long> lru = it.next();
-                Long handle = lru.getValue();
-                it.remove();
-
-                if (handle != null && handle != 0L) {
-                    enqueueDeferredDisposal(handle);
-                }
-            }
-        }
-    }
-
-    
     public void clearCaches(MetalDevice metalDevice) {
         if (metalDevice != null && metalDevice.getObjcMsgSend() != 0L) {
             long send = metalDevice.getObjcMsgSend();
@@ -313,19 +199,12 @@ public class MetalGpuCache {
                 gpuMeshCache.clear();
             }
 
-            synchronized (gpuTextureCache) {
-                for (Long handle : gpuTextureCache.values()) {
-                    if (handle != null && handle != 0L) {
-                        invokePPP(handle, selRelease, send);
-                    }
-                }
-                gpuTextureCache.clear();
-            }
+            textureRegistry.cleanup(metalDevice);
+            gridRingBuffer.cleanup(metalDevice);
+            uiRingBuffer.cleanup(metalDevice);
         } else {
             gpuMeshCache.clear();
-            gpuTextureCache.clear();
         }
         System.out.println("[MetalGpuCache] VRAM mesh and texture caches released.");
     }
-
 }
