@@ -4,7 +4,6 @@ import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
 
-import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
@@ -42,6 +41,11 @@ public class VulkanPassEncoder {
     private long imageAvailableSemaphore = 0L;
     private long renderFinishedSemaphore = 0L;
     private long inFlightFence = 0L;
+
+    // Reusable scratchpad arrays for zero-allocation frame loops
+    private final float[] modelMatrixScratch = new float[16];
+    private final float[] identityLightSpace = new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    private final float[] defaultGridView = new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,-5,1};
 
     public VkCommandBuffer getCommandBuffer() { return commandBuffer; }
     public long getImageAvailableSemaphore() { return imageAvailableSemaphore; }
@@ -164,10 +168,10 @@ public class VulkanPassEncoder {
             if (gridVbo != 0L && gridCount > 0) {
                 FloatBuffer pushData = stack.mallocFloat(32);
                 if (viewMatrix != null && viewMatrix.length == 16) pushData.put(viewMatrix);
-                else pushData.put(new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,-5,1});
+                else pushData.put(defaultGridView);
 
                 if (projMatrix != null && projMatrix.length == 16) pushData.put(projMatrix);
-                else pushData.put(new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1});
+                else pushData.put(identityLightSpace);
 
                 pushData.flip();
 
@@ -200,8 +204,6 @@ public class VulkanPassEncoder {
                 VkDevice vkDevice = deviceManager.getDevice();
                 VulkanGpuCache.VulkanTexture whiteTex = gpuCache.getDefaultWhiteTexture(deviceManager);
                 VulkanGpuCache.VulkanBuffer lightUbo = gpuCache.getOrCreateLightUniformBuffer(deviceManager);
-
-                float[] identityLightSpace = new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
 
                 for (int i = 0; i < sceneQueueCount; i++) {
                     RenderEntity entity = sceneQueue.get(i);
@@ -237,10 +239,10 @@ public class VulkanPassEncoder {
                         }
                     }
 
-                    float[] modelMatrix = computeModelMatrix(entity.px, entity.py, entity.pz, entity.rx, entity.ry, entity.rz, entity.sx, entity.sy, entity.sz);
+                    computeModelMatrixInPlace(entity.px, entity.py, entity.pz, entity.rx, entity.ry, entity.rz, entity.sx, entity.sy, entity.sz, modelMatrixScratch);
 
                     FloatBuffer push68 = stack.mallocFloat(68);
-                    push68.put(modelMatrix);
+                    push68.put(modelMatrixScratch);
                     push68.put(viewMatrix != null && viewMatrix.length == 16 ? viewMatrix : identityLightSpace);
                     push68.put(projMatrix != null && projMatrix.length == 16 ? projMatrix : identityLightSpace);
                     push68.put(0.0f);                      // shadowParams.x = passFlags (0.0 = Standard 3D Mesh)
@@ -272,7 +274,6 @@ public class VulkanPassEncoder {
                 VkDevice vkDevice = deviceManager.getDevice();
                 VulkanGpuCache.VulkanTexture whiteTex = gpuCache.getDefaultWhiteTexture(deviceManager);
                 VulkanGpuCache.VulkanBuffer lightUbo = gpuCache.getOrCreateLightUniformBuffer(deviceManager);
-                float[] identityLightSpace = new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
 
                 int shadowIndex = 0;
                 for (int i = 0; i < sceneQueueCount; i++) {
@@ -313,10 +314,10 @@ public class VulkanPassEncoder {
                         }
                     }
 
-                    float[] shadowModelMatrix = computeModelMatrix(entity.px, shadowY, entity.pz, 0.0f, 0.0f, 0.0f, shadowScale, 1.0f, shadowScale);
+                    computeModelMatrixInPlace(entity.px, shadowY, entity.pz, 0.0f, 0.0f, 0.0f, shadowScale, 1.0f, shadowScale, modelMatrixScratch);
 
                     FloatBuffer pushShadow = stack.mallocFloat(68);
-                    pushShadow.put(shadowModelMatrix);
+                    pushShadow.put(modelMatrixScratch);
                     pushShadow.put(viewMatrix != null && viewMatrix.length == 16 ? viewMatrix : identityLightSpace);
                     pushShadow.put(projMatrix != null && projMatrix.length == 16 ? projMatrix : identityLightSpace);
                     pushShadow.put(1.0f);       // shadowParams.x = passFlags (1.0 = Shadow Blob Pass!)
@@ -492,7 +493,7 @@ public class VulkanPassEncoder {
         }
     }
 
-    private float[] computeModelMatrix(float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
+    private void computeModelMatrixInPlace(float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float[] outMatrix) {
         float radX = (float) Math.toRadians(rx);
         float radY = (float) Math.toRadians(ry);
         float radZ = (float) Math.toRadians(rz);
@@ -513,13 +514,10 @@ public class VulkanPassEncoder {
         float m21 = -sx_s * cy * sz;
         float m22 = cx * cy * sz;
 
-        float[] matrix = new float[16];
-        matrix[0] = m00;  matrix[1] = m10;  matrix[2] = m20;  matrix[3] = 0.0f;
-        matrix[4] = m01;  matrix[5] = m11;  matrix[6] = m21;  matrix[7] = 0.0f;
-        matrix[8] = m02;  matrix[9] = m12;  matrix[10] = m22; matrix[11] = 0.0f;
-        matrix[12] = px;  matrix[13] = py;  matrix[14] = pz;  matrix[15] = 1.0f;
-
-        return matrix;
+        outMatrix[0] = m00;  outMatrix[1] = m10;  outMatrix[2] = m20;  outMatrix[3] = 0.0f;
+        outMatrix[4] = m01;  outMatrix[5] = m11;  outMatrix[6] = m21;  outMatrix[7] = 0.0f;
+        outMatrix[8] = m02;  outMatrix[9] = m12;  outMatrix[10] = m22; outMatrix[11] = 0.0f;
+        outMatrix[12] = px;  outMatrix[13] = py;  outMatrix[14] = pz;  outMatrix[15] = 1.0f;
     }
 
     public void cleanup(VulkanDevice device) {

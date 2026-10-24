@@ -70,6 +70,9 @@ public class PhysicsSystem {
     private final List<PhysicsBody> activeBodies = new ArrayList<>();
     private float accumulator = 0.0f;
 
+    // Reusable scratchpad RaycastHit for zero-allocation queries
+    private final RaycastHit sharedRaycastHit = new RaycastHit();
+
     public void initWorld(List<Entity> sceneEntities) {
         bodyMap.clear();
         activeBodies.clear();
@@ -171,15 +174,15 @@ public class PhysicsSystem {
 
             float halfHeight = capsuleHeight * 0.5f;
 
-            // Ground Probe Raycast downwards
-            RaycastHit hit = raycastExcluding(body.entity, body.px, body.py + halfHeight, body.pz, 0.0f, -1.0f, 0.0f, halfHeight + cc.stepOffset + 0.05f);
+            // Ground Probe Raycast downwards with zero allocation
+            raycastExcludingInPlace(body.entity, body.px, body.py + halfHeight, body.pz, 0.0f, -1.0f, 0.0f, halfHeight + cc.stepOffset + 0.05f, sharedRaycastHit);
 
-            if (hit.hit && hit.distance <= halfHeight + cc.stepOffset + 0.05f) {
+            if (sharedRaycastHit.hit && sharedRaycastHit.distance <= halfHeight + cc.stepOffset + 0.05f) {
                 cc.isGrounded = true;
                 if (cc.velocityY < 0.0f) cc.velocityY = 0.0f;
 
                 // Snap smoothly to ground / step offset
-                float targetPy = hit.pointY + halfHeight;
+                float targetPy = sharedRaycastHit.pointY + halfHeight;
                 body.py = Math.max(body.py, targetPy);
             } else {
                 cc.isGrounded = false;
@@ -227,13 +230,13 @@ public class PhysicsSystem {
                 float wy = body.py;
                 float wz = body.pz + wheelOffsets[i][1];
 
-                RaycastHit hit = raycastExcluding(body.entity, wx, wy, wz, 0.0f, -1.0f, 0.0f, maxRayDist);
+                raycastExcludingInPlace(body.entity, wx, wy, wz, 0.0f, -1.0f, 0.0f, maxRayDist, sharedRaycastHit);
 
-                if (hit.hit) {
+                if (sharedRaycastHit.hit) {
                     vc.wheelGrounded[i] = true;
                     groundedCount++;
 
-                    float compression = maxRayDist - hit.distance;
+                    float compression = maxRayDist - sharedRaycastHit.distance;
                     vc.suspensionCompression[i] = compression;
 
                     // Hooke's Law Spring Force
@@ -362,10 +365,19 @@ public class PhysicsSystem {
 
     public RaycastHit raycastExcluding(Entity excludeEntity, float rayOriginX, float rayOriginY, float rayOriginZ,
                                        float rayDirX, float rayDirY, float rayDirZ, float maxDistance) {
-        RaycastHit closestHit = new RaycastHit();
+        RaycastHit hit = new RaycastHit();
+        raycastExcludingInPlace(excludeEntity, rayOriginX, rayOriginY, rayOriginZ, rayDirX, rayDirY, rayDirZ, maxDistance, hit);
+        return hit;
+    }
+
+    public void raycastExcludingInPlace(Entity excludeEntity, float rayOriginX, float rayOriginY, float rayOriginZ,
+                                        float rayDirX, float rayDirY, float rayDirZ, float maxDistance, RaycastHit outHit) {
+        outHit.hit = false;
+        outHit.distance = 0.0f;
+        outHit.entity = null;
 
         float dirLen = (float) Math.sqrt(rayDirX * rayDirX + rayDirY * rayDirY + rayDirZ * rayDirZ);
-        if (dirLen <= 0.00001f) return closestHit;
+        if (dirLen <= 0.00001f) return;
 
         float dx = rayDirX / dirLen;
         float dy = rayDirY / dirLen;
@@ -392,7 +404,7 @@ public class PhysicsSystem {
             float tmax = Math.min(Math.min(Math.max(t1, t2), Math.max(t3, t4)), Math.max(t5, t6));
 
             if (tmax >= tmin && tmin >= 0.0f && tmin <= maxDistance) {
-                if (!closestHit.hit || tmin < closestHit.distance) {
+                if (!outHit.hit || tmin < outHit.distance) {
                     float hitPx = rayOriginX + dx * tmin;
                     float hitPy = rayOriginY + dy * tmin;
                     float hitPz = rayOriginZ + dz * tmin;
@@ -405,11 +417,18 @@ public class PhysicsSystem {
                     else if (Math.abs(hitPz - minZ) < 0.01f) nz = -1.0f;
                     else if (Math.abs(hitPz - maxZ) < 0.01f) nz = 1.0f;
 
-                    closestHit = new RaycastHit(body.entity, tmin, hitPx, hitPy, hitPz, nx, ny, nz);
+                    outHit.entity = body.entity;
+                    outHit.distance = tmin;
+                    outHit.pointX = hitPx;
+                    outHit.pointY = hitPy;
+                    outHit.pointZ = hitPz;
+                    outHit.normalX = nx;
+                    outHit.normalY = ny;
+                    outHit.normalZ = nz;
+                    outHit.hit = true;
                 }
             }
         }
-        return closestHit;
     }
 
     public void cleanup() {
