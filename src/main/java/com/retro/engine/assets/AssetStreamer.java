@@ -164,6 +164,15 @@ public class AssetStreamer {
         requestTextureAsync(filePath);
     }
 
+    public void clearCaches() {
+        modelCache.clear();
+        textureCache.clear();
+        activeModelRequests.clear();
+        activeTextureRequests.clear();
+        completedUploadsQueue.clear();
+        System.out.println("[AssetStreamer] Asset caches flushed.");
+    }
+
     public void shutdown() {
         ioExecutor.shutdown();
         try {
@@ -174,8 +183,7 @@ public class AssetStreamer {
             ioExecutor.shutdownNow();
             Thread.currentThread().interrupt();
         }
-        modelCache.clear();
-        textureCache.clear();
+        clearCaches();
         System.out.println("[AssetStreamer] Virtual Thread Executor shutdown complete.");
     }
 }

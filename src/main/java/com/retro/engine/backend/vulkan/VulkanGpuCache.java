@@ -736,7 +736,42 @@ public class VulkanGpuCache {
         return 0;
     }
 
+    
+    public void clearCaches(VulkanDevice device) {
+        if (device == null || device.getLogicalDevice() == null) {
+            meshCache.clear();
+            textureCache.clear();
+            return;
+        }
+        VkDevice vkDevice = device.getLogicalDevice();
+
+        synchronized (meshCache) {
+            for (VulkanBuffer buf : meshCache.values()) {
+                if (buf != null) {
+                    if (buf.bufferHandle != 0L) vkDestroyBuffer(vkDevice, buf.bufferHandle, null);
+                    if (buf.memoryHandle != 0L) vkFreeMemory(vkDevice, buf.memoryHandle, null);
+                }
+            }
+            meshCache.clear();
+        }
+
+        synchronized (textureCache) {
+            for (VulkanTexture tex : textureCache.values()) {
+                if (tex != null) {
+                    if (tex.samplerHandle != 0L) vkDestroySampler(vkDevice, tex.samplerHandle, null);
+                    if (tex.imageViewHandle != 0L) vkDestroyImageView(vkDevice, tex.imageViewHandle, null);
+                    if (tex.imageHandle != 0L) vkDestroyImage(vkDevice, tex.imageHandle, null);
+                    if (tex.memoryHandle != 0L) vkFreeMemory(vkDevice, tex.memoryHandle, null);
+                }
+            }
+            textureCache.clear();
+        }
+        System.out.println("[VulkanGpuCache] VRAM mesh and texture caches cleared.");
+    }
+
     public void cleanup(VulkanDevice device) {
+        clearCaches(device);
+
         if (device == null || device.getLogicalDevice() == null) return;
         VkDevice vkDevice = device.getLogicalDevice();
 
