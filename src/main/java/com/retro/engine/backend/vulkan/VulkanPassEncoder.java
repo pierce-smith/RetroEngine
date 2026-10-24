@@ -107,7 +107,7 @@ public class VulkanPassEncoder {
                                      int imageIndex,
                                      VulkanPipeline pipelineManager,
                                      VulkanGpuCache gpuCache,
-                                     VulkanDescriptorPool descriptorPool,
+                                     long descriptorPoolHandle,
                                      VulkanDevice deviceManager,
                                      float[] viewMatrix,
                                      float[] projMatrix,
@@ -210,10 +210,10 @@ public class VulkanPassEncoder {
                     long vboHandle = entity.getVertexBufferHandle();
                     if (vboHandle == 0L || entity.vertexCount <= 0) continue;
 
-                    if (vkDevice != null && descriptorPool.getHandle() != 0L && lightUbo != null && whiteTex != null) {
+                    if (vkDevice != null && descriptorPoolHandle != 0L && lightUbo != null && whiteTex != null) {
                         VkDescriptorSetAllocateInfo allocSetInfo = VkDescriptorSetAllocateInfo.calloc(stack)
                                 .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO)
-                                .descriptorPool(descriptorPool.getHandle())
+                                .descriptorPool(descriptorPoolHandle)
                                 .pSetLayouts(stack.longs(pipelineManager.getDescriptorSetLayout3D()));
 
                         LongBuffer pSet = stack.mallocLong(1);
@@ -288,10 +288,10 @@ public class VulkanPassEncoder {
                     float shadowScale = Math.max(entity.sx, entity.sz) * 1.25f;
                     float shadowY = entity.groundY + 0.005f;
 
-                    if (vkDevice != null && descriptorPool.getHandle() != 0L && lightUbo != null && whiteTex != null) {
+                    if (vkDevice != null && descriptorPoolHandle != 0L && lightUbo != null && whiteTex != null) {
                         VkDescriptorSetAllocateInfo allocSetInfo = VkDescriptorSetAllocateInfo.calloc(stack)
                                 .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO)
-                                .descriptorPool(descriptorPool.getHandle())
+                                .descriptorPool(descriptorPoolHandle)
                                 .pSetLayouts(stack.longs(pipelineManager.getDescriptorSetLayout3D()));
 
                         LongBuffer pSet = stack.mallocLong(1);
