@@ -53,6 +53,7 @@ public class MetalBackend implements IRenderBackend {
     private boolean framePermitHeld = false;
     private long completedHandlerCallback = 0L;
     private long completedHandlerBlock = 0L;
+    private long frameCounter = 0L;
 
     private float camPanX = 0.0f;
     private float camPanY = 0.25f;
@@ -175,22 +176,26 @@ public class MetalBackend implements IRenderBackend {
     }
 
     @Override
-    public void submitEntity(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float reflectionStrength) {
-        submitEntity(meshPath, vertices, vertexCount, texturePath, pixels, texW, texH, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, reflectionStrength, null);
+    public long registerMesh(String assetKey, float[] vertices, int vertexCount) {
+        return resourceCache.registerMesh(metalDevice, assetKey, vertices, vertexCount);
     }
 
     @Override
-    public void submitEntity(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float reflectionStrength, float[][] bonePalette) {
-        if (meshPath == null || vertices == null || vertexCount <= 0) return;
+    public long registerTexture(String assetKey, byte[] pixels, int width, int height) {
+        return resourceCache.registerTexture(metalDevice, assetKey, pixels, width, height);
+    }
 
-        long vbo = resourceCache.getOrCreateMeshBuffer(metalDevice, meshPath, vertices, vertexCount);
+    @Override public void unregisterMesh(long meshHandle) { resourceCache.unregisterMesh(meshHandle); }
+    @Override public void unregisterTexture(long textureHandle) { resourceCache.unregisterTexture(textureHandle); }
 
-        long texHandle = 0L;
-        boolean hasTex = false;
-        if (texturePath != null && pixels != null && pixels.length > 0) {
-            texHandle = resourceCache.getOrCreateTexture(metalDevice, texturePath, pixels, texW, texH);
-            hasTex = (texHandle != 0L);
-        }
+    @Override
+    public void submitEntity(long meshHandle, long textureHandle, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float reflectionStrength, float[][] bonePalette) {
+        MetalBuffer mesh = resourceCache.getMesh(meshHandle);
+        if (mesh == null || mesh.getElementCount() <= 0) return;
+
+        // Resolve to raw id<MTLTexture> here so MetalPassEncoder can batch-sort and bind without lookups
+        MetalTexture tex = resourceCache.getTexture(textureHandle);
+        long texHandle = (tex != null) ? tex.getBindableTexture() : 0L;
 
         MetalPassEncoder.RenderEntity item;
         if (activeSceneQueueCount < sceneQueuePool.size()) {
@@ -201,26 +206,17 @@ public class MetalBackend implements IRenderBackend {
         }
         activeSceneQueueCount++;
 
-        item.vertexBufferHandle = vbo;
-        item.vertexCount = vertexCount;
+        item.vertexBufferHandle = mesh.getHandle();
+        item.vertexCount = mesh.getElementCount();
+        item.stride = mesh.getFloatStride();
         item.textureHandle = texHandle;
-        item.hasTexture = hasTex;
+        item.hasTexture = (texHandle != 0L);
         item.px = px; item.py = py; item.pz = pz;
         item.rx = rx; item.ry = ry; item.rz = rz;
         item.sx = sx; item.sy = sy; item.sz = sz;
         item.groundY = groundY;
         item.reflectionStrength = reflectionStrength;
-        item.stride = vertices.length / vertexCount;
         item.bonePalette = bonePalette;
-    }
-
-    public void submitEntityWithShadow(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float reflectionStrength) {
-        submitEntity(meshPath, vertices, vertexCount, texturePath, pixels, texW, texH, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, reflectionStrength);
-    }
-
-    @Override
-    public void submitEntity(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
-        submitEntity(meshPath, vertices, vertexCount, texturePath, pixels, texW, texH, px, py, pz, rx, ry, rz, sx, sy, sz, 0.0f, 0.0f);
     }
 
     @Override
@@ -240,6 +236,9 @@ public class MetalBackend implements IRenderBackend {
         // Block until the GPU has retired the frame that last used the uniform slot we are about to advance into
         inFlightFrames.acquireUninterruptibly();
         framePermitHeld = true;
+
+        // With the permit held, frames older than the ring depth have retired; release their deferred resources
+        resourceCache.beginFrame(metalDevice, ++frameCounter);
 
         uniformStreamer.advanceFrameIndex();
 

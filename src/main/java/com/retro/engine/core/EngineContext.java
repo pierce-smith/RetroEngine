@@ -136,6 +136,7 @@ public class EngineContext {
             shutdown();
             return false;
         }
+        streamingService.bindRenderBackend(rhi);
 
         if (rhi != null && rhi.getAPI() != null) {
             String apiName = rhi.getAPI().name().toUpperCase();

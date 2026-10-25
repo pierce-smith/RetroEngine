@@ -3,7 +3,8 @@ package com.retro.engine.rhi;
 /**
  * Render Hardware Interface (RHI) abstraction contract for cross-platform backends.
  * Extended with Offscreen Viewport Render Target, unified scene lighting support,
- * and 64-matrix GPU skeletal animation matrix palette streaming.
+ * 64-matrix GPU skeletal animation matrix palette streaming, and handle-based asset registration
+ * (meshes and textures are uploaded once; frames reference them by opaque 64-bit handle).
  */
 public interface IRenderBackend {
     boolean initialize(ViewportSpec windowInfo);
@@ -24,31 +25,47 @@ public interface IRenderBackend {
     void updateUiMesh(float[] vertices, int count);
     void clearSceneQueue();
 
-    void submitEntity(String meshPath, float[] vertices, int vertexCount, 
-                      String texturePath, byte[] pixels, int texW, int texH, 
-                      float px, float py, float pz, 
-                      float rx, float ry, float rz, 
-                      float sx, float sy, float sz, 
-                      float groundY, float reflectionStrength);
+    /**
+     * Uploads a mesh to GPU memory once and returns an opaque handle for {@link #submitEntity}.
+     * Registering an assetKey that is already live returns the existing handle without re-uploading.
+     * Safe to call from any thread (e.g. AssetStreamer virtual threads). Returns 0L when the backend
+     * has no GPU (headless/null rendering) or the upload fails.
+     */
+    default long registerMesh(String assetKey, float[] vertices, int vertexCount) { return 0L; }
 
-    default void submitEntity(String meshPath, float[] vertices, int vertexCount, 
-                              String texturePath, byte[] pixels, int texW, int texH, 
-                              float px, float py, float pz, 
-                              float rx, float ry, float rz, 
-                              float sx, float sy, float sz) {
-        submitEntity(meshPath, vertices, vertexCount, texturePath, pixels, texW, texH, 
-                     px, py, pz, rx, ry, rz, sx, sy, sz, 0.0f, 0.0f);
+    /** Texture counterpart of {@link #registerMesh}; pixels are tightly packed RGBA8. */
+    default long registerTexture(String assetKey, byte[] pixels, int width, int height) { return 0L; }
+
+    /** Releases a mesh handle. GPU memory is reclaimed once in-flight frames no longer reference it. */
+    default void unregisterMesh(long meshHandle) {}
+
+    /** Releases a texture handle. GPU memory is reclaimed once in-flight frames no longer reference it. */
+    default void unregisterTexture(long textureHandle) {}
+
+    /**
+     * Queues one entity for this frame using handles from {@link #registerMesh} / {@link #registerTexture}.
+     * A 0L or stale meshHandle skips the draw; a 0L or stale textureHandle falls back to the default white texture.
+     */
+    void submitEntity(long meshHandle, long textureHandle,
+                      float px, float py, float pz,
+                      float rx, float ry, float rz,
+                      float sx, float sy, float sz,
+                      float groundY, float reflectionStrength,
+                      float[][] bonePalette);
+
+    default void submitEntity(long meshHandle, long textureHandle,
+                              float px, float py, float pz,
+                              float rx, float ry, float rz,
+                              float sx, float sy, float sz,
+                              float groundY, float reflectionStrength) {
+        submitEntity(meshHandle, textureHandle, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, reflectionStrength, null);
     }
 
-    default void submitEntity(String meshPath, float[] vertices, int vertexCount, 
-                              String texturePath, byte[] pixels, int texW, int texH, 
-                              float px, float py, float pz, 
-                              float rx, float ry, float rz, 
-                              float sx, float sy, float sz, 
-                              float groundY, float reflectionStrength,
-                              float[][] bonePalette) {
-        submitEntity(meshPath, vertices, vertexCount, texturePath, pixels, texW, texH, 
-                     px, py, pz, rx, ry, rz, sx, sy, sz, groundY, reflectionStrength);
+    default void submitEntity(long meshHandle, long textureHandle,
+                              float px, float py, float pz,
+                              float rx, float ry, float rz,
+                              float sx, float sy, float sz) {
+        submitEntity(meshHandle, textureHandle, px, py, pz, rx, ry, rz, sx, sy, sz, 0.0f, 0.0f, null);
     }
 
     void beginFrame();

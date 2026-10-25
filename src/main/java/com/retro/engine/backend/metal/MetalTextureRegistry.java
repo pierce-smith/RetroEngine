@@ -4,39 +4,18 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.ByteBuffer;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.Queue;
 
 import static org.lwjgl.system.JNI.*;
 import static org.lwjgl.system.macosx.ObjCRuntime.*;
 
 /**
- * SRP Domain Manager: Manages Metal GPU texture handle caching, LRU eviction,
- * default white texture fallback, and sampler state lifecycle.
+ * SRP Domain Manager: Manages the default white texture fallback and sampler state lifecycle.
+ * Registered scene textures are owned by MetalGpuCache's opaque handle table.
  */
 public class MetalTextureRegistry {
 
-    private static final int DEFAULT_MAX_CACHE_ENTRIES = 128;
-
-    private final int maxTextureCacheSize;
-    private final Map<String, Long> gpuTextureCache;
-
     private long defaultTextureHandle = 0L;
     private long samplerStateHandle = 0L;
-
-    public MetalTextureRegistry() {
-        this(DEFAULT_MAX_CACHE_ENTRIES);
-    }
-
-    public MetalTextureRegistry(int maxTextureCacheSize) {
-        this.maxTextureCacheSize = Math.max(8, maxTextureCacheSize);
-        this.gpuTextureCache = Collections.synchronizedMap(
-                new LinkedHashMap<String, Long>(16, 0.75f, true)
-        );
-    }
 
     public void initDefaultTextureAndSampler(MetalDevice metalDevice) {
         if (metalDevice == null || metalDevice.getDevice() == 0L) return;
@@ -87,54 +66,10 @@ public class MetalTextureRegistry {
         return samplerStateHandle;
     }
 
-    public long getOrCreateTexture(MetalDevice metalDevice, String texturePath, byte[] pixels, int texW, int texH,
-                                    Queue<MetalGpuCache.DeferredHandle> disposalQueue, long currentFrame) {
-        if (texturePath == null || pixels == null || pixels.length == 0 || metalDevice == null) return 0L;
-
-        Long existing = gpuTextureCache.get(texturePath);
-        if (existing != null) return existing;
-
-        evictLruTexturesIfNeeded(disposalQueue, currentFrame);
-
-        MetalTexture tex = new MetalTexture();
-        tex.uploadTexture(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), pixels, texW, texH);
-        long handle = tex.getBindableTexture();
-        if (handle != 0L) {
-            gpuTextureCache.put(texturePath, handle);
-        }
-        return handle;
-    }
-
-    private void evictLruTexturesIfNeeded(Queue<MetalGpuCache.DeferredHandle> disposalQueue, long currentFrame) {
-        synchronized (gpuTextureCache) {
-            while (gpuTextureCache.size() >= maxTextureCacheSize) {
-                Iterator<Map.Entry<String, Long>> it = gpuTextureCache.entrySet().iterator();
-                if (!it.hasNext()) break;
-
-                Map.Entry<String, Long> lru = it.next();
-                Long handle = lru.getValue();
-                it.remove();
-
-                if (handle != null && handle != 0L && disposalQueue != null) {
-                    disposalQueue.add(new MetalGpuCache.DeferredHandle(handle, currentFrame + 3));
-                }
-            }
-        }
-    }
-
     public void cleanup(MetalDevice metalDevice) {
         if (metalDevice != null && metalDevice.getObjcMsgSend() != 0L) {
             long send = metalDevice.getObjcMsgSend();
             long selRelease = sel_registerName("release");
-
-            synchronized (gpuTextureCache) {
-                for (Long handle : gpuTextureCache.values()) {
-                    if (handle != null && handle != 0L) {
-                        invokePPP(handle, selRelease, send);
-                    }
-                }
-                gpuTextureCache.clear();
-            }
 
             if (defaultTextureHandle != 0L) {
                 invokePPP(defaultTextureHandle, selRelease, send);
@@ -144,8 +79,6 @@ public class MetalTextureRegistry {
                 invokePPP(samplerStateHandle, selRelease, send);
                 samplerStateHandle = 0L;
             }
-        } else {
-            gpuTextureCache.clear();
         }
     }
 }

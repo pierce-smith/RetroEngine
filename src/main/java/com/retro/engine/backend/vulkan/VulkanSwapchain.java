@@ -136,7 +136,10 @@ public class VulkanSwapchain {
                     .pSwapchains(stack.longs(swapchainHandle))
                     .pImageIndices(stack.ints(imageIndex));
 
-            int res = KHRSwapchain.vkQueuePresentKHR(device.getPresentQueue(), presentInfo);
+            int res;
+            synchronized (device.getQueueLock()) {
+                res = KHRSwapchain.vkQueuePresentKHR(device.getPresentQueue(), presentInfo);
+            }
             return (res == VK_SUCCESS);
         }
     }

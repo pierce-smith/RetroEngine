@@ -10,10 +10,16 @@ public class MetalBuffer {
 
     private long bufferHandle = 0L;
     private int elementCount = 0;
+    private int floatStride = 0;
 
     public MetalBuffer(long bufferHandle, int elementCount) {
         this.bufferHandle = bufferHandle;
         this.elementCount = elementCount;
+    }
+
+    public MetalBuffer(long bufferHandle, int elementCount, int floatStride) {
+        this(bufferHandle, elementCount);
+        this.floatStride = floatStride;
     }
 
     public static MetalBuffer createWithFloatArray(long device, long objc_msgSend, float[] data, int floatStride) {
@@ -26,7 +32,7 @@ public class MetalBuffer {
         long handle = invokePPPPPP(device, sel_newBufferWithBytes, MemoryUtil.memAddress(fb), (long) data.length * 4L, 0L, objc_msgSend);
 
         MemoryUtil.memFree(fb);
-        return new MetalBuffer(handle, data.length / floatStride);
+        return new MetalBuffer(handle, data.length / floatStride, floatStride);
     }
 
     public static MetalBuffer createWithFloatArray(long device, long objc_msgSend, float[] data) {
@@ -40,4 +46,5 @@ public class MetalBuffer {
 
     public long getHandle() { return bufferHandle; }
     public int getElementCount() { return elementCount; }
+    public int getFloatStride() { return floatStride; }
 }

@@ -32,6 +32,10 @@ public class VulkanDevice {
     private int graphicsQueueFamilyIndex = -1;
     private int presentQueueFamilyIndex = -1;
 
+    // VkQueue access must be externally synchronized: frame submission/present on the render thread
+    // and asset uploads from AssetStreamer virtual threads all serialize on this lock.
+    private final Object queueLock = new Object();
+
     public String getDriverName() {
         return (Platform.get() == Platform.MACOSX)
                 ? "Modular Vulkan 1.3 Driver (MoltenVK / Apple Silicon)"
@@ -302,4 +306,5 @@ public class VulkanDevice {
     public VkQueue getPresentQueue() { return presentQueue; }
     public int getGraphicsQueueFamilyIndex() { return graphicsQueueFamilyIndex; }
     public int getPresentQueueFamilyIndex() { return presentQueueFamilyIndex; }
+    public Object getQueueLock() { return queueLock; }
 }
