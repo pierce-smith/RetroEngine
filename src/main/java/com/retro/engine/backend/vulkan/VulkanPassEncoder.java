@@ -30,6 +30,8 @@ public class VulkanPassEncoder {
         public float sx, sy, sz;
         public float groundY = 0.0f;
         public float reflectionStrength = 0.0f;
+        public int stride = 22;
+        public float[][] bonePalette = null;
 
         public long getVertexBufferHandle() { return vertexBufferHandle; }
         public long getTextureHandle() { return textureHandle; }
@@ -138,16 +140,36 @@ public class VulkanPassEncoder {
             // STEP 2: 3D Scene Mesh Pass
             // ---------------------------------------------------------------------------------
             if (pipelineManager.getGraphicsPipeline3D() != 0L && sceneQueue != null && sceneQueueCount > 0) {
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getGraphicsPipeline3D());
-
                 VkDevice vkDevice = deviceManager.getDevice();
                 VulkanGpuCache.VulkanTexture whiteTex = gpuCache.getDefaultWhiteTexture(deviceManager);
                 VulkanGpuCache.VulkanBuffer lightUbo = gpuCache.getOrCreateLightUniformBuffer(deviceManager);
+                VulkanGpuCache.VulkanBuffer bonePaletteBuf = gpuCache.getOrCreateBonePaletteBuffer(deviceManager);
+                long skinnedPipeline = pipelineManager.getGraphicsPipelineSkinned();
+
+                long boundPipeline = 0L;
+                int skinnedIndex = 0;
 
                 for (int i = 0; i < sceneQueueCount; i++) {
                     RenderEntity entity = sceneQueue.get(i);
                     long vboHandle = entity.getVertexBufferHandle();
                     if (vboHandle == 0L || entity.vertexCount <= 0) continue;
+
+                    // 30-float buffers must go through the 120-byte skinned pipeline; without a palette or a free
+                    // slot they still draw there against an identity-seeded slot rather than misreading the stride.
+                    boolean skinnedLayout = entity.stride >= 30;
+                    if (skinnedLayout && (skinnedPipeline == 0L || bonePaletteBuf == null)) continue;
+
+                    int paletteSlot = 0;
+                    if (skinnedLayout && entity.bonePalette != null && skinnedIndex < VulkanGpuCache.MAX_SKINNED_ENTITIES_PER_FRAME - 1) {
+                        paletteSlot = ++skinnedIndex; // slot 0 stays identity for palette-less skinned meshes
+                        gpuCache.writeBonePalette(paletteSlot, entity.bonePalette);
+                    }
+
+                    long wantedPipeline = skinnedLayout ? skinnedPipeline : pipelineManager.getGraphicsPipeline3D();
+                    if (wantedPipeline != boundPipeline) {
+                        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, wantedPipeline);
+                        boundPipeline = wantedPipeline;
+                    }
 
                     if (vkDevice != null && descriptorPoolHandle != 0L && lightUbo != null && whiteTex != null) {
                         VkDescriptorSetAllocateInfo allocSetInfo = VkDescriptorSetAllocateInfo.calloc(stack)
@@ -166,10 +188,18 @@ public class VulkanPassEncoder {
                             VkDescriptorImageInfo.Buffer imageInfoTex = VkDescriptorImageInfo.calloc(1, stack).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(activeTexView).sampler(whiteTex.samplerHandle);
                             VkDescriptorImageInfo.Buffer imageInfoShadow = VkDescriptorImageInfo.calloc(1, stack).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(whiteTex.imageViewHandle).sampler(whiteTex.samplerHandle);
 
-                            VkWriteDescriptorSet.Buffer descriptorWrites = VkWriteDescriptorSet.calloc(3, stack);
+                            int writeCount = (bonePaletteBuf != null) ? 4 : 3;
+                            VkWriteDescriptorSet.Buffer descriptorWrites = VkWriteDescriptorSet.calloc(writeCount, stack);
                             descriptorWrites.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(0).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC).pBufferInfo(bufferInfo);
                             descriptorWrites.get(1).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(1).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(imageInfoTex);
                             descriptorWrites.get(2).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(2).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(imageInfoShadow);
+                            if (bonePaletteBuf != null) {
+                                VkDescriptorBufferInfo.Buffer boneInfo = VkDescriptorBufferInfo.calloc(1, stack)
+                                        .buffer(bonePaletteBuf.bufferHandle)
+                                        .offset(paletteSlot * VulkanGpuCache.BONE_PALETTE_STRIDE)
+                                        .range(VulkanGpuCache.BONE_PALETTE_STRIDE);
+                                descriptorWrites.get(3).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(3).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(boneInfo);
+                            }
 
                             vkUpdateDescriptorSets(vkDevice, descriptorWrites, null);
 

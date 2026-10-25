@@ -114,9 +114,14 @@ public class MetalBackend implements IRenderBackend {
 
     @Override
     public void submitEntity(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float reflectionStrength) {
+        submitEntity(meshPath, vertices, vertexCount, texturePath, pixels, texW, texH, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, reflectionStrength, null);
+    }
+
+    @Override
+    public void submitEntity(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float reflectionStrength, float[][] bonePalette) {
         if (meshPath == null || vertices == null || vertexCount <= 0) return;
 
-        long vbo = resourceCache.getOrCreateMeshBuffer(metalDevice, meshPath, vertices);
+        long vbo = resourceCache.getOrCreateMeshBuffer(metalDevice, meshPath, vertices, vertexCount);
 
         long texHandle = 0L;
         boolean hasTex = false;
@@ -143,6 +148,8 @@ public class MetalBackend implements IRenderBackend {
         item.sx = sx; item.sy = sy; item.sz = sz;
         item.groundY = groundY;
         item.reflectionStrength = reflectionStrength;
+        item.stride = vertices.length / vertexCount;
+        item.bonePalette = bonePalette;
     }
 
     public void submitEntityWithShadow(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float reflectionStrength) {

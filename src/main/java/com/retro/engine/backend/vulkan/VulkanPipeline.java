@@ -12,6 +12,7 @@ import static org.lwjgl.vulkan.VK13.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_
 
 /**
  * Manages Vulkan 1.3 Graphics Pipelines for offscreen 3D Blinn-Phong geometry (88-byte 22-float stride),
+ * GPU-skinned geometry (120-byte 30-float stride with bone palette storage buffer at binding 3),
  * infinite 3D grid rendering (36-byte 9-float stride VBO from GizmoState matching Metal backend),
  * dynamic ground shadow blobs, vertical Y-axis pillar lines, and swapchain 2D UI composition
  * using Dynamic Rendering (VK_KHR_dynamic_rendering).
@@ -27,6 +28,7 @@ public class VulkanPipeline {
     private long pipelineLayout3D = 0L;
     private long graphicsPipeline3D = 0L;
     private long graphicsPipelineShadow = 0L;
+    private long graphicsPipelineSkinned = 0L;
 
     private long descriptorSetLayoutGrid = 0L;
     private long pipelineLayoutGrid = 0L;
@@ -58,10 +60,11 @@ public class VulkanPipeline {
 
         try (MemoryStack stack = stackPush()) {
             // 1. 3D Scene Pass Layout
-            VkDescriptorSetLayoutBinding.Buffer bindings3D = VkDescriptorSetLayoutBinding.calloc(3, stack);
+            VkDescriptorSetLayoutBinding.Buffer bindings3D = VkDescriptorSetLayoutBinding.calloc(4, stack);
             bindings3D.get(0).binding(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC).descriptorCount(1).stageFlags(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
             bindings3D.get(1).binding(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
             bindings3D.get(2).binding(2).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+            bindings3D.get(3).binding(3).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_VERTEX_BIT);
 
             VkDescriptorSetLayoutCreateInfo dsCreateInfo3D = VkDescriptorSetLayoutCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)
@@ -265,6 +268,35 @@ public class VulkanPipeline {
                     System.out.println("[VulkanPipeline] Created Dedicated Shadow Blob VkPipeline [0x" + Long.toHexString(graphicsPipelineShadow) + "].");
                 }
 
+                // 2C. GPU Skinned 3D Pipeline (120-Byte Stride, 30 Floats per Vertex: 22 static + 4 bone ids + 4 weights)
+                long vertSkinnedModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/blinn_phong_skinned.vert.spv");
+                if (vertSkinnedModule != 0L) {
+                    VkPipelineShaderStageCreateInfo.Buffer shaderStagesSkinned = VkPipelineShaderStageCreateInfo.calloc(2, stack);
+                    shaderStagesSkinned.get(0).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_VERTEX_BIT).module(vertSkinnedModule).pName(stack.UTF8("main"));
+                    shaderStagesSkinned.get(1).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_FRAGMENT_BIT).module(frag3DModule).pName(stack.UTF8("main"));
+
+                    VkVertexInputBindingDescription.Buffer bindingSkinned = VkVertexInputBindingDescription.calloc(1, stack).binding(0).stride(120).inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
+                    VkVertexInputAttributeDescription.Buffer attributesSkinned = VkVertexInputAttributeDescription.calloc(9, stack);
+                    for (int a = 0; a < 7; a++) {
+                        VkVertexInputAttributeDescription src = attributeDescriptions.get(a);
+                        attributesSkinned.get(a).binding(0).location(src.location()).format(src.format()).offset(src.offset());
+                    }
+                    attributesSkinned.get(7).binding(0).location(7).format(VK_FORMAT_R32G32B32A32_UINT).offset(88);    // BONE IDS (raw int bits)
+                    attributesSkinned.get(8).binding(0).location(8).format(VK_FORMAT_R32G32B32A32_SFLOAT).offset(104); // BONE WEIGHTS
+
+                    VkPipelineVertexInputStateCreateInfo vertexInputSkinned = VkPipelineVertexInputStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO).pVertexBindingDescriptions(bindingSkinned).pVertexAttributeDescriptions(attributesSkinned);
+
+                    VkGraphicsPipelineCreateInfo.Buffer pipelineInfoSkinned = VkGraphicsPipelineCreateInfo.calloc(1, stack)
+                            .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO).pNext(renderingCreateInfo.address()).pStages(shaderStagesSkinned).pVertexInputState(vertexInputSkinned).pInputAssemblyState(inputAssembly).pViewportState(viewportState).pRasterizationState(rasterizer).pMultisampleState(multisampling).pDepthStencilState(depthStencil3D).pColorBlendState(colorBlending3D).pDynamicState(dynamicState3D).layout(pipelineLayout3D).renderPass(VK_NULL_HANDLE).subpass(0);
+
+                    LongBuffer pPipelineSkinned = stack.mallocLong(1);
+                    if (vkCreateGraphicsPipelines(vkDevice, cacheHandle, pipelineInfoSkinned, null, pPipelineSkinned) == VK_SUCCESS) {
+                        graphicsPipelineSkinned = pPipelineSkinned.get(0);
+                        System.out.println("[VulkanPipeline] Created GPU Skinned 3D VkPipeline [0x" + Long.toHexString(graphicsPipelineSkinned) + "].");
+                    }
+                    VulkanShaderLoader.destroyShaderModule(vkDevice, vertSkinnedModule);
+                }
+
                 VulkanShaderLoader.destroyShaderModule(vkDevice, vert3DModule);
                 VulkanShaderLoader.destroyShaderModule(vkDevice, frag3DModule);
             }
@@ -326,6 +358,7 @@ public class VulkanPipeline {
     public long getPipelineLayout3D() { return pipelineLayout3D; }
     public long getGraphicsPipeline3D() { return graphicsPipeline3D; }
     public long getGraphicsPipelineShadow() { return graphicsPipelineShadow != 0L ? graphicsPipelineShadow : graphicsPipeline3D; }
+    public long getGraphicsPipelineSkinned() { return graphicsPipelineSkinned; }
 
     public long getDescriptorSetLayoutGrid() { return descriptorSetLayoutGrid; }
     public long getPipelineLayoutGrid() { return pipelineLayoutGrid; }
@@ -344,6 +377,7 @@ public class VulkanPipeline {
 
         if (graphicsPipeline3D != 0L) { vkDestroyPipeline(vkDevice, graphicsPipeline3D, null); graphicsPipeline3D = 0L; }
         if (graphicsPipelineShadow != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineShadow, null); graphicsPipelineShadow = 0L; }
+        if (graphicsPipelineSkinned != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineSkinned, null); graphicsPipelineSkinned = 0L; }
         if (pipelineLayout3D != 0L) { vkDestroyPipelineLayout(vkDevice, pipelineLayout3D, null); pipelineLayout3D = 0L; }
         if (descriptorSetLayout3D != 0L) { vkDestroyDescriptorSetLayout(vkDevice, descriptorSetLayout3D, null); descriptorSetLayout3D = 0L; }
 

@@ -30,6 +30,8 @@ public class MetalPassEncoder {
         public float sx, sy, sz;
         public float groundY = 0.0f;
         public float reflectionStrength = 0.0f;
+        public int stride = 22;
+        public float[][] bonePalette = null;
     }
 
     public void encodeOffscreen3DPass(
@@ -59,11 +61,17 @@ public class MetalPassEncoder {
         }
 
         long encoder3D = invokePPPP(commandBuffer, sel_registerName("renderCommandEncoderWithDescriptor:"), offscreenPassDesc, send);
+        invokePPPP(encoder3D, sel_registerName("setTriangleFillMode:"), 0L, send); // MTLTriangleFillModeFill
 
         float aspect = (framebuffer.getWidth() > 0 && framebuffer.getHeight() > 0) ? ((float) framebuffer.getWidth() / (float) framebuffer.getHeight()) : (712.0f / 488.0f);
         long currentSlotOffset = streamer.getCurrentSlotOffset();
         long streamingUniformBuffer = streamer.getStreamingUniformBuffer();
         long pBufferContents = invokePPP(streamingUniformBuffer, sel_registerName("contents"), send);
+
+        // vertexMain declares the bone palette at buffer(2); keep it bound for every draw in this pass
+        long bonePaletteBuffer = streamer.getBonePaletteBuffer();
+        long pBoneContents = bonePaletteBuffer != 0L ? invokePPP(bonePaletteBuffer, sel_registerName("contents"), send) : 0L;
+        invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), bonePaletteBuffer, streamer.getBonePaletteOffset(0), 2L, send);
 
         // 1A. Procedural Ray-Plane Infinite Grid Encoding
         if (resourceCache.getGridVertexBuffer() != 0L && resourceCache.getGridVertexCount() > 0) {
@@ -112,6 +120,7 @@ public class MetalPassEncoder {
 
             long lastVbo = -1L;
             long lastTexture = -1L;
+            int skinnedIndex = 0;
 
             for (RenderEntity item : sceneQueue) {
                 if (entityIndex >= MetalUniformStream.MAX_ENTITIES_PER_FRAME) break;
@@ -130,6 +139,14 @@ public class MetalPassEncoder {
                         invokePPPPP(encoder3D, sel_registerName("setFragmentSamplerState:atIndex:"), texture.getSamplerStateHandle(), 0L, send);
                     }
                     lastTexture = currentTex;
+                }
+
+                boolean skinned = item.stride >= 30 && item.bonePalette != null && pBoneContents != 0L
+                        && skinnedIndex < MetalUniformStream.MAX_SKINNED_ENTITIES_PER_FRAME;
+                if (skinned) {
+                    streamer.writeBonePalette(pBoneContents, skinnedIndex, item.bonePalette);
+                    invokePPPPP(encoder3D, sel_registerName("setVertexBufferOffset:atIndex:"), streamer.getBonePaletteOffset(skinnedIndex), 2L, send);
+                    skinnedIndex++;
                 }
 
                 long entityUniformOffset = currentSlotOffset + MetalUniformStream.UNIFORM_STRIDE * (1 + 64 + entityIndex);
@@ -169,11 +186,14 @@ public class MetalPassEncoder {
 
                     MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_HAS_TEXTURE, item.hasTexture ? 1 : 0);
                     MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_IS_UNLIT, 0);
-                    MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_STRIDE, 22);
+                    MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_STRIDE, item.stride);
 
                     int passFlags = 0;
                     if (item.reflectionStrength > 0.0f) {
                         passFlags |= 2;
+                    }
+                    if (skinned) {
+                        passFlags |= MetalUniformStream.PASS_FLAG_SKINNED;
                     }
                     MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PASS_FLAGS, passFlags);
                 }
@@ -272,6 +292,7 @@ public class MetalPassEncoder {
 
             invokePPPPPP(encoderWin, sel_registerName("setVertexBuffer:offset:atIndex:"), resourceCache.getViewportQuadBuffer(), 0L, 0L, send);
             invokePPPPPP(encoderWin, sel_registerName("setVertexBuffer:offset:atIndex:"), streamer.getUniformBufferIdentity(), 0L, 1L, send);
+            invokePPPPPP(encoderWin, sel_registerName("setVertexBuffer:offset:atIndex:"), streamer.getBonePaletteBuffer(), 0L, 2L, send);
             invokePPPPPP(encoderWin, sel_registerName("setFragmentBuffer:offset:atIndex:"), streamer.getUniformBufferIdentity(), 0L, 1L, send);
             invokePPPPPP(encoderWin, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, 6L, send);
         }

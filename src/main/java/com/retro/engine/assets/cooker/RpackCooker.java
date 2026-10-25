@@ -52,7 +52,7 @@ public class RpackCooker {
             outFile.getParentFile().mkdirs();
         }
 
-        int stride = (meshData.vertices.length % MeshBufferData.FLOATS_PER_VERTEX == 0) ? MeshBufferData.FLOATS_PER_VERTEX : 22;
+        int stride = meshData.stride();
         UUID assetUuid;
         try {
             assetUuid = (customUuidStr != null && !customUuidStr.trim().isEmpty()) ? UUID.fromString(customUuidStr.trim()) : UUID.randomUUID();

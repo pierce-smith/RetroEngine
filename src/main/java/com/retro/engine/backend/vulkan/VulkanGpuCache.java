@@ -1,6 +1,7 @@
 package com.retro.engine.backend.vulkan;
 
 import org.lwjgl.PointerBuffer;
+import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
 
@@ -24,10 +25,17 @@ public class VulkanGpuCache {
 
     private static final int RING_SLOTS = 3;
 
+    // Bone palettes: 64 column-major mat4 per skinned entity, read by blinn_phong_skinned.vert at binding 3.
+    // A single slot set suffices because VulkanBackend waits on the in-flight fence before recording.
+    public static final int MAX_PALETTE_BONES = 64;
+    public static final long BONE_PALETTE_STRIDE = MAX_PALETTE_BONES * 64L;
+    public static final int MAX_SKINNED_ENTITIES_PER_FRAME = 64;
+
     public static class VulkanBuffer {
         public long bufferHandle;
         public long memoryHandle;
         public int vertexCount;
+        public int floatStride;
 
         public VulkanBuffer(long bufferHandle, long memoryHandle, int vertexCount) {
             this.bufferHandle = bufferHandle;
@@ -82,6 +90,8 @@ public class VulkanGpuCache {
 
     private VulkanBuffer lightUniformBuffer = null;
     private VulkanBuffer groundQuadBuffer = null;
+    private VulkanBuffer bonePaletteBuffer = null;
+    private long bonePaletteMapped = 0L;
 
     private int totalFrameCount = 0;
 
@@ -106,7 +116,7 @@ public class VulkanGpuCache {
              1.0f, 0.005f, -1.0f,  0.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f, 1.0f,  1.0f, 0.0f,  1.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 0.0f, 1.0f,  1.0f, 0.0f
         };
 
-        groundQuadBuffer = createHostVisibleBuffer(device, groundVerts);
+        groundQuadBuffer = createHostVisibleBuffer(device, groundVerts, 22);
         return (groundQuadBuffer != null) ? groundQuadBuffer.bufferHandle : 0L;
     }
 
@@ -140,13 +150,13 @@ public class VulkanGpuCache {
         }
     }
 
-    public VulkanBuffer getOrCreateMeshBuffer(VulkanDevice device, String meshPath, float[] vertices) {
-        if (meshPath == null || vertices == null || vertices.length == 0) return null;
+    public VulkanBuffer getOrCreateMeshBuffer(VulkanDevice device, String meshPath, float[] vertices, int vertexCount) {
+        if (meshPath == null || vertices == null || vertices.length == 0 || vertexCount <= 0) return null;
 
         VulkanBuffer existing = meshCache.get(meshPath);
         if (existing != null) return existing;
 
-        VulkanBuffer created = createHostVisibleBuffer(device, vertices);
+        VulkanBuffer created = createHostVisibleBuffer(device, vertices, vertices.length / vertexCount);
         if (created != null) {
             meshCache.put(meshPath, created);
         }
@@ -161,8 +171,8 @@ public class VulkanGpuCache {
         return textureRegistry.getDefaultWhiteTexture(device);
     }
 
-    public VulkanBuffer createHostVisibleBuffer(VulkanDevice device, float[] vertices) {
-        if (device == null || device.getLogicalDevice() == null || vertices == null || vertices.length == 0) return null;
+    public VulkanBuffer createHostVisibleBuffer(VulkanDevice device, float[] vertices, int floatStride) {
+        if (device == null || device.getLogicalDevice() == null || vertices == null || vertices.length == 0 || floatStride <= 0) return null;
 
         VkDevice vkDevice = device.getLogicalDevice();
         long bufferSize = (long) vertices.length * Float.BYTES;
@@ -204,8 +214,76 @@ public class VulkanGpuCache {
             floatBuf.put(vertices);
             vkUnmapMemory(vkDevice, bufferMemory);
 
-            int floatStride = (vertices.length % 22 == 0) ? 22 : ((vertices.length % 14 == 0) ? 14 : 9);
-            return new VulkanBuffer(buffer, bufferMemory, vertices.length / floatStride);
+            VulkanBuffer created = new VulkanBuffer(buffer, bufferMemory, vertices.length / floatStride);
+            created.floatStride = floatStride;
+            return created;
+        }
+    }
+
+    public VulkanBuffer getOrCreateBonePaletteBuffer(VulkanDevice device) {
+        if (bonePaletteBuffer != null) return bonePaletteBuffer;
+        if (device == null || device.getLogicalDevice() == null) return null;
+
+        VkDevice vkDevice = device.getLogicalDevice();
+        long bufferSize = BONE_PALETTE_STRIDE * MAX_SKINNED_ENTITIES_PER_FRAME;
+
+        try (MemoryStack stack = stackPush()) {
+            VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
+                    .size(bufferSize)
+                    .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
+                    .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+
+            LongBuffer pBuffer = stack.mallocLong(1);
+            if (vkCreateBuffer(vkDevice, bufferInfo, null, pBuffer) != VK_SUCCESS) return null;
+            long buffer = pBuffer.get(0);
+
+            VkMemoryRequirements memReqs = VkMemoryRequirements.calloc(stack);
+            vkGetBufferMemoryRequirements(vkDevice, buffer, memReqs);
+
+            int memTypeIndex = findMemoryType(device.getPhysicalDevice(), memReqs.memoryTypeBits(),
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+            VkMemoryAllocateInfo allocInfo = VkMemoryAllocateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
+                    .allocationSize(memReqs.size())
+                    .memoryTypeIndex(memTypeIndex);
+
+            LongBuffer pMemory = stack.mallocLong(1);
+            if (vkAllocateMemory(vkDevice, allocInfo, null, pMemory) != VK_SUCCESS) {
+                vkDestroyBuffer(vkDevice, buffer, null);
+                return null;
+            }
+            long memory = pMemory.get(0);
+            vkBindBufferMemory(vkDevice, buffer, memory, 0);
+
+            // Persistently mapped: palettes are rewritten every frame after the in-flight fence wait
+            PointerBuffer pData = stack.mallocPointer(1);
+            if (vkMapMemory(vkDevice, memory, 0, bufferSize, 0, pData) != VK_SUCCESS) {
+                vkDestroyBuffer(vkDevice, buffer, null);
+                vkFreeMemory(vkDevice, memory, null);
+                return null;
+            }
+            bonePaletteMapped = pData.get(0);
+
+            // Seed every slot with identity matrices so an unwritten slot never skins with garbage
+            FloatBuffer fb = MemoryUtil.memFloatBuffer(bonePaletteMapped, (int) (bufferSize / Float.BYTES));
+            for (int m = 0; m < MAX_PALETTE_BONES * MAX_SKINNED_ENTITIES_PER_FRAME; m++) {
+                for (int i = 0; i < 16; i++) fb.put((i % 5 == 0) ? 1.0f : 0.0f);
+            }
+
+            bonePaletteBuffer = new VulkanBuffer(buffer, memory, 0);
+            return bonePaletteBuffer;
+        }
+    }
+
+    /** Copies up to 64 column-major 4x4 matrices into the given skinned-entity slot of the mapped palette buffer. */
+    public void writeBonePalette(int skinnedIndex, float[][] palette) {
+        if (bonePaletteMapped == 0L || palette == null) return;
+        FloatBuffer fb = MemoryUtil.memFloatBuffer(bonePaletteMapped + skinnedIndex * BONE_PALETTE_STRIDE, MAX_PALETTE_BONES * 16);
+        int count = Math.min(palette.length, MAX_PALETTE_BONES);
+        for (int b = 0; b < count; b++) {
+            fb.put(palette[b], 0, 16);
         }
     }
 
@@ -394,6 +472,13 @@ public class VulkanGpuCache {
             if (lightUniformBuffer.bufferHandle != 0L) vkDestroyBuffer(vkDevice, lightUniformBuffer.bufferHandle, null);
             if (lightUniformBuffer.memoryHandle != 0L) vkFreeMemory(vkDevice, lightUniformBuffer.memoryHandle, null);
             lightUniformBuffer = null;
+        }
+
+        if (bonePaletteBuffer != null) {
+            if (bonePaletteBuffer.bufferHandle != 0L) vkDestroyBuffer(vkDevice, bonePaletteBuffer.bufferHandle, null);
+            if (bonePaletteBuffer.memoryHandle != 0L) vkFreeMemory(vkDevice, bonePaletteBuffer.memoryHandle, null);
+            bonePaletteBuffer = null;
+            bonePaletteMapped = 0L;
         }
 
         if (groundQuadBuffer != null) {

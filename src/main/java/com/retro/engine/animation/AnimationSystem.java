@@ -16,7 +16,8 @@ public class AnimationSystem {
 
     // Pre-allocated scratchpad matrices and vectors for zero per-frame JVM allocations
     private final float[][] worldBoneTransforms = new float[AnimatorComponent.MAX_BONES][16];
-    private final float[] localScratch = new float[16];
+    private final float[][] localBoneTransforms = new float[AnimatorComponent.MAX_BONES][16];
+    private final boolean[] worldResolved = new boolean[AnimatorComponent.MAX_BONES];
 
     private final float[] posScratchA = new float[3];
     private final float[] quatScratchA = new float[4];
@@ -68,6 +69,7 @@ public class AnimationSystem {
             for (int i = 0; i < boneCount; i++) {
                 Skeleton.BoneNode bone = skeleton.getBone(i);
                 if (bone == null) continue;
+                float[] localScratch = localBoneTransforms[i];
 
                 KeyframeTrack trackA = currentState.clip.getTrack(bone.name);
 
@@ -113,8 +115,6 @@ public class AnimationSystem {
 
                     composeTRS(posBlended, quatBlended, scaleBlended, localScratch);
                 }
-
-                evaluateHierarchyAndPalette(animator, skeleton, bone, i, boneCount);
             }
         } else {
             // 2. Direct Clip Playback Fallback
@@ -127,6 +127,7 @@ public class AnimationSystem {
             for (int i = 0; i < boneCount; i++) {
                 Skeleton.BoneNode bone = skeleton.getBone(i);
                 if (bone == null) continue;
+                float[] localScratch = localBoneTransforms[i];
 
                 KeyframeTrack track = clip.getTrack(bone.name);
                 if (track != null) {
@@ -137,24 +138,41 @@ public class AnimationSystem {
                 } else {
                     System.arraycopy(bone.localBindTransform, 0, localScratch, 0, 16);
                 }
-
-                evaluateHierarchyAndPalette(animator, skeleton, bone, i, boneCount);
             }
         }
 
+        evaluateHierarchyAndPalette(animator, skeleton, boneCount);
         animator.setDirty(true);
     }
 
-    private void evaluateHierarchyAndPalette(AnimatorComponent animator, Skeleton skeleton, Skeleton.BoneNode bone, int boneIndex, int boneCount) {
-        float[] worldMat = worldBoneTransforms[boneIndex];
-        if (bone.parentId >= 0 && bone.parentId < boneCount) {
-            float[] parentWorldMat = worldBoneTransforms[bone.parentId];
-            multiply4x4(parentWorldMat, localScratch, worldMat);
-        } else {
-            System.arraycopy(localScratch, 0, worldMat, 0, 16);
-        }
+    /**
+     * Resolves world transforms parent-first, then writes world * offset into the palette.
+     * Bone indices are not guaranteed to be topologically ordered (bones without skin weights are
+     * appended late by SkeletonImporter), so each bone resolves its parent chain on demand.
+     */
+    private void evaluateHierarchyAndPalette(AnimatorComponent animator, Skeleton skeleton, int boneCount) {
+        for (int i = 0; i < boneCount; i++) worldResolved[i] = false;
 
-        multiply4x4(worldMat, bone.offsetMatrix, animator.bonePaletteMatrices[boneIndex]);
+        for (int i = 0; i < boneCount; i++) {
+            Skeleton.BoneNode bone = skeleton.getBone(i);
+            if (bone == null) continue;
+            resolveWorldTransform(skeleton, i, boneCount);
+            multiply4x4(worldBoneTransforms[i], bone.offsetMatrix, animator.bonePaletteMatrices[i]);
+        }
+    }
+
+    private void resolveWorldTransform(Skeleton skeleton, int boneIndex, int boneCount) {
+        if (worldResolved[boneIndex]) return;
+        worldResolved[boneIndex] = true; // set before recursing so a malformed parent cycle cannot recurse forever
+
+        Skeleton.BoneNode bone = skeleton.getBone(boneIndex);
+        float[] worldMat = worldBoneTransforms[boneIndex];
+        if (bone != null && bone.parentId >= 0 && bone.parentId < boneCount) {
+            resolveWorldTransform(skeleton, bone.parentId, boneCount);
+            multiply4x4(worldBoneTransforms[bone.parentId], localBoneTransforms[boneIndex], worldMat);
+        } else {
+            System.arraycopy(localBoneTransforms[boneIndex], 0, worldMat, 0, 16);
+        }
     }
 
     public static void lerpVector3(float[] a, float[] b, float t, float[] out) {
