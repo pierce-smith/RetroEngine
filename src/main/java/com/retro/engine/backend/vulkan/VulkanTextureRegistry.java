@@ -6,34 +6,17 @@ import org.lwjgl.vulkan.*;
 
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
 
 /**
- * SRP Domain Manager: Owns VkImage, VkImageView, VkSampler allocations,
- * texture path caching, layout transitions, and default fallback texture generation.
+ * SRP Domain Manager: Creates VkImage, VkImageView, VkSampler allocations, layout transitions,
+ * and default fallback texture generation. Registered textures are owned by VulkanGpuCache's handle table.
  */
 public class VulkanTextureRegistry {
 
-    private final Map<String, VulkanGpuCache.VulkanTexture> textureCache = Collections.synchronizedMap(new HashMap<>());
     private VulkanGpuCache.VulkanTexture defaultWhiteTexture = null;
-
-    public VulkanGpuCache.VulkanTexture getOrCreateTexture(VulkanDevice device, String texturePath, byte[] pixels, int width, int height) {
-        if (texturePath == null || pixels == null || pixels.length == 0 || width <= 0 || height <= 0) return null;
-
-        VulkanGpuCache.VulkanTexture existing = textureCache.get(texturePath);
-        if (existing != null) return existing;
-
-        VulkanGpuCache.VulkanTexture created = createTextureFromPixels(device, pixels, width, height);
-        if (created != null) {
-            textureCache.put(texturePath, created);
-        }
-        return created;
-    }
 
     public VulkanGpuCache.VulkanTexture getDefaultWhiteTexture(VulkanDevice device) {
         if (defaultWhiteTexture != null) return defaultWhiteTexture;
@@ -241,15 +224,6 @@ public class VulkanTextureRegistry {
 
     public void cleanup(VkDevice vkDevice) {
         if (vkDevice == null) return;
-        for (VulkanGpuCache.VulkanTexture tex : textureCache.values()) {
-            if (tex != null) {
-                if (tex.imageViewHandle != 0L) vkDestroyImageView(vkDevice, tex.imageViewHandle, null);
-                if (tex.samplerHandle != 0L) vkDestroySampler(vkDevice, tex.samplerHandle, null);
-                if (tex.imageHandle != 0L) vkDestroyImage(vkDevice, tex.imageHandle, null);
-                if (tex.memoryHandle != 0L) vkFreeMemory(vkDevice, tex.memoryHandle, null);
-            }
-        }
-        textureCache.clear();
 
         if (defaultWhiteTexture != null) {
             if (defaultWhiteTexture.imageViewHandle != 0L) vkDestroyImageView(vkDevice, defaultWhiteTexture.imageViewHandle, null);

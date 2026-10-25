@@ -1,5 +1,6 @@
 package com.retro.engine.backend.vulkan;
 
+import com.retro.engine.rhi.HandleRegistry;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.MemoryStack;
@@ -8,9 +9,6 @@ import org.lwjgl.vulkan.*;
 import java.nio.FloatBuffer;
 import java.nio.LongBuffer;
 import java.util.ArrayDeque;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Queue;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
@@ -20,6 +18,7 @@ import static org.lwjgl.vulkan.VK10.*;
  * Service Registry & VRAM Coordinator (SRP Pattern matching EditorWorkspace):
  * Coordinates static VBO mesh buffers, Light UBO allocations, ground shadow quad VBOs,
  * and delegates texture management to VulkanTextureRegistry and dynamic geometry buffering to VulkanRingBuffer.
+ * Registered meshes and textures are owned by opaque-handle tables; command recording resolves them by handle.
  */
 public class VulkanGpuCache {
 
@@ -61,11 +60,22 @@ public class VulkanGpuCache {
     public static class DeferredVulkanResource {
         public final long bufferHandle;
         public final long memoryHandle;
+        public final long imageHandle;
+        public final long imageViewHandle;
+        public final long samplerHandle;
         public final int frameEnqueued;
 
         public DeferredVulkanResource(long bufferHandle, long memoryHandle, int frameEnqueued) {
+            this(bufferHandle, memoryHandle, 0L, 0L, 0L, frameEnqueued);
+        }
+
+        public DeferredVulkanResource(long bufferHandle, long memoryHandle, long imageHandle,
+                                      long imageViewHandle, long samplerHandle, int frameEnqueued) {
             this.bufferHandle = bufferHandle;
             this.memoryHandle = memoryHandle;
+            this.imageHandle = imageHandle;
+            this.imageViewHandle = imageViewHandle;
+            this.samplerHandle = samplerHandle;
             this.frameEnqueued = frameEnqueued;
         }
     }
@@ -85,7 +95,9 @@ public class VulkanGpuCache {
     private final VulkanRingBuffer uiRingBuffer = new VulkanRingBuffer();
     private final VulkanRingBuffer gridRingBuffer = new VulkanRingBuffer();
 
-    private final Map<String, VulkanBuffer> meshCache = Collections.synchronizedMap(new HashMap<>());
+    // Opaque handle tables for registered assets; written from any thread, resolved lock-free during recording
+    private final HandleRegistry<VulkanBuffer> meshHandles = new HandleRegistry<>();
+    private final HandleRegistry<VulkanTexture> textureHandles = new HandleRegistry<>();
     private final Queue<DeferredVulkanResource> deferredDisposalQueue = new ArrayDeque<>();
 
     private VulkanBuffer lightUniformBuffer = null;
@@ -93,7 +105,7 @@ public class VulkanGpuCache {
     private VulkanBuffer bonePaletteBuffer = null;
     private long bonePaletteMapped = 0L;
 
-    private int totalFrameCount = 0;
+    private volatile int totalFrameCount = 0;
 
     public long getUiVertexBuffer() { return uiRingBuffer.getCurrentBufferHandle(); }
     public int getUiVertexCount() { return uiRingBuffer.getVertexCount(); }
@@ -141,8 +153,7 @@ public class VulkanGpuCache {
                 DeferredVulkanResource res = deferredDisposalQueue.peek();
                 if (totalFrameCount - res.frameEnqueued >= RING_SLOTS) {
                     deferredDisposalQueue.poll();
-                    if (res.bufferHandle != 0L) vkDestroyBuffer(vkDevice, res.bufferHandle, null);
-                    if (res.memoryHandle != 0L) vkFreeMemory(vkDevice, res.memoryHandle, null);
+                    destroyDeferred(vkDevice, res);
                 } else {
                     break;
                 }
@@ -150,22 +161,47 @@ public class VulkanGpuCache {
         }
     }
 
-    public VulkanBuffer getOrCreateMeshBuffer(VulkanDevice device, String meshPath, float[] vertices, int vertexCount) {
-        if (meshPath == null || vertices == null || vertices.length == 0 || vertexCount <= 0) return null;
+    private static void destroyDeferred(VkDevice vkDevice, DeferredVulkanResource res) {
+        if (res.imageViewHandle != 0L) vkDestroyImageView(vkDevice, res.imageViewHandle, null);
+        if (res.samplerHandle != 0L) vkDestroySampler(vkDevice, res.samplerHandle, null);
+        if (res.imageHandle != 0L) vkDestroyImage(vkDevice, res.imageHandle, null);
+        if (res.bufferHandle != 0L) vkDestroyBuffer(vkDevice, res.bufferHandle, null);
+        if (res.memoryHandle != 0L) vkFreeMemory(vkDevice, res.memoryHandle, null);
+    }
 
-        VulkanBuffer existing = meshCache.get(meshPath);
-        if (existing != null) return existing;
+    /** Uploads a static VBO once (or returns the live handle for assetKey). Thread-safe. */
+    public long registerMesh(VulkanDevice device, String assetKey, float[] vertices, int vertexCount) {
+        if (vertices == null || vertexCount <= 0 || vertices.length < vertexCount) return HandleRegistry.NULL_HANDLE;
+        return meshHandles.register(assetKey, () -> createHostVisibleBuffer(device, vertices, vertices.length / vertexCount));
+    }
 
-        VulkanBuffer created = createHostVisibleBuffer(device, vertices, vertices.length / vertexCount);
-        if (created != null) {
-            meshCache.put(meshPath, created);
+    /** Uploads image data into a VkImage + VkImageView + VkSampler once (or returns the live handle). Thread-safe. */
+    public long registerTexture(VulkanDevice device, String assetKey, byte[] pixels, int width, int height) {
+        if (pixels == null || width <= 0 || height <= 0 || pixels.length < width * height * 4) return HandleRegistry.NULL_HANDLE;
+        return textureHandles.register(assetKey, () -> textureRegistry.createTextureFromPixels(device, pixels, width, height));
+    }
+
+    public void unregisterMesh(long meshHandle) {
+        VulkanBuffer buf = meshHandles.remove(meshHandle);
+        if (buf == null) return;
+        synchronized (deferredDisposalQueue) {
+            deferredDisposalQueue.add(new DeferredVulkanResource(buf.bufferHandle, buf.memoryHandle, totalFrameCount));
         }
-        return created;
     }
 
-    public VulkanTexture getOrCreateTexture(VulkanDevice device, String texturePath, byte[] pixels, int width, int height) {
-        return textureRegistry.getOrCreateTexture(device, texturePath, pixels, width, height);
+    public void unregisterTexture(long textureHandle) {
+        VulkanTexture tex = textureHandles.remove(textureHandle);
+        if (tex == null) return;
+        synchronized (deferredDisposalQueue) {
+            deferredDisposalQueue.add(new DeferredVulkanResource(0L, tex.memoryHandle, tex.imageHandle,
+                    tex.imageViewHandle, tex.samplerHandle, totalFrameCount));
+        }
     }
+
+    /** Allocation-free handle lookup for command recording; null for 0L, stale, or unregistered handles. */
+    public VulkanBuffer getMesh(long meshHandle) { return meshHandles.get(meshHandle); }
+
+    public VulkanTexture getTexture(long textureHandle) { return textureHandles.get(textureHandle); }
 
     public VulkanTexture getDefaultWhiteTexture(VulkanDevice device) {
         return textureRegistry.getDefaultWhiteTexture(device);
@@ -419,7 +455,9 @@ public class VulkanGpuCache {
                         .sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
                         .pCommandBuffers(stack.pointers(stc.cmd));
 
-                vkQueueSubmit(device.getGraphicsQueue(), submitInfo, fence);
+                synchronized (device.getQueueLock()) {
+                    vkQueueSubmit(device.getGraphicsQueue(), submitInfo, fence);
+                }
                 vkWaitForFences(vkDevice, fence, true, 1000000000L);
                 vkDestroyFence(vkDevice, fence, null);
             } else {
@@ -427,8 +465,10 @@ public class VulkanGpuCache {
                         .sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
                         .pCommandBuffers(stack.pointers(stc.cmd));
 
-                vkQueueSubmit(device.getGraphicsQueue(), submitInfo, VK_NULL_HANDLE);
-                vkQueueWaitIdle(device.getGraphicsQueue());
+                synchronized (device.getQueueLock()) {
+                    vkQueueSubmit(device.getGraphicsQueue(), submitInfo, VK_NULL_HANDLE);
+                    vkQueueWaitIdle(device.getGraphicsQueue());
+                }
             }
 
             if (stc.pool != 0L) {
@@ -460,13 +500,24 @@ public class VulkanGpuCache {
         uiRingBuffer.cleanup(vkDevice);
         gridRingBuffer.cleanup(vkDevice);
 
-        for (VulkanBuffer buf : meshCache.values()) {
-            if (buf != null) {
-                if (buf.bufferHandle != 0L) vkDestroyBuffer(vkDevice, buf.bufferHandle, null);
-                if (buf.memoryHandle != 0L) vkFreeMemory(vkDevice, buf.memoryHandle, null);
+        meshHandles.clear(buf -> {
+            if (buf.bufferHandle != 0L) vkDestroyBuffer(vkDevice, buf.bufferHandle, null);
+            if (buf.memoryHandle != 0L) vkFreeMemory(vkDevice, buf.memoryHandle, null);
+        });
+        textureHandles.clear(tex -> {
+            if (tex.imageViewHandle != 0L) vkDestroyImageView(vkDevice, tex.imageViewHandle, null);
+            if (tex.samplerHandle != 0L) vkDestroySampler(vkDevice, tex.samplerHandle, null);
+            if (tex.imageHandle != 0L) vkDestroyImage(vkDevice, tex.imageHandle, null);
+            if (tex.memoryHandle != 0L) vkFreeMemory(vkDevice, tex.memoryHandle, null);
+        });
+
+        // Device is idle at shutdown, so anything still awaiting deferred disposal can be destroyed now
+        synchronized (deferredDisposalQueue) {
+            DeferredVulkanResource res;
+            while ((res = deferredDisposalQueue.poll()) != null) {
+                destroyDeferred(vkDevice, res);
             }
         }
-        meshCache.clear();
 
         if (lightUniformBuffer != null) {
             if (lightUniformBuffer.bufferHandle != 0L) vkDestroyBuffer(vkDevice, lightUniformBuffer.bufferHandle, null);

@@ -183,7 +183,9 @@ public class VulkanBackend implements IRenderBackend {
                     .pCommandBuffers(stack.pointers(cmd))
                     .pSignalSemaphores(stack.longs(queueSubmitter.getRenderFinishedSemaphore()));
 
-            vkQueueSubmit(deviceManager.getGraphicsQueue(), submitInfo, queueSubmitter.getInFlightFence());
+            synchronized (deviceManager.getQueueLock()) {
+                vkQueueSubmit(deviceManager.getGraphicsQueue(), submitInfo, queueSubmitter.getInFlightFence());
+            }
         }
     }
 
@@ -197,7 +199,9 @@ public class VulkanBackend implements IRenderBackend {
     public void shutdown() {
         VkDevice device = deviceManager.getDevice();
         if (device != null) {
-            vkDeviceWaitIdle(device);
+            synchronized (deviceManager.getQueueLock()) {
+                vkDeviceWaitIdle(device);
+            }
         }
 
         queueSubmitter.cleanup(deviceManager);
@@ -240,12 +244,22 @@ public class VulkanBackend implements IRenderBackend {
     @Override public void clearSceneQueue() { activeSceneQueueCount = 0; }
 
     @Override
-    public void submitEntity(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float reflectionStrength) {
-        submitEntity(meshPath, vertices, vertexCount, texturePath, pixels, texW, texH, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, reflectionStrength, null);
+    public long registerMesh(String assetKey, float[] vertices, int vertexCount) {
+        return gpuCache.registerMesh(deviceManager, assetKey, vertices, vertexCount);
     }
 
     @Override
-    public void submitEntity(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float reflectionStrength, float[][] bonePalette) {
+    public long registerTexture(String assetKey, byte[] pixels, int width, int height) {
+        return gpuCache.registerTexture(deviceManager, assetKey, pixels, width, height);
+    }
+
+    @Override public void unregisterMesh(long meshHandle) { gpuCache.unregisterMesh(meshHandle); }
+    @Override public void unregisterTexture(long textureHandle) { gpuCache.unregisterTexture(textureHandle); }
+
+    @Override
+    public void submitEntity(long meshHandle, long textureHandle, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float reflectionStrength, float[][] bonePalette) {
+        if (meshHandle == 0L) return;
+
         VulkanPassEncoder.RenderEntity item;
         if (activeSceneQueueCount < sceneQueuePool.size()) {
             item = sceneQueuePool.get(activeSceneQueueCount);
@@ -255,48 +269,14 @@ public class VulkanBackend implements IRenderBackend {
         }
         activeSceneQueueCount++;
 
-        if (meshPath != null && vertices != null && vertices.length > 0) {
-            VulkanGpuCache.VulkanBuffer vbo = gpuCache.getOrCreateMeshBuffer(deviceManager, meshPath, vertices, vertexCount);
-            if (vbo != null) {
-                item.vertexBufferHandle = vbo.bufferHandle;
-                item.vertexCount = vbo.vertexCount > 0 ? vbo.vertexCount : vertexCount;
-                item.stride = vbo.floatStride;
-            } else {
-                item.vertexBufferHandle = 0L;
-                item.vertexCount = vertexCount;
-                item.stride = 22;
-            }
-        } else {
-            item.vertexBufferHandle = 0L;
-            item.vertexCount = vertexCount;
-            item.stride = 22;
-        }
+        item.meshHandle = meshHandle;
+        item.textureHandle = textureHandle;
         item.bonePalette = bonePalette;
-
-        if (texturePath != null && pixels != null && pixels.length > 0 && texW > 0 && texH > 0) {
-            VulkanGpuCache.VulkanTexture tex = gpuCache.getOrCreateTexture(deviceManager, texturePath, pixels, texW, texH);
-            if (tex != null) {
-                item.textureHandle = tex.imageViewHandle;
-                item.hasTexture = true;
-            } else {
-                item.textureHandle = 0L;
-                item.hasTexture = false;
-            }
-        } else {
-            item.textureHandle = 0L;
-            item.hasTexture = false;
-        }
-
         item.px = px; item.py = py; item.pz = pz;
         item.rx = rx; item.ry = ry; item.rz = rz;
         item.sx = sx; item.sy = sy; item.sz = sz;
         item.groundY = groundY;
         item.reflectionStrength = reflectionStrength;
-    }
-
-    @Override
-    public void submitEntity(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
-        submitEntity(meshPath, vertices, vertexCount, texturePath, pixels, texW, texH, px, py, pz, rx, ry, rz, sx, sy, sz, 0.0f, 0.0f);
     }
 
     @Override public long createBuffer(BufferDesc createInfo) { return 101L; }

@@ -20,21 +20,16 @@ import static org.lwjgl.vulkan.KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
  */
 public class VulkanPassEncoder {
 
+    /** One queued draw. Mesh and texture are opaque VulkanGpuCache handles, resolved during command recording. */
     public static class RenderEntity {
-        public long vertexBufferHandle;
-        public int vertexCount;
+        public long meshHandle;
         public long textureHandle;
-        public boolean hasTexture;
         public float px, py, pz;
         public float rx, ry, rz;
         public float sx, sy, sz;
         public float groundY = 0.0f;
         public float reflectionStrength = 0.0f;
-        public int stride = 22;
         public float[][] bonePalette = null;
-
-        public long getVertexBufferHandle() { return vertexBufferHandle; }
-        public long getTextureHandle() { return textureHandle; }
     }
 
     // Reusable scratchpad arrays for zero-allocation frame loops
@@ -161,12 +156,13 @@ public class VulkanPassEncoder {
 
                 for (int i = 0; i < sceneQueueCount; i++) {
                     RenderEntity entity = sceneQueue.get(i);
-                    long vboHandle = entity.getVertexBufferHandle();
-                    if (vboHandle == 0L || entity.vertexCount <= 0) continue;
+                    VulkanGpuCache.VulkanBuffer mesh = gpuCache.getMesh(entity.meshHandle);
+                    if (mesh == null || mesh.bufferHandle == 0L || mesh.vertexCount <= 0) continue;
+                    long vboHandle = mesh.bufferHandle;
 
                     // 30-float buffers must go through the 120-byte skinned pipeline; without a palette or a free
                     // slot they still draw there against an identity-seeded slot rather than misreading the stride.
-                    boolean skinnedLayout = entity.stride >= 30;
+                    boolean skinnedLayout = mesh.floatStride >= 30;
                     if (skinnedLayout && (skinnedPipeline == 0L || bonePaletteBuf == null)) continue;
 
                     int paletteSlot = 0;
@@ -193,7 +189,8 @@ public class VulkanPassEncoder {
 
                             VkDescriptorBufferInfo.Buffer bufferInfo = VkDescriptorBufferInfo.calloc(1, stack).buffer(lightUbo.bufferHandle).offset(0).range(512);
 
-                            long activeTexView = (entity.hasTexture && entity.getTextureHandle() != 0L) ? entity.getTextureHandle() : whiteTex.imageViewHandle;
+                            VulkanGpuCache.VulkanTexture entityTex = gpuCache.getTexture(entity.textureHandle);
+                            long activeTexView = (entityTex != null && entityTex.imageViewHandle != 0L) ? entityTex.imageViewHandle : whiteTex.imageViewHandle;
 
                             VkDescriptorImageInfo.Buffer imageInfoTex = VkDescriptorImageInfo.calloc(1, stack).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(activeTexView).sampler(whiteTex.samplerHandle);
                             VkDescriptorImageInfo.Buffer imageInfoShadow = VkDescriptorImageInfo.calloc(1, stack).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(whiteTex.imageViewHandle).sampler(whiteTex.samplerHandle);
@@ -236,7 +233,7 @@ public class VulkanPassEncoder {
                     LongBuffer pBuffers = stack.longs(vboHandle);
                     LongBuffer pOffsets = stack.longs(0L);
                     vkCmdBindVertexBuffers(cmd, 0, pBuffers, pOffsets);
-                    vkCmdDraw(cmd, entity.vertexCount, 1, 0, 0);
+                    vkCmdDraw(cmd, mesh.vertexCount, 1, 0, 0);
                 }
             }
 

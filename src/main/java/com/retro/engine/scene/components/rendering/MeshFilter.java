@@ -22,6 +22,22 @@ public class MeshFilter implements Component {
 
     public String[] subMeshPaths = new String[0];
 
+    // Runtime-only GPU handle cache filled by SceneRenderPipeline; never serialized or shown in the inspector
+    private transient long gpuMeshHandle = 0L;
+    private transient String gpuMeshKey;
+    private transient int gpuHandleEpoch;
+
+    /** Returns the cached GPU mesh handle if it was resolved for this path in this epoch, otherwise 0L. */
+    public long getCachedMeshHandle(String path, int epoch) {
+        return (gpuMeshHandle != 0L && epoch == gpuHandleEpoch && path.equals(gpuMeshKey)) ? gpuMeshHandle : 0L;
+    }
+
+    public void cacheMeshHandle(String path, long handle, int epoch) {
+        this.gpuMeshKey = path;
+        this.gpuMeshHandle = handle;
+        this.gpuHandleEpoch = epoch;
+    }
+
     public MeshFilter(String meshAssetPath) {
         this.meshAssetPath = meshAssetPath;
     }

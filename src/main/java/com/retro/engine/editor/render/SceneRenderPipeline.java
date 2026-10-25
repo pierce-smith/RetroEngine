@@ -3,7 +3,6 @@ package com.retro.engine.editor.render;
 import com.retro.engine.assets.AssetStreamer;
 import com.retro.engine.assets.importers.MeshBufferData;
 import com.retro.engine.assets.importers.MeshImporter;
-import com.retro.engine.assets.importers.PixelBufferData;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.ui.dock.DockPanel;
@@ -27,6 +26,8 @@ import java.util.List;
  * through a vendor-agnostic IRenderBackend contract.
  * Fully decoupled from EditorWorkspace via thread-safe RenderSceneSnapshot structures with zero per-frame heap allocations
  * using an auto-expanding descriptor pool and pooled LightDescriptor state.
+ * Geometry and textures are referenced by opaque GPU handles registered through AssetStreamer;
+ * no vertex or pixel arrays cross the RHI boundary per frame.
  */
 public class SceneRenderPipeline {
 
@@ -63,12 +64,8 @@ public class SceneRenderPipeline {
     }
 
     public record RenderEntityDescriptor(
-            String submitKey,
-            float[] vertices,
-            int vertexCount,
-            String texturePath,
-            byte[] pixels,
-            int texW, int texH,
+            long meshHandle,
+            long textureHandle,
             float px, float py, float pz,
             float rx, float ry, float rz,
             float sx, float sy, float sz,
@@ -78,12 +75,8 @@ public class SceneRenderPipeline {
     ) {}
 
     public static class MutableRenderEntityDescriptor {
-        public String submitKey;
-        public float[] vertices;
-        public int vertexCount;
-        public String texturePath;
-        public byte[] pixels;
-        public int texW, texH;
+        public long meshHandle;
+        public long textureHandle;
         public float px, py, pz;
         public float rx, ry, rz;
         public float sx, sy, sz;
@@ -91,16 +84,11 @@ public class SceneRenderPipeline {
         public float reflectVal;
         public float[][] bonePalette;
 
-        public void set(String submitKey, float[] vertices, int vertexCount, String texturePath,
-                        byte[] pixels, int texW, int texH, float px, float py, float pz,
+        public void set(long meshHandle, long textureHandle, float px, float py, float pz,
                         float rx, float ry, float rz, float sx, float sy, float sz,
                         float groundY, float reflectVal, float[][] bonePalette) {
-            this.submitKey = submitKey;
-            this.vertices = vertices;
-            this.vertexCount = vertexCount;
-            this.texturePath = texturePath;
-            this.pixels = pixels;
-            this.texW = texW; this.texH = texH;
+            this.meshHandle = meshHandle;
+            this.textureHandle = textureHandle;
             this.px = px; this.py = py; this.pz = pz;
             this.rx = rx; this.ry = ry; this.rz = rz;
             this.sx = sx; this.sy = sy; this.sz = sz;
@@ -161,6 +149,7 @@ public class SceneRenderPipeline {
     };
     private int snapshotBufferIndex = 0;
 
+    private static final String FALLBACK_CUBE_KEY = "[FALLBACK_CUBE]";
     private final MeshBufferData fallbackCube = MeshImporter.createDefaultCube();
     private final FrustumCuller frustumCuller = new FrustumCuller();
 
@@ -186,6 +175,7 @@ public class SceneRenderPipeline {
         }
 
         List<Entity> entities = editorManager.getSceneEntities();
+        int handleEpoch = streamingService.getHandleEpoch();
         int totalActiveVertices = 0;
         int entityDrawCalls = 0;
 
@@ -256,31 +246,31 @@ public class SceneRenderPipeline {
 
                     MeshBufferData model = streamingService.getModel(meshPath);
 
-                    byte[] pixels = null;
-                    int texW = 0, texH = 0;
-                    if (texturePath != null) {
-                        PixelBufferData tex = streamingService.getTexture(texturePath);
-                        if (tex != null) {
-                            pixels = tex.pixels;
-                            texW = tex.width;
-                            texH = tex.height;
-                        }
-                    }
-
-                    String submitKey;
-                    float[] verticesToSubmit;
+                    long meshHandle;
                     int vertexCountToSubmit;
 
                     if (model != null && model.vertices != null && model.vertices.length > 0) {
-                        submitKey = meshPath;
-                        verticesToSubmit = model.vertices;
+                        meshHandle = mc.getCachedMeshHandle(meshPath, handleEpoch);
+                        if (meshHandle == 0L) {
+                            meshHandle = streamingService.getMeshHandle(meshPath);
+                            mc.cacheMeshHandle(meshPath, meshHandle, handleEpoch);
+                        }
                         vertexCountToSubmit = model.vertexCount;
                     } else if (streamingService.isMeshLoaded(meshPath)) {
-                        submitKey = "[FALLBACK_CUBE]";
-                        verticesToSubmit = fallbackCube.vertices;
+                        meshHandle = streamingService.resolveMeshHandle(FALLBACK_CUBE_KEY, fallbackCube);
                         vertexCountToSubmit = fallbackCube.vertexCount;
                     } else {
                         continue;
+                    }
+
+                    // 0L handles (headless/null backends) are still submitted so entity counts stay consistent
+                    long textureHandle = 0L;
+                    if (texturePath != null && mat != null) {
+                        textureHandle = mat.getCachedTextureHandle(texturePath, handleEpoch);
+                        if (textureHandle == 0L) {
+                            textureHandle = streamingService.getTextureHandle(texturePath);
+                            mat.cacheTextureHandle(texturePath, textureHandle, handleEpoch);
+                        }
                     }
 
                     totalActiveVertices += vertexCountToSubmit;
@@ -292,8 +282,7 @@ public class SceneRenderPipeline {
 
                     MutableRenderEntityDescriptor desc = snapshot.obtainDescriptor(snapshot.activeEntityCount);
                     desc.set(
-                            submitKey, verticesToSubmit, vertexCountToSubmit,
-                            texturePath, pixels, texW, texH,
+                            meshHandle, textureHandle,
                             wt.px(), wt.py(), wt.pz(),
                             wt.rx(), wt.ry(), wt.rz(),
                             wt.sx(), wt.sy(), wt.sz(),
@@ -357,8 +346,7 @@ public class SceneRenderPipeline {
         for (int i = 0; i < snapshot.activeEntityCount; i++) {
             MutableRenderEntityDescriptor e = snapshot.pooledEntities.get(i);
             rhi.submitEntity(
-                    e.submitKey, e.vertices, e.vertexCount,
-                    e.texturePath, e.pixels, e.texW, e.texH,
+                    e.meshHandle, e.textureHandle,
                     e.px, e.py, e.pz, e.rx, e.ry, e.rz, e.sx, e.sy, e.sz,
                     e.groundY, e.reflectVal, e.bonePalette
             );
@@ -366,8 +354,7 @@ public class SceneRenderPipeline {
 
         for (RenderEntityDescriptor e : snapshot.entities) {
             rhi.submitEntity(
-                    e.submitKey(), e.vertices(), e.vertexCount(),
-                    e.texturePath(), e.pixels(), e.texW(), e.texH(),
+                    e.meshHandle(), e.textureHandle(),
                     e.px(), e.py(), e.pz(), e.rx(), e.ry(), e.rz(), e.sx(), e.sy(), e.sz(),
                     e.groundY(), e.reflectVal(), e.bonePalette()
             );
