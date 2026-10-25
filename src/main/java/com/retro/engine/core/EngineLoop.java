@@ -11,12 +11,13 @@ import com.retro.engine.rhi.IRenderBackend;
  * EngineLoop manages sub-millisecond frame pacing, GLFW event polling,
  * delta time smoothing via rolling history window, camera state synchronization,
  * double-buffered command flushing, and RHI rendering ticks at a rock-solid 60 FPS.
- * Tightened spin-wait threshold and frame-delta snapping prevent thread-sleep overshoots.
+ * Each frame sleeps for the bulk of its remaining budget, then spin-waits the final
+ * sub-millisecond remainder; subsystems receive the true, un-clamped frame delta.
  */
 public class EngineLoop {
 
     private static final long TARGET_FRAME_TIME_NS = 16_666_667L; // 60 FPS
-    private static final float MAX_FRAME_TIME = 0.1f;
+    private static final long SLEEP_THRESHOLD_NS = 2_000_000L;
 
     private static final int SMOOTHING_SAMPLES = 8;
     private final float[] deltaHistory = new float[SMOOTHING_SAMPLES];
@@ -39,31 +40,21 @@ public class EngineLoop {
         SceneRenderPipeline renderSubmitter = context.getRenderSubmitter();
         IRenderBackend rhi = context.getRhi();
 
-        long targetNextFrameNs = System.nanoTime();
-        long lastTimeNs = System.nanoTime();
+        long lastFrameStartNs = System.nanoTime();
 
         while (window != null && !window.shouldClose()) {
+            long frameStartNs = System.nanoTime();
+            float frameDelta = (frameStartNs - lastFrameStartNs) / 1_000_000_000.0f;
+            lastFrameStartNs = frameStartNs;
+
             window.pollEvents();
 
-            long currentTimeNs = System.nanoTime();
-            float rawDeltaTime = (currentTimeNs - lastTimeNs) / 1_000_000_000.0f;
-            lastTimeNs = currentTimeNs;
-
-            // Clamp raw delta time to guard against focus loss / window drag spikes
-            float clampedDelta = Math.min(Math.max(rawDeltaTime, 0.0001f), MAX_FRAME_TIME);
-
-            // Calculate smoothed delta time via 8-frame rolling window average
-            deltaHistory[deltaIndex] = clampedDelta;
+            // Rolling 8-frame history of the true, un-clamped frame delta
+            deltaHistory[deltaIndex] = frameDelta;
             deltaIndex = (deltaIndex + 1) % SMOOTHING_SAMPLES;
             if (deltaIndex == 0) historyFilled = true;
 
             float smoothedDelta = calculateSmoothedDelta();
-
-            // Direct frame delta: use clampedDelta snapped to 60Hz if within 2% to match display flips exactly
-            float frameDelta = clampedDelta;
-            if (Math.abs(clampedDelta - (1.0f / 60.0f)) < 0.0005f) {
-                frameDelta = 1.0f / 60.0f;
-            }
 
             // 0. Double-Buffered Transactional Editor Command Flush at Frame Boundary
             if (editorManager != null && editorManager.getCommandHistory() != null) {
@@ -110,27 +101,19 @@ public class EngineLoop {
             }
 
             // --- Sub-Millisecond Precision Frame Pacing Loop ---
-            targetNextFrameNs += TARGET_FRAME_TIME_NS;
-            long nowNs = System.nanoTime();
-
-            // If behind schedule by more than 2 frames, resync anchor target to prevent catch-up spiral
-            if (nowNs > targetNextFrameNs + (TARGET_FRAME_TIME_NS * 2)) {
-                targetNextFrameNs = nowNs;
-            }
-
-            long sleepNs = targetNextFrameNs - nowNs;
-            if (sleepNs > 0) {
-                long sleepMs = sleepNs / 1_000_000L;
-                // Sleep only if remaining time > 4ms, with 3ms safety margin to eliminate OS thread-sleep overshoots
-                if (sleepMs > 4) {
+            long remainingNs = TARGET_FRAME_TIME_NS - (System.nanoTime() - frameStartNs);
+            if (remainingNs > 0) {
+                // Sleep through the bulk of the wait, leaving at least 1ms for the spin to absorb OS sleep overshoot
+                if (remainingNs > SLEEP_THRESHOLD_NS) {
                     try {
-                        Thread.sleep(sleepMs - 3);
+                        Thread.sleep(remainingNs / 1_000_000L - 1);
                     } catch (InterruptedException ignored) {
                         Thread.currentThread().interrupt();
                     }
                 }
-                // High-precision spin-wait for remaining sub-millisecond duration
-                while (System.nanoTime() < targetNextFrameNs) {
+                // High-precision spin-wait for the remaining sub-millisecond duration
+                long frameDeadlineNs = frameStartNs + TARGET_FRAME_TIME_NS;
+                while (System.nanoTime() < frameDeadlineNs) {
                     Thread.onSpinWait();
                 }
             }
