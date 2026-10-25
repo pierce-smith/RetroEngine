@@ -215,6 +215,9 @@ public class EntitySpawner {
                         animator.currentClip = result.animations().get(0);
                         animator.activeClipName = animator.currentClip.name;
                         controller.setInitialState(result.animations().get(0).name);
+                        // Auto-play the entry clip as soon as the rig finishes loading
+                        animator.playbackTime = 0.0f;
+                        animator.isPlaying = true;
                     }
                 }
             }

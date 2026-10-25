@@ -42,8 +42,8 @@ public class AnimatorGraphPanel {
     public static boolean handleMouseClick(float ndcX, float ndcY, int button, int action, EditorWorkspace manager) {
         if (manager == null) return false;
 
-        // 1. Route to Parameters Sidebar
-        if (AnimatorParametersDelegate.handleParametersClick(ndcX, ndcY, manager.getActiveAnimatorController())) {
+        // 1. Route to Parameters Sidebar (left press only; it has no button discrimination of its own)
+        if (button == 0 && action == 1 && AnimatorParametersDelegate.handleParametersClick(ndcX, ndcY, manager.getActiveAnimatorController())) {
             return true;
         }
 

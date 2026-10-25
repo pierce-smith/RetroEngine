@@ -197,17 +197,67 @@ public class SceneWorld {
     }
 
     public void play() {
+        boolean enteringPlayMode = simulationEngine.getPlayState() == PlayState.EDITING;
         simulationEngine.play(sceneEntities);
+        syncAnimationPlayState();
+        if (enteringPlayMode) enterAnimatorEntryStates();
     }
 
     public void pause() {
         simulationEngine.pause();
+        syncAnimationPlayState();
+    }
+
+    /** Animation follows the simulation's play state: it only ticks while SIMULATING. */
+    private void syncAnimationPlayState() {
+        animationEngine.setPlayState(simulationEngine.getPlayState());
     }
 
     public void stop() {
+        boolean leavingPlayMode = simulationEngine.getPlayState() != PlayState.EDITING;
         List<Entity> restored = simulationEngine.stop(sceneEntities);
+        syncAnimationPlayState();
         if (restored != null) {
             clearRegistryAndRebind(restored);
+        }
+        if (leavingPlayMode) stopAnimators();
+    }
+
+    /** Restarts every animator from its controller's Entry State (resuming from Pause does not call this). */
+    private void enterAnimatorEntryStates() {
+        for (int i = 0; i < sceneEntities.size(); i++) {
+            Entity e = sceneEntities.get(i);
+            if (e == null) continue;
+            AnimatorComponent animator = e.getComponent(AnimatorComponent.class);
+            if (animator != null) animationEngine.enterEntryState(animator);
+        }
+    }
+
+    /** Halts every animator, rewinds it to its Entry State, and snaps its mesh back to the bind pose. */
+    private void stopAnimators() {
+        for (int i = 0; i < sceneEntities.size(); i++) {
+            Entity e = sceneEntities.get(i);
+            if (e == null) continue;
+            AnimatorComponent animator = e.getComponent(AnimatorComponent.class);
+            if (animator != null) animationEngine.stop(animator);
+        }
+    }
+
+    /**
+     * Animators are not serialized, so after a scene load rigged meshes would otherwise sit unanimated
+     * until selected in the editor. Rebuild their skeleton/controller from the mesh asset and arm the
+     * Entry State at frame 0 in the bind pose; the clip starts when Play is pressed.
+     */
+    private void attachAndArmAnimators() {
+        for (int i = 0; i < sceneEntities.size(); i++) {
+            Entity e = sceneEntities.get(i);
+            if (e == null) continue;
+            String meshPath = e.getMeshAssetPath();
+            if (e.getComponent(AnimatorComponent.class) == null && meshPath != null && !meshPath.trim().isEmpty()) {
+                EntitySpawner.attachAnimatorIfRigged(e, meshPath);
+            }
+            AnimatorComponent animator = e.getComponent(AnimatorComponent.class);
+            if (animator != null) animationEngine.armEntryState(animator);
         }
     }
 
@@ -250,6 +300,7 @@ public class SceneWorld {
 
     public void update(float deltaTime) {
         simulationEngine.update(deltaTime, sceneEntities);
+        syncAnimationPlayState();
         
         // Per-frame Skeletal Animation Keyframe Sampling & Pose Matrix Palette Evaluation
         if (sceneEntities != null) {
@@ -460,6 +511,7 @@ public class SceneWorld {
         SceneSerializer.SceneLoadData data = SceneSerializer.loadSceneData(sanitized, assetDb);
         List<Entity> loadedEntities = (data != null && data.entities() != null) ? data.entities() : new ArrayList<>();
         clearRegistryAndRebind(loadedEntities);
+        attachAndArmAnimators();
         if (!sceneEntities.isEmpty()) {
             selectEntity(sceneEntities.get(0));
         }

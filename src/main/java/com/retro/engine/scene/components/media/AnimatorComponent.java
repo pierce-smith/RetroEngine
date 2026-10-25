@@ -28,6 +28,9 @@ public class AnimatorComponent implements Component {
 
     private boolean dirty = true;
 
+    // Runtime: true while the palette holds the skeleton's rest pose, so idle animators skip re-evaluation
+    public boolean bindPoseApplied = false;
+
     public AnimatorComponent() {
         initIdentityPalette();
     }

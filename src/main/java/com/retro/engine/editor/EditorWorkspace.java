@@ -105,6 +105,7 @@ public class EditorWorkspace {
 
     public String getSelectedStateName() { return selectedStateName; }
     public void setSelectedStateName(String name) { if (name != null) this.selectedStateName = name; }
+    public void clearAnimatorSelection() { this.selectedStateName = null; this.selectedTransition = null; }
 
     public AnimatorController getActiveAnimatorController() {
         Entity selected = sceneManager.getSelectedEntity();

@@ -239,6 +239,9 @@ public class OverlaySystem {
                 items.add(new MenuItem("Deselect All", () -> manager.selectEntity(null)));
             }
 
+        } else if (region == PanelRegion.VIEWPORT && manager.getActiveWorkspaceTab() == EditorWorkspace.WorkspaceTab.ANIMATOR) {
+            // Animator graph canvas owns this region; its menu is opened on press by AnimatorCanvasDelegate
+            return;
         } else if (region == PanelRegion.VIEWPORT) {
             Entity bestEntity = null;
             float bestDistSq = Float.MAX_VALUE;

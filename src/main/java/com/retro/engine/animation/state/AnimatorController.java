@@ -16,6 +16,7 @@ public class AnimatorController {
     private final Map<String, AnimatorState> states = new LinkedHashMap<>();
     private final Map<String, AnimatorParameter> parameters = new LinkedHashMap<>();
 
+    private AnimatorState entryState = null;
     private AnimatorState currentState = null;
     private AnimatorState targetState = null;
 
@@ -74,22 +75,68 @@ public class AnimatorController {
         addState(runState);
         addState(jumpState);
 
-        currentState = idleState;
+        setEntryState("Idle");
     }
 
     public void clearStates() {
         states.clear();
+        entryState = null;
         currentState = null;
         targetState = null;
+        transitioning = false;
     }
 
     public void addState(AnimatorState state) {
         if (state == null || state.name == null) return;
         states.put(state.name, state);
+        if (entryState == null) entryState = state;
         if (currentState == null) {
             currentState = state;
             currentStateTime = 0.0f;
         }
+    }
+
+    /**
+     * Removes a state and every transition targeting it. If the removed state was the entry,
+     * current, or crossfade target, the controller falls back to the first remaining state.
+     */
+    public boolean removeState(String name) {
+        AnimatorState removed = states.remove(name);
+        if (removed == null) return false;
+
+        for (AnimatorState state : states.values()) {
+            state.transitions.removeIf(t -> name.equals(t.destinationStateName));
+        }
+
+        AnimatorState fallback = states.isEmpty() ? null : states.values().iterator().next();
+        if (entryState == removed) entryState = fallback;
+        if (targetState == removed) {
+            targetState = null;
+            targetStateTime = 0.0f;
+            transitioning = false;
+            crossfadeTimer = 0.0f;
+        }
+        if (currentState == removed) {
+            if (transitioning && targetState != null) {
+                currentState = targetState;
+                currentStateTime = targetStateTime;
+                targetState = null;
+                transitioning = false;
+                crossfadeTimer = 0.0f;
+            } else {
+                currentState = entryState;
+                currentStateTime = 0.0f;
+            }
+        }
+        return true;
+    }
+
+    /** Returns base, or base suffixed with the lowest free index, so state keys never collide. */
+    public String uniqueStateName(String base) {
+        if (!states.containsKey(base)) return base;
+        int suffix = 1;
+        while (states.containsKey(base + " " + suffix)) suffix++;
+        return base + " " + suffix;
     }
 
     public AnimatorState getState(String name) {
@@ -101,12 +148,31 @@ public class AnimatorController {
     }
 
     public void setInitialState(String name) {
+        setEntryState(name);
+        resetToEntryState();
+    }
+
+    /** Designates the default state entered on Play. Does not interrupt the running state. */
+    public boolean setEntryState(String name) {
         AnimatorState state = states.get(name);
-        if (state != null) {
-            currentState = state;
-            currentStateTime = 0.0f;
-            transitioning = false;
-        }
+        if (state == null) return false;
+        entryState = state;
+        return true;
+    }
+
+    public AnimatorState getEntryState() {
+        return entryState;
+    }
+
+    /** Hard-resets runtime playback to the entry state, cancelling any crossfade. */
+    public void resetToEntryState() {
+        if (entryState == null && !states.isEmpty()) entryState = states.values().iterator().next();
+        currentState = entryState;
+        currentStateTime = 0.0f;
+        targetState = null;
+        targetStateTime = 0.0f;
+        crossfadeTimer = 0.0f;
+        transitioning = false;
     }
 
     // --- Parameter Mutators ---
@@ -159,10 +225,11 @@ public class AnimatorController {
     public void update(float deltaTime) {
         if (currentState == null) return;
 
-        currentStateTime += deltaTime * currentState.speed;
+        // Looping states wrap, single-shot states freeze at their terminal frame
+        currentStateTime = currentState.boundStateTime(currentStateTime + deltaTime * currentState.speed, this);
 
         if (transitioning && targetState != null) {
-            targetStateTime += deltaTime * targetState.speed;
+            targetStateTime = targetState.boundStateTime(targetStateTime + deltaTime * targetState.speed, this);
             crossfadeTimer += deltaTime;
 
             if (crossfadeTimer >= crossfadeDuration) {
@@ -177,8 +244,8 @@ public class AnimatorController {
         }
 
         // Evaluate outgoing transitions if not already crossfading
-        if (!transitioning && currentState.clip != null) {
-            float normalizedTime = currentState.clip.normalizeTime(currentStateTime);
+        if (!transitioning) {
+            float normalizedTime = currentState.getNormalizedTime(currentStateTime, this);
 
             for (AnimatorTransition transition : currentState.transitions) {
                 if (transition.canTransition(normalizedTime, parameters)) {
@@ -217,6 +284,11 @@ public class AnimatorController {
     public float getTargetStateTime() { return targetStateTime; }
     public boolean isTransitioning() { return transitioning; }
     public boolean isCrossfading() { return transitioning; }
+
+    /** True when the current single-shot state has played to its end and no crossfade is leaving it. */
+    public boolean isCurrentStateFinished() {
+        return currentState != null && !transitioning && currentState.isFinished(currentStateTime, this);
+    }
 
     public float getCrossfadeWeight() {
         if (!transitioning || crossfadeDuration <= 0.0f) return 0.0f;

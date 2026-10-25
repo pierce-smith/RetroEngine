@@ -3,13 +3,17 @@ package com.retro.engine.editor.ui.animator;
 import com.retro.engine.animation.state.AnimatorController;
 import com.retro.engine.animation.state.AnimatorState;
 import com.retro.engine.animation.state.AnimatorTransition;
+import com.retro.engine.animation.state.BlendTree;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
+import com.retro.engine.editor.ui.panels.MenuItem;
 
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 
 /**
  * SRP Delegate: Manages 2D Animator Graph Canvas rendering, grid layout,
@@ -23,6 +27,14 @@ public class AnimatorCanvasDelegate {
     private static float dragStartNdcY = 0.0f;
     private static float nodeStartGraphX = 0.0f;
     private static float nodeStartGraphY = 0.0f;
+
+    // Transition link mode: set by the "Create Transition" menu item, resolved by the next left press
+    private static String pendingTransitionSource = null;
+    private static float cursorNdcX = 0.0f;
+    private static float cursorNdcY = 0.0f;
+
+    private static final float NODE_W = 0.22f;
+    private static final float NODE_H = 0.12f;
 
     public static void renderCanvas(UIGeometryBatch.Buffer buffer, AnimatorController controller, String selectedStateName) {
         float canvasX1 = -0.55f, canvasY1 = -0.50f, canvasX2 = 0.55f, canvasY2 = 0.86f;
@@ -85,9 +97,16 @@ public class AnimatorCanvasDelegate {
                 }
             }
 
-            // Entry arrow to default/current state
-            if (activeState != null) {
-                renderTransitionLine(buffer, entryPos.x + entryPos.w, entryPos.y - entryPos.h * 0.5f, activeState.graphX, activeState.graphY - 0.06f, "ENTRY", 0.2f, 0.8f, 0.3f, false);
+            // Entry arrow to the designated Entry State
+            AnimatorState entryState = controller.getEntryState();
+            if (entryState != null) {
+                renderTransitionLine(buffer, entryPos.x + entryPos.w, entryPos.y - entryPos.h * 0.5f, entryState.graphX, entryState.graphY - 0.06f, "ENTRY", 0.2f, 0.8f, 0.3f, false);
+            }
+
+            // Rubber-band preview while choosing a transition destination
+            AnimatorState linkSource = (pendingTransitionSource != null) ? controller.getState(pendingTransitionSource) : null;
+            if (linkSource != null) {
+                renderTransitionLine(buffer, linkSource.graphX + NODE_W, linkSource.graphY - 0.06f, cursorNdcX, cursorNdcY, "PICK TARGET", 1.0f, 0.85f, 0.2f, false);
             }
 
             // Dynamic State Nodes
@@ -97,7 +116,12 @@ public class AnimatorCanvasDelegate {
                 boolean isTarget = targetName.equalsIgnoreCase(state.name);
                 boolean isSelected = (selectedStateName != null && selectedStateName.equalsIgnoreCase(state.name));
 
-                String clipName = (state.clip != null && state.clip.name != null) ? state.clip.name : "No Clip";
+                String clipName;
+                if (state.blendTree != null) {
+                    clipName = "Blend Tree (" + state.blendTree.parameterX + ")";
+                } else {
+                    clipName = (state.clip != null && state.clip.name != null) ? state.clip.name : "No Clip";
+                }
                 renderStateNode(buffer, state.name, clipName, pos, isActive, isTarget, isSelected);
             }
         } else {
@@ -109,6 +133,27 @@ public class AnimatorCanvasDelegate {
         if (manager == null) return false;
         AnimatorController controller = manager.getActiveAnimatorController();
 
+        if (action == 1 && button == 1) { // Right press
+            pendingTransitionSource = null;
+            if (isInsideCanvas(ndcX, ndcY)) {
+                openGraphContextMenu(ndcX, ndcY, controller, manager);
+                return true;
+            }
+            return false;
+        }
+
+        if (action == 1 && button == 0 && pendingTransitionSource != null) { // Resolve transition link mode
+            String source = pendingTransitionSource;
+            pendingTransitionSource = null;
+            AnimatorState destination = isInsideCanvas(ndcX, ndcY) ? findStateAt(controller, ndcX, ndcY) : null;
+            if (destination != null) {
+                createTransition(controller, source, destination.name, manager);
+            } else {
+                UISoundPlayer.play(UISound.CLOSE_MODAL);
+            }
+            return true;
+        }
+
         if (action == 1 && button == 0) { // Press
             // 1. Check [+ STATE] button in Graph Canvas Header
             if (ndcX >= 0.37f && ndcX <= 0.54f && ndcY >= 0.81f && ndcY <= 0.86f) {
@@ -117,26 +162,18 @@ public class AnimatorCanvasDelegate {
             }
 
             // 2. Check Central Canvas Node Card Clicks (-0.55f to 0.55f)
-            if (ndcX >= -0.55f && ndcX <= 0.55f && ndcY >= -0.50f && ndcY <= 0.80f) {
-                if (controller != null) {
-                    for (AnimatorState state : controller.getStates().values()) {
-                        float x1 = state.graphX;
-                        float x2 = state.graphX + 0.22f;
-                        float y1 = state.graphY - 0.12f;
-                        float y2 = state.graphY;
-
-                        if (ndcX >= x1 && ndcX <= x2 && ndcY >= y1 && ndcY <= y2) {
-                            manager.setSelectedStateName(state.name);
-                            isDraggingNode = true;
-                            draggedStateName = state.name;
-                            dragStartNdcX = ndcX;
-                            dragStartNdcY = ndcY;
-                            nodeStartGraphX = state.graphX;
-                            nodeStartGraphY = state.graphY;
-                            UISoundPlayer.play(UISound.CLICK);
-                            return true;
-                        }
-                    }
+            if (isInsideCanvas(ndcX, ndcY)) {
+                AnimatorState state = findStateAt(controller, ndcX, ndcY);
+                if (state != null) {
+                    manager.setSelectedStateName(state.name);
+                    isDraggingNode = true;
+                    draggedStateName = state.name;
+                    dragStartNdcX = ndcX;
+                    dragStartNdcY = ndcY;
+                    nodeStartGraphX = state.graphX;
+                    nodeStartGraphY = state.graphY;
+                    UISoundPlayer.play(UISound.CLICK);
+                    return true;
                 }
             }
         } else if (action == 0 && button == 0) { // Release
@@ -150,6 +187,8 @@ public class AnimatorCanvasDelegate {
     }
 
     public static boolean handleCursorPos(float ndcX, float ndcY, EditorWorkspace manager) {
+        cursorNdcX = ndcX;
+        cursorNdcY = ndcY;
         if (isDraggingNode && draggedStateName != null && manager != null) {
             AnimatorController controller = manager.getActiveAnimatorController();
             if (controller != null) {
@@ -166,6 +205,120 @@ public class AnimatorCanvasDelegate {
             }
         }
         return false;
+    }
+
+    private static boolean isInsideCanvas(float ndcX, float ndcY) {
+        return ndcX >= -0.55f && ndcX <= 0.55f && ndcY >= -0.50f && ndcY <= 0.80f;
+    }
+
+    /** Topmost (last-rendered) state node card under the cursor, or null. */
+    private static AnimatorState findStateAt(AnimatorController controller, float ndcX, float ndcY) {
+        if (controller == null) return null;
+        AnimatorState hit = null;
+        for (AnimatorState state : controller.getStates().values()) {
+            if (ndcX >= state.graphX && ndcX <= state.graphX + NODE_W && ndcY >= state.graphY - NODE_H && ndcY <= state.graphY) {
+                hit = state;
+            }
+        }
+        return hit;
+    }
+
+    /**
+     * Builds the right-click menu for the graph canvas. Node cards get node actions; the empty
+     * background gets creation actions. Item lambdas capture only state names (re-resolved on run)
+     * and the workspace; OverlaySystem clears the item list on close, releasing them.
+     */
+    private static void openGraphContextMenu(float ndcX, float ndcY, AnimatorController controller, EditorWorkspace manager) {
+        if (controller == null) return;
+        List<MenuItem> items = new ArrayList<>();
+        AnimatorState hitState = findStateAt(controller, ndcX, ndcY);
+
+        if (hitState != null) {
+            final String stateName = hitState.name;
+            manager.setSelectedStateName(stateName);
+            items.add(new MenuItem("Create Transition", () -> {
+                if (controller.getState(stateName) != null) pendingTransitionSource = stateName;
+            }));
+            if (controller.getEntryState() != hitState) {
+                items.add(new MenuItem("Set as Entry State", () -> setEntryState(controller, stateName)));
+            }
+            items.add(new MenuItem("Delete State", () -> deleteState(controller, stateName, manager)));
+        } else {
+            final float spawnX = Math.max(-0.53f, Math.min(0.31f, ndcX));
+            final float spawnY = Math.max(-0.38f, Math.min(0.80f, ndcY));
+            items.add(new MenuItem("Create State", () -> createState(controller, spawnX, spawnY, false, manager)));
+            items.add(new MenuItem("Create Blend Tree", () -> createState(controller, spawnX, spawnY, true, manager)));
+
+            AnimatorState selected = (manager.getSelectedStateName() != null) ? controller.getState(manager.getSelectedStateName()) : null;
+            if (selected != null && controller.getEntryState() != selected) {
+                final String selectedName = selected.name;
+                items.add(new MenuItem("Set '" + selectedName + "' as Entry State", () -> setEntryState(controller, selectedName)));
+            }
+        }
+
+        manager.getOverlayManager().openContextMenu(ndcX, ndcY, items);
+    }
+
+    private static void createState(AnimatorController controller, float graphX, float graphY, boolean blendTree, EditorWorkspace manager) {
+        String name = controller.uniqueStateName(blendTree ? "Blend Tree" : "New State");
+        AnimatorState state = new AnimatorState(name, null).setGraphPos(graphX, graphY);
+
+        if (blendTree) {
+            // 1D tree on a dedicated float parameter, seeded with the controller's existing clips
+            // at thresholds 0, 1, 2, ... so it animates immediately (e.g. Idle -> Walk -> Run)
+            BlendTree tree = new BlendTree(BlendTree.BlendType.SIMPLE_1D, "Blend");
+            if (!controller.getParameters().containsKey(tree.parameterX)) {
+                controller.setFloat(tree.parameterX, 0.0f);
+            }
+            float threshold = 0.0f;
+            for (AnimatorState existing : controller.getStates().values()) {
+                if (existing.clip != null) {
+                    tree.addMotion(existing.clip, threshold);
+                    threshold += 1.0f;
+                }
+            }
+            state.blendTree = tree;
+        }
+
+        controller.addState(state);
+        manager.setSelectedStateName(name);
+        UISoundPlayer.play(UISound.SPAWN);
+    }
+
+    private static void setEntryState(AnimatorController controller, String stateName) {
+        if (controller.setEntryState(stateName)) {
+            UISoundPlayer.play(UISound.CLICK);
+        }
+    }
+
+    private static void deleteState(AnimatorController controller, String stateName, EditorWorkspace manager) {
+        if (!controller.removeState(stateName)) return;
+        if (stateName.equals(draggedStateName)) {
+            isDraggingNode = false;
+            draggedStateName = null;
+        }
+        if (stateName.equals(pendingTransitionSource)) pendingTransitionSource = null;
+        // Selection may reference the removed state or one of the transitions that targeted it
+        manager.clearAnimatorSelection();
+        UISoundPlayer.play(UISound.CLOSE_MODAL);
+    }
+
+    private static void createTransition(AnimatorController controller, String sourceName, String destinationName, EditorWorkspace manager) {
+        AnimatorState source = (controller != null) ? controller.getState(sourceName) : null;
+        if (source == null || sourceName.equals(destinationName)) {
+            UISoundPlayer.play(UISound.CLOSE_MODAL);
+            return;
+        }
+        for (AnimatorTransition existing : source.transitions) {
+            if (destinationName.equals(existing.destinationStateName)) {
+                UISoundPlayer.play(UISound.CLOSE_MODAL);
+                return;
+            }
+        }
+        // Unconditioned transitions fire immediately, so default to exit-time until conditions are added
+        source.addTransition(new AnimatorTransition(destinationName, 0.25f, true, 0.90f));
+        manager.setSelectedStateName(sourceName);
+        UISoundPlayer.play(UISound.SPAWN);
     }
 
     private static void promptAddState(AnimatorController controller) {

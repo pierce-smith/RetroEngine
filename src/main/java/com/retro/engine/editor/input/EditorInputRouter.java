@@ -101,6 +101,11 @@ public class EditorInputRouter {
                     gizmoStateController.getCamPanY(),
                     gizmoStateController.getCamZoom()
                 );
+                // Animator canvas opens its graph context menu on press; OverlaySystem's release-time
+                // menu builder then sees the open menu (OVERLAY_MODAL) and leaves it alone
+                if (workspace.getActiveWorkspaceTab() == EditorWorkspace.WorkspaceTab.ANIMATOR && region == PanelRegion.VIEWPORT) {
+                    AnimatorGraphPanel.handleMouseClick(ndcX, ndcY, button, action, workspace);
+                }
                 return true;
             }
 
@@ -205,7 +210,7 @@ public class EditorInputRouter {
             }
 
             if (workspace.getActiveWorkspaceTab() == EditorWorkspace.WorkspaceTab.ANIMATOR) {
-                return AnimatorGraphPanel.handleMouseClick(ndcX, ndcX, button, action, workspace);
+                return AnimatorGraphPanel.handleMouseClick(ndcX, ndcY, button, action, workspace);
             }
 
             if (button == 0 && gizmoStateController.getActiveAxis() != EditorWorkspace.GizmoAxis.NONE && workspace.getSelectedEntity() != null) {
