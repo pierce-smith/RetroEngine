@@ -2,6 +2,7 @@ package com.retro.engine.editor.gizmos;
 
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ViewportCamera;
+import com.retro.engine.editor.ui.dock.DockSpace;
 
 /**
  * Pure Mathematical Delegate for 3D World-to-NDC Projection,
@@ -10,7 +11,7 @@ import com.retro.engine.editor.ViewportCamera;
 public class GizmoMath {
 
     public static float[] projectWorldToNdc(float wx, float wy, float wz, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
-        float aspect = 712.0f / 488.0f;
+        float aspect = DockSpace.getSceneAspect();
         float fov = (float) Math.toRadians(50.0);
         float f = (float) (1.0 / Math.tan(fov / 2.0));
 

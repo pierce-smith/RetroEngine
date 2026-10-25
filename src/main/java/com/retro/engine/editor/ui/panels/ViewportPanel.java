@@ -13,6 +13,10 @@ public class ViewportPanel {
 
     private static String rhiCanvasTitle = "3D VIEWPORT [RHI CANVAS]";
 
+    public static String getRhiCanvasTitle() {
+        return rhiCanvasTitle;
+    }
+
     public static void setRhiCanvasTitle(String title) {
         if (title != null && !title.trim().isEmpty()) {
             rhiCanvasTitle = title;

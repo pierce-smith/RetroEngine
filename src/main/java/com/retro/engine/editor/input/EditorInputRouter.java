@@ -8,6 +8,8 @@ import com.retro.engine.editor.commands.EditorCommands;
 import com.retro.engine.editor.gizmos.GizmoState;
 import com.retro.engine.editor.ui.animator.AnimatorGraphPanel;
 import com.retro.engine.editor.ui.batch.PanelRegion;
+import com.retro.engine.editor.ui.dock.DockPanel;
+import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.overlays.ContextMenuOverlay;
 import com.retro.engine.editor.ui.overlays.OverlaySystem;
 import com.retro.engine.editor.ui.panels.InspectorPanel;
@@ -17,7 +19,8 @@ import com.retro.engine.scene.entity.Entity;
 /**
  * Single Authority for GLFW/LWJGL Editor Input Event Routing.
  * Evaluates screen-to-NDC projections, panel region hit-testing,
- * viewport tab switching, 3D gizmo interactions, and viewport scrolling.
+ * dock chrome (tab activation, tab re-docking, splitter resizing), 3D gizmo interactions,
+ * and viewport scrolling. Panel input is dispatched in each docked panel's design space.
  * Hardened with explicit dispose() unbind hooks.
  */
 public class EditorInputRouter {
@@ -73,6 +76,7 @@ public class EditorInputRouter {
         if (workspace == null) return false;
         PointerCoordinates coords = calculateCoordinates(rawX, rawY);
         if (coords == null) return false;
+        if (DockSpace.isDragging()) return false;
         return PanelRegion.getRegionAt(coords.ndcX, coords.ndcY, workspace.getOverlayManager()) == PanelRegion.VIEWPORT;
     }
 
@@ -93,6 +97,7 @@ public class EditorInputRouter {
 
         if (action == 1) { // Press
             if (button == 1) {
+                DockSpace.cancelDrag();
                 overlayManager.onRightClickPress(
                     refX, refY, ndcX, ndcY, cameraController,
                     gizmoStateController.getCamPitch(),
@@ -103,8 +108,8 @@ public class EditorInputRouter {
                 );
                 // Animator canvas opens its graph context menu on press; OverlaySystem's release-time
                 // menu builder then sees the open menu (OVERLAY_MODAL) and leaves it alone
-                if (workspace.getActiveWorkspaceTab() == EditorWorkspace.WorkspaceTab.ANIMATOR && region == PanelRegion.VIEWPORT) {
-                    AnimatorGraphPanel.handleMouseClick(ndcX, ndcY, button, action, workspace);
+                if (region == PanelRegion.ANIMATOR && DockSpace.panelAt(ndcX, ndcY) == DockPanel.ANIMATOR) {
+                    dispatchToPanel(DockPanel.ANIMATOR, ndcX, ndcY, button, action);
                 }
                 return true;
             }
@@ -140,60 +145,19 @@ public class EditorInputRouter {
                 return true;
             }
 
-            // Check Viewport Panel Header Tab Clicks (-0.55f to 0.55f, 0.86f to 0.92f)
-            if (ndcY >= 0.86f && ndcY <= 0.92f && ndcX >= -0.55f && ndcX <= 0.55f) {
-                if (ndcX >= -0.53f && ndcX <= -0.33f) {
-                    UISoundPlayer.play(UISound.CLICK);
-                    workspace.setActiveWorkspaceTab(EditorWorkspace.WorkspaceTab.SCENE_3D);
-                    return true;
-                } else if (ndcX >= -0.31f && ndcX <= -0.09f) {
-                    UISoundPlayer.play(UISound.CLICK);
-                    workspace.setActiveWorkspaceTab(EditorWorkspace.WorkspaceTab.ANIMATOR);
-                    return true;
-                }
-            }
-
-            if (ndcY >= 0.92f) {
+            if (ndcY >= DockSpace.AREA_Y1) {
                 MainMenuBarInputDelegate.processTopBarClick(ndcX, workspace);
                 return true;
             }
 
-            if (workspace.getActiveWorkspaceTab() == EditorWorkspace.WorkspaceTab.ANIMATOR) {
-                if (region == PanelRegion.ASSET_DIRECTORY) {
-                    AssetBrowserInputDelegate.processAssetDirectoryClick(ndcX, ndcY, workspace);
-                    return true;
-                }
-                return AnimatorGraphPanel.handleMouseClick(ndcX, ndcY, button, action, workspace);
+            // Dock chrome (tab bars, splitters) takes priority over panel content
+            if (DockSpace.onPress(ndcX, ndcY)) {
+                return true;
             }
 
-            switch (region) {
-                case TOP_BAR -> {
-                    MainMenuBarInputDelegate.processTopBarClick(ndcX, workspace);
-                    return true;
-                }
-                case ASSET_DIRECTORY -> {
-                    AssetBrowserInputDelegate.processAssetDirectoryClick(ndcX, ndcY, workspace);
-                    return true;
-                }
-                case SCENE_HIERARCHY -> {
-                    AssetBrowserInputDelegate.processHierarchyClick(ndcY, workspace);
-                    return true;
-                }
-                case INSPECTOR -> {
-                    InspectorInputDelegate.processInspectorClick(ndcX, ndcY, workspace);
-                    return true;
-                }
-                case VIEWPORT -> {
-                    if (gizmoStateController.processViewportToolbarClick(ndcX, ndcY)) {
-                        return true;
-                    }
-                    gizmoStateController.processViewportGizmoClick(refX, refY, workspace);
-                    return gizmoStateController.getActiveAxis() != EditorWorkspace.GizmoAxis.NONE;
-                }
-                default -> {
-                    return false;
-                }
-            }
+            DockPanel panel = DockSpace.panelAt(ndcX, ndcY);
+            if (panel == null) return false;
+            return dispatchToPanel(panel, ndcX, ndcY, button, action);
         } else if (action == 0) { // Release
             InspectorInputDelegate.onMouseRelease();
             if (button == 1) {
@@ -209,8 +173,20 @@ public class EditorInputRouter {
                 return true;
             }
 
-            if (workspace.getActiveWorkspaceTab() == EditorWorkspace.WorkspaceTab.ANIMATOR) {
-                return AnimatorGraphPanel.handleMouseClick(ndcX, ndcY, button, action, workspace);
+            if (DockSpace.onRelease(ndcX, ndcY)) {
+                return true;
+            }
+
+            // Node drags may end outside the animator tile, so the canvas always sees the release
+            if (DockSpace.isVisible(DockPanel.ANIMATOR)) {
+                DockSpace.beginInput(DockPanel.ANIMATOR);
+                try {
+                    if (AnimatorGraphPanel.handleCanvasClick(DockSpace.toDesignX(DockPanel.ANIMATOR, ndcX), DockSpace.toDesignY(DockPanel.ANIMATOR, ndcY), button, action, workspace)) {
+                        return true;
+                    }
+                } finally {
+                    DockSpace.endInput();
+                }
             }
 
             if (button == 0 && gizmoStateController.getActiveAxis() != EditorWorkspace.GizmoAxis.NONE && workspace.getSelectedEntity() != null) {
@@ -239,16 +215,72 @@ public class EditorInputRouter {
         return false;
     }
 
+    /**
+     * Dispatches a press to a docked panel in that panel's authored design space, so every existing
+     * hit-test keeps working wherever (and at whatever size) the panel is docked.
+     */
+    private boolean dispatchToPanel(DockPanel panel, float screenX, float screenY, int button, int action) {
+        float dx = DockSpace.toDesignX(panel, screenX);
+        float dy = DockSpace.toDesignY(panel, screenY);
+        GizmoState gizmoStateController = workspace.getGizmoStateController();
+
+        DockSpace.beginInput(panel);
+        try {
+            switch (panel) {
+                case HIERARCHY -> {
+                    AssetBrowserInputDelegate.processHierarchyClick(dy, workspace);
+                    return true;
+                }
+                case INSPECTOR -> {
+                    InspectorInputDelegate.processInspectorClick(dx, dy, workspace);
+                    return true;
+                }
+                case ASSETS -> {
+                    AssetBrowserInputDelegate.processAssetDirectoryClick(dx, dy, workspace);
+                    return true;
+                }
+                case SCENE -> {
+                    if (gizmoStateController.processViewportToolbarClick(dx, dy)) {
+                        return true;
+                    }
+                    gizmoStateController.processViewportGizmoClick((dx + 1.0) * 640.0, (1.0 - dy) * 360.0, workspace);
+                    return gizmoStateController.getActiveAxis() != EditorWorkspace.GizmoAxis.NONE;
+                }
+                case ANIMATOR -> {
+                    return AnimatorGraphPanel.handleCanvasClick(dx, dy, button, action, workspace);
+                }
+                case ANIMATOR_PARAMETERS, ANIMATOR_INSPECTOR -> {
+                    // Same routing as the classic full-screen animator: parameters sidebar, then canvas
+                    // (which cancels a pending transition link when clicked outside the graph)
+                    return AnimatorGraphPanel.handleMouseClick(dx, dy, button, action, workspace);
+                }
+                case CONSOLE -> {
+                    return true;
+                }
+                default -> {
+                    return false;
+                }
+            }
+        } finally {
+            DockSpace.endInput();
+        }
+    }
+
     public boolean onCursorPos(double rawX, double rawY) {
         if (workspace == null) return false;
         PointerCoordinates coords = calculateCoordinates(rawX, rawY);
         if (coords != null) {
             workspace.setLastNdcPos(coords.ndcX, coords.ndcY);
 
-            if (workspace.getActiveWorkspaceTab() == EditorWorkspace.WorkspaceTab.ANIMATOR) {
-                AnimatorGraphPanel.handleCursorPos(coords.ndcX, coords.ndcY, workspace);
-            } else {
-                InspectorInputDelegate.processInspectorDrag(coords.ndcX, coords.ndcY, workspace);
+            if (DockSpace.onCursor(coords.ndcX, coords.ndcY)) {
+                return true;
+            }
+
+            if (DockSpace.isVisible(DockPanel.ANIMATOR)) {
+                AnimatorGraphPanel.handleCursorPos(DockSpace.toDesignX(DockPanel.ANIMATOR, coords.ndcX), DockSpace.toDesignY(DockPanel.ANIMATOR, coords.ndcY), workspace);
+            }
+            if (DockSpace.isVisible(DockPanel.INSPECTOR)) {
+                InspectorInputDelegate.processInspectorDrag(DockSpace.toDesignX(DockPanel.INSPECTOR, coords.ndcX), DockSpace.toDesignY(DockPanel.INSPECTOR, coords.ndcY), workspace);
             }
         }
         return workspace.getGizmoStateController().onCursorPos(rawX, rawY, workspace, workspace.getOverlayManager());
@@ -256,15 +288,13 @@ public class EditorInputRouter {
 
     public boolean handleScroll(double yOffset) {
         if (workspace == null) return false;
-        float lastNdcX = workspace.getLastNdcX();
-        float lastNdcY = workspace.getLastNdcY();
+        DockPanel panel = DockSpace.panelAt(workspace.getLastNdcX(), workspace.getLastNdcY());
 
-        if (lastNdcX >= 0.55f && lastNdcY >= -0.50f && lastNdcY <= 0.88f) {
+        if (panel == DockPanel.INSPECTOR) {
             InspectorPanel.scroll((float) -yOffset * 0.18f);
             return true;
         }
-        if (workspace.getActiveWorkspaceTab() == EditorWorkspace.WorkspaceTab.SCENE_3D &&
-            lastNdcX >= -0.55f && lastNdcX <= 0.55f && lastNdcY >= -0.50f && lastNdcY <= 0.86f) {
+        if (panel == DockPanel.SCENE && !workspace.getOverlayManager().isContextMenuVisible()) {
             if (cameraController != null) {
                 cameraController.onScroll(yOffset);
                 return true;

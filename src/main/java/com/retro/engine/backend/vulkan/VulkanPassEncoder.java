@@ -42,6 +42,16 @@ public class VulkanPassEncoder {
     private final float[] identityLightSpace = new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
     private final float[] defaultGridView = new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,-5,1};
 
+    // Screen NDC rect of the docked Scene tile the offscreen image is blitted into
+    private float sceneMinX = -0.55f, sceneMinY = -0.50f, sceneMaxX = 0.55f, sceneMaxY = 0.88f;
+
+    public void setSceneRect(float minX, float minY, float maxX, float maxY) {
+        this.sceneMinX = minX;
+        this.sceneMinY = minY;
+        this.sceneMaxX = maxX;
+        this.sceneMaxY = maxY;
+    }
+
     public void record4PhasePipeline(VkCommandBuffer cmd,
                                      VulkanTargetPass targetPass,
                                      VulkanSwapchain swapchainManager,
@@ -369,10 +379,11 @@ public class VulkanPassEncoder {
 
             vkCmdClearColorImage(cmd, currentSwapchainImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, clearColor, clearRange);
 
-            int dstX0 = (int) ((1.0f - 0.55f) * 0.5f * dstWidth);
-            int dstX1 = (int) ((1.0f + 0.55f) * 0.5f * dstWidth);
-            int dstY0 = (int) ((1.0f - 0.88f) * 0.5f * dstHeight);
-            int dstY1 = (int) ((1.0f - (-0.50f)) * 0.5f * dstHeight);
+            int dstX0 = Math.max(0, Math.min(dstWidth, (int) ((1.0f + sceneMinX) * 0.5f * dstWidth)));
+            int dstX1 = Math.max(0, Math.min(dstWidth, (int) ((1.0f + sceneMaxX) * 0.5f * dstWidth)));
+            int dstY0 = Math.max(0, Math.min(dstHeight, (int) ((1.0f - sceneMaxY) * 0.5f * dstHeight)));
+            int dstY1 = Math.max(0, Math.min(dstHeight, (int) ((1.0f - sceneMinY) * 0.5f * dstHeight)));
+            boolean sceneVisible = dstX1 > dstX0 && dstY1 > dstY0;
 
             VkImageBlit.Buffer blitRegion = VkImageBlit.calloc(1, stack);
             blitRegion.get(0).srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
@@ -383,7 +394,9 @@ public class VulkanPassEncoder {
             blitRegion.get(0).dstOffsets(0).set(dstX0, dstY0, 0);
             blitRegion.get(0).dstOffsets(1).set(dstX1, dstY1, 1);
 
-            vkCmdBlitImage(cmd, targetPass.getOffscreenImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, currentSwapchainImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, blitRegion, VK_FILTER_LINEAR);
+            if (sceneVisible) {
+                vkCmdBlitImage(cmd, targetPass.getOffscreenImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, currentSwapchainImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, blitRegion, VK_FILTER_LINEAR);
+            }
 
             // 2. Transition Swapchain Image TRANSFER_DST_OPTIMAL -> COLOR_ATTACHMENT_OPTIMAL
             VkImageMemoryBarrier.Buffer uiBarrier = VkImageMemoryBarrier.calloc(1, stack)

@@ -51,6 +51,7 @@ public class VulkanBackend implements IRenderBackend {
     // Reusable Matrix Buffers for Zero-Allocation Frame Loops
     private final float[] viewMatrix = new float[16];
     private final float[] projMatrix = new float[16];
+    private float sceneAspect = 0.0f; // docked Scene tile aspect; 0 = use offscreen target aspect
 
     @Override
     public boolean initialize(ViewportSpec windowInfo) {
@@ -120,7 +121,8 @@ public class VulkanBackend implements IRenderBackend {
             vkBeginCommandBuffer(cmd, beginInfo);
 
             computeViewMatrix();
-            computePerspectiveProjectionMatrix(50.0f, (float) targetPass.getWidth() / (float) targetPass.getHeight(), 0.1f, 500.0f);
+            float aspect = sceneAspect > 0.0f ? sceneAspect : (float) targetPass.getWidth() / (float) targetPass.getHeight();
+            computePerspectiveProjectionMatrix(50.0f, aspect, 0.1f, 500.0f);
 
             passEncoder.record4PhasePipeline(
                     cmd,
@@ -152,6 +154,12 @@ public class VulkanBackend implements IRenderBackend {
         viewMatrix[4] = 0.0f;      viewMatrix[5] = cp;        viewMatrix[6] = -sp;       viewMatrix[7] = 0.0f;
         viewMatrix[8] = -sy;       viewMatrix[9] = cy * sp;   viewMatrix[10] = cy * cp;  viewMatrix[11] = 0.0f;
         viewMatrix[12] = camPanX;  viewMatrix[13] = camPanY;  viewMatrix[14] = camZoom;  viewMatrix[15] = 1.0f;
+    }
+
+    @Override
+    public void setSceneViewport(float minX, float minY, float maxX, float maxY, float aspect) {
+        passEncoder.setSceneRect(minX, minY, maxX, maxY);
+        this.sceneAspect = aspect;
     }
 
     private void computePerspectiveProjectionMatrix(float fovDeg, float aspect, float zNear, float zFar) {

@@ -39,6 +39,29 @@ public class AnimatorGraphPanel {
         AnimatorInspectorDelegate.renderInspectorSidebar(buffer, controller, selectedStateName, selectedTransition);
     }
 
+    // --- Per-section entry points: each section is an independently dockable panel ---
+
+    public static void renderCanvas(UIGeometryBatch.Buffer buffer, AnimatorController controller, String selectedStateName) {
+        AnimatorCanvasDelegate.renderCanvas(buffer, controller, selectedStateName);
+    }
+
+    public static void renderParameters(UIGeometryBatch.Buffer buffer, AnimatorController controller) {
+        AnimatorParametersDelegate.renderParametersSidebar(buffer, controller);
+    }
+
+    public static void renderInspector(UIGeometryBatch.Buffer buffer, AnimatorController controller, String selectedStateName, AnimatorTransition selectedTransition) {
+        AnimatorInspectorDelegate.renderInspectorSidebar(buffer, controller, selectedStateName, selectedTransition);
+    }
+
+    public static boolean handleCanvasClick(float ndcX, float ndcY, int button, int action, EditorWorkspace manager) {
+        return AnimatorCanvasDelegate.handleCanvasClick(ndcX, ndcY, button, action, manager);
+    }
+
+    public static boolean handleParametersClick(float ndcX, float ndcY, int button, int action, EditorWorkspace manager) {
+        if (manager == null || button != 0 || action != 1) return false;
+        return AnimatorParametersDelegate.handleParametersClick(ndcX, ndcY, manager.getActiveAnimatorController());
+    }
+
     public static boolean handleMouseClick(float ndcX, float ndcY, int button, int action, EditorWorkspace manager) {
         if (manager == null) return false;
 

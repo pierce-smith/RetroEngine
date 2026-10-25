@@ -14,6 +14,12 @@ public interface IRenderBackend {
                               float dirX, float dirY, float dirZ, 
                               float r, float g, float b, float intensity) {}
 
+    /**
+     * Screen-space NDC rect the offscreen scene image is composited into (the docked Scene tile),
+     * plus the projection aspect matching that tile. A zero-area rect means the Scene tab is hidden.
+     */
+    default void setSceneViewport(float minX, float minY, float maxX, float maxY, float aspect) {}
+
     void updateGridMesh(float[] vertices, int count);
     void updateUiMesh(float[] vertices, int count);
     void clearSceneQueue();

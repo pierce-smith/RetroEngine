@@ -13,6 +13,20 @@ public class UIGeometryBatch {
         private float[] data;
         private int size;
 
+        // Panel mapping: when active, every emitted triangle is transformed from a panel's design-space
+        // NDC (its original fixed layout) into its docked rect, then clipped to that rect on the CPU.
+        private boolean mapped = false;
+        private boolean transformSuspended = false;
+        private float mapSx = 1.0f, mapSy = 1.0f, mapTx = 0.0f, mapTy = 0.0f;
+        private float clipX0, clipY0, clipX1, clipY1;
+        private float textScale = 1.0f;
+
+        // Triangle assembly + Sutherland-Hodgman scratch (6 floats per vertex, zero per-frame allocation)
+        private final float[] tri = new float[18];
+        private int triVerts = 0;
+        private final float[] polyA = new float[96];
+        private final float[] polyB = new float[96];
+
         public Buffer() {
             this(16384);
         }
@@ -53,6 +67,107 @@ public class UIGeometryBatch {
             System.arraycopy(data, 0, copy, 0, size);
             return copy;
         }
+
+        /**
+         * Maps design-space rect [dx0,dx1]x[dy0,dy1] onto screen rect [sx0,sx1]x[sy0,sy1] and clips all
+         * subsequent geometry to the screen rect, until {@link #clearPanelMapping()}.
+         */
+        public void setPanelMapping(float dx0, float dy0, float dx1, float dy1, float sx0, float sy0, float sx1, float sy1) {
+            this.mapSx = (sx1 - sx0) / (dx1 - dx0);
+            this.mapSy = (sy1 - sy0) / (dy1 - dy0);
+            this.mapTx = sx0 - dx0 * mapSx;
+            this.mapTy = sy0 - dy0 * mapSy;
+            this.clipX0 = sx0; this.clipY0 = sy0; this.clipX1 = sx1; this.clipY1 = sy1;
+            // Glyphs scale uniformly (never stretched) and never grow past their authored size
+            this.textScale = Math.max(0.35f, Math.min(1.0f, Math.min(mapSx, mapSy)));
+            this.mapped = true;
+            this.transformSuspended = false;
+            this.triVerts = 0;
+        }
+
+        public void clearPanelMapping() {
+            this.mapped = false;
+            this.transformSuspended = false;
+            this.triVerts = 0;
+            this.mapSx = 1.0f; this.mapSy = 1.0f; this.mapTx = 0.0f; this.mapTy = 0.0f;
+            this.textScale = 1.0f;
+        }
+
+        public boolean isMapped() { return mapped; }
+        public float mapX(float x) { return mapped ? x * mapSx + mapTx : x; }
+        public float mapY(float y) { return mapped ? y * mapSy + mapTy : y; }
+        public float getTextScale() { return mapped ? textScale : 1.0f; }
+
+        void suspendTransform(boolean suspended) { this.transformSuspended = suspended; }
+
+        void stageVertex(float x, float y, float r, float g, float b, float a) {
+            int o = triVerts * 6;
+            if (!transformSuspended) {
+                x = x * mapSx + mapTx;
+                y = y * mapSy + mapTy;
+            }
+            tri[o] = x; tri[o + 1] = y; tri[o + 2] = r; tri[o + 3] = g; tri[o + 4] = b; tri[o + 5] = a;
+            if (++triVerts == 3) {
+                triVerts = 0;
+                emitClippedTriangle();
+            }
+        }
+
+        private void emitRaw(float[] src, int vertIndex) {
+            int o = vertIndex * 6;
+            ensureCapacity(size + 6);
+            data[size++] = src[o]; data[size++] = src[o + 1];
+            data[size++] = src[o + 2]; data[size++] = src[o + 3]; data[size++] = src[o + 4]; data[size++] = src[o + 5];
+        }
+
+        private void emitClippedTriangle() {
+            float x0 = tri[0], y0 = tri[1], x1 = tri[6], y1 = tri[7], x2 = tri[12], y2 = tri[13];
+
+            // Trivial reject: entirely beyond one clip edge
+            if ((x0 < clipX0 && x1 < clipX0 && x2 < clipX0) || (x0 > clipX1 && x1 > clipX1 && x2 > clipX1) ||
+                (y0 < clipY0 && y1 < clipY0 && y2 < clipY0) || (y0 > clipY1 && y1 > clipY1 && y2 > clipY1)) {
+                return;
+            }
+            // Trivial accept: entirely inside (the common case for panel content)
+            if (x0 >= clipX0 && x0 <= clipX1 && x1 >= clipX0 && x1 <= clipX1 && x2 >= clipX0 && x2 <= clipX1 &&
+                y0 >= clipY0 && y0 <= clipY1 && y1 >= clipY0 && y1 <= clipY1 && y2 >= clipY0 && y2 <= clipY1) {
+                emitRaw(tri, 0); emitRaw(tri, 1); emitRaw(tri, 2);
+                return;
+            }
+
+            System.arraycopy(tri, 0, polyA, 0, 18);
+            int n = 3;
+            n = clipEdge(polyA, n, polyB, 0, clipX0, false);
+            n = clipEdge(polyB, n, polyA, 0, clipX1, true);
+            n = clipEdge(polyA, n, polyB, 1, clipY0, false);
+            n = clipEdge(polyB, n, polyA, 1, clipY1, true);
+            for (int i = 1; i + 1 < n; i++) {
+                emitRaw(polyA, 0); emitRaw(polyA, i); emitRaw(polyA, i + 1);
+            }
+        }
+
+        /** Clips polygon in src against one axis-aligned edge (axis 0 = x, 1 = y), interpolating all attributes. */
+        private static int clipEdge(float[] src, int n, float[] dst, int axis, float bound, boolean keepBelow) {
+            int out = 0;
+            if (n == 0) return 0;
+            for (int i = 0; i < n; i++) {
+                int cur = i * 6, prev = ((i + n - 1) % n) * 6;
+                float cv = src[cur + axis], pv = src[prev + axis];
+                boolean cIn = keepBelow ? cv <= bound : cv >= bound;
+                boolean pIn = keepBelow ? pv <= bound : pv >= bound;
+                if (cIn != pIn) {
+                    float t = (bound - pv) / (cv - pv);
+                    int o = out * 6;
+                    for (int k = 0; k < 6; k++) dst[o + k] = src[prev + k] + t * (src[cur + k] - src[prev + k]);
+                    out++;
+                }
+                if (cIn) {
+                    System.arraycopy(src, cur, dst, out * 6, 6);
+                    out++;
+                }
+            }
+            return out;
+        }
     }
 
     private static final long[] FONT = new long[128];
@@ -79,6 +194,10 @@ public class UIGeometryBatch {
 
     // --- Primitive Buffer Overloads (Zero Allocation) ---
     public static void addVert(Buffer buffer, float x, float y, float r, float g, float b, float a) {
+        if (buffer.mapped) {
+            buffer.stageVertex(x, y, r, g, b, a);
+            return;
+        }
         buffer.add(x); buffer.add(y);
         buffer.add(r); buffer.add(g); buffer.add(b); buffer.add(a);
     }
@@ -165,6 +284,22 @@ public class UIGeometryBatch {
 
     public static void addBoundedText(Buffer buffer, CharSequence text, float startX, float startY, float maxX, float size, float r, float g, float b, float a) {
         if (text == null) return;
+        if (buffer.mapped) {
+            // Lay glyphs out in screen space at a uniform scale so docked text is never stretched;
+            // the anchor and right bound still follow the panel mapping, and clipping stays active
+            float sStartX = buffer.mapX(startX), sStartY = buffer.mapY(startY), sMaxX = buffer.mapX(maxX);
+            buffer.suspendTransform(true);
+            try {
+                emitText(buffer, text, sStartX, sStartY, sMaxX, size * buffer.textScale, r, g, b, a);
+            } finally {
+                buffer.suspendTransform(false);
+            }
+            return;
+        }
+        emitText(buffer, text, startX, startY, maxX, size, r, g, b, a);
+    }
+
+    private static void emitText(Buffer buffer, CharSequence text, float startX, float startY, float maxX, float size, float r, float g, float b, float a) {
         float charW = size * 0.010f;
         float charH = size * 0.018f;
         float pixelW = charW / 6.0f;
