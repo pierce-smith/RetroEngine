@@ -16,6 +16,9 @@ public class AnimatorState {
     public float speed = 1.0f;
     public boolean isLooping = true;
 
+    // Optional parametric blend container; when set it takes precedence over clip
+    public BlendTree blendTree = null;
+
     // 2D Canvas Layout Coordinates
     public float graphX = 0.0f;
     public float graphY = 0.0f;
@@ -51,6 +54,81 @@ public class AnimatorState {
 
     public boolean isLooping() {
         return isLooping;
+    }
+
+    public boolean isBlendTree() {
+        return blendTree != null;
+    }
+
+    public boolean hasMotion() {
+        return clip != null || blendTree != null;
+    }
+
+    /**
+     * Length of one playback cycle in seconds: the clip duration (doubled for PING_PONG clips,
+     * whose period spans forward + reverse), or the weight-blended duration of a blend tree.
+     * Returns 0 for states with no motion.
+     */
+    public float getCycleDuration(AnimatorController controller) {
+        if (blendTree != null) {
+            return blendTree.getBlendedDuration(blendTree.evaluateWeights(controller));
+        }
+        if (clip != null) {
+            boolean pingPong = isLooping && clip.loopMode == AnimationClip.LoopMode.PING_PONG;
+            return pingPong ? clip.durationSeconds * 2.0f : clip.durationSeconds;
+        }
+        return 0.0f;
+    }
+
+    /**
+     * Bounds an accumulated state time to this state's timeline: looping states wrap by modulo
+     * so the accumulator never grows without bound; single-shot states clamp at the terminal frame.
+     */
+    public float boundStateTime(float stateTime, AnimatorController controller) {
+        float duration = getCycleDuration(controller);
+        if (duration <= 0.0001f) return 0.0f;
+        if (isLooping) {
+            float wrapped = stateTime % duration;
+            return wrapped < 0.0f ? wrapped + duration : wrapped;
+        }
+        return Math.max(0.0f, Math.min(stateTime, duration));
+    }
+
+    /** True once a single-shot state's timeline has reached its terminal frame. */
+    public boolean isFinished(float stateTime, AnimatorController controller) {
+        if (isLooping || !hasMotion()) return false;
+        float duration = getCycleDuration(controller);
+        return duration > 0.0001f && stateTime >= duration;
+    }
+
+    /**
+     * Clip-local sample time for this state's single clip. Looping states defer to the clip's
+     * LOOP/PING_PONG mapping; single-shot states hold the final frame instead of wrapping to frame 0.
+     */
+    public float getClipSampleTime(float stateTime) {
+        if (clip == null) return 0.0f;
+        if (isLooping) return clip.normalizeTime(stateTime);
+        return Math.max(0.0f, Math.min(stateTime, clip.durationSeconds));
+    }
+
+    /**
+     * Playback phase in [0, 1] for exit-time evaluation and blend-tree clip synchronisation.
+     * Single-shot states saturate at 1. Returns 0 for states with no motion.
+     */
+    public float getNormalizedTime(float stateTime, AnimatorController controller) {
+        float duration = getCycleDuration(controller);
+        return phaseFor(stateTime, duration);
+    }
+
+    /** Phase in [0, 1] for a precomputed cycle duration (avoids re-evaluating blend weights). */
+    public float phaseFor(float stateTime, float cycleDuration) {
+        if (cycleDuration <= 0.0001f) return 0.0f;
+        if (!isLooping) return Math.max(0.0f, Math.min(stateTime / cycleDuration, 1.0f));
+        if (clip != null && blendTree == null) {
+            return clip.normalizeTime(stateTime) / clip.durationSeconds;
+        }
+        float phase = (stateTime / cycleDuration) % 1.0f;
+        return phase < 0.0f ? phase + 1.0f : phase;
     }
 
     public AnimatorTransition addTransition(String destinationStateName, float crossfadeDuration) {

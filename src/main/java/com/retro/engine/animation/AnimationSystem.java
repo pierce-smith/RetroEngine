@@ -5,7 +5,11 @@ import com.retro.engine.animation.clips.KeyframeTrack;
 import com.retro.engine.animation.skeleton.Skeleton;
 import com.retro.engine.animation.state.AnimatorController;
 import com.retro.engine.animation.state.AnimatorState;
+import com.retro.engine.animation.state.BlendTree;
 import com.retro.engine.scene.components.media.AnimatorComponent;
+import com.retro.engine.scene.world.SceneWorld.PlayState;
+
+import java.util.List;
 
 /**
  * System executing per-frame skeletal animation updates, keyframe sampling,
@@ -31,6 +35,14 @@ public class AnimationSystem {
     private final float[] quatBlended = new float[4];
     private final float[] scaleBlended = new float[3];
 
+    private final float[] posMotion = new float[3];
+    private final float[] quatMotion = new float[4];
+    private final float[] scaleMotion = new float[3];
+
+    // Mirrors the simulation play state. Only SIMULATING advances animation time: EDITING holds the
+    // static bind pose at frame 0, PAUSED holds the last evaluated pose.
+    private PlayState playState = PlayState.EDITING;
+
     public AnimationSystem() {
         for (int i = 0; i < AnimatorComponent.MAX_BONES; i++) {
             for (int j = 0; j < 16; j++) {
@@ -40,10 +52,118 @@ public class AnimationSystem {
     }
 
     /**
+     * Snaps the animator's controller to its Entry State, mirrors the entry clip onto the
+     * component, starts playback, and evaluates the first pose immediately so the bone palette
+     * is valid on the very first rendered frame of a Play session.
+     */
+    public void enterEntryState(AnimatorComponent animator) {
+        if (animator == null) return;
+        animator.playbackTime = 0.0f;
+        animator.isPlaying = true;
+        if (animator.controller != null) {
+            animator.controller.resetToEntryState();
+            syncActiveClip(animator, animator.controller.getCurrentState());
+        }
+        update(animator, 0.0f);
+    }
+
+    public void setPlayState(PlayState playState) {
+        if (playState != null) this.playState = playState;
+    }
+
+    public PlayState getPlayState() {
+        return playState;
+    }
+
+    /**
+     * Prepares an animator for editing: controller rewound to its Entry State at frame 0 and the mesh
+     * shown in its bind pose. Playback starts only when Play calls enterEntryState().
+     */
+    public void armEntryState(AnimatorComponent animator) {
+        if (animator == null) return;
+        animator.playbackTime = 0.0f;
+        animator.isPlaying = true;
+        if (animator.controller != null) {
+            animator.controller.resetToEntryState();
+            syncActiveClip(animator, animator.controller.getCurrentState());
+        }
+        resetToBindPose(animator);
+    }
+
+    /**
+     * Stops playback: rewinds the controller to its Entry State (ready for the next Play) and
+     * drops the mesh back into its rest pose instead of freezing on the last sampled frame.
+     */
+    public void stop(AnimatorComponent animator) {
+        if (animator == null) return;
+        animator.isPlaying = false;
+        animator.playbackTime = 0.0f;
+        if (animator.controller != null) {
+            animator.controller.resetToEntryState();
+        }
+        resetToBindPose(animator);
+    }
+
+    /**
+     * Overwrites the full 64-matrix palette with the skeleton's bind pose (world bind * inverse bind
+     * offset, which is identity for a consistently rigged mesh). Slots beyond the skeleton's bone count
+     * are set to identity so no stale keyframe matrices survive. The palette is re-streamed to the GPU
+     * bone uniforms every frame, so the next frame renders the rest pose.
+     */
+    public void resetToBindPose(AnimatorComponent animator) {
+        if (animator == null) return;
+        Skeleton skeleton = animator.skeleton;
+        int boneCount = (skeleton != null) ? Math.min(skeleton.getBoneCount(), AnimatorComponent.MAX_BONES) : 0;
+
+        for (int i = 0; i < boneCount; i++) {
+            Skeleton.BoneNode bone = skeleton.getBone(i);
+            if (bone != null) {
+                System.arraycopy(bone.localBindTransform, 0, localBoneTransforms[i], 0, 16);
+            } else {
+                setIdentity(localBoneTransforms[i]);
+            }
+        }
+        if (boneCount > 0) {
+            evaluateHierarchyAndPalette(animator, skeleton, boneCount);
+        }
+        for (int i = 0; i < AnimatorComponent.MAX_BONES; i++) {
+            if (i >= boneCount || skeleton.getBone(i) == null) setIdentity(animator.bonePaletteMatrices[i]);
+        }
+
+        animator.bindPoseApplied = true;
+        animator.setDirty(true);
+    }
+
+    private void applyBindPoseOnce(AnimatorComponent animator) {
+        if (!animator.bindPoseApplied) resetToBindPose(animator);
+    }
+
+    private static void setIdentity(float[] m) {
+        for (int j = 0; j < 16; j++) m[j] = (j % 5 == 0) ? 1.0f : 0.0f;
+    }
+
+    /**
      * Updates and evaluates the skeleton animation pose for a target AnimatorComponent.
      */
     public void update(AnimatorComponent animator, float deltaTime) {
-        if (animator == null || !animator.isPlaying) return;
+        // Play-state gate: no animation time accumulates outside an active Play session
+        if (playState != PlayState.SIMULATING) {
+            if (animator == null) return;
+            if (playState == PlayState.EDITING) {
+                // Editor Mode: hold frame 0 so the scene stays static, and show the bind pose
+                animator.playbackTime = 0.0f;
+                applyBindPoseOnce(animator);
+            }
+            // PAUSED: freeze timers and leave the last evaluated palette untouched, so characters
+            // hold their exact mid-motion pose (no bind-pose reset, no phase drift)
+            return;
+        }
+        if (animator == null) return;
+        if (!animator.isPlaying) {
+            // A stopped animator must not keep presenting its last sampled (often mid-motion) pose
+            applyBindPoseOnce(animator);
+            return;
+        }
 
         Skeleton skeleton = animator.skeleton;
         if (skeleton == null) return;
@@ -57,71 +177,73 @@ public class AnimationSystem {
 
             AnimatorState currentState = controller.getCurrentState();
             AnimatorState targetState = controller.getTargetState();
-            boolean transitioning = controller.isTransitioning();
+            if (currentState == null || !currentState.hasMotion() || controller.isCurrentStateFinished()) {
+                // Empty state, or a single-shot state that ran out with no transition leaving it
+                applyBindPoseOnce(animator);
+                return;
+            }
+            syncActiveClip(animator, currentState);
+
+            boolean blendTarget = controller.isTransitioning() && targetState != null && targetState.hasMotion();
             float weight = controller.getCrossfadeWeight();
+            float stateTimeA = controller.getCurrentStateTime();
+            float stateTimeB = controller.getTargetStateTime();
 
-            if (currentState == null || currentState.clip == null) return;
-
-            float sampleTimeA = currentState.clip.normalizeTime(controller.getCurrentStateTime());
-            float sampleTimeB = (targetState != null && targetState.clip != null) ?
-                    targetState.clip.normalizeTime(controller.getTargetStateTime()) : 0.0f;
+            // Blend weights depend only on parameters, so evaluate them once per frame rather than per bone
+            float[] weightsA = currentState.blendTree != null ? currentState.blendTree.evaluateWeights(controller) : null;
+            float[] weightsB = (blendTarget && targetState.blendTree != null) ? targetState.blendTree.evaluateWeights(controller) : null;
 
             for (int i = 0; i < boneCount; i++) {
                 Skeleton.BoneNode bone = skeleton.getBone(i);
                 if (bone == null) continue;
                 float[] localScratch = localBoneTransforms[i];
 
-                KeyframeTrack trackA = currentState.clip.getTrack(bone.name);
+                boolean sampledA = sampleStatePose(currentState, weightsA, stateTimeA, bone, posScratchA, quatScratchA, scaleScratchA);
 
-                if (!transitioning || targetState == null || targetState.clip == null) {
-                    // Single state evaluation
-                    if (trackA != null) {
-                        trackA.samplePosition(sampleTimeA, posBlended);
-                        trackA.sampleRotation(sampleTimeA, quatBlended);
-                        trackA.sampleScale(sampleTimeA, scaleBlended);
-                        composeTRS(posBlended, quatBlended, scaleBlended, localScratch);
+                if (!blendTarget) {
+                    if (sampledA) {
+                        composeTRS(posScratchA, quatScratchA, scaleScratchA, localScratch);
                     } else {
                         System.arraycopy(bone.localBindTransform, 0, localScratch, 0, 16);
                     }
-                } else {
-                    // Dual-clip crossfade blending
-                    KeyframeTrack trackB = targetState.clip.getTrack(bone.name);
-
-                    if (trackA != null) {
-                        trackA.samplePosition(sampleTimeA, posScratchA);
-                        trackA.sampleRotation(sampleTimeA, quatScratchA);
-                        trackA.sampleScale(sampleTimeA, scaleScratchA);
-                    } else {
-                        posScratchA[0] = bone.localBindTransform[12];
-                        posScratchA[1] = bone.localBindTransform[13];
-                        posScratchA[2] = bone.localBindTransform[14];
-                        quatScratchA[0] = 0.0f; quatScratchA[1] = 0.0f; quatScratchA[2] = 0.0f; quatScratchA[3] = 1.0f;
-                        scaleScratchA[0] = 1.0f; scaleScratchA[1] = 1.0f; scaleScratchA[2] = 1.0f;
-                    }
-
-                    if (trackB != null) {
-                        trackB.samplePosition(sampleTimeB, posScratchB);
-                        trackB.sampleRotation(sampleTimeB, quatScratchB);
-                        trackB.sampleScale(sampleTimeB, scaleScratchB);
-                    } else {
-                        posScratchB[0] = posScratchA[0]; posScratchB[1] = posScratchA[1]; posScratchB[2] = posScratchA[2];
-                        quatScratchB[0] = quatScratchA[0]; quatScratchB[1] = quatScratchA[1]; quatScratchB[2] = quatScratchA[2]; quatScratchB[3] = quatScratchA[3];
-                        scaleScratchB[0] = scaleScratchA[0]; scaleScratchB[1] = scaleScratchA[1]; scaleScratchB[2] = scaleScratchA[2];
-                    }
-
-                    lerpVector3(posScratchA, posScratchB, weight, posBlended);
-                    slerpQuat(quatScratchA, quatScratchB, weight, quatBlended);
-                    lerpVector3(scaleScratchA, scaleScratchB, weight, scaleBlended);
-
-                    composeTRS(posBlended, quatBlended, scaleBlended, localScratch);
+                    continue;
                 }
+
+                // Dual-state crossfade blending
+                boolean sampledB = sampleStatePose(targetState, weightsB, stateTimeB, bone, posScratchB, quatScratchB, scaleScratchB);
+                if (!sampledA && !sampledB) {
+                    System.arraycopy(bone.localBindTransform, 0, localScratch, 0, 16);
+                    continue;
+                }
+
+                lerpVector3(posScratchA, posScratchB, weight, posBlended);
+                slerpQuat(quatScratchA, quatScratchB, weight, quatBlended);
+                lerpVector3(scaleScratchA, scaleScratchB, weight, scaleBlended);
+
+                composeTRS(posBlended, quatBlended, scaleBlended, localScratch);
             }
         } else {
             // 2. Direct Clip Playback Fallback
             AnimationClip clip = animator.currentClip;
-            if (clip == null) return;
+            if (clip == null) {
+                applyBindPoseOnce(animator);
+                return;
+            }
 
+            float duration = clip.durationSeconds;
             animator.playbackTime += deltaTime * animator.playbackSpeed;
+            if (clip.loopMode == AnimationClip.LoopMode.ONCE) {
+                if (animator.playbackTime >= duration) {
+                    // Single-shot finished: freeze the timeline at its end and drop to the rest pose
+                    stop(animator);
+                    animator.playbackTime = duration;
+                    return;
+                }
+            } else {
+                float period = (clip.loopMode == AnimationClip.LoopMode.PING_PONG) ? duration * 2.0f : duration;
+                animator.playbackTime %= period;
+                if (animator.playbackTime < 0.0f) animator.playbackTime += period;
+            }
             float sampleTime = clip.normalizeTime(animator.playbackTime);
 
             for (int i = 0; i < boneCount; i++) {
@@ -142,7 +264,136 @@ public class AnimationSystem {
         }
 
         evaluateHierarchyAndPalette(animator, skeleton, boneCount);
+        animator.bindPoseApplied = false;
         animator.setDirty(true);
+    }
+
+    private static void syncActiveClip(AnimatorComponent animator, AnimatorState state) {
+        AnimationClip clip = (state != null) ? state.clip : null;
+        if (clip != null && animator.currentClip != clip) {
+            animator.currentClip = clip;
+            animator.activeClipName = clip.name;
+        }
+    }
+
+    /**
+     * Samples one bone's local TRS for a state (single clip or parametric blend tree).
+     * Blend tree motions are phase-synchronised and accumulated with incremental normalised
+     * LERP/SLERP: each motion i is folded in with factor w_i / (w_0 + ... + w_i).
+     *
+     * @return false if no motion had a track for this bone (outputs then hold the decomposed bind pose)
+     */
+    private boolean sampleStatePose(AnimatorState state, float[] blendWeights, float stateTime, Skeleton.BoneNode bone,
+                                    float[] outPos, float[] outQuat, float[] outScale) {
+        BlendTree tree = state.blendTree;
+        if (tree == null) {
+            KeyframeTrack track = state.clip.getTrack(bone.name);
+            if (track == null) {
+                decomposeBind(bone, outPos, outQuat, outScale);
+                return false;
+            }
+            float sampleTime = state.getClipSampleTime(stateTime);
+            track.samplePosition(sampleTime, outPos);
+            track.sampleRotation(sampleTime, outQuat);
+            track.sampleScale(sampleTime, outScale);
+            return true;
+        }
+
+        List<BlendTree.Motion> motions = tree.getMotions();
+        // blendWeights is the tree's own array, so phase is derived here rather than via
+        // getNormalizedTime(), which would re-evaluate (and overwrite) the weights
+        float phase = state.phaseFor(stateTime, tree.getBlendedDuration(blendWeights));
+
+        float accumulated = 0.0f;
+        boolean anyTrack = false;
+        for (int m = 0; m < motions.size(); m++) {
+            float w = blendWeights[m];
+            AnimationClip clip = motions.get(m).clip;
+            if (w <= 0.0f || clip == null) continue;
+
+            KeyframeTrack track = clip.getTrack(bone.name);
+            if (track != null) {
+                float sampleTime = phase * clip.durationSeconds;
+                track.samplePosition(sampleTime, posMotion);
+                track.sampleRotation(sampleTime, quatMotion);
+                track.sampleScale(sampleTime, scaleMotion);
+                anyTrack = true;
+            } else {
+                decomposeBind(bone, posMotion, quatMotion, scaleMotion);
+            }
+
+            accumulated += w;
+            if (accumulated == w) {
+                copy3(posMotion, outPos);
+                copy4(quatMotion, outQuat);
+                copy3(scaleMotion, outScale);
+            } else {
+                float t = w / accumulated;
+                lerpVector3(outPos, posMotion, t, outPos);
+                slerpQuat(outQuat, quatMotion, t, outQuat);
+                lerpVector3(outScale, scaleMotion, t, outScale);
+            }
+        }
+
+        if (accumulated <= 0.0f) {
+            decomposeBind(bone, outPos, outQuat, outScale);
+            return false;
+        }
+        return anyTrack;
+    }
+
+    /** Decomposes a bone's bind matrix into translation, rotation quaternion, and axis scale. */
+    private static void decomposeBind(Skeleton.BoneNode bone, float[] pos, float[] quat, float[] scale) {
+        float[] m = bone.localBindTransform;
+        pos[0] = m[12]; pos[1] = m[13]; pos[2] = m[14];
+
+        float sx = (float) Math.sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
+        float sy = (float) Math.sqrt(m[4] * m[4] + m[5] * m[5] + m[6] * m[6]);
+        float sz = (float) Math.sqrt(m[8] * m[8] + m[9] * m[9] + m[10] * m[10]);
+        scale[0] = sx; scale[1] = sy; scale[2] = sz;
+
+        float isx = sx > 0.000001f ? 1.0f / sx : 0.0f;
+        float isy = sy > 0.000001f ? 1.0f / sy : 0.0f;
+        float isz = sz > 0.000001f ? 1.0f / sz : 0.0f;
+        // Column-major rotation r(row, col) = m[col * 4 + row] / scale[col]
+        float r00 = m[0] * isx, r10 = m[1] * isx, r20 = m[2] * isx;
+        float r01 = m[4] * isy, r11 = m[5] * isy, r21 = m[6] * isy;
+        float r02 = m[8] * isz, r12 = m[9] * isz, r22 = m[10] * isz;
+
+        float trace = r00 + r11 + r22;
+        if (trace > 0.0f) {
+            float s = (float) Math.sqrt(trace + 1.0f) * 2.0f;
+            quat[3] = 0.25f * s;
+            quat[0] = (r21 - r12) / s;
+            quat[1] = (r02 - r20) / s;
+            quat[2] = (r10 - r01) / s;
+        } else if (r00 > r11 && r00 > r22) {
+            float s = (float) Math.sqrt(1.0f + r00 - r11 - r22) * 2.0f;
+            quat[3] = (r21 - r12) / s;
+            quat[0] = 0.25f * s;
+            quat[1] = (r01 + r10) / s;
+            quat[2] = (r02 + r20) / s;
+        } else if (r11 > r22) {
+            float s = (float) Math.sqrt(1.0f + r11 - r00 - r22) * 2.0f;
+            quat[3] = (r02 - r20) / s;
+            quat[0] = (r01 + r10) / s;
+            quat[1] = 0.25f * s;
+            quat[2] = (r12 + r21) / s;
+        } else {
+            float s = (float) Math.sqrt(1.0f + r22 - r00 - r11) * 2.0f;
+            quat[3] = (r10 - r01) / s;
+            quat[0] = (r02 + r20) / s;
+            quat[1] = (r12 + r21) / s;
+            quat[2] = 0.25f * s;
+        }
+    }
+
+    private static void copy3(float[] src, float[] dst) {
+        dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2];
+    }
+
+    private static void copy4(float[] src, float[] dst) {
+        dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; dst[3] = src[3];
     }
 
     /**

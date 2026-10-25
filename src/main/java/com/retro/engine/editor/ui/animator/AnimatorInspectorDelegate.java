@@ -3,6 +3,7 @@ package com.retro.engine.editor.ui.animator;
 import com.retro.engine.animation.state.AnimatorController;
 import com.retro.engine.animation.state.AnimatorState;
 import com.retro.engine.animation.state.AnimatorTransition;
+import com.retro.engine.animation.state.BlendTree;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 
 /**
@@ -32,8 +33,15 @@ public class AnimatorInspectorDelegate {
             UIGeometryBatch.addBoundedText(buffer, "STATE: " + selectedState.name.toUpperCase(), x1 + 0.02f, itemY, x2 - 0.02f, 1.1f, 0.0f, 0.7f, 1.0f, 1.0f);
 
             itemY -= 0.06f;
-            String clipStr = (selectedState.clip != null && selectedState.clip.name != null) ? selectedState.clip.name : "None";
-            UIGeometryBatch.addBoundedText(buffer, "MOTION CLIP: " + clipStr, x1 + 0.02f, itemY, x2 - 0.02f, 0.9f, 0.8f, 0.8f, 0.85f, 1.0f);
+            if (selectedState.blendTree != null) {
+                String treeStr = String.format("BLEND TREE: %s ON %s (%d MOTIONS)",
+                        selectedState.blendTree.type == BlendTree.BlendType.SIMPLE_1D ? "1D" : "2D",
+                        selectedState.blendTree.parameterX, selectedState.blendTree.getMotions().size());
+                UIGeometryBatch.addBoundedText(buffer, treeStr, x1 + 0.02f, itemY, x2 - 0.02f, 0.9f, 0.8f, 0.8f, 0.85f, 1.0f);
+            } else {
+                String clipStr = (selectedState.clip != null && selectedState.clip.name != null) ? selectedState.clip.name : "None";
+                UIGeometryBatch.addBoundedText(buffer, "MOTION CLIP: " + clipStr, x1 + 0.02f, itemY, x2 - 0.02f, 0.9f, 0.8f, 0.8f, 0.85f, 1.0f);
+            }
 
             itemY -= 0.05f;
             UIGeometryBatch.addBoundedText(buffer, String.format("SPEED: %.2fx", selectedState.speed), x1 + 0.02f, itemY, x2 - 0.02f, 0.9f, 0.8f, 0.8f, 0.85f, 1.0f);
