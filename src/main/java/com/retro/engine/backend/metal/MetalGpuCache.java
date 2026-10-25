@@ -147,15 +147,15 @@ public class MetalGpuCache {
         uiRingBuffer.updateBuffer(metalDevice, vertices, count, 6, deferredDisposalQueue, currentFrameCounter);
     }
 
-    public long getOrCreateMeshBuffer(MetalDevice metalDevice, String meshPath, float[] vertices) {
-        if (meshPath == null || vertices == null) return 0L;
+    public long getOrCreateMeshBuffer(MetalDevice metalDevice, String meshPath, float[] vertices, int vertexCount) {
+        if (meshPath == null || vertices == null || vertexCount <= 0) return 0L;
 
         Long existing = gpuMeshCache.get(meshPath);
         if (existing != null) return existing;
 
         evictLruMeshesIfNeeded(metalDevice);
 
-        int stride = (vertices.length % 22 == 0) ? 22 : ((vertices.length % 14 == 0) ? 14 : 9);
+        int stride = vertices.length / vertexCount;
         MetalBuffer buf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), vertices, stride);
         long handle = buf.getHandle();
         if (handle != 0L) {

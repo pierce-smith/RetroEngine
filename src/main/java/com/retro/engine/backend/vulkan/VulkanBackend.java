@@ -233,6 +233,11 @@ public class VulkanBackend implements IRenderBackend {
 
     @Override
     public void submitEntity(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float reflectionStrength) {
+        submitEntity(meshPath, vertices, vertexCount, texturePath, pixels, texW, texH, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, reflectionStrength, null);
+    }
+
+    @Override
+    public void submitEntity(String meshPath, float[] vertices, int vertexCount, String texturePath, byte[] pixels, int texW, int texH, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float reflectionStrength, float[][] bonePalette) {
         VulkanPassEncoder.RenderEntity item;
         if (activeSceneQueueCount < sceneQueuePool.size()) {
             item = sceneQueuePool.get(activeSceneQueueCount);
@@ -243,18 +248,22 @@ public class VulkanBackend implements IRenderBackend {
         activeSceneQueueCount++;
 
         if (meshPath != null && vertices != null && vertices.length > 0) {
-            VulkanGpuCache.VulkanBuffer vbo = gpuCache.getOrCreateMeshBuffer(deviceManager, meshPath, vertices);
+            VulkanGpuCache.VulkanBuffer vbo = gpuCache.getOrCreateMeshBuffer(deviceManager, meshPath, vertices, vertexCount);
             if (vbo != null) {
                 item.vertexBufferHandle = vbo.bufferHandle;
                 item.vertexCount = vbo.vertexCount > 0 ? vbo.vertexCount : vertexCount;
+                item.stride = vbo.floatStride;
             } else {
                 item.vertexBufferHandle = 0L;
                 item.vertexCount = vertexCount;
+                item.stride = 22;
             }
         } else {
             item.vertexBufferHandle = 0L;
             item.vertexCount = vertexCount;
+            item.stride = 22;
         }
+        item.bonePalette = bonePalette;
 
         if (texturePath != null && pixels != null && pixels.length > 0 && texW > 0 && texH > 0) {
             VulkanGpuCache.VulkanTexture tex = gpuCache.getOrCreateTexture(deviceManager, texturePath, pixels, texW, texH);

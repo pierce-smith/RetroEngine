@@ -34,8 +34,19 @@ public class MetalUniformStream {
     public static final long OFFSET_STRIDE = 232L;
     public static final long OFFSET_PASS_FLAGS = 236L;
 
+    // passFlags bit 4: vertex shader applies the bone palette bound at vertex buffer index 2
+    public static final int PASS_FLAG_SKINNED = 16;
+
+    // Bone palettes (64 column-major float4x4) are too large for the 256-byte uniform slot,
+    // so they stream through a dedicated ring buffer bound at vertex buffer index 2.
+    public static final int MAX_PALETTE_BONES = 64;
+    public static final long BONE_PALETTE_STRIDE = MAX_PALETTE_BONES * 64L;
+    public static final int MAX_SKINNED_ENTITIES_PER_FRAME = 64;
+    private static final long BONE_FRAME_SLOT_SIZE = BONE_PALETTE_STRIDE * MAX_SKINNED_ENTITIES_PER_FRAME;
+
     private long streamingUniformBuffer = 0L;
     private long uniformBufferIdentity = 0L;
+    private long bonePaletteBuffer = 0L;
     private int frameIndex = 0;
 
     private final float[] matP = new float[16];
@@ -54,6 +65,7 @@ public class MetalUniformStream {
         long send = device.getObjcMsgSend();
 
         streamingUniformBuffer = MetalBuffer.createUniformBuffer(d, send, TOTAL_RING_BUFFER_SIZE);
+        bonePaletteBuffer = MetalBuffer.createUniformBuffer(d, send, BONE_FRAME_SLOT_SIZE * RING_SLOTS);
         initIdentityUniform(device);
     }
 
@@ -85,6 +97,21 @@ public class MetalUniformStream {
 
     public long getStreamingUniformBuffer() { return streamingUniformBuffer; }
     public long getUniformBufferIdentity() { return uniformBufferIdentity; }
+    public long getBonePaletteBuffer() { return bonePaletteBuffer; }
+
+    public long getBonePaletteOffset(int skinnedIndex) {
+        return frameIndex * BONE_FRAME_SLOT_SIZE + skinnedIndex * BONE_PALETTE_STRIDE;
+    }
+
+    /** Copies up to 64 column-major 4x4 matrices into the current frame's palette slot. */
+    public void writeBonePalette(long pBoneContents, int skinnedIndex, float[][] palette) {
+        if (pBoneContents == 0L || palette == null) return;
+        FloatBuffer fb = MemoryUtil.memFloatBuffer(pBoneContents + getBonePaletteOffset(skinnedIndex), MAX_PALETTE_BONES * 16);
+        int count = Math.min(palette.length, MAX_PALETTE_BONES);
+        for (int b = 0; b < count; b++) {
+            fb.put(palette[b], 0, 16);
+        }
+    }
 
     public int advanceFrameIndex() {
         frameIndex = (frameIndex + 1) % RING_SLOTS;

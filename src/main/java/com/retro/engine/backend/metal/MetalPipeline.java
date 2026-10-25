@@ -10,7 +10,7 @@ import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 
 /**
  * MetalPipeline sets up the RenderWare 3.5 multi-pass shader pipeline featuring:
- * 1. 22-float vertex stride & multi-light type shading (Directional, Point, Spot).
+ * 1. 22-float static / 30-float skinned vertex strides & multi-light type shading (Directional, Point, Spot).
  * 2. Dynamic Ground Entity Shadow Blobs with soft radial distance falloff.
  * 3. Procedural Ray-Plane Anti-Aliased Infinite Shader Grid.
  * 4. Decoupled window composition & 2D UI pipelines with zero depth attachment dependency.
@@ -57,30 +57,47 @@ public class MetalPipeline {
                 uint hasTexture;          // 4 bytes  (224..227)
                 uint isUnlit;             // 4 bytes  (228..231) -> 0 = Lit Model, 1 = Procedural Grid, 2 = Viewport Pass-through
                 uint stride;              // 4 bytes  (232..235)
-                uint passFlags;           // 4 bytes  (236..239) -> bit 0: shadowBlob, bit 1: reflection, bit 2: lightmap, bit 3: fog
+                uint passFlags;           // 4 bytes  (236..239) -> bit 0: shadowBlob, bit 1: reflection, bit 2: lightmap, bit 3: fog, bit 4: skinned
             };
 
             vertex VertexOut vertexMain(uint vertexID [[vertex_id]],
                                         constant float* vertices [[buffer(0)]],
-                                        constant Uniforms& uniforms [[buffer(1)]]) {
+                                        constant Uniforms& uniforms [[buffer(1)]],
+                                        constant float4x4* bones [[buffer(2)]]) {
                 VertexOut out;
                 uint vertStride = uniforms.stride > 0 ? uniforms.stride : 22;
                 int idx = vertexID * vertStride;
 
                 float4 localPos = float4(vertices[idx], vertices[idx+1], vertices[idx+2], 1.0);
-                out.position = uniforms.mvp * localPos;
-                out.worldPos = (uniforms.model * localPos).xyz;
-                out.viewDist = out.position.w;
 
-                if (vertStride == 22) {
+                if (vertStride == 22 || vertStride == 30) {
                     float3 localNorm = float3(vertices[idx+3], vertices[idx+4], vertices[idx+5]);
+                    float3 localTan = float3(vertices[idx+14], vertices[idx+15], vertices[idx+16]);
+                    float3 localBitan = float3(vertices[idx+17], vertices[idx+18], vertices[idx+19]);
+
+                    // Linear blend skinning: bone indices are stored as raw uint bit patterns in floats 22..25
+                    if (vertStride == 30 && (uniforms.passFlags & 16u) != 0u) {
+                        constant uint* boneIds = reinterpret_cast<constant uint*>(vertices);
+                        float4 w = float4(vertices[idx+26], vertices[idx+27], vertices[idx+28], vertices[idx+29]);
+                        float totalWeight = w.x + w.y + w.z + w.w;
+                        if (totalWeight > 0.001) {
+                            float4x4 skin = bones[min(boneIds[idx+22], 63u)] * w.x
+                                          + bones[min(boneIds[idx+23], 63u)] * w.y
+                                          + bones[min(boneIds[idx+24], 63u)] * w.z
+                                          + bones[min(boneIds[idx+25], 63u)] * w.w;
+                            skin = skin * (1.0 / totalWeight);
+                            localPos = skin * localPos;
+                            localNorm = (skin * float4(localNorm, 0.0)).xyz;
+                            localTan = (skin * float4(localTan, 0.0)).xyz;
+                            localBitan = (skin * float4(localBitan, 0.0)).xyz;
+                        }
+                    }
+
                     out.worldNormal = normalize((uniforms.model * float4(localNorm, 0.0)).xyz);
                     out.color = float4(vertices[idx+6], vertices[idx+7], vertices[idx+8], vertices[idx+9]);
                     out.uv = float2(vertices[idx+10], vertices[idx+11]);
                     out.uv2 = float2(vertices[idx+12], vertices[idx+13]);
-                    float3 localTan = float3(vertices[idx+14], vertices[idx+15], vertices[idx+16]);
                     out.tangent = normalize((uniforms.model * float4(localTan, 0.0)).xyz);
-                    float3 localBitan = float3(vertices[idx+17], vertices[idx+18], vertices[idx+19]);
                     out.bitangent = normalize((uniforms.model * float4(localBitan, 0.0)).xyz);
                 } else if (vertStride == 14) {
                     float3 localNorm = float3(vertices[idx+3], vertices[idx+4], vertices[idx+5]);
@@ -98,6 +115,10 @@ public class MetalPipeline {
                     out.tangent = float3(1.0, 0.0, 0.0);
                     out.bitangent = float3(0.0, 1.0, 0.0);
                 }
+
+                out.position = uniforms.mvp * localPos;
+                out.worldPos = (uniforms.model * localPos).xyz;
+                out.viewDist = out.position.w;
 
                 return out;
             }
