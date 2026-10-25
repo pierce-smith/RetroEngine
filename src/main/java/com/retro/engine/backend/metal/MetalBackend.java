@@ -6,17 +6,31 @@ import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.rhi.TextureDesc;
 import com.retro.engine.rhi.ViewportSpec;
 
+import org.lwjgl.system.Callback;
+import org.lwjgl.system.CallbackI;
+import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.system.libffi.FFICIF;
+import org.lwjgl.system.macosx.LibSystem;
+
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 
+import static org.lwjgl.system.APIUtil.apiCreateCIF;
 import static org.lwjgl.system.JNI.invokePPP;
 import static org.lwjgl.system.JNI.invokePPPP;
 import static org.lwjgl.system.macosx.ObjCRuntime.objc_getClass;
+import static org.lwjgl.system.libffi.LibFFI.FFI_DEFAULT_ABI;
+import static org.lwjgl.system.libffi.LibFFI.ffi_type_pointer;
+import static org.lwjgl.system.libffi.LibFFI.ffi_type_void;
 import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 
 /**
  * MetalBackend Facade Bridge routing scene queue and downward-raycast shadow parameters to MetalPassEncoder.
  * Hardened with zero-allocation scene queue views and triple-buffered uniform streaming.
+ * Frames in flight are capped at the uniform ring depth: each committed command buffer carries an
+ * addCompletedHandler: block that returns its in-flight permit once the GPU has consumed the frame.
  */
 public class MetalBackend implements IRenderBackend {
 
@@ -32,6 +46,13 @@ public class MetalBackend implements IRenderBackend {
     private long currentDrawable = 0L;
     private long currentCommandBuffer = 0L;
     private long currentAutoreleasePool = 0L;
+
+    // Matches MetalUniformStream.RING_SLOTS: the CPU never writes a uniform slot the GPU may still be reading
+    private static final int MAX_FRAMES_IN_FLIGHT = 3;
+    private final Semaphore inFlightFrames = new Semaphore(MAX_FRAMES_IN_FLIGHT);
+    private boolean framePermitHeld = false;
+    private long completedHandlerCallback = 0L;
+    private long completedHandlerBlock = 0L;
 
     private float camPanX = 0.0f;
     private float camPanY = 0.25f;
@@ -66,8 +87,43 @@ public class MetalBackend implements IRenderBackend {
         metalTexture.initDefaultTextureAndSampler(metalDevice.getDevice(), metalDevice.getObjcMsgSend());
 
         uniformStreamer.initialize(metalDevice);
+        if (!initCompletedHandlerBlock()) return false;
 
         System.out.println("[MetalBackend] Sub-step 4B: Downward Raycast Dynamic Surface Shadows Active.");
+        return true;
+    }
+
+    /**
+     * Builds a global Objective-C block literal (void (^)(id<MTLCommandBuffer>)) whose invoke pointer is an
+     * LWJGL libffi closure. Global blocks are never copied or disposed by the runtime, so one instance is
+     * reused for every frame. Metal calls it on its own dispatch thread; LWJGL attaches that thread to the JVM.
+     */
+    private boolean initCompletedHandlerBlock() {
+        long nsConcreteGlobalBlock = LibSystem.getLibrary().getFunctionAddress("_NSConcreteGlobalBlock");
+        if (nsConcreteGlobalBlock == 0L) {
+            System.err.println("[MetalBackend] ERROR: _NSConcreteGlobalBlock not found; cannot register command buffer completion handlers.");
+            return false;
+        }
+
+        final FFICIF cif = apiCreateCIF(FFI_DEFAULT_ABI, ffi_type_void, ffi_type_pointer, ffi_type_pointer);
+        CallbackI onCompleted = new CallbackI() {
+            @Override public FFICIF getCallInterface() { return cif; }
+            @Override public void callback(long ret, long args) { inFlightFrames.release(); }
+        };
+        completedHandlerCallback = onCompleted.address();
+
+        // struct Block_literal { void *isa; int flags; int reserved; void *invoke; Block_descriptor *descriptor; }
+        // struct Block_descriptor { unsigned long reserved; unsigned long size; } is packed after the literal.
+        final int BLOCK_IS_GLOBAL = 1 << 28;
+        completedHandlerBlock = MemoryUtil.nmemCalloc(1, 48);
+        long descriptor = completedHandlerBlock + 32;
+        MemoryUtil.memPutAddress(completedHandlerBlock, nsConcreteGlobalBlock);
+        MemoryUtil.memPutInt(completedHandlerBlock + 8, BLOCK_IS_GLOBAL);
+        MemoryUtil.memPutInt(completedHandlerBlock + 12, 0);
+        MemoryUtil.memPutAddress(completedHandlerBlock + 16, completedHandlerCallback);
+        MemoryUtil.memPutAddress(completedHandlerBlock + 24, descriptor);
+        MemoryUtil.memPutLong(descriptor, 0L);
+        MemoryUtil.memPutLong(descriptor + 8, 32L);
         return true;
     }
 
@@ -175,10 +231,15 @@ public class MetalBackend implements IRenderBackend {
             currentAutoreleasePool = invokePPP(alloc, sel_registerName("init"), send);
         }
 
+        // Block until the GPU has retired the frame that last used the uniform slot we are about to advance into
+        inFlightFrames.acquireUninterruptibly();
+        framePermitHeld = true;
+
         uniformStreamer.advanceFrameIndex();
 
         currentDrawable = invokePPP(metalLayer, sel_registerName("nextDrawable"), send);
         if (currentDrawable == 0L) {
+            releaseUnsubmittedFramePermit();
             if (currentAutoreleasePool != 0L && send != 0L) {
                 invokePPP(currentAutoreleasePool, sel_registerName("drain"), send);
                 currentAutoreleasePool = 0L;
@@ -215,10 +276,16 @@ public class MetalBackend implements IRenderBackend {
         long send = metalDevice.getObjcMsgSend();
 
         if (currentCommandBuffer != 0L && send != 0L) {
+            // The completion handler owns this frame's permit from here; it is released once the GPU finishes.
+            if (framePermitHeld) {
+                invokePPPP(currentCommandBuffer, sel_registerName("addCompletedHandler:"), completedHandlerBlock, send);
+                framePermitHeld = false;
+            }
             invokePPP(currentCommandBuffer, sel_registerName("commit"), send);
             currentCommandBuffer = 0L;
             currentDrawable = 0L;
         }
+        releaseUnsubmittedFramePermit();
 
         if (currentAutoreleasePool != 0L && send != 0L) {
             invokePPP(currentAutoreleasePool, sel_registerName("drain"), send);
@@ -226,7 +293,36 @@ public class MetalBackend implements IRenderBackend {
         }
     }
 
-    @Override public void shutdown() {}
+    private void releaseUnsubmittedFramePermit() {
+        if (framePermitHeld) {
+            framePermitHeld = false;
+            inFlightFrames.release();
+        }
+    }
+
+    @Override
+    public void shutdown() {
+        releaseUnsubmittedFramePermit();
+        // Drain in-flight frames before freeing the block and closure the GPU completion handlers still reference
+        try {
+            if (!inFlightFrames.tryAcquire(MAX_FRAMES_IN_FLIGHT, 1, TimeUnit.SECONDS)) {
+                System.err.println("[MetalBackend] WARNING: GPU frames still in flight at shutdown; leaking completion handler block.");
+                return;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return;
+        }
+        if (completedHandlerBlock != 0L) {
+            MemoryUtil.nmemFree(completedHandlerBlock);
+            completedHandlerBlock = 0L;
+        }
+        if (completedHandlerCallback != 0L) {
+            Callback.free(completedHandlerCallback);
+            completedHandlerCallback = 0L;
+        }
+        inFlightFrames.release(MAX_FRAMES_IN_FLIGHT);
+    }
     @Override public long createBuffer(BufferDesc createInfo) { return 102L; }
     @Override public void destroyBuffer(long handle) {}
     @Override public long createTexture(TextureDesc createInfo) { return 201L; }
