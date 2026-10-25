@@ -2,6 +2,8 @@ package com.retro.engine.editor.ui.overlays;
 
 import com.retro.engine.editor.input.InspectorInputDelegate;
 import com.retro.engine.editor.ui.batch.PanelRegion;
+import com.retro.engine.editor.ui.dock.DockPanel;
+import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.panels.EngineConsolePanel;
 import com.retro.engine.editor.ui.panels.HierarchyPanel;
 import com.retro.engine.editor.ui.panels.InspectorPanel;
@@ -96,8 +98,9 @@ public class OverlaySystem {
     public void hideContextMenu() { closeContextMenu(); }
 
     public void openContextMenu(float ndcX, float ndcY, List<MenuItem> items) {
-        this.contextMenuNdcX = ndcX;
-        this.contextMenuNdcY = ndcY;
+        // Panel handlers run in their docked design space; the menu itself is drawn in screen space
+        this.contextMenuNdcX = DockSpace.inputToScreenX(ndcX);
+        this.contextMenuNdcY = DockSpace.inputToScreenY(ndcY);
         this.contextMenuItems.clear();
         if (items != null) this.contextMenuItems.addAll(items);
         this.contextMenuVisible = true;
@@ -155,11 +158,16 @@ public class OverlaySystem {
         }
     }
 
-    private void buildAndShowContextMenuAt(float ndcX, float ndcY, EditorWorkspace manager) {
+    private void buildAndShowContextMenuAt(float screenX, float screenY, EditorWorkspace manager) {
         if (manager == null) return;
         List<MenuItem> items = new ArrayList<>();
 
-        PanelRegion region = PanelRegion.getRegionAt(ndcX, ndcY, this);
+        PanelRegion region = PanelRegion.getRegionAt(screenX, screenY, this);
+
+        // Hit-tests below are authored in each panel's design space; the menu opens at the screen point
+        DockPanel dockPanel = DockSpace.panelAt(screenX, screenY);
+        float ndcX = (dockPanel != null) ? DockSpace.toDesignX(dockPanel, screenX) : screenX;
+        float ndcY = (dockPanel != null) ? DockSpace.toDesignY(dockPanel, screenY) : screenY;
 
         if (region == PanelRegion.ASSET_DIRECTORY) {
             String activePath = manager.getAssetDatabase().getCurrentFolderPath();
@@ -239,7 +247,7 @@ public class OverlaySystem {
                 items.add(new MenuItem("Deselect All", () -> manager.selectEntity(null)));
             }
 
-        } else if (region == PanelRegion.VIEWPORT && manager.getActiveWorkspaceTab() == EditorWorkspace.WorkspaceTab.ANIMATOR) {
+        } else if (region == PanelRegion.ANIMATOR) {
             // Animator graph canvas owns this region; its menu is opened on press by AnimatorCanvasDelegate
             return;
         } else if (region == PanelRegion.VIEWPORT) {
@@ -279,7 +287,7 @@ public class OverlaySystem {
         }
 
         if (!items.isEmpty()) {
-            openContextMenu(ndcX, ndcY, items);
+            openContextMenu(screenX, screenY, items);
         }
     }
 

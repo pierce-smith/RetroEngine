@@ -11,6 +11,8 @@ import com.retro.engine.editor.gizmos.GizmoState;
 import com.retro.engine.editor.gizmos.GizmoSystem;
 import com.retro.engine.editor.ui.animator.AnimatorGraphPanel;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
+import com.retro.engine.editor.ui.dock.DockPanel;
+import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.overlays.ContextMenuOverlay;
 import com.retro.engine.editor.ui.overlays.ModalDialogOverlay;
 import com.retro.engine.editor.ui.overlays.OverlaySystem;
@@ -100,8 +102,16 @@ public class EditorWorkspace {
     public void setLastNdcPos(float ndcX, float ndcY) { this.lastNdcX = ndcX; this.lastNdcY = ndcY; }
 
     // --- Active Workspace Tab & Animator State ---
-    public WorkspaceTab getActiveWorkspaceTab() { return activeWorkspaceTab; }
-    public void setActiveWorkspaceTab(WorkspaceTab tab) { if (tab != null) this.activeWorkspaceTab = tab; }
+    // The focused workspace follows whichever of the docked Scene / Animator tabs the user last activated
+    public WorkspaceTab getActiveWorkspaceTab() {
+        activeWorkspaceTab = (DockSpace.getFocusedWorkspace() == DockPanel.ANIMATOR) ? WorkspaceTab.ANIMATOR : WorkspaceTab.SCENE_3D;
+        return activeWorkspaceTab;
+    }
+    public void setActiveWorkspaceTab(WorkspaceTab tab) {
+        if (tab == null) return;
+        this.activeWorkspaceTab = tab;
+        DockSpace.activate(tab == WorkspaceTab.ANIMATOR ? DockPanel.ANIMATOR : DockPanel.SCENE);
+    }
 
     public String getSelectedStateName() { return selectedStateName; }
     public void setSelectedStateName(String name) { if (name != null) this.selectedStateName = name; }
@@ -195,44 +205,25 @@ public class EditorWorkspace {
     public float[] generateUiVertices() {
         uiGeometryBuffer.reset();
 
-        ViewportPanel.renderFraming(uiGeometryBuffer, activeWorkspaceTab);
+        // Master dock layout: every panel below the menu bar is a docked, tabbed tile
+        DockSpace.layout(windowWidth, windowHeight);
+        DockSpace.renderBackgrounds(uiGeometryBuffer);
 
-        if (activeWorkspaceTab == WorkspaceTab.SCENE_3D) {
-            ViewportPanel.renderToolbar(uiGeometryBuffer, gizmoStateController.getGizmoMode());
-
-            ColliderDebugRenderer.renderColliderWireframes(
-                uiGeometryBuffer, sceneManager.getSceneEntities(), sceneManager.getSelectedEntity(),
-                cameraController, gizmoStateController.getCamPanX(), gizmoStateController.getCamPanY(),
-                gizmoStateController.getCamZoom(), gizmoStateController.getCamPitch(), gizmoStateController.getCamYaw()
-            );
-
-            Entity selected = sceneManager.getSelectedEntity();
-            if (selected != null && overlayManager.getActiveModal() == ModalState.NONE) {
-                SceneWorld.WorldTransform wt = sceneManager.getComputedWorldTransform(selected);
-                GizmoSystem.render3DGizmosAtWorldPosition(
-                    uiGeometryBuffer, wt.px(), wt.py(), wt.pz(), gizmoStateController.getGizmoMode(),
-                    gizmoStateController.getActiveAxis(), cameraController, gizmoStateController.getCamPanX(),
-                    gizmoStateController.getCamPanY(), gizmoStateController.getCamZoom(),
-                    gizmoStateController.getCamPitch(), gizmoStateController.getCamYaw()
-                );
+        for (DockPanel panel : DockPanel.values()) {
+            if (!DockSpace.isRenderable(panel)) continue;
+            DockSpace.beginPanel(uiGeometryBuffer, panel);
+            try {
+                renderDockedPanel(panel);
+            } finally {
+                DockSpace.endPanel(uiGeometryBuffer);
             }
-
-            HierarchyPanel.render(uiGeometryBuffer, sceneManager.getSceneEntities());
-            InspectorPanel.render(uiGeometryBuffer, sceneManager.getSelectedEntity(), assetDirectoryManager.getAssetDirectory());
-        } else if (activeWorkspaceTab == WorkspaceTab.ANIMATOR) {
-            AnimatorGraphPanel.render(uiGeometryBuffer, getActiveAnimatorController(), selectedStateName, selectedTransition);
         }
 
-        AssetBrowserPanel.render(uiGeometryBuffer, assetDirectoryManager.getAssetDirectory(), assetDirectoryManager.getCurrentFolderPath());
+        DockSpace.renderChrome(uiGeometryBuffer);
 
         MainMenuBar.render(uiGeometryBuffer, overlayManager.getActiveDropdownMenu(), sceneManager.getActiveScenePath(), sceneManager.getPlayState());
 
-        if (activeWorkspaceTab == WorkspaceTab.SCENE_3D) {
-            EngineConsolePanel.renderProfilerHUD(uiGeometryBuffer, lastDeltaTime);
-        }
-        if (EngineConsolePanel.isConsoleVisible()) {
-            EngineConsolePanel.renderConsole(uiGeometryBuffer);
-        }
+        DockSpace.renderDragOverlay(uiGeometryBuffer);
 
         if (overlayManager.getActiveDropdownMenu() != DropdownMenu.NONE) {
             MainMenuBar.renderDropdownMenuOverlay(uiGeometryBuffer, overlayManager.getActiveDropdownMenu(), commandHistory, gizmoStateController.is3DGridVisible());
@@ -256,6 +247,41 @@ public class EditorWorkspace {
         this.cachedUiVertexCount = size / 6;
 
         return this.cachedUiVertices;
+    }
+
+    /** Renders one dock panel's content in its authored design space (mapped onto its tile by the dock). */
+    private void renderDockedPanel(DockPanel panel) {
+        switch (panel) {
+            case SCENE -> {
+                ViewportPanel.renderToolbar(uiGeometryBuffer, gizmoStateController.getGizmoMode());
+
+                ColliderDebugRenderer.renderColliderWireframes(
+                    uiGeometryBuffer, sceneManager.getSceneEntities(), sceneManager.getSelectedEntity(),
+                    cameraController, gizmoStateController.getCamPanX(), gizmoStateController.getCamPanY(),
+                    gizmoStateController.getCamZoom(), gizmoStateController.getCamPitch(), gizmoStateController.getCamYaw()
+                );
+
+                Entity selected = sceneManager.getSelectedEntity();
+                if (selected != null && overlayManager.getActiveModal() == ModalState.NONE) {
+                    SceneWorld.WorldTransform wt = sceneManager.getComputedWorldTransform(selected);
+                    GizmoSystem.render3DGizmosAtWorldPosition(
+                        uiGeometryBuffer, wt.px(), wt.py(), wt.pz(), gizmoStateController.getGizmoMode(),
+                        gizmoStateController.getActiveAxis(), cameraController, gizmoStateController.getCamPanX(),
+                        gizmoStateController.getCamPanY(), gizmoStateController.getCamZoom(),
+                        gizmoStateController.getCamPitch(), gizmoStateController.getCamYaw()
+                    );
+                }
+
+                EngineConsolePanel.renderProfilerHUD(uiGeometryBuffer, lastDeltaTime);
+            }
+            case HIERARCHY -> HierarchyPanel.render(uiGeometryBuffer, sceneManager.getSceneEntities());
+            case INSPECTOR -> InspectorPanel.render(uiGeometryBuffer, sceneManager.getSelectedEntity(), assetDirectoryManager.getAssetDirectory());
+            case ANIMATOR -> AnimatorGraphPanel.renderCanvas(uiGeometryBuffer, getActiveAnimatorController(), selectedStateName);
+            case ANIMATOR_PARAMETERS -> AnimatorGraphPanel.renderParameters(uiGeometryBuffer, getActiveAnimatorController());
+            case ANIMATOR_INSPECTOR -> AnimatorGraphPanel.renderInspector(uiGeometryBuffer, getActiveAnimatorController(), selectedStateName, selectedTransition);
+            case ASSETS -> AssetBrowserPanel.render(uiGeometryBuffer, assetDirectoryManager.getAssetDirectory(), assetDirectoryManager.getCurrentFolderPath());
+            case CONSOLE -> EngineConsolePanel.renderConsole(uiGeometryBuffer);
+        }
     }
 
     /**

@@ -124,6 +124,7 @@ public class MainMenuBar {
                 renderDropdownItem(buffer, "Reset Viewport Camera (F)", minX + 0.01f, 0.85f, maxX - 0.01f);
                 String gridLabel = show3DGrid ? "Hide 3D Grid" : "Show 3D Grid";
                 renderDropdownItem(buffer, gridLabel, minX + 0.01f, 0.76f, maxX - 0.01f);
+                renderDropdownItem(buffer, "Reset Dock Layout", minX + 0.01f, 0.67f, maxX - 0.01f);
             }
             default -> {}
         }

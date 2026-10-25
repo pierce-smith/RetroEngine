@@ -149,6 +149,12 @@ public class MetalBackend implements IRenderBackend {
     }
 
     @Override
+    public void setSceneViewport(float minX, float minY, float maxX, float maxY, float aspect) {
+        resourceCache.updateViewportQuad(metalDevice, minX, minY, maxX, maxY);
+        passEncoder.setSceneAspect(aspect);
+    }
+
+    @Override
     public void updateGridMesh(float[] vertices, int count) {
         resourceCache.updateGridMesh(metalDevice, vertices, count);
     }

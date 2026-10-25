@@ -1,10 +1,12 @@
 package com.retro.engine.editor.ui.batch;
 
 import com.retro.engine.editor.EditorWorkspace;
+import com.retro.engine.editor.ui.dock.DockPanel;
+import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.overlays.OverlaySystem;
 
 /**
- * PanelRegion defines explicit screen-space NDC bounds for all editor panels,
+ * PanelRegion classifies screen-space NDC points by the editor panel under them,
  * providing clean regional hit-testing and preventing click/drag bleed
  * between UI panels and the 3D viewport canvas.
  */
@@ -14,10 +16,15 @@ public enum PanelRegion {
     INSPECTOR,
     ASSET_DIRECTORY,
     VIEWPORT,
+    ANIMATOR,
+    CONSOLE,
+    DOCK_CHROME,
     OVERLAY_MODAL;
 
     /**
-     * Determines which panel region contains the given NDC coordinate (X, Y in [-1.0, 1.0]).
+     * Determines which panel region contains the given screen NDC coordinate (X, Y in [-1.0, 1.0]).
+     * Panels are resolved through the dock layout, so regions follow panels wherever they are docked;
+     * tab bars and splitters report DOCK_CHROME.
      */
     public static PanelRegion getRegionAt(float ndcX, float ndcY, OverlaySystem overlayManager) {
         if (overlayManager != null) {
@@ -28,18 +35,10 @@ public enum PanelRegion {
             }
         }
 
-        if (ndcY >= 0.92f) {
+        if (ndcY >= DockSpace.AREA_Y1) {
             return TOP_BAR;
         }
-        if (ndcY <= -0.42f) {
-            return ASSET_DIRECTORY;
-        }
-        if (ndcX <= -0.55f) {
-            return SCENE_HIERARCHY;
-        }
-        if (ndcX >= 0.55f) {
-            return INSPECTOR;
-        }
-        return VIEWPORT;
+        DockPanel panel = DockSpace.panelAt(ndcX, ndcY);
+        return (panel != null) ? panel.region : DOCK_CHROME;
     }
 }

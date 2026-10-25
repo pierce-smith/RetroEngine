@@ -6,6 +6,8 @@ import com.retro.engine.assets.importers.MeshImporter;
 import com.retro.engine.assets.importers.PixelBufferData;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ViewportCamera;
+import com.retro.engine.editor.ui.dock.DockPanel;
+import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.panels.EngineConsolePanel;
 import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.scene.entity.Entity;
@@ -121,6 +123,9 @@ public class SceneRenderPipeline {
         public int uiVertexCount = 0;
         public int totalDrawCalls = 0;
         public int totalActiveVertices = 0;
+        // Docked Scene tile (screen NDC) the offscreen 3D image is composited into; empty when hidden
+        public float sceneMinX = -0.55f, sceneMinY = -0.50f, sceneMaxX = 0.55f, sceneMaxY = 0.88f;
+        public float sceneAspect = 712.0f / 488.0f;
 
         public RenderSceneSnapshot() {
             for (int i = 0; i < 1024; i++) {
@@ -176,7 +181,7 @@ public class SceneRenderPipeline {
             frustumCuller.updateFromCamera(
                     camera.getPanX(), camera.getPanY(), camera.getZoom(),
                     camera.getPitch(), camera.getYaw(),
-                    50.0f, 712.0f / 488.0f, 0.1f, 100.0f
+                    50.0f, DockSpace.getSceneAspect(), 0.1f, 100.0f
             );
         }
 
@@ -305,6 +310,16 @@ public class SceneRenderPipeline {
         snapshot.uiVertices = editorManager.getUiVertices();
         snapshot.uiVertexCount = editorManager.getUiVertexCount();
 
+        if (DockSpace.isSceneViewportVisible()) {
+            snapshot.sceneMinX = DockSpace.getContentX0(DockPanel.SCENE);
+            snapshot.sceneMinY = DockSpace.getContentY0(DockPanel.SCENE);
+            snapshot.sceneMaxX = DockSpace.getContentX1(DockPanel.SCENE);
+            snapshot.sceneMaxY = DockSpace.getContentY1(DockPanel.SCENE);
+        } else {
+            snapshot.sceneMinX = snapshot.sceneMinY = snapshot.sceneMaxX = snapshot.sceneMaxY = 0.0f;
+        }
+        snapshot.sceneAspect = DockSpace.getSceneAspect();
+
         if (snapshot.gridVisible) {
             totalActiveVertices += snapshot.gridVertexCount;
         }
@@ -358,6 +373,7 @@ public class SceneRenderPipeline {
             );
         }
 
+        rhi.setSceneViewport(snapshot.sceneMinX, snapshot.sceneMinY, snapshot.sceneMaxX, snapshot.sceneMaxY, snapshot.sceneAspect);
         rhi.updateGridMesh(snapshot.gridVertices, snapshot.gridVertexCount);
         rhi.updateUiMesh(snapshot.uiVertices, snapshot.uiVertexCount);
 

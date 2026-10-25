@@ -34,6 +34,12 @@ public class MetalPassEncoder {
         public float[][] bonePalette = null;
     }
 
+    private float sceneAspect = 0.0f; // 0 = fall back to framebuffer aspect
+
+    public void setSceneAspect(float aspect) {
+        this.sceneAspect = aspect;
+    }
+
     public void encodeOffscreen3DPass(
             long commandBuffer, MetalDevice device, MetalPipeline pipeline, MetalTexture texture,
             MetalTargetPass framebuffer, MetalGpuCache resourceCache, MetalUniformStream streamer,
@@ -63,7 +69,9 @@ public class MetalPassEncoder {
         long encoder3D = invokePPPP(commandBuffer, sel_registerName("renderCommandEncoderWithDescriptor:"), offscreenPassDesc, send);
         invokePPPP(encoder3D, sel_registerName("setTriangleFillMode:"), 0L, send); // MTLTriangleFillModeFill
 
-        float aspect = (framebuffer.getWidth() > 0 && framebuffer.getHeight() > 0) ? ((float) framebuffer.getWidth() / (float) framebuffer.getHeight()) : (712.0f / 488.0f);
+        // The offscreen image is stretched over the docked Scene tile, so project with that tile's aspect
+        float aspect = sceneAspect > 0.0f ? sceneAspect
+                : (framebuffer.getWidth() > 0 && framebuffer.getHeight() > 0) ? ((float) framebuffer.getWidth() / (float) framebuffer.getHeight()) : (712.0f / 488.0f);
         long currentSlotOffset = streamer.getCurrentSlotOffset();
         long streamingUniformBuffer = streamer.getStreamingUniformBuffer();
         long pBufferContents = invokePPP(streamingUniformBuffer, sel_registerName("contents"), send);
@@ -282,7 +290,7 @@ public class MetalPassEncoder {
         long pipelineComp = pipeline.getPipelineStateComposition();
         if (pipelineComp == 0L) pipelineComp = pipeline.getPipelineState3D();
 
-        if (resourceCache.getViewportQuadBuffer() != 0L && framebuffer.getOffscreenColorTexture() != 0L && pipelineComp != 0L) {
+        if (resourceCache.isViewportQuadVisible() && resourceCache.getViewportQuadBuffer() != 0L && framebuffer.getOffscreenColorTexture() != 0L && pipelineComp != 0L) {
             invokePPPP(encoderWin, sel_registerName("setRenderPipelineState:"), pipelineComp, send);
 
             invokePPPPP(encoderWin, sel_registerName("setFragmentTexture:atIndex:"), framebuffer.getOffscreenColorTexture(), 0L, send);

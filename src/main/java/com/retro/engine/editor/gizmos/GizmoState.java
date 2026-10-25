@@ -4,6 +4,8 @@ import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.EditorWorkspace.GizmoAxis;
 import com.retro.engine.editor.EditorWorkspace.GizmoMode;
 import com.retro.engine.editor.ViewportCamera;
+import com.retro.engine.editor.ui.dock.DockPanel;
+import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.overlays.OverlaySystem;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.world.SceneWorld;
@@ -157,8 +159,15 @@ public class GizmoState {
     public boolean onCursorPos(double rawX, double rawY, EditorWorkspace manager, OverlaySystem overlayManager) {
         if (manager == null) return false;
 
-        double refX = (rawX / (double) manager.getWindowWidth()) * 1280.0;
-        double refY = (rawY / (double) manager.getWindowHeight()) * 720.0;
+        // Gizmo math is authored against the Scene panel's design rect; map the docked tile back into it
+        float screenX = (float) ((rawX / (double) manager.getWindowWidth()) * 2.0 - 1.0);
+        float screenY = (float) (1.0 - (rawY / (double) manager.getWindowHeight()) * 2.0);
+        if (DockSpace.isVisible(DockPanel.SCENE)) {
+            screenX = DockSpace.toDesignX(DockPanel.SCENE, screenX);
+            screenY = DockSpace.toDesignY(DockPanel.SCENE, screenY);
+        }
+        double refX = (screenX + 1.0) * 640.0;
+        double refY = (1.0 - screenY) * 360.0;
 
         double deltaX = refX - lastMouseX;
         double deltaY = refY - lastMouseY;

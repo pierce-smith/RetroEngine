@@ -42,6 +42,8 @@ public class MetalGpuCache {
     private final MetalRingBuffer uiRingBuffer = new MetalRingBuffer();
 
     private long viewportQuadBuffer = 0L;
+    private float quadMinX = -0.55f, quadMinY = -0.50f, quadMaxX = 0.55f, quadMaxY = 0.88f;
+    private boolean viewportQuadVisible = true;
     private long groundQuadBuffer = 0L;
 
     public MetalGpuCache() {
@@ -109,17 +111,42 @@ public class MetalGpuCache {
         return groundQuadBuffer;
     }
 
+    public boolean isViewportQuadVisible() {
+        return viewportQuadVisible;
+    }
+
+    private static float[] buildViewportQuadVerts(float minX, float minY, float maxX, float maxY) {
+        return new float[] {
+            minX, maxY, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f,
+            minX, minY, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f,
+            maxX, minY, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+
+            minX, maxY, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f,
+            maxX, minY, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+            maxX, maxY, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f
+        };
+    }
+
+    /**
+     * Re-targets the scene composite quad onto the docked Scene tile. The quad is only rebuilt when
+     * the rect changes; the previous buffer is released once in-flight frames no longer reference it.
+     */
+    public void updateViewportQuad(MetalDevice metalDevice, float minX, float minY, float maxX, float maxY) {
+        viewportQuadVisible = (maxX - minX) > 0.0001f && (maxY - minY) > 0.0001f;
+        if (!viewportQuadVisible || metalDevice == null) return;
+        if (viewportQuadBuffer != 0L && minX == quadMinX && minY == quadMinY && maxX == quadMaxX && maxY == quadMaxY) return;
+
+        MetalBuffer buf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(),
+                buildViewportQuadVerts(minX, minY, maxX, maxY), 9);
+        if (buf.getHandle() == 0L) return;
+        enqueueDeferredDisposal(viewportQuadBuffer);
+        this.viewportQuadBuffer = buf.getHandle();
+        quadMinX = minX; quadMinY = minY; quadMaxX = maxX; quadMaxY = maxY;
+    }
+
     public void initViewportQuad(MetalDevice metalDevice) {
         if (metalDevice == null) return;
-        float[] quadVerts = new float[] {
-            -0.55f,  0.88f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f,
-            -0.55f, -0.50f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f,
-             0.55f, -0.50f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
-
-            -0.55f,  0.88f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f,
-             0.55f, -0.50f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
-             0.55f,  0.88f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f
-        };
+        float[] quadVerts = buildViewportQuadVerts(quadMinX, quadMinY, quadMaxX, quadMaxY);
         MetalBuffer buf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), quadVerts, 9);
         this.viewportQuadBuffer = buf.getHandle();
 

@@ -9,6 +9,7 @@ import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.editor.commands.EditorCommands;
+import com.retro.engine.editor.ui.dock.DockSpace;
 
 import java.io.File;
 import java.util.List;
@@ -122,6 +123,7 @@ public class MainMenuBarInputDelegate {
             } else if (activeDropdownMenu == DropdownMenu.VIEW) {
                 if (itemIndex == 0) { UISoundPlayer.play(UISound.CLICK); manager.resetViewportCamera(); }
                 else if (itemIndex == 1) { UISoundPlayer.play(UISound.TOGGLE); manager.getGizmoStateController().toggle3DGrid(); }
+                else if (itemIndex == 2) { UISoundPlayer.play(UISound.CLICK); DockSpace.resetLayout(); }
             }
             return true;
         }

@@ -1,0 +1,626 @@
+package com.retro.engine.editor.ui.dock;
+
+import com.retro.engine.editor.audio.UISoundPlayer;
+import com.retro.engine.editor.audio.UISoundPlayer.UISound;
+import com.retro.engine.editor.ui.batch.UIGeometryBatch;
+import com.retro.engine.editor.ui.panels.EngineConsolePanel;
+import com.retro.engine.editor.ui.panels.ViewportPanel;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+/**
+ * Master docking workspace covering the full editor viewport below the main menu bar.
+ * Owns the dock tree (splits + tabbed leaves), computes every panel's on-screen tile, renders tab
+ * bars / splitters / drop previews, and handles tab activation, tab drag-and-drop re-docking
+ * (stack, or split left/right/top/bottom) and splitter resizing.
+ *
+ * Panels keep rendering and hit-testing in their authored design-space NDC: rendering goes through
+ * {@link #beginPanel}/{@link #endPanel} (a batch transform + clip), and input is mapped back with
+ * {@link #toDesignX}/{@link #toDesignY}.
+ */
+public final class DockSpace {
+
+    public static final float AREA_X0 = -1.0f, AREA_Y0 = -1.0f, AREA_X1 = 1.0f, AREA_Y1 = 0.92f;
+    static final float TAB_BAR_H = 0.05f;
+
+    private static final float GAP = 0.006f;
+    private static final float SPLITTER_GRAB = 0.014f;
+    private static final float MIN_EXTENT = 0.12f;
+    private static final float DRAG_THRESHOLD = 0.02f;
+    private static final float TAB_TEXT_SIZE = 0.95f;
+    private static final float MIN_RENDERABLE = 0.04f;
+
+    public enum DropZone { CENTER, LEFT, RIGHT, TOP, BOTTOM }
+
+    private static final int PANEL_COUNT = DockPanel.values().length;
+    private static final boolean[] visible = new boolean[PANEL_COUNT];
+    private static final float[] contentX0 = new float[PANEL_COUNT];
+    private static final float[] contentY0 = new float[PANEL_COUNT];
+    private static final float[] contentX1 = new float[PANEL_COUNT];
+    private static final float[] contentY1 = new float[PANEL_COUNT];
+
+    private static final List<DockNode> leaves = new ArrayList<>();
+    private static final List<DockNode> splits = new ArrayList<>();
+
+    private static DockNode root;
+    private static int windowW = 1280;
+    private static int windowH = 720;
+
+    // Interaction state
+    private static DockNode draggingSplit = null;
+    private static DockPanel draggingTab = null;
+    private static boolean tabDragActive = false;
+    private static float pressX, pressY;
+    private static float cursorX, cursorY;
+
+    // Scene <-> Animator focus, console tab sync, and input-space context
+    private static DockPanel focusedWorkspace = DockPanel.SCENE;
+    private static boolean lastConsoleFlag = false;
+    private static DockPanel consoleReturnPanel = DockPanel.ASSETS;
+    private static DockPanel inputPanel = null;
+
+    static {
+        for (DockPanel p : DockPanel.values()) {
+            int i = p.ordinal();
+            contentX0[i] = p.designX0; contentY0[i] = p.designY0;
+            contentX1[i] = p.designX1; contentY1[i] = p.designY1;
+        }
+        root = buildDefaultLayout();
+    }
+
+    private DockSpace() {}
+
+    /** Default layout reproduces the classic editor arrangement, with every panel now dockable. */
+    private static DockNode buildDefaultLayout() {
+        float areaH = AREA_Y1 - AREA_Y0;
+        DockNode left = DockNode.leaf(DockPanel.HIERARCHY, DockPanel.ANIMATOR_PARAMETERS);
+        DockNode center = DockNode.leaf(DockPanel.SCENE, DockPanel.ANIMATOR);
+        DockNode right = DockNode.leaf(DockPanel.INSPECTOR, DockPanel.ANIMATOR_INSPECTOR);
+        DockNode bottom = DockNode.leaf(DockPanel.ASSETS, DockPanel.CONSOLE);
+
+        DockNode centerRight = DockNode.split(true, 1.10f / 1.55f, center, right);
+        DockNode top = DockNode.split(true, 0.45f / 2.0f, left, centerRight);
+        return DockNode.split(false, (AREA_Y1 - (-0.42f)) / areaH, top, bottom);
+    }
+
+    public static void resetLayout() {
+        root = buildDefaultLayout();
+        draggingSplit = null;
+        draggingTab = null;
+        tabDragActive = false;
+        focusedWorkspace = DockPanel.SCENE;
+        consoleReturnPanel = DockPanel.ASSETS;
+        EngineConsolePanel.setConsoleVisible(false);
+        lastConsoleFlag = false;
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Layout
+    // ------------------------------------------------------------------------------------------
+
+    /** Recomputes every tile for this frame. Call once per frame before rendering or routing input. */
+    public static void layout(int winW, int winH) {
+        if (winW > 0) windowW = winW;
+        if (winH > 0) windowH = winH;
+
+        syncConsoleVisibility();
+
+        leaves.clear();
+        splits.clear();
+        Arrays.fill(visible, false);
+        layoutNode(root, AREA_X0, AREA_Y0, AREA_X1, AREA_Y1);
+
+        // Keep Scene/Animator focus on a panel the user can actually see
+        DockPanel other = (focusedWorkspace == DockPanel.SCENE) ? DockPanel.ANIMATOR : DockPanel.SCENE;
+        if (!visible[focusedWorkspace.ordinal()] && visible[other.ordinal()]) focusedWorkspace = other;
+    }
+
+    private static void layoutNode(DockNode n, float x0, float y0, float x1, float y1) {
+        n.x0 = x0; n.y0 = y0; n.x1 = x1; n.y1 = y1;
+        if (n.leaf) {
+            leaves.add(n);
+            DockPanel p = n.activePanel();
+            if (p != null) {
+                int i = p.ordinal();
+                visible[i] = true;
+                contentX0[i] = x0; contentY0[i] = y0;
+                contentX1[i] = x1; contentY1[i] = Math.max(y0, y1 - TAB_BAR_H);
+            }
+            return;
+        }
+        splits.add(n);
+        if (n.horizontal) {
+            float line = x0 + (x1 - x0) * n.ratio;
+            layoutNode(n.first, x0, y0, line - GAP * 0.5f, y1);
+            layoutNode(n.second, line + GAP * 0.5f, y0, x1, y1);
+        } else {
+            float line = y1 - (y1 - y0) * n.ratio;
+            layoutNode(n.first, x0, line + GAP * 0.5f, x1, y1);
+            layoutNode(n.second, x0, y0, x1, line - GAP * 0.5f);
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Panel queries & coordinate mapping
+    // ------------------------------------------------------------------------------------------
+
+    public static boolean isVisible(DockPanel p) {
+        return visible[p.ordinal()];
+    }
+
+    /** Visible and large enough to draw meaningful content. */
+    public static boolean isRenderable(DockPanel p) {
+        int i = p.ordinal();
+        return visible[i] && (contentX1[i] - contentX0[i]) > MIN_RENDERABLE && (contentY1[i] - contentY0[i]) > MIN_RENDERABLE;
+    }
+
+    public static float getContentX0(DockPanel p) { return contentX0[p.ordinal()]; }
+    public static float getContentY0(DockPanel p) { return contentY0[p.ordinal()]; }
+    public static float getContentX1(DockPanel p) { return contentX1[p.ordinal()]; }
+    public static float getContentY1(DockPanel p) { return contentY1[p.ordinal()]; }
+
+    public static float toDesignX(DockPanel p, float screenX) {
+        int i = p.ordinal();
+        float w = contentX1[i] - contentX0[i];
+        if (w <= 0.0001f) return p.designX0;
+        return p.designX0 + (screenX - contentX0[i]) * (p.designX1 - p.designX0) / w;
+    }
+
+    public static float toDesignY(DockPanel p, float screenY) {
+        int i = p.ordinal();
+        float h = contentY1[i] - contentY0[i];
+        if (h <= 0.0001f) return p.designY0;
+        return p.designY0 + (screenY - contentY0[i]) * (p.designY1 - p.designY0) / h;
+    }
+
+    public static float toScreenX(DockPanel p, float designX) {
+        int i = p.ordinal();
+        return contentX0[i] + (designX - p.designX0) * (contentX1[i] - contentX0[i]) / (p.designX1 - p.designX0);
+    }
+
+    public static float toScreenY(DockPanel p, float designY) {
+        int i = p.ordinal();
+        return contentY0[i] + (designY - p.designY0) * (contentY1[i] - contentY0[i]) / (p.designY1 - p.designY0);
+    }
+
+    /** Panel whose content area (excluding tab bar) contains the point, or null. */
+    public static DockPanel panelAt(float x, float y) {
+        for (int i = 0; i < leaves.size(); i++) {
+            DockNode leaf = leaves.get(i);
+            DockPanel p = leaf.activePanel();
+            if (p == null) continue;
+            int k = p.ordinal();
+            if (x >= contentX0[k] && x <= contentX1[k] && y >= contentY0[k] && y <= contentY1[k]) return p;
+        }
+        return null;
+    }
+
+    public static void beginPanel(UIGeometryBatch.Buffer buffer, DockPanel p) {
+        int i = p.ordinal();
+        buffer.setPanelMapping(p.designX0, p.designY0, p.designX1, p.designY1,
+                contentX0[i], contentY0[i], contentX1[i], contentY1[i]);
+    }
+
+    public static void endPanel(UIGeometryBatch.Buffer buffer) {
+        buffer.clearPanelMapping();
+    }
+
+    /**
+     * Marks input as being dispatched in a panel's design space, so code that opens screen-space
+     * overlays (context menus) from inside a panel handler can convert back to screen coordinates.
+     */
+    public static void beginInput(DockPanel p) { inputPanel = p; }
+    public static void endInput() { inputPanel = null; }
+    public static float inputToScreenX(float x) { return inputPanel == null ? x : toScreenX(inputPanel, x); }
+    public static float inputToScreenY(float y) { return inputPanel == null ? y : toScreenY(inputPanel, y); }
+
+    // ------------------------------------------------------------------------------------------
+    // Scene viewport (3D offscreen image placement)
+    // ------------------------------------------------------------------------------------------
+
+    public static boolean isSceneViewportVisible() {
+        return isRenderable(DockPanel.SCENE);
+    }
+
+    /** Pixel aspect of the docked Scene tile; the projection uses it so the 3D image is never distorted. */
+    public static float getSceneAspect() {
+        int i = DockPanel.SCENE.ordinal();
+        float w = (contentX1[i] - contentX0[i]) * 0.5f * windowW;
+        float h = (contentY1[i] - contentY0[i]) * 0.5f * windowH;
+        return (w > 1.0f && h > 1.0f) ? (w / h) : (712.0f / 488.0f);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Activation, workspace focus, console sync
+    // ------------------------------------------------------------------------------------------
+
+    public static DockPanel getFocusedWorkspace() {
+        return focusedWorkspace;
+    }
+
+    /**
+     * Activates a panel's tab. Scene and Animator also swap their stacked companions, matching the
+     * classic editor: Scene shows Hierarchy/Inspector, Animator shows Parameters/Anim Inspector.
+     */
+    public static void activate(DockPanel p) {
+        if (!activateTab(p)) return;
+        if (p == DockPanel.SCENE) {
+            focusedWorkspace = DockPanel.SCENE;
+            swapCompanion(DockPanel.ANIMATOR_PARAMETERS, DockPanel.HIERARCHY);
+            swapCompanion(DockPanel.ANIMATOR_INSPECTOR, DockPanel.INSPECTOR);
+        } else if (p == DockPanel.ANIMATOR) {
+            focusedWorkspace = DockPanel.ANIMATOR;
+            swapCompanion(DockPanel.HIERARCHY, DockPanel.ANIMATOR_PARAMETERS);
+            swapCompanion(DockPanel.INSPECTOR, DockPanel.ANIMATOR_INSPECTOR);
+        }
+    }
+
+    /** If 'from' is the shown tab of its stack, show 'to' instead (only when they share that stack). */
+    private static void swapCompanion(DockPanel from, DockPanel to) {
+        DockNode leaf = findLeaf(from);
+        if (leaf != null && leaf.activePanel() == from && leaf.tabs.contains(to)) {
+            leaf.activeTab = leaf.tabs.indexOf(to);
+        }
+    }
+
+    private static boolean activateTab(DockPanel p) {
+        DockNode leaf = findLeaf(p);
+        if (leaf == null) return false;
+        if (p == DockPanel.CONSOLE && leaf.activePanel() != DockPanel.CONSOLE && leaf.activePanel() != null) {
+            consoleReturnPanel = leaf.activePanel();
+        }
+        leaf.activeTab = leaf.tabs.indexOf(p);
+        return true;
+    }
+
+    /**
+     * Keeps EngineConsolePanel's visibility flag (toggled by the Cmd+~ hotkey) and the Console tab in
+     * agreement: a hotkey toggle shows/hides the tab, and tab clicks update the flag.
+     */
+    private static void syncConsoleVisibility() {
+        DockNode leaf = findLeaf(DockPanel.CONSOLE);
+        if (leaf == null) return;
+        boolean flag = EngineConsolePanel.isConsoleVisible();
+        boolean shown = leaf.activePanel() == DockPanel.CONSOLE;
+
+        if (flag != lastConsoleFlag) {
+            if (flag && !shown) {
+                activateTab(DockPanel.CONSOLE);
+            } else if (!flag && shown && leaf.tabs.size() > 1) {
+                DockPanel back = leaf.tabs.contains(consoleReturnPanel) && consoleReturnPanel != DockPanel.CONSOLE
+                        ? consoleReturnPanel
+                        : leaf.tabs.get(leaf.tabs.get(0) == DockPanel.CONSOLE ? 1 : 0);
+                leaf.activeTab = leaf.tabs.indexOf(back);
+            }
+            shown = leaf.activePanel() == DockPanel.CONSOLE;
+        }
+        EngineConsolePanel.setConsoleVisible(shown);
+        lastConsoleFlag = shown;
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Input: tab clicks, tab drag & drop, splitter resize
+    // ------------------------------------------------------------------------------------------
+
+    public static boolean isDragging() {
+        return draggingSplit != null || (draggingTab != null && tabDragActive);
+    }
+
+    /** Left press on dock chrome (tab bars, splitters). Returns true if consumed. */
+    public static boolean onPress(float x, float y) {
+        if (x < AREA_X0 || x > AREA_X1 || y < AREA_Y0 || y > AREA_Y1) return false;
+
+        DockNode split = splitterAt(x, y);
+        if (split != null) {
+            draggingSplit = split;
+            return true;
+        }
+
+        DockNode leaf = leafAt(x, y);
+        if (leaf != null && y >= leaf.tabBarBottom()) {
+            int tab = tabIndexAt(leaf, x);
+            if (tab >= 0) {
+                DockPanel p = leaf.tabs.get(tab);
+                if (leaf.activePanel() != p) UISoundPlayer.play(UISound.CLICK);
+                activate(p);
+                draggingTab = p;
+                tabDragActive = false;
+                pressX = x;
+                pressY = y;
+            }
+            return true; // empty tab-bar space is still chrome
+        }
+        return false;
+    }
+
+    /** Cursor move; returns true while a dock drag owns the pointer. */
+    public static boolean onCursor(float x, float y) {
+        cursorX = x;
+        cursorY = y;
+        if (draggingSplit != null) {
+            resizeSplit(draggingSplit, x, y);
+            return true;
+        }
+        if (draggingTab != null) {
+            if (!tabDragActive && Math.hypot(x - pressX, y - pressY) > DRAG_THRESHOLD) tabDragActive = true;
+            return true;
+        }
+        return false;
+    }
+
+    /** Left release; completes splitter drags and tab drops. Returns true if a dock interaction ended. */
+    public static boolean onRelease(float x, float y) {
+        if (draggingSplit != null) {
+            draggingSplit = null;
+            return true;
+        }
+        if (draggingTab != null) {
+            DockPanel panel = draggingTab;
+            boolean wasDragging = tabDragActive;
+            draggingTab = null;
+            tabDragActive = false;
+            if (wasDragging) {
+                DockNode target = leafAt(x, y);
+                if (target != null) {
+                    dropPanel(panel, target, dropZoneFor(target, x, y));
+                    UISoundPlayer.play(UISound.SPAWN);
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /** Cancels any in-progress dock drag (e.g. when a modal opens). */
+    public static void cancelDrag() {
+        draggingSplit = null;
+        draggingTab = null;
+        tabDragActive = false;
+    }
+
+    private static void resizeSplit(DockNode n, float x, float y) {
+        float extent = n.horizontal ? (n.x1 - n.x0) : (n.y1 - n.y0);
+        if (extent <= 0.0001f) return;
+        float ratio = n.horizontal ? (x - n.x0) / extent : (n.y1 - y) / extent;
+        float min = Math.min(0.5f, MIN_EXTENT / extent);
+        n.ratio = Math.max(min, Math.min(1.0f - min, ratio));
+    }
+
+    private static DockNode splitterAt(float x, float y) {
+        float half = SPLITTER_GRAB * 0.5f;
+        for (int i = 0; i < splits.size(); i++) {
+            DockNode n = splits.get(i);
+            if (n.horizontal) {
+                float line = n.x0 + (n.x1 - n.x0) * n.ratio;
+                if (Math.abs(x - line) <= half && y >= n.y0 && y <= n.y1) return n;
+            } else {
+                float line = n.y1 - (n.y1 - n.y0) * n.ratio;
+                if (Math.abs(y - line) <= half && x >= n.x0 && x <= n.x1) return n;
+            }
+        }
+        return null;
+    }
+
+    private static DockNode leafAt(float x, float y) {
+        for (int i = 0; i < leaves.size(); i++) {
+            DockNode leaf = leaves.get(i);
+            if (x >= leaf.x0 && x <= leaf.x1 && y >= leaf.y0 && y <= leaf.y1) return leaf;
+        }
+        return null;
+    }
+
+    private static DropZone dropZoneFor(DockNode leaf, float x, float y) {
+        if (y >= leaf.tabBarBottom()) return DropZone.CENTER;
+        float w = leaf.x1 - leaf.x0;
+        float h = leaf.tabBarBottom() - leaf.y0;
+        if (w <= 0.0001f || h <= 0.0001f) return DropZone.CENTER;
+        float u = (x - leaf.x0) / w;
+        float v = (y - leaf.y0) / h;
+        float left = u, right = 1.0f - u, bottom = v, top = 1.0f - v;
+        float nearest = Math.min(Math.min(left, right), Math.min(bottom, top));
+        if (nearest >= 0.25f) return DropZone.CENTER;
+        if (nearest == left) return DropZone.LEFT;
+        if (nearest == right) return DropZone.RIGHT;
+        if (nearest == top) return DropZone.TOP;
+        return DropZone.BOTTOM;
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Tree mutation
+    // ------------------------------------------------------------------------------------------
+
+    private static void dropPanel(DockPanel p, DockNode target, DropZone zone) {
+        DockNode source = findLeaf(p);
+        if (source == null || target == null || !target.leaf) return;
+
+        if (zone == DropZone.CENTER) {
+            if (source != target) {
+                removePanel(p);
+                target.tabs.add(p);
+            }
+            activate(p);
+            return;
+        }
+
+        // Splitting a single-tab stack against itself would leave an empty side
+        if (source == target && source.tabs.size() == 1) return;
+
+        removePanel(p);
+        DockNode newLeaf = DockNode.leaf(p);
+        boolean horizontal = (zone == DropZone.LEFT || zone == DropZone.RIGHT);
+        boolean newFirst = (zone == DropZone.LEFT || zone == DropZone.TOP);
+        DockNode split = DockNode.split(horizontal, 0.5f, newFirst ? newLeaf : target, newFirst ? target : newLeaf);
+        replaceNode(target, split);
+        activate(p);
+    }
+
+    private static void removePanel(DockPanel p) {
+        DockNode leaf = findLeaf(p);
+        if (leaf == null) return;
+        int idx = leaf.tabs.indexOf(p);
+        leaf.tabs.remove(idx);
+        if (idx < leaf.activeTab || leaf.activeTab >= leaf.tabs.size()) {
+            leaf.activeTab = Math.max(0, leaf.activeTab - 1);
+        }
+        if (leaf.tabs.isEmpty() && leaf != root) {
+            DockNode parent = findParent(root, leaf);
+            if (parent != null) {
+                replaceNode(parent, parent.first == leaf ? parent.second : parent.first);
+            }
+        }
+    }
+
+    private static void replaceNode(DockNode old, DockNode replacement) {
+        if (old == root) {
+            root = replacement;
+            return;
+        }
+        DockNode parent = findParent(root, old);
+        if (parent == null) return;
+        if (parent.first == old) parent.first = replacement; else parent.second = replacement;
+    }
+
+    private static DockNode findParent(DockNode node, DockNode child) {
+        if (node == null || node.leaf) return null;
+        if (node.first == child || node.second == child) return node;
+        DockNode found = findParent(node.first, child);
+        return (found != null) ? found : findParent(node.second, child);
+    }
+
+    private static DockNode findLeaf(DockPanel p) {
+        return findLeaf(root, p);
+    }
+
+    private static DockNode findLeaf(DockNode node, DockPanel p) {
+        if (node == null) return null;
+        if (node.leaf) return node.tabs.contains(p) ? node : null;
+        DockNode found = findLeaf(node.first, p);
+        return (found != null) ? found : findLeaf(node.second, p);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Rendering
+    // ------------------------------------------------------------------------------------------
+
+    private static float naturalTabWidth(DockPanel p) {
+        return 0.035f + p.title.length() * TAB_TEXT_SIZE * 0.012f;
+    }
+
+    private static float tabScale(DockNode leaf) {
+        float total = 0.0f;
+        for (int i = 0; i < leaf.tabs.size(); i++) total += naturalTabWidth(leaf.tabs.get(i));
+        float avail = (leaf.x1 - leaf.x0) - 0.01f;
+        return (total > avail && total > 0.0f) ? Math.max(0.0f, avail / total) : 1.0f;
+    }
+
+    private static int tabIndexAt(DockNode leaf, float x) {
+        float scale = tabScale(leaf);
+        float tx = leaf.x0 + 0.005f;
+        for (int i = 0; i < leaf.tabs.size(); i++) {
+            float w = naturalTabWidth(leaf.tabs.get(i)) * scale;
+            if (x >= tx && x <= tx + w) return i;
+            tx += w;
+        }
+        return -1;
+    }
+
+    /** Opaque backing for every non-scene tile, drawn before panel content. */
+    public static void renderBackgrounds(UIGeometryBatch.Buffer buffer) {
+        for (int i = 0; i < leaves.size(); i++) {
+            DockNode leaf = leaves.get(i);
+            if (leaf.activePanel() == DockPanel.SCENE) continue;
+            UIGeometryBatch.addQuad(buffer, leaf.x0, leaf.y0, leaf.x1, leaf.tabBarBottom(), 0.08f, 0.08f, 0.10f, 1.0f);
+        }
+    }
+
+    /** Tab bars, tile frames and splitters, drawn after panel content. */
+    public static void renderChrome(UIGeometryBatch.Buffer buffer) {
+        DockNode hoverSplit = (draggingSplit != null) ? draggingSplit : (draggingTab == null ? splitterAt(cursorX, cursorY) : null);
+
+        for (int i = 0; i < splits.size(); i++) {
+            DockNode n = splits.get(i);
+            boolean hot = (n == hoverSplit);
+            float r = hot ? 0.0f : 0.04f, g = hot ? 0.55f : 0.04f, b = hot ? 0.90f : 0.05f;
+            if (n.horizontal) {
+                float line = n.x0 + (n.x1 - n.x0) * n.ratio;
+                UIGeometryBatch.addQuad(buffer, line - GAP * 0.5f, n.y0, line + GAP * 0.5f, n.y1, r, g, b, 1.0f);
+            } else {
+                float line = n.y1 - (n.y1 - n.y0) * n.ratio;
+                UIGeometryBatch.addQuad(buffer, n.x0, line - GAP * 0.5f, n.x1, line + GAP * 0.5f, r, g, b, 1.0f);
+            }
+        }
+
+        for (int i = 0; i < leaves.size(); i++) {
+            DockNode leaf = leaves.get(i);
+            float barY0 = leaf.tabBarBottom(), barY1 = leaf.y1;
+
+            UIGeometryBatch.addQuad(buffer, leaf.x0, barY0, leaf.x1, barY1, 0.09f, 0.09f, 0.11f, 1.0f);
+            UIGeometryBatch.addQuad(buffer, leaf.x0, barY0, leaf.x1, barY0 + 0.002f, 0.22f, 0.24f, 0.30f, 1.0f);
+
+            float scale = tabScale(leaf);
+            float tx = leaf.x0 + 0.005f;
+            for (int t = 0; t < leaf.tabs.size(); t++) {
+                DockPanel p = leaf.tabs.get(t);
+                float w = naturalTabWidth(p) * scale;
+                boolean active = (t == leaf.activeTab);
+                boolean beingDragged = (p == draggingTab && tabDragActive);
+                float bg = active ? 0.17f : 0.12f;
+                UIGeometryBatch.addQuad(buffer, tx + 0.002f, barY0 + 0.002f, tx + w - 0.002f, barY1 - 0.006f,
+                        bg, bg + 0.01f, bg + 0.05f, beingDragged ? 0.5f : 1.0f);
+                if (active) {
+                    UIGeometryBatch.addQuad(buffer, tx + 0.002f, barY1 - 0.010f, tx + w - 0.002f, barY1 - 0.006f, 0.0f, 0.6f, 1.0f, 1.0f);
+                }
+                float tc = active ? 1.0f : 0.6f;
+                UIGeometryBatch.addBoundedText(buffer, p.title, tx + 0.015f, barY1 - 0.017f, tx + w - 0.006f, TAB_TEXT_SIZE, tc, tc, tc, 1.0f);
+                tx += w;
+            }
+
+            // Right-aligned caption for the active panel (e.g. which RHI backend renders the Scene)
+            String caption = captionFor(leaf.activePanel());
+            if (caption != null) {
+                float capSize = 0.85f;
+                float capW = caption.length() * capSize * 0.012f;
+                float capX = Math.max(tx + 0.02f, leaf.x1 - 0.012f - capW);
+                if (capX + 0.05f < leaf.x1) {
+                    UIGeometryBatch.addBoundedText(buffer, caption, capX, barY1 - 0.019f, leaf.x1 - 0.008f, capSize, 0.3f, 0.75f, 1.0f, 1.0f);
+                }
+            }
+
+            UIGeometryBatch.addFrameBorder(buffer, leaf.x0, leaf.y0, leaf.x1, barY1, 0.002f, 0.22f, 0.24f, 0.30f, 1.0f);
+        }
+    }
+
+    private static String captionFor(DockPanel p) {
+        if (p == DockPanel.SCENE) return ViewportPanel.getRhiCanvasTitle();
+        if (p == DockPanel.ANIMATOR) return "STATE MACHINE";
+        return null;
+    }
+
+    /** Drop-zone preview and dragged-tab ghost, drawn above everything docked. */
+    public static void renderDragOverlay(UIGeometryBatch.Buffer buffer) {
+        if (draggingTab == null || !tabDragActive) return;
+
+        DockNode target = leafAt(cursorX, cursorY);
+        if (target != null) {
+            DropZone zone = dropZoneFor(target, cursorX, cursorY);
+            float x0 = target.x0, y0 = target.y0, x1 = target.x1, y1 = target.y1;
+            float midX = (x0 + x1) * 0.5f, midY = (y0 + target.tabBarBottom()) * 0.5f;
+            switch (zone) {
+                case LEFT -> x1 = midX;
+                case RIGHT -> x0 = midX;
+                case TOP -> y0 = midY;
+                case BOTTOM -> y1 = midY;
+                default -> {}
+            }
+            UIGeometryBatch.addQuad(buffer, x0, y0, x1, y1, 0.05f, 0.45f, 0.95f, 0.28f);
+            UIGeometryBatch.addFrameBorder(buffer, x0, y0, x1, y1, 0.004f, 0.2f, 0.7f, 1.0f, 1.0f);
+        }
+
+        float gw = naturalTabWidth(draggingTab);
+        float gx = cursorX + 0.01f, gy = cursorY - 0.01f;
+        UIGeometryBatch.addQuad(buffer, gx, gy - TAB_BAR_H + 0.008f, gx + gw, gy, 0.12f, 0.30f, 0.50f, 0.95f);
+        UIGeometryBatch.addBoundedText(buffer, draggingTab.title, gx + 0.015f, gy - 0.011f, gx + gw - 0.006f, TAB_TEXT_SIZE, 1.0f, 1.0f, 1.0f, 1.0f);
+    }
+}
