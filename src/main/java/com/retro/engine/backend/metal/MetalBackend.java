@@ -94,13 +94,20 @@ public class MetalBackend implements IRenderBackend {
 
     @Override
     public boolean initialize(ViewportSpec windowInfo) {
-        if (!metalDevice.initialize(windowInfo)) return false;
-        if (!metalDevice.supportsMetal3()) {
-            System.err.println("[MetalBackend] ERROR: This GPU does not support Metal 3 (MTLGPUFamilyMetal3), which the argument-buffer "
-                    + "material path requires. Launch with --vulkan to use the Vulkan (MoltenVK) backend instead.");
+        if (!metalDevice.initialize(windowInfo)) {
+            shutdown();
             return false;
         }
-        if (!metalPipeline.initialize(metalDevice)) return false;
+        if (!metalDevice.supportsMetal3()) {
+            System.err.println("[MetalBackend] ERROR: This GPU does not support Metal 3 (MTLGPUFamilyMetal3), which the argument-buffer "
+                    + "material path requires. Triggering automatic Vulkan fallback...");
+            shutdown();
+            return false;
+        }
+        if (!metalPipeline.initialize(metalDevice)) {
+            shutdown();
+            return false;
+        }
 
         framebuffer.initFramebuffer(metalDevice, windowInfo.width() > 0 ? windowInfo.width() : 712, windowInfo.height() > 0 ? windowInfo.height() : 488);
         resourceCache.initViewportQuad(metalDevice);
@@ -108,7 +115,10 @@ public class MetalBackend implements IRenderBackend {
         metalTexture.initDefaultTextureAndSampler(metalDevice.getDevice(), metalDevice.getObjcMsgSend());
 
         uniformStreamer.initialize(metalDevice);
-        if (!initCompletedHandlerBlock()) return false;
+        if (!initCompletedHandlerBlock()) {
+            shutdown();
+            return false;
+        }
 
         System.out.println("[MetalBackend] Sub-step 4B: Downward Raycast Dynamic Surface Shadows Active.");
         return true;
