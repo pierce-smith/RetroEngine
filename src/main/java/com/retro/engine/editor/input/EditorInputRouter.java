@@ -177,7 +177,10 @@ public class EditorInputRouter {
                 return true;
             }
 
-            // Node drags may end outside the animator tile, so the canvas always sees the release
+            // Playhead scrubs and node drags may end outside their tiles, so they always see the release
+            if (button == 0 && AnimatorGraphPanel.handleInspectorRelease()) {
+                return true;
+            }
             if (DockSpace.isVisible(DockPanel.ANIMATOR)) {
                 DockSpace.beginInput(DockPanel.ANIMATOR);
                 try {
@@ -279,6 +282,9 @@ public class EditorInputRouter {
             if (DockSpace.isVisible(DockPanel.ANIMATOR)) {
                 AnimatorGraphPanel.handleCursorPos(DockSpace.toDesignX(DockPanel.ANIMATOR, coords.ndcX), DockSpace.toDesignY(DockPanel.ANIMATOR, coords.ndcY), workspace);
             }
+            if (DockSpace.isVisible(DockPanel.ANIMATOR_INSPECTOR)) {
+                AnimatorGraphPanel.handleInspectorCursorPos(DockSpace.toDesignX(DockPanel.ANIMATOR_INSPECTOR, coords.ndcX), DockSpace.toDesignY(DockPanel.ANIMATOR_INSPECTOR, coords.ndcY), workspace);
+            }
             if (DockSpace.isVisible(DockPanel.INSPECTOR)) {
                 InspectorInputDelegate.processInspectorDrag(DockSpace.toDesignX(DockPanel.INSPECTOR, coords.ndcX), DockSpace.toDesignY(DockPanel.INSPECTOR, coords.ndcY), workspace);
             }
@@ -293,6 +299,13 @@ public class EditorInputRouter {
         if (panel == DockPanel.INSPECTOR) {
             InspectorPanel.scroll((float) -yOffset * 0.18f);
             return true;
+        }
+        if (panel == DockPanel.ANIMATOR || panel == DockPanel.ANIMATOR_INSPECTOR) {
+            float dx = DockSpace.toDesignX(panel, workspace.getLastNdcX());
+            float dy = DockSpace.toDesignY(panel, workspace.getLastNdcY());
+            return panel == DockPanel.ANIMATOR
+                    ? AnimatorGraphPanel.handleCanvasScroll(dx, dy, yOffset)
+                    : AnimatorGraphPanel.handleInspectorScroll(dx, dy, yOffset);
         }
         if (panel == DockPanel.SCENE && !workspace.getOverlayManager().isContextMenuVisible()) {
             if (cameraController != null) {
