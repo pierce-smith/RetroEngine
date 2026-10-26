@@ -4,9 +4,15 @@ import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.panels.MenuItem;
+import com.retro.engine.editor.ui.theme.EditorTheme;
 
 import java.util.List;
 
+/**
+ * ContextMenuOverlay encapsulates rendering and layout for right-click popup context menus.
+ * Updated to match the macOS Dark Graphite aesthetic with rounded cards, metallic borders,
+ * and subtle drop shadows while maintaining exact hit-testing boundaries.
+ */
 public class ContextMenuOverlay {
 
     public static void render(UIGeometryBatch.Buffer buffer, float rawNdcX, float rawNdcY, List<MenuItem> items) {
@@ -30,9 +36,11 @@ public class ContextMenuOverlay {
             maxY = minY + totalHeight;
         }
 
-        // Dark background quad with border
-        UIGeometryBatch.addQuad(buffer, minX, minY, maxX, maxY, 0.10f, 0.11f, 0.15f, 0.98f);
-        UIGeometryBatch.addFrameBorder(buffer, minX, minY, maxX, maxY, 0.003f, 0.0f, 0.55f, 0.90f, 1.0f);
+        // Soft drop shadow
+        UIGeometryBatch.addRoundedQuad(buffer, minX + 0.004f, minY - 0.008f, maxX + 0.004f, maxY - 0.002f, EditorTheme.RADIUS * 1.4f, 0x000000, 0.35f);
+
+        // Dark Graphite popup card container
+        UIGeometryBatch.addRoundedCard(buffer, minX, minY, maxX, maxY, EditorTheme.RADIUS * 1.4f, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 0.98f);
 
         float currentY = maxY - 0.01f;
 
@@ -41,17 +49,19 @@ public class ContextMenuOverlay {
             float rowTop = currentY;
             float rowBottom = currentY - itemHeight;
 
-            UIGeometryBatch.addQuad(buffer, minX + 0.005f, rowBottom + 0.005f, maxX - 0.005f, rowTop - 0.005f, 0.16f, 0.18f, 0.24f, 1.0f);
-            UIGeometryBatch.addFrameBorder(buffer, minX + 0.005f, rowBottom + 0.005f, maxX - 0.005f, rowTop - 0.005f, 0.001f, 0.25f, 0.28f, 0.35f, 1.0f);
+            // Row item surface
+            UIGeometryBatch.addRoundedCard(buffer, minX + 0.005f, rowBottom + 0.003f, maxX - 0.005f, rowTop - 0.003f, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE, EditorTheme.BORDER, 1.0f);
 
-            UIGeometryBatch.addBoundedText(
+            // Item text
+            float textMidY = (rowTop + rowBottom) * 0.5f;
+            UIGeometryBatch.addTruncatedText(
                     buffer,
                     item.label(),
                     minX + 0.02f,
-                    rowBottom + 0.015f,
-                    maxX - 0.01f,
+                    textMidY + 1.0f * 0.009f,
+                    maxX - 0.015f,
                     1.0f,
-                    0.95f, 0.95f, 0.95f, 1.0f
+                    EditorTheme.TEXT, 1.0f
             );
 
             currentY -= itemHeight;
