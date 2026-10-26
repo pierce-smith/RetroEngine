@@ -11,7 +11,7 @@ import java.util.List;
 /**
  * ModalDialogOverlay encapsulates rendering and layout for modal dialog overlays.
  * Updated to match the macOS "Dark Graphite" design language with rounded cards,
- * type badges, red accent close controls, and crisp button actions.
+ * type badges, and crisp button controls.
  */
 public class ModalDialogOverlay {
 
@@ -36,9 +36,9 @@ public class ModalDialogOverlay {
         String title = "SELECT " + pickerFilterType.name() + " ASSET";
         UIGeometryBatch.addBoundedText(buffer, title, cardMinX + 0.03f, cardMaxY - 0.035f, cardMaxX - 0.10f, 1.0f, EditorTheme.TEXT, 1.0f);
 
-        // Close "X" Button (macOS Red Close Badge)
-        UIGeometryBatch.addRoundedQuad(buffer, cardMaxX - 0.075f, cardMaxY - 0.075f, cardMaxX - 0.02f, cardMaxY - 0.02f, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_SUNKEN, 1.0f);
-        centeredTextIn(buffer, "✕", cardMaxX - 0.075f, cardMaxX - 0.02f, cardMaxY - 0.0475f, 0.9f, EditorTheme.RED);
+        // Close "X" Button (Red Badge with ASCII 'X')
+        UIGeometryBatch.addRoundedQuad(buffer, cardMaxX - 0.075f, cardMaxY - 0.075f, cardMaxX - 0.02f, cardMaxY - 0.02f, EditorTheme.RADIUS_SMALL, EditorTheme.RED, 0.90f);
+        centeredTextIn(buffer, "X", cardMaxX - 0.075f, cardMaxX - 0.02f, cardMaxY - 0.0475f, 0.9f, EditorTheme.TEXT);
 
         // Top Action Buttons: [NONE / UNBIND] & [+ IMPORT DISK...]
         float actionY0 = 0.27f, actionY1 = 0.33f;
@@ -119,9 +119,9 @@ public class ModalDialogOverlay {
         String title = "SET PARENT FOR '" + targetEntity.name.toUpperCase() + "'";
         UIGeometryBatch.addBoundedText(buffer, title, cardMinX + 0.03f, cardMaxY - 0.035f, cardMaxX - 0.10f, 1.0f, EditorTheme.TEXT, 1.0f);
 
-        // Close "X" Button (macOS Red Close Badge)
-        UIGeometryBatch.addRoundedQuad(buffer, cardMaxX - 0.075f, cardMaxY - 0.075f, cardMaxX - 0.02f, cardMaxY - 0.02f, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_SUNKEN, 1.0f);
-        centeredTextIn(buffer, "✕", cardMaxX - 0.075f, cardMaxX - 0.02f, cardMaxY - 0.0475f, 0.9f, EditorTheme.RED);
+        // Close "X" Button (Red Badge with ASCII 'X')
+        UIGeometryBatch.addRoundedQuad(buffer, cardMaxX - 0.075f, cardMaxY - 0.075f, cardMaxX - 0.02f, cardMaxY - 0.02f, EditorTheme.RADIUS_SMALL, EditorTheme.RED, 0.90f);
+        centeredTextIn(buffer, "X", cardMaxX - 0.075f, cardMaxX - 0.02f, cardMaxY - 0.0475f, 0.9f, EditorTheme.TEXT);
 
         // Option 1: [UNPARENT / MOVE TO ROOT SCENE]
         float actionY0 = 0.27f, actionY1 = 0.33f;
