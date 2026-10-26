@@ -3,7 +3,6 @@ package com.retro.engine.backend.metal;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.FloatBuffer;
-import java.util.Queue;
 
 import static org.lwjgl.system.JNI.invokePPP;
 import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
@@ -30,8 +29,7 @@ public class MetalRingBuffer {
         return vertexCount;
     }
 
-    public void updateBuffer(MetalDevice metalDevice, float[] vertices, int count, int strideFloats,
-                             Queue<MetalGpuCache.DeferredHandle> disposalQueue, long currentFrame) {
+    public void updateBuffer(MetalDevice metalDevice, float[] vertices, int count, int strideFloats, MetalGpuCache cache) {
         if (vertices == null || count <= 0 || metalDevice == null) {
             this.vertexCount = 0;
             return;
@@ -51,8 +49,8 @@ public class MetalRingBuffer {
         int currentCapacity = this.capacityRing[this.ringIndex];
 
         if (currentBuffer == 0L || requiredFloats > currentCapacity) {
-            if (currentBuffer != 0L && disposalQueue != null) {
-                disposalQueue.add(new MetalGpuCache.DeferredHandle(currentBuffer, currentFrame + RING_SLOTS));
+            if (currentBuffer != 0L) {
+                cache.enqueueDeferredDisposal(currentBuffer);
             }
             int newCap = Math.max(requiredFloats * 2, 2048 * strideFloats);
             this.capacityRing[this.ringIndex] = newCap;
