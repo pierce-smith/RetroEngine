@@ -14,7 +14,8 @@ import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
  * 2. Dynamic Ground Entity Shadow Blobs with soft radial distance falloff.
  * 3. Procedural Ray-Plane Anti-Aliased Infinite Shader Grid.
  * 4. Decoupled window composition & 2D UI pipelines with zero depth attachment dependency.
- * 5. Disk-backed MSL shader compilation caching for instantaneous pipeline initialization.
+ * 5. 2048x2048 Depth32Float directional shadow map depth pass with 3x3 PCF sampling in the lit fragment path.
+ * 6. Disk-backed MSL shader compilation caching for instantaneous pipeline initialization.
  */
 public class MetalPipeline {
 
@@ -25,6 +26,8 @@ public class MetalPipeline {
     private long pipelineStateComposition = 0L;
     private long depthStencilState3D = 0L;
     private long depthStencilStateShadow = 0L;
+    private long pipelineStateShadowMap = 0L;
+    private long depthStencilStateShadowMap = 0L;
 
     private long pipelineStateUI = 0L;
     private long depthStencilStateUI = 0L;
@@ -43,6 +46,7 @@ public class MetalPipeline {
                 float3 tangent;
                 float3 bitangent;
                 float viewDist;
+                float4 lightSpacePos;
             };
 
             struct Uniforms {
@@ -53,12 +57,34 @@ public class MetalPipeline {
                 float4 lightColor;        // 16 bytes (160..175) -> rgb = lightColor, a = unused
                 float4 ambientColor;      // 16 bytes (176..191) -> rgb = ambient, a = unused
                 float4 fogColorDensity;   // 16 bytes (192..207) -> rgb = fogColor, w = fogDensity
-                float4 matParams;         // 16 bytes (208..223) -> x = reflectStrength, y = shadowOpacity, z = unused, w = unused
+                float4 matParams;         // 16 bytes (208..223) -> x = reflectStrength, y = shadowOpacity, z = shadowMapBias, w = unused
                 uint hasTexture;          // 4 bytes  (224..227)
                 uint isUnlit;             // 4 bytes  (228..231) -> 0 = Lit Model, 1 = Procedural Grid, 2 = Viewport Pass-through
                 uint stride;              // 4 bytes  (232..235)
                 uint passFlags;           // 4 bytes  (236..239) -> bit 0: shadowBlob, bit 1: reflection, bit 2: lightmap, bit 3: fog, bit 4: skinned
+                float4x4 lightSpace;      // 64 bytes (240..303) -> directional shadow map view-projection
             };
+
+            // 3x3 PCF over the directional shadow map: 1.0 = fully lit, 0.0 = fully shadowed.
+            // Metal NDC y points up while texture v points down, hence the flipped v.
+            float computeDirectionalShadow(float4 lightSpacePos, float NdotL, float baseBias,
+                                           depth2d<float> shadowMap, sampler shadowSmp) {
+                float3 proj = lightSpacePos.xyz / lightSpacePos.w;
+                if (proj.z > 1.0) return 1.0;
+
+                float2 uv = float2(proj.x * 0.5 + 0.5, 0.5 - proj.y * 0.5);
+                float bias = max(baseBias * (1.0 - NdotL), baseBias * 0.2);
+                float refDepth = proj.z - bias;
+
+                float2 texel = 1.0 / float2(shadowMap.get_width(), shadowMap.get_height());
+                float lit = 0.0;
+                for (int x = -1; x <= 1; x++) {
+                    for (int y = -1; y <= 1; y++) {
+                        lit += shadowMap.sample_compare(shadowSmp, uv + float2(x, y) * texel, refDepth);
+                    }
+                }
+                return lit / 9.0;
+            }
 
             vertex VertexOut vertexMain(uint vertexID [[vertex_id]],
                                         constant float* vertices [[buffer(0)]],
@@ -119,6 +145,7 @@ public class MetalPipeline {
                 out.position = uniforms.mvp * localPos;
                 out.worldPos = (uniforms.model * localPos).xyz;
                 out.viewDist = out.position.w;
+                out.lightSpacePos = uniforms.lightSpace * float4(out.worldPos, 1.0);
 
                 return out;
             }
@@ -126,6 +153,8 @@ public class MetalPipeline {
             fragment float4 fragmentMain(VertexOut in [[stage_in]],
                                           texture2d<float> tex [[texture(0)]],
                                           sampler smp [[sampler(0)]],
+                                          depth2d<float> shadowMap [[texture(1)]],
+                                          sampler shadowSmp [[sampler(1)]],
                                           constant Uniforms& uniforms [[buffer(1)]]) {
 
                 // Pass Flag Bit 0: Ground Dynamic Shadow Blob Pass
@@ -208,9 +237,12 @@ public class MetalPipeline {
                 int lightType = int(uniforms.lightPosType.w);
                 float3 L;
                 float attenuation = 1.0;
+                float shadow = 1.0;
 
                 if (lightType == 0) {
                     L = normalize(-uniforms.lightDirIntensity.xyz);
+                    shadow = computeDirectionalShadow(in.lightSpacePos, clamp(dot(N, L), 0.0, 1.0),
+                                                      uniforms.matParams.z, shadowMap, shadowSmp);
                 } else {
                     float3 lightPos = uniforms.lightPosType.xyz;
                     float3 lightVector = lightPos - in.worldPos;
@@ -230,7 +262,7 @@ public class MetalPipeline {
 
                 float intensity = uniforms.lightDirIntensity.w;
                 float diff = max(dot(N, L), 0.0);
-                float3 diffuse = diff * uniforms.lightColor.rgb * intensity * attenuation;
+                float3 diffuse = diff * uniforms.lightColor.rgb * intensity * attenuation * shadow;
                 float3 ambient = max(uniforms.ambientColor.rgb, float3(0.35, 0.35, 0.38));
 
                 float3 finalRGB = (ambient + diffuse) * baseColor.rgb;
@@ -252,6 +284,17 @@ public class MetalPipeline {
                 finalRGB = mix(finalRGB, fogColor, fogFactor);
 
                 return float4(finalRGB, baseColor.a);
+            }
+
+            // Directional shadow map depth pass: depth comes from vertexMain (mvp = lightSpace * model);
+            // only the foliage alpha cutout runs here. The shadow map itself is never bound in this pass.
+            fragment void shadowFragmentMain(VertexOut in [[stage_in]],
+                                             texture2d<float> tex [[texture(0)]],
+                                             sampler smp [[sampler(0)]],
+                                             constant Uniforms& uniforms [[buffer(1)]]) {
+                if (uniforms.hasTexture == 1 && tex.sample(smp, in.uv).a < 0.25) {
+                    discard_fragment();
+                }
             }
             """;
 
@@ -332,6 +375,17 @@ public class MetalPipeline {
 
         pipelineStateComposition = invokePPPPP(d, sel_registerName("newRenderPipelineStateWithDescriptor:error:"), pipeDescComp, 0L, send);
 
+        // 3. Directional Shadow Map Depth Pipeline (no color attachments, Depth32Float)
+        long fragFuncShadow = invokePPPP(lib3D, sel_registerName("newFunctionWithName:"), device.createNSString("shadowFragmentMain"), send);
+        long pipeDescShadow = invokePPP(pipeDescClass, sel_registerName("new"), send);
+        invokePPPP(pipeDescShadow, sel_registerName("setVertexFunction:"), vertFunc3D, send);
+        invokePPPP(pipeDescShadow, sel_registerName("setFragmentFunction:"), fragFuncShadow, send);
+        invokePPPP(pipeDescShadow, sel_registerName("setDepthAttachmentPixelFormat:"), 252L, send);
+        pipelineStateShadowMap = invokePPPPP(d, sel_registerName("newRenderPipelineStateWithDescriptor:error:"), pipeDescShadow, 0L, send);
+        if (pipelineStateShadowMap == 0L) {
+            System.err.println("[MetalPipeline] ERROR: Failed to create directional shadow map pipeline state.");
+        }
+
         long depthDescClass = objc_getClass("MTLDepthStencilDescriptor");
         long depthDesc3D = invokePPP(depthDescClass, sel_registerName("new"), send);
         invokePPPP(depthDesc3D, sel_registerName("setDepthCompareFunction:"), 1L, send); // Less
@@ -343,7 +397,12 @@ public class MetalPipeline {
         invokePPPP(depthDescShadow, sel_registerName("setDepthWriteEnabled:"), 0L, send);   // Depth write OFF!
         depthStencilStateShadow = invokePPPP(d, sel_registerName("newDepthStencilStateWithDescriptor:"), depthDescShadow, send);
 
-        // 3. 2D UI Overlay Pipeline (Depth Format = 0L / Invalid)
+        long depthDescShadowMap = invokePPP(depthDescClass, sel_registerName("new"), send);
+        invokePPPP(depthDescShadowMap, sel_registerName("setDepthCompareFunction:"), 3L, send); // LessEqual
+        invokePPPP(depthDescShadowMap, sel_registerName("setDepthWriteEnabled:"), 1L, send);   // Depth write ON for shadow casters
+        depthStencilStateShadowMap = invokePPPP(d, sel_registerName("newDepthStencilStateWithDescriptor:"), depthDescShadowMap, send);
+
+        // 4. 2D UI Overlay Pipeline (Depth Format = 0L / Invalid)
         long libUI = loadOrCompileLibrary(device, MSL_UI_SHADER, MSL_UI_CACHE_FILE);
         if (libUI == 0L) return false;
 
@@ -417,6 +476,8 @@ public class MetalPipeline {
     public long getPipelineStateComposition() { return pipelineStateComposition; }
     public long getDepthStencilState3D() { return depthStencilState3D; }
     public long getDepthStencilStateShadow() { return depthStencilStateShadow; }
+    public long getPipelineStateShadowMap() { return pipelineStateShadowMap; }
+    public long getDepthStencilStateShadowMap() { return depthStencilStateShadowMap; }
     public long getPipelineStateUI() { return pipelineStateUI; }
     public long getDepthStencilStateUI() { return depthStencilStateUI; }
 }

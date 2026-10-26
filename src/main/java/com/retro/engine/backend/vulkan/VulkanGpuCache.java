@@ -1,5 +1,6 @@
 package com.retro.engine.backend.vulkan;
 
+import com.retro.engine.rhi.DirectionalShadowFrustum;
 import com.retro.engine.rhi.HandleRegistry;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryUtil;
@@ -18,7 +19,7 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /**
  * Service Registry & VRAM Coordinator (SRP Pattern matching EditorWorkspace):
- * Coordinates static VBO mesh buffers, Light UBO allocations, ground shadow quad VBOs,
+ * Coordinates static VBO mesh buffers, Light UBO allocations, ground shadow quad VBOs, the directional shadow map,
  * and delegates texture management to VulkanTextureRegistry and dynamic geometry buffering to VulkanRingBuffer.
  * Registered meshes and textures are owned by opaque-handle tables; command recording resolves them by handle.
  */
@@ -32,6 +33,14 @@ public class VulkanGpuCache {
     public static final long BONE_PALETTE_STRIDE = MAX_PALETTE_BONES * 64L;
     public static final int MAX_SKINNED_ENTITIES_PER_FRAME = 64;
 
+    // Directional shadow map: persistent 2048x2048 depth target sampled through binding 2 with a comparison sampler
+    public static final int SHADOW_MAP_SIZE = DirectionalShadowFrustum.SHADOW_MAP_SIZE;
+    public static final int SHADOW_MAP_FORMAT = VK_FORMAT_D32_SFLOAT;
+
+    // LightBuffer (binding 0) std140 layout: lightSpaceMatrix at byte 304, 368 bytes total
+    public static final int LIGHT_UBO_LIGHT_SPACE_FLOAT_INDEX = 76;
+    public static final long LIGHT_UBO_SIZE = 368L;
+
     public static class VulkanBuffer {
         public long bufferHandle;
         public long memoryHandle;
@@ -42,6 +51,8 @@ public class VulkanGpuCache {
         public long indexMemoryHandle;
         public int indexCount;
         public int indexType = VK_INDEX_TYPE_UINT32;
+        // Local-space bounding sphere radius around the mesh origin, used to fit the shadow frustum
+        public float boundsRadius = 1.0f;
 
         public VulkanBuffer(long bufferHandle, long memoryHandle, int vertexCount) {
             this.bufferHandle = bufferHandle;
@@ -112,6 +123,11 @@ public class VulkanGpuCache {
     private VulkanBuffer bonePaletteBuffer = null;
     private long bonePaletteMapped = 0L;
     private VulkanBuffer dummyBonePaletteBuffer = null;
+
+    private long shadowMapImage = 0L;
+    private long shadowMapMemory = 0L;
+    private long shadowMapImageView = 0L;
+    private long shadowMapSampler = 0L;
 
     private volatile int totalFrameCount = 0;
 
@@ -197,6 +213,7 @@ public class VulkanGpuCache {
         if (vertices == null || vertexCount <= 0 || vertices.length < vertexCount) return HandleRegistry.NULL_HANDLE;
         return meshHandles.register(assetKey, () -> {
             VulkanBuffer buf = createHostVisibleBuffer(device, vertices, vertices.length / vertexCount);
+            if (buf != null) buf.boundsRadius = DirectionalShadowFrustum.computeLocalBoundsRadius(vertices, buf.floatStride, vertexCount);
             if (buf == null || indices == null || indexCount <= 0) return buf;
             if (!attachIndexBuffer(device, buf, indices, Math.min(indexCount, indices.length))) {
                 vkDestroyBuffer(device.getLogicalDevice(), buf.bufferHandle, null);
@@ -360,7 +377,105 @@ public class VulkanGpuCache {
     /** Creates long-lived resources that descriptor writes depend on; call once after the logical device exists. */
     public void initialize(VulkanDevice device) {
         getOrCreateDummyBonePaletteBuffer(device);
+        if (!createShadowMap(device)) {
+            System.err.println("[VulkanGpuCache] ERROR: Failed to allocate the " + SHADOW_MAP_SIZE + "x" + SHADOW_MAP_SIZE + " directional shadow map.");
+        }
     }
+
+    /** Device-local D32 depth image + view + comparison sampler for the directional shadow map. */
+    private boolean createShadowMap(VulkanDevice device) {
+        if (device == null || device.getLogicalDevice() == null) return false;
+        VkDevice vkDevice = device.getLogicalDevice();
+
+        try (MemoryStack stack = stackPush()) {
+            VkImageCreateInfo imageInfo = VkImageCreateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO)
+                    .imageType(VK_IMAGE_TYPE_2D)
+                    .format(SHADOW_MAP_FORMAT)
+                    .extent(e -> e.width(SHADOW_MAP_SIZE).height(SHADOW_MAP_SIZE).depth(1))
+                    .mipLevels(1)
+                    .arrayLayers(1)
+                    .samples(VK_SAMPLE_COUNT_1_BIT)
+                    .tiling(VK_IMAGE_TILING_OPTIMAL)
+                    .usage(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
+                    .sharingMode(VK_SHARING_MODE_EXCLUSIVE)
+                    .initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);
+
+            LongBuffer pImage = stack.mallocLong(1);
+            if (vkCreateImage(vkDevice, imageInfo, null, pImage) != VK_SUCCESS) return false;
+            shadowMapImage = pImage.get(0);
+
+            VkMemoryRequirements memReqs = VkMemoryRequirements.calloc(stack);
+            vkGetImageMemoryRequirements(vkDevice, shadowMapImage, memReqs);
+
+            VkMemoryAllocateInfo allocInfo = VkMemoryAllocateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
+                    .allocationSize(memReqs.size())
+                    .memoryTypeIndex(findMemoryType(device.getPhysicalDevice(), memReqs.memoryTypeBits(), VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
+
+            LongBuffer pMemory = stack.mallocLong(1);
+            if (vkAllocateMemory(vkDevice, allocInfo, null, pMemory) != VK_SUCCESS) {
+                destroyShadowMap(vkDevice);
+                return false;
+            }
+            shadowMapMemory = pMemory.get(0);
+            vkBindImageMemory(vkDevice, shadowMapImage, shadowMapMemory, 0);
+
+            VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
+                    .image(shadowMapImage)
+                    .viewType(VK_IMAGE_VIEW_TYPE_2D)
+                    .format(SHADOW_MAP_FORMAT);
+            viewInfo.subresourceRange().aspectMask(VK_IMAGE_ASPECT_DEPTH_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+
+            LongBuffer pView = stack.mallocLong(1);
+            if (vkCreateImageView(vkDevice, viewInfo, null, pView) != VK_SUCCESS) {
+                destroyShadowMap(vkDevice);
+                return false;
+            }
+            shadowMapImageView = pView.get(0);
+
+            // Hardware 2x2 comparison filtering under each PCF tap when the format supports linear filtering
+            VkFormatProperties formatProps = VkFormatProperties.calloc(stack);
+            vkGetPhysicalDeviceFormatProperties(device.getPhysicalDevice(), SHADOW_MAP_FORMAT, formatProps);
+            int filter = (formatProps.optimalTilingFeatures() & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0 ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+
+            // Outside the map the opaque white border reads as depth 1.0, so everything there stays lit
+            VkSamplerCreateInfo samplerInfo = VkSamplerCreateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO)
+                    .magFilter(filter)
+                    .minFilter(filter)
+                    .mipmapMode(VK_SAMPLER_MIPMAP_MODE_NEAREST)
+                    .addressModeU(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER)
+                    .addressModeV(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER)
+                    .addressModeW(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER)
+                    .borderColor(VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE)
+                    .compareEnable(true)
+                    .compareOp(VK_COMPARE_OP_LESS_OR_EQUAL)
+                    .minLod(0.0f)
+                    .maxLod(0.0f)
+                    .maxAnisotropy(1.0f);
+
+            LongBuffer pSampler = stack.mallocLong(1);
+            if (vkCreateSampler(vkDevice, samplerInfo, null, pSampler) != VK_SUCCESS) {
+                destroyShadowMap(vkDevice);
+                return false;
+            }
+            shadowMapSampler = pSampler.get(0);
+            return true;
+        }
+    }
+
+    private void destroyShadowMap(VkDevice vkDevice) {
+        if (shadowMapSampler != 0L) { vkDestroySampler(vkDevice, shadowMapSampler, null); shadowMapSampler = 0L; }
+        if (shadowMapImageView != 0L) { vkDestroyImageView(vkDevice, shadowMapImageView, null); shadowMapImageView = 0L; }
+        if (shadowMapImage != 0L) { vkDestroyImage(vkDevice, shadowMapImage, null); shadowMapImage = 0L; }
+        if (shadowMapMemory != 0L) { vkFreeMemory(vkDevice, shadowMapMemory, null); shadowMapMemory = 0L; }
+    }
+
+    public long getShadowMapImage() { return shadowMapImage; }
+    public long getShadowMapImageView() { return shadowMapImageView; }
+    public boolean hasShadowMap() { return shadowMapImageView != 0L && shadowMapSampler != 0L; }
 
     /**
      * Host-visible storage buffer of {@code slots} identity-seeded palettes. When {@code mappedOut} is non-null the
@@ -458,7 +573,8 @@ public class VulkanGpuCache {
         VulkanBuffer bonePaletteBuf = getOrCreateBonePaletteBuffer(device);
         // Binding 3 is always written: fall back to the one-slot identity palette (dynamic offsets then stay 0)
         VulkanBuffer binding3Buf = (bonePaletteBuf != null) ? bonePaletteBuf : getOrCreateDummyBonePaletteBuffer(device);
-        if (vkDevice == null || descriptorPool == 0L || setLayout == 0L || lightUbo == null || whiteTex == null || binding3Buf == null) return;
+        // Binding 2 always samples the shadow map, which the pass encoder leaves in SHADER_READ_ONLY_OPTIMAL every frame
+        if (vkDevice == null || descriptorPool == 0L || setLayout == 0L || lightUbo == null || whiteTex == null || binding3Buf == null || !hasShadowMap()) return;
 
         shadowDescriptorSet = acquireTextureSet(vkDevice, descriptorPool, setLayout, whiteTex.imageViewHandle, whiteTex, lightUbo, binding3Buf);
 
@@ -507,9 +623,9 @@ public class VulkanGpuCache {
             if (vkAllocateDescriptorSets(vkDevice, allocSetInfo, pSet) != VK_SUCCESS) return 0L;
             long set = pSet.get(0);
 
-            VkDescriptorBufferInfo.Buffer bufferInfo = VkDescriptorBufferInfo.calloc(1, stack).buffer(lightUbo.bufferHandle).offset(0).range(512);
+            VkDescriptorBufferInfo.Buffer bufferInfo = VkDescriptorBufferInfo.calloc(1, stack).buffer(lightUbo.bufferHandle).offset(0).range(LIGHT_UBO_SIZE);
             VkDescriptorImageInfo.Buffer imageInfoTex = VkDescriptorImageInfo.calloc(1, stack).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(texView).sampler(whiteTex.samplerHandle);
-            VkDescriptorImageInfo.Buffer imageInfoShadow = VkDescriptorImageInfo.calloc(1, stack).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(whiteTex.imageViewHandle).sampler(whiteTex.samplerHandle);
+            VkDescriptorImageInfo.Buffer imageInfoShadow = VkDescriptorImageInfo.calloc(1, stack).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(shadowMapImageView).sampler(shadowMapSampler);
 
             // Base offset 0 with a one-slot range; the entity's slot is chosen by the dynamic offset at bind time
             VkDescriptorBufferInfo.Buffer boneInfo = VkDescriptorBufferInfo.calloc(1, stack)
@@ -584,7 +700,7 @@ public class VulkanGpuCache {
                                         float dirX, float dirY, float dirZ,
                                         float r, float g, float b, float intensity,
                                         float camX, float camY, float camZ, float groundY,
-                                        float[] viewMatrix, float[] projMatrix) {
+                                        float[] viewMatrix, float[] projMatrix, float[] lightSpaceMatrix) {
         VulkanBuffer buf = getOrCreateLightUniformBuffer(device);
         if (buf == null || device == null || device.getLogicalDevice() == null) return;
 
@@ -611,13 +727,14 @@ public class VulkanGpuCache {
                 floatBuf.put(28, r);    floatBuf.put(29, g);    floatBuf.put(30, b);    floatBuf.put(31, intensity);
                 floatBuf.put(32, 1.0f); floatBuf.put(33, 0.09f);floatBuf.put(34, 0.032f);floatBuf.put(35, 0.0f);
 
-                floatBuf.put(36, numDir); floatBuf.put(37, numPoint); floatBuf.put(38, numSpot); floatBuf.put(39, 0.005f);
+                floatBuf.put(36, numDir); floatBuf.put(37, numPoint); floatBuf.put(38, numSpot); floatBuf.put(39, DirectionalShadowFrustum.SHADOW_BIAS);
 
                 floatBuf.put(40, camX); floatBuf.put(41, camY); floatBuf.put(42, camZ); floatBuf.put(43, groundY);
 
                 // Camera matrices live here (byte offset 176) rather than in push constants to keep those at 80 bytes
                 putMatrixOrIdentity(floatBuf, 44, viewMatrix);
                 putMatrixOrIdentity(floatBuf, 60, projMatrix);
+                putMatrixOrIdentity(floatBuf, LIGHT_UBO_LIGHT_SPACE_FLOAT_INDEX, lightSpaceMatrix);
 
                 vkUnmapMemory(vkDevice, buf.memoryHandle);
             }
@@ -718,6 +835,7 @@ public class VulkanGpuCache {
         VkDevice vkDevice = device.getLogicalDevice();
 
         textureRegistry.cleanup(vkDevice);
+        destroyShadowMap(vkDevice);
         uiRingBuffer.cleanup(vkDevice);
         gridRingBuffer.cleanup(vkDevice);
 

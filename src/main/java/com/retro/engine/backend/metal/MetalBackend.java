@@ -1,6 +1,7 @@
 package com.retro.engine.backend.metal;
 
 import com.retro.engine.rhi.BufferDesc;
+import com.retro.engine.rhi.DirectionalShadowFrustum;
 import com.retro.engine.rhi.GraphicsAPI;
 import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.rhi.TextureDesc;
@@ -97,6 +98,7 @@ public class MetalBackend implements IRenderBackend {
 
         framebuffer.initFramebuffer(metalDevice, windowInfo.width() > 0 ? windowInfo.width() : 712, windowInfo.height() > 0 ? windowInfo.height() : 488);
         resourceCache.initViewportQuad(metalDevice);
+        resourceCache.initShadowMap(metalDevice);
         metalTexture.initDefaultTextureAndSampler(metalDevice.getDevice(), metalDevice.getObjcMsgSend());
 
         uniformStreamer.initialize(metalDevice);
@@ -230,6 +232,7 @@ public class MetalBackend implements IRenderBackend {
             item.indexType = MetalGpuCache.MTL_INDEX_TYPE_UINT32;
         }
         item.stride = mesh.getFloatStride();
+        item.boundsRadius = (mesh instanceof MetalGpuCache.MetalMesh m) ? m.boundsRadius : 1.0f;
         item.textureHandle = texHandle;
         item.hasTexture = (texHandle != 0L);
         item.px = px; item.py = py; item.pz = pz;
@@ -277,6 +280,8 @@ public class MetalBackend implements IRenderBackend {
 
         currentCommandBuffer = invokePPP(commandQueue, SEL_COMMAND_BUFFER, send);
 
+        computeLightSpaceMatrix();
+
         passEncoder.encodeOffscreen3DPass(
             currentCommandBuffer, metalDevice, metalPipeline, metalTexture,
             framebuffer, resourceCache, uniformStreamer,
@@ -291,6 +296,18 @@ public class MetalBackend implements IRenderBackend {
             currentCommandBuffer, drawableTexture, metalDevice, metalPipeline, metalTexture,
             framebuffer, resourceCache, uniformStreamer
         );
+    }
+
+    /** Orthographic directional light view-projection fitted around the bounding spheres of every queued entity. */
+    private void computeLightSpaceMatrix() {
+        DirectionalShadowFrustum frustum = uniformStreamer.getShadowFrustum();
+        frustum.reset();
+        for (int i = 0; i < activeSceneQueueCount; i++) {
+            MetalPassEncoder.RenderEntity item = sceneQueuePool.get(i);
+            float scale = Math.max(Math.abs(item.sx), Math.max(Math.abs(item.sy), Math.abs(item.sz)));
+            frustum.include(item.px, item.py, item.pz, item.boundsRadius * scale);
+        }
+        uniformStreamer.updateLightSpaceMatrix(activeLightDirX, activeLightDirY, activeLightDirZ);
     }
 
     @Override

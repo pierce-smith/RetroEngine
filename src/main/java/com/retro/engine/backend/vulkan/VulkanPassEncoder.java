@@ -11,11 +11,12 @@ import java.util.List;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
+import static org.lwjgl.vulkan.VK12.VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
 import static org.lwjgl.vulkan.VK13.*;
 import static org.lwjgl.vulkan.KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
 /**
- * Encodes offscreen 3D passes, dynamic ground shadow blobs, and final swapchain composition pass
+ * Encodes the directional shadow map depth pass, offscreen 3D passes, dynamic ground shadow blobs, and final swapchain composition pass
  * (3D viewport blit + 2D UI overlay pass).
  */
 public class VulkanPassEncoder {
@@ -64,6 +65,9 @@ public class VulkanPassEncoder {
         try (MemoryStack stack = stackPush()) {
             // Reused for every 3D/shadow draw: vkCmdPushConstants copies the data at record time
             FloatBuffer meshPush = stack.mallocFloat(MESH_PUSH_FLOATS);
+
+            // PASS 0: DIRECTIONAL SHADOW MAP DEPTH PASS (leaves the shadow map in SHADER_READ_ONLY_OPTIMAL)
+            encodeShadowDepthPass(cmd, stack, meshPush, pipelineManager, gpuCache, deviceManager, sceneQueue, sceneQueueCount);
 
             // Dynamic Viewport & Scissor Setup for Offscreen Viewport (Negative height for Vulkan Y-Inversion)
             VkViewport.Buffer offscreenViewport = VkViewport.calloc(1, stack);
@@ -418,6 +422,134 @@ public class VulkanPassEncoder {
             presentBarrier.get(0).subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, null, null, presentBarrier);
         }
+    }
+
+    /**
+     * Renders every queued mesh into the 2048x2048 shadow map from the light (passFlags 2.0 selects lightSpaceMatrix in
+     * the vertex stage), then transitions it to SHADER_READ_ONLY_OPTIMAL for binding 2. Runs every frame, even with an
+     * empty queue, because the main pass descriptors always expect the shadow map in the read-only layout.
+     */
+    private void encodeShadowDepthPass(VkCommandBuffer cmd, MemoryStack stack, FloatBuffer meshPush,
+                                       VulkanPipeline pipelineManager, VulkanGpuCache gpuCache, VulkanDevice deviceManager,
+                                       List<RenderEntity> sceneQueue, int sceneQueueCount) {
+        if (!gpuCache.hasShadowMap()) return;
+
+        int size = VulkanGpuCache.SHADOW_MAP_SIZE;
+        int depthLayout = deviceManager.supportsSeparateDepthStencilLayouts()
+                ? VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        // Previous contents are cleared, so discard them; wait on last frame's fragment reads before writing depth
+        VkImageMemoryBarrier.Buffer toAttachment = VkImageMemoryBarrier.calloc(1, stack)
+                .sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER)
+                .oldLayout(VK_IMAGE_LAYOUT_UNDEFINED)
+                .newLayout(depthLayout)
+                .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .image(gpuCache.getShadowMapImage())
+                .srcAccessMask(0)
+                .dstAccessMask(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+        toAttachment.get(0).subresourceRange().aspectMask(VK_IMAGE_ASPECT_DEPTH_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, 0, null, null, toAttachment);
+
+        VkRenderingAttachmentInfo shadowDepthAttachment = VkRenderingAttachmentInfo.calloc(stack)
+                .sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO)
+                .imageView(gpuCache.getShadowMapImageView())
+                .imageLayout(depthLayout)
+                .loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR)
+                .storeOp(VK_ATTACHMENT_STORE_OP_STORE);
+        shadowDepthAttachment.clearValue().depthStencil().set(1.0f, 0);
+
+        VkRenderingInfo shadowRenderingInfo = VkRenderingInfo.calloc(stack)
+                .sType(VK_STRUCTURE_TYPE_RENDERING_INFO)
+                .layerCount(1)
+                .pDepthAttachment(shadowDepthAttachment);
+        shadowRenderingInfo.renderArea().extent().set(size, size);
+
+        vkCmdBeginRendering(cmd, shadowRenderingInfo);
+
+        // Positive-height viewport: blinn_phong.frag maps light NDC to shadow UVs as ndc * 0.5 + 0.5
+        VkViewport.Buffer shadowViewport = VkViewport.calloc(1, stack);
+        shadowViewport.get(0).x(0.0f).y(0.0f).width((float) size).height((float) size).minDepth(0.0f).maxDepth(1.0f);
+        VkRect2D.Buffer shadowScissor = VkRect2D.calloc(1, stack);
+        shadowScissor.get(0).offset().set(0, 0);
+        shadowScissor.get(0).extent().set(size, size);
+        vkCmdSetViewport(cmd, 0, shadowViewport);
+        vkCmdSetScissor(cmd, 0, shadowScissor);
+
+        long staticPipeline = pipelineManager.getGraphicsPipelineShadowDepth();
+        long skinnedPipeline = pipelineManager.getGraphicsPipelineShadowDepthSkinned();
+        VulkanGpuCache.VulkanBuffer bonePaletteBuf = gpuCache.getOrCreateBonePaletteBuffer(deviceManager);
+
+        if (staticPipeline != 0L && sceneQueue != null && sceneQueueCount > 0) {
+            IntBuffer dynamicOffsets = stack.mallocInt(2);
+            LongBuffer pSet = stack.mallocLong(1);
+            LongBuffer pBuffers = stack.mallocLong(1);
+            LongBuffer pOffsets = stack.longs(0L);
+            long boundPipeline = 0L;
+            long boundSet = 0L;
+            int boundPaletteOffset = -1;
+
+            for (int i = 0; i < sceneQueueCount; i++) {
+                RenderEntity entity = sceneQueue.get(i);
+                VulkanGpuCache.VulkanBuffer mesh = gpuCache.getMesh(entity.meshHandle);
+                if (mesh == null || mesh.bufferHandle == 0L || mesh.vertexCount <= 0) continue;
+
+                // Same pipeline-selection rules as the main 3D pass so casters and receivers always match
+                boolean skinnedLayout = mesh.floatStride >= 30;
+                if (skinnedLayout && (skinnedPipeline == 0L || bonePaletteBuf == null)) continue;
+
+                long entitySet = gpuCache.getEntityDescriptorSet(i);
+                if (entitySet == 0L) continue;
+
+                long wantedPipeline = skinnedLayout ? skinnedPipeline : staticPipeline;
+                if (wantedPipeline != boundPipeline) {
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, wantedPipeline);
+                    boundPipeline = wantedPipeline;
+                }
+
+                int paletteOffset = gpuCache.getEntityPaletteOffset(i);
+                if (entitySet != boundSet || paletteOffset != boundPaletteOffset) {
+                    dynamicOffsets.put(0, 0).put(1, paletteOffset);
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, pSet.put(0, entitySet), dynamicOffsets);
+                    boundSet = entitySet;
+                    boundPaletteOffset = paletteOffset;
+                }
+
+                computeModelMatrixInPlace(entity.px, entity.py, entity.pz, entity.rx, entity.ry, entity.rz, entity.sx, entity.sy, entity.sz, modelMatrixScratch);
+
+                meshPush.clear();
+                meshPush.put(modelMatrixScratch);
+                meshPush.put(2.0f); // params.x = passFlags (2.0 = Shadow Map Depth Pass)
+                meshPush.put(1.0f);
+                meshPush.put(0.0f);
+                meshPush.put(0.0f);
+                meshPush.flip();
+                vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, meshPush);
+
+                vkCmdBindVertexBuffers(cmd, 0, pBuffers.put(0, mesh.bufferHandle), pOffsets);
+                if (mesh.indexBufferHandle != 0L && mesh.indexCount > 0) {
+                    vkCmdBindIndexBuffer(cmd, mesh.indexBufferHandle, 0, mesh.indexType);
+                    vkCmdDrawIndexed(cmd, mesh.indexCount, 1, 0, 0, 0);
+                } else {
+                    vkCmdDraw(cmd, mesh.vertexCount, 1, 0, 0);
+                }
+            }
+        }
+
+        vkCmdEndRendering(cmd);
+
+        VkImageMemoryBarrier.Buffer toShaderRead = VkImageMemoryBarrier.calloc(1, stack)
+                .sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER)
+                .oldLayout(depthLayout)
+                .newLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .image(gpuCache.getShadowMapImage())
+                .srcAccessMask(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
+                .dstAccessMask(VK_ACCESS_SHADER_READ_BIT);
+        toShaderRead.get(0).subresourceRange().aspectMask(VK_IMAGE_ASPECT_DEPTH_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, null, null, toShaderRead);
     }
 
     private void computeModelMatrixInPlace(float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float[] outMatrix) {

@@ -1,5 +1,6 @@
 package com.retro.engine.backend.metal;
 
+import com.retro.engine.rhi.DirectionalShadowFrustum;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.FloatBuffer;
@@ -15,9 +16,15 @@ import static org.lwjgl.system.macosx.ObjCRuntime.*;
 public class MetalUniformStream {
 
     private static final int RING_SLOTS = 3;
-    public static final long UNIFORM_STRIDE = 256L;
+    // 304-byte Uniforms struct rounded up to keep every slot 256-byte aligned for constant buffer binding
+    public static final long UNIFORM_STRIDE = 512L;
     public static final int MAX_ENTITIES_PER_FRAME = 256;
-    private static final long FRAME_SLOT_SIZE = UNIFORM_STRIDE * (1 + 64 + MAX_ENTITIES_PER_FRAME);
+
+    // Per-frame slot layout: [grid] [64 shadow blobs] [MAX_ENTITIES lit entities] [MAX_ENTITIES shadow map casters]
+    public static final int SLOT_BASE_SHADOW_BLOBS = 1;
+    public static final int SLOT_BASE_ENTITIES = 1 + 64;
+    public static final int SLOT_BASE_SHADOW_CASTERS = 1 + 64 + MAX_ENTITIES_PER_FRAME;
+    private static final long FRAME_SLOT_SIZE = UNIFORM_STRIDE * (1 + 64 + 2 * MAX_ENTITIES_PER_FRAME);
     private static final long TOTAL_RING_BUFFER_SIZE = FRAME_SLOT_SIZE * RING_SLOTS;
 
     // Locked Byte Offsets for MSL Uniforms Struct
@@ -33,6 +40,7 @@ public class MetalUniformStream {
     public static final long OFFSET_IS_UNLIT = 228L;
     public static final long OFFSET_STRIDE = 232L;
     public static final long OFFSET_PASS_FLAGS = 236L;
+    public static final long OFFSET_LIGHT_SPACE = 240L;
 
     // passFlags bit 4: vertex shader applies the bone palette bound at vertex buffer index 2
     public static final int PASS_FLAG_SKINNED = 16;
@@ -59,6 +67,11 @@ public class MetalUniformStream {
     private final float[] matRotZ = new float[16];
     private final float[] matR = new float[16];
     private final float[] matTempR = new float[16];
+
+    // Directional shadow map view-projection, refit to the scene bounds once per frame and streamed into every slot
+    private final DirectionalShadowFrustum shadowFrustum = new DirectionalShadowFrustum();
+    private final float[] matLightSpace = new float[16];
+    private final float[] matLightMVP = new float[16];
 
     public void initialize(MetalDevice device) {
         long d = device.getDevice();
@@ -111,6 +124,29 @@ public class MetalUniformStream {
         for (int b = 0; b < count; b++) {
             fb.put(palette[b], 0, 16);
         }
+    }
+
+    /** Bounds accumulator for this frame's shadow frustum; reset, include every entity, then call updateLightSpaceMatrix. */
+    public DirectionalShadowFrustum getShadowFrustum() { return shadowFrustum; }
+
+    public float[] updateLightSpaceMatrix(float lightDirX, float lightDirY, float lightDirZ) {
+        shadowFrustum.build(lightDirX, lightDirY, lightDirZ, matLightSpace);
+        return matLightSpace;
+    }
+
+    public float[] getLightSpaceMatrix() { return matLightSpace; }
+
+    /** Writes this frame's light-space matrix into the uniform slot at baseAddr. */
+    public void writeLightSpaceMatrix(long baseAddr) {
+        FloatBuffer fb = MemoryUtil.memFloatBuffer(baseAddr + OFFSET_LIGHT_SPACE, 16);
+        fb.put(matLightSpace);
+    }
+
+    /** lightSpace * model for the shadow map depth pass; also leaves the model matrix in getModelMatrix(). */
+    public float[] createLightSpaceMVPMatrix(float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
+        createModelMatrix(px, py, pz, rx, ry, rz, sx, sy, sz);
+        multiplyMat4(matLightSpace, matM, matLightMVP);
+        return matLightMVP;
     }
 
     public int advanceFrameIndex() {

@@ -36,6 +36,9 @@ public class VulkanDevice {
     // and asset uploads from AssetStreamer virtual threads all serialize on this lock.
     private final Object queueLock = new Object();
 
+    // Vulkan 1.2 feature gating the depth-only VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL layout
+    private boolean separateDepthStencilLayouts = false;
+
     public String getDriverName() {
         return (Platform.get() == Platform.MACOSX)
                 ? "Modular Vulkan 1.3 Driver (MoltenVK / Apple Silicon)"
@@ -165,8 +168,20 @@ public class VulkanDevice {
             }
             ppExtensions.flip();
 
+            VkPhysicalDeviceVulkan12Features supported12 = VkPhysicalDeviceVulkan12Features.calloc(stack).sType$Default();
+            VkPhysicalDeviceFeatures2 supportedFeatures = VkPhysicalDeviceFeatures2.calloc(stack)
+                    .sType$Default()
+                    .pNext(supported12.address());
+            VK11.vkGetPhysicalDeviceFeatures2(physicalDevice, supportedFeatures);
+            separateDepthStencilLayouts = supported12.separateDepthStencilLayouts();
+
+            VkPhysicalDeviceVulkan12Features features12 = VkPhysicalDeviceVulkan12Features.calloc(stack)
+                    .sType$Default()
+                    .separateDepthStencilLayouts(separateDepthStencilLayouts);
+
             VkPhysicalDeviceVulkan13Features features13 = VkPhysicalDeviceVulkan13Features.calloc(stack)
                     .sType$Default()
+                    .pNext(features12.address())
                     .dynamicRendering(true);
 
             VkPhysicalDeviceFeatures2 features2 = VkPhysicalDeviceFeatures2.calloc(stack)
@@ -307,4 +322,5 @@ public class VulkanDevice {
     public int getGraphicsQueueFamilyIndex() { return graphicsQueueFamilyIndex; }
     public int getPresentQueueFamilyIndex() { return presentQueueFamilyIndex; }
     public Object getQueueLock() { return queueLock; }
+    public boolean supportsSeparateDepthStencilLayouts() { return separateDepthStencilLayouts; }
 }
