@@ -1,5 +1,6 @@
 package com.retro.engine.backend.metal;
 
+import com.retro.engine.rhi.DirectionalShadowFrustum;
 import com.retro.engine.rhi.HandleRegistry;
 import org.lwjgl.system.MemoryUtil;
 
@@ -9,13 +10,14 @@ import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static org.lwjgl.system.JNI.invokePPP;
+import static org.lwjgl.system.JNI.invokePPPP;
 import static org.lwjgl.system.JNI.invokePPPPPP;
 import static org.lwjgl.system.macosx.ObjCRuntime.objc_getClass;
 import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 
 /**
  * Service Registry & VRAM Coordinator (SRP Pattern matching VulkanGpuCache and EditorWorkspace):
- * Coordinates static VBO mesh buffers, viewport quad, ground quad VBOs, and delegates texture
+ * Coordinates static VBO mesh buffers, viewport quad, ground quad VBOs, the directional shadow map, and delegates texture
  * management to MetalTextureRegistry and dynamic geometry buffering to MetalRingBuffer.
  * Registered meshes and textures live in opaque-handle tables; unregistered resources are released
  * through the deferred disposal queue once no in-flight frame can still reference them.
@@ -27,11 +29,16 @@ public class MetalGpuCache {
     public static final long MTL_INDEX_TYPE_UINT16 = 0L;
     public static final long MTL_INDEX_TYPE_UINT32 = 1L;
 
+    public static final int SHADOW_MAP_SIZE = DirectionalShadowFrustum.SHADOW_MAP_SIZE;
+    private static final long MTL_PIXEL_FORMAT_DEPTH32_FLOAT = 252L;
+
     /** Registered mesh: the vertex MTLBuffer plus an optional index MTLBuffer (0L when non-indexed). */
     public static class MetalMesh extends MetalBuffer {
         public final long indexBufferHandle;
         public final int indexCount;
         public final long indexType;
+        // Local-space bounding sphere radius around the mesh origin, used to fit the shadow frustum
+        public float boundsRadius = 1.0f;
 
         public MetalMesh(MetalBuffer vertices, long indexBufferHandle, int indexCount, long indexType) {
             super(vertices.getHandle(), vertices.getElementCount(), vertices.getFloatStride());
@@ -69,6 +76,10 @@ public class MetalGpuCache {
     private float quadMinX = -0.55f, quadMinY = -0.50f, quadMaxX = 0.55f, quadMaxY = 0.88f;
     private boolean viewportQuadVisible = true;
     private long groundQuadBuffer = 0L;
+
+    // Persistent 2048x2048 Depth32Float shadow map (RenderTarget | ShaderRead) and its comparison sampler
+    private long shadowMapTexture = 0L;
+    private long shadowSamplerState = 0L;
 
     public void beginFrame(MetalDevice metalDevice, long frameIndex) {
         this.currentFrameCounter = frameIndex;
@@ -120,6 +131,43 @@ public class MetalGpuCache {
 
     public long getGroundQuadBuffer() {
         return groundQuadBuffer;
+    }
+
+    public long getShadowMapTexture() { return shadowMapTexture; }
+    public long getShadowSamplerState() { return shadowSamplerState; }
+    public boolean hasShadowMap() { return shadowMapTexture != 0L && shadowSamplerState != 0L; }
+
+    /** Allocates the directional shadow map depth texture and its LessEqual comparison sampler; call once at startup. */
+    public void initShadowMap(MetalDevice metalDevice) {
+        if (metalDevice == null || metalDevice.getDevice() == 0L || metalDevice.getObjcMsgSend() == 0L) return;
+        long d = metalDevice.getDevice();
+        long send = metalDevice.getObjcMsgSend();
+        long selRelease = sel_registerName("release");
+
+        long texDesc = invokePPP(objc_getClass("MTLTextureDescriptor"), sel_registerName("new"), send);
+        invokePPPP(texDesc, sel_registerName("setTextureType:"), 2L, send);                         // MTLTextureType2D
+        invokePPPP(texDesc, sel_registerName("setPixelFormat:"), MTL_PIXEL_FORMAT_DEPTH32_FLOAT, send);
+        invokePPPP(texDesc, sel_registerName("setWidth:"), (long) SHADOW_MAP_SIZE, send);
+        invokePPPP(texDesc, sel_registerName("setHeight:"), (long) SHADOW_MAP_SIZE, send);
+        invokePPPP(texDesc, sel_registerName("setUsage:"), 5L, send);                               // RenderTarget (4) | ShaderRead (1)
+        invokePPPP(texDesc, sel_registerName("setStorageMode:"), 2L, send);                         // Private
+        shadowMapTexture = invokePPPP(d, sel_registerName("newTextureWithDescriptor:"), texDesc, send);
+        invokePPP(texDesc, selRelease, send);
+
+        // Outside the map the opaque white border reads as depth 1.0, so everything there stays lit
+        long samplerDesc = invokePPP(objc_getClass("MTLSamplerDescriptor"), sel_registerName("new"), send);
+        invokePPPP(samplerDesc, sel_registerName("setMinFilter:"), 1L, send);                       // Linear: hardware 2x2 compare filtering per tap
+        invokePPPP(samplerDesc, sel_registerName("setMagFilter:"), 1L, send);
+        invokePPPP(samplerDesc, sel_registerName("setSAddressMode:"), 5L, send);                    // ClampToBorderColor
+        invokePPPP(samplerDesc, sel_registerName("setTAddressMode:"), 5L, send);
+        invokePPPP(samplerDesc, sel_registerName("setBorderColor:"), 2L, send);                     // OpaqueWhite
+        invokePPPP(samplerDesc, sel_registerName("setCompareFunction:"), 3L, send);                 // LessEqual
+        shadowSamplerState = invokePPPP(d, sel_registerName("newSamplerStateWithDescriptor:"), samplerDesc, send);
+        invokePPP(samplerDesc, selRelease, send);
+
+        if (!hasShadowMap()) {
+            System.err.println("[MetalGpuCache] ERROR: Failed to allocate the " + SHADOW_MAP_SIZE + "x" + SHADOW_MAP_SIZE + " directional shadow map.");
+        }
     }
 
     public boolean isViewportQuadVisible() {
@@ -196,10 +244,15 @@ public class MetalGpuCache {
         return meshHandles.register(assetKey, () -> {
             MetalBuffer buf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), vertices, vertices.length / vertexCount);
             if (buf.getHandle() == 0L) return null;
-            if (indices == null || indexCount <= 0) return new MetalMesh(buf, 0L, 0, MTL_INDEX_TYPE_UINT32);
 
-            MetalMesh mesh = createIndexedMesh(metalDevice, buf, indices, Math.min(indexCount, indices.length));
-            if (mesh == null) invokePPP(buf.getHandle(), sel_registerName("release"), metalDevice.getObjcMsgSend());
+            MetalMesh mesh = (indices == null || indexCount <= 0)
+                    ? new MetalMesh(buf, 0L, 0, MTL_INDEX_TYPE_UINT32)
+                    : createIndexedMesh(metalDevice, buf, indices, Math.min(indexCount, indices.length));
+            if (mesh == null) {
+                invokePPP(buf.getHandle(), sel_registerName("release"), metalDevice.getObjcMsgSend());
+                return null;
+            }
+            mesh.boundsRadius = DirectionalShadowFrustum.computeLocalBoundsRadius(vertices, buf.getFloatStride(), vertexCount);
             return mesh;
         });
     }
@@ -298,6 +351,8 @@ public class MetalGpuCache {
             textureHandles.clear(tex -> invokePPP(tex.getBindableTexture(), selRelease, send));
 
             textureRegistry.cleanup(metalDevice);
+            if (shadowMapTexture != 0L) { invokePPP(shadowMapTexture, selRelease, send); shadowMapTexture = 0L; }
+            if (shadowSamplerState != 0L) { invokePPP(shadowSamplerState, selRelease, send); shadowSamplerState = 0L; }
             gridRingBuffer.cleanup(metalDevice);
             uiRingBuffer.cleanup(metalDevice);
         } else {

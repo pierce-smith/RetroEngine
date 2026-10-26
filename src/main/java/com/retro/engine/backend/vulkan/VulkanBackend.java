@@ -1,6 +1,7 @@
 package com.retro.engine.backend.vulkan;
 
 import com.retro.engine.rhi.BufferDesc;
+import com.retro.engine.rhi.DirectionalShadowFrustum;
 import com.retro.engine.rhi.GraphicsAPI;
 import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.rhi.TextureDesc;
@@ -51,6 +52,8 @@ public class VulkanBackend implements IRenderBackend {
     // Reusable Matrix Buffers for Zero-Allocation Frame Loops
     private final float[] viewMatrix = new float[16];
     private final float[] projMatrix = new float[16];
+    private final float[] lightSpaceMatrix = new float[16];
+    private final DirectionalShadowFrustum shadowFrustum = new DirectionalShadowFrustum();
     private float sceneAspect = 0.0f; // docked Scene tile aspect; 0 = use offscreen target aspect
 
     @Override
@@ -108,6 +111,7 @@ public class VulkanBackend implements IRenderBackend {
         computeViewMatrix();
         float aspect = sceneAspect > 0.0f ? sceneAspect : (float) targetPass.getWidth() / (float) targetPass.getHeight();
         computePerspectiveProjectionMatrix(50.0f, aspect, 0.1f, 500.0f);
+        computeLightSpaceMatrix();
 
         gpuCache.updateLightUniformBuffer(
                 deviceManager,
@@ -119,7 +123,8 @@ public class VulkanBackend implements IRenderBackend {
                 camPanX, camPanY, camZoom,
                 0.0f,
                 viewMatrix,
-                projMatrix
+                projMatrix,
+                lightSpaceMatrix
         );
 
         // All descriptor allocation and vkUpdateDescriptorSets happen here, never during command recording
@@ -170,6 +175,19 @@ public class VulkanBackend implements IRenderBackend {
         viewMatrix[4] = 0.0f;      viewMatrix[5] = cp;        viewMatrix[6] = -sp;       viewMatrix[7] = 0.0f;
         viewMatrix[8] = -sy;       viewMatrix[9] = cy * sp;   viewMatrix[10] = cy * cp;  viewMatrix[11] = 0.0f;
         viewMatrix[12] = camPanX;  viewMatrix[13] = camPanY;  viewMatrix[14] = camZoom;  viewMatrix[15] = 1.0f;
+    }
+
+    /** Orthographic directional light view-projection fitted around the bounding spheres of every queued entity. */
+    private void computeLightSpaceMatrix() {
+        shadowFrustum.reset();
+        for (int i = 0; i < activeSceneQueueCount; i++) {
+            VulkanPassEncoder.RenderEntity entity = sceneQueuePool.get(i);
+            VulkanGpuCache.VulkanBuffer mesh = gpuCache.getMesh(entity.meshHandle);
+            if (mesh == null) continue;
+            float scale = Math.max(Math.abs(entity.sx), Math.max(Math.abs(entity.sy), Math.abs(entity.sz)));
+            shadowFrustum.include(entity.px, entity.py, entity.pz, mesh.boundsRadius * scale);
+        }
+        shadowFrustum.build(activeLightDirX, activeLightDirY, activeLightDirZ, lightSpaceMatrix);
     }
 
     @Override

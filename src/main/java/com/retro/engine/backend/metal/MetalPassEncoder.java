@@ -1,5 +1,6 @@
 package com.retro.engine.backend.metal;
 
+import com.retro.engine.rhi.DirectionalShadowFrustum;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.FloatBuffer;
@@ -10,7 +11,7 @@ import static org.lwjgl.system.JNI.*;
 import static org.lwjgl.system.macosx.ObjCRuntime.*;
 
 /**
- * Encodes offscreen 3D passes (procedural grid, batched 3D models with environment reflections,
+ * Encodes the directional shadow map depth pass, offscreen 3D passes (procedural grid, batched 3D models with environment reflections,
  * and dynamic downward-raycast shadow blobs) and window quad composition into Metal command buffers.
  */
 public class MetalPassEncoder {
@@ -36,6 +37,8 @@ public class MetalPassEncoder {
         public float reflectionStrength = 0.0f;
         public int stride = 22;
         public float[][] bonePalette = null;
+        public float boundsRadius = 1.0f; // local bounding sphere radius, fits the shadow frustum
+        int skinnedSlot = -1;             // bone palette slot assigned for this frame, -1 = not skinned
     }
 
     // Selectors are interned once at class load; nothing on the encoding path performs a string lookup
@@ -95,6 +98,22 @@ public class MetalPassEncoder {
             float lightR, float lightG, float lightB, float lightIntensity) {
 
         send = device.getObjcMsgSend();
+
+        long currentSlotOffset = streamer.getCurrentSlotOffset();
+        long streamingUniformBuffer = streamer.getStreamingUniformBuffer();
+        long pBufferContents = invokePPP(streamingUniformBuffer, SEL_CONTENTS, send);
+        long bonePaletteBuffer = streamer.getBonePaletteBuffer();
+        long pBoneContents = bonePaletteBuffer != 0L ? invokePPP(bonePaletteBuffer, SEL_CONTENTS, send) : 0L;
+
+        // Sort once and stream bone palettes once; the shadow and main passes share slot assignments
+        if (sceneQueue != null && !sceneQueue.isEmpty()) {
+            sceneQueue.sort(BATCH_COMPARATOR);
+            assignSkinningSlots(sceneQueue, streamer, pBoneContents);
+        }
+
+        // PASS 0: Directional shadow map depth pass, encoded before the main 3D pass samples it
+        encodeShadowMapPass(commandBuffer, pipeline, texture, resourceCache, streamer, sceneQueue, pBufferContents, currentSlotOffset);
+
         long offscreenPassDesc = invokePPP(renderPassDescClass(), SEL_RENDER_PASS_DESCRIPTOR, send);
 
         long colorAttachOff = invokePPP(offscreenPassDesc, SEL_COLOR_ATTACHMENTS, send);
@@ -118,14 +137,12 @@ public class MetalPassEncoder {
         // The offscreen image is stretched over the docked Scene tile, so project with that tile's aspect
         float aspect = sceneAspect > 0.0f ? sceneAspect
                 : (framebuffer.getWidth() > 0 && framebuffer.getHeight() > 0) ? ((float) framebuffer.getWidth() / (float) framebuffer.getHeight()) : (712.0f / 488.0f);
-        long currentSlotOffset = streamer.getCurrentSlotOffset();
-        long streamingUniformBuffer = streamer.getStreamingUniformBuffer();
-        long pBufferContents = invokePPP(streamingUniformBuffer, SEL_CONTENTS, send);
 
         // vertexMain declares the bone palette at buffer(2); keep it bound for every draw in this pass
-        long bonePaletteBuffer = streamer.getBonePaletteBuffer();
-        long pBoneContents = bonePaletteBuffer != 0L ? invokePPP(bonePaletteBuffer, SEL_CONTENTS, send) : 0L;
         bindVertexBuffer(bonePaletteBuffer, streamer.getBonePaletteOffset(0), 2);
+
+        // fragmentMain samples the shadow map at texture(1) / sampler(1) for every lit draw in this pass
+        bindShadowMap(resourceCache);
 
         // 1A. Procedural Ray-Plane Infinite Grid Encoding
         if (resourceCache.getGridVertexBuffer() != 0L && resourceCache.getGridVertexCount() > 0) {
@@ -166,13 +183,9 @@ public class MetalPassEncoder {
 
         // 1B. Instanced & Batched Opaque 3D Models
         if (sceneQueue != null && !sceneQueue.isEmpty()) {
-            sceneQueue.sort(BATCH_COMPARATOR);
-
             int entityIndex = 0;
             bindPipeline(pipeline.getPipelineState3D());
             bindDepthStencil(pipeline.getDepthStencilState3D());
-
-            int skinnedIndex = 0;
 
             for (RenderEntity item : sceneQueue) {
                 if (entityIndex >= MetalUniformStream.MAX_ENTITIES_PER_FRAME) break;
@@ -186,15 +199,12 @@ public class MetalPassEncoder {
                     bindFragmentSampler(texture.getSamplerStateHandle());
                 }
 
-                boolean skinned = item.stride >= 30 && item.bonePalette != null && pBoneContents != 0L
-                        && skinnedIndex < MetalUniformStream.MAX_SKINNED_ENTITIES_PER_FRAME;
+                boolean skinned = item.skinnedSlot >= 0;
                 if (skinned) {
-                    streamer.writeBonePalette(pBoneContents, skinnedIndex, item.bonePalette);
-                    bindVertexBuffer(bonePaletteBuffer, streamer.getBonePaletteOffset(skinnedIndex), 2);
-                    skinnedIndex++;
+                    bindVertexBuffer(bonePaletteBuffer, streamer.getBonePaletteOffset(item.skinnedSlot), 2);
                 }
 
-                long entityUniformOffset = currentSlotOffset + MetalUniformStream.UNIFORM_STRIDE * (1 + 64 + entityIndex);
+                long entityUniformOffset = currentSlotOffset + MetalUniformStream.UNIFORM_STRIDE * (MetalUniformStream.SLOT_BASE_ENTITIES + entityIndex);
                 float[] mvpModel = streamer.create3DMVPMatrix(aspect, camPanX, camPanY, camZoom, camPitch, camYaw, item.px, item.py, item.pz, item.rx, item.ry, item.rz, item.sx, item.sy, item.sz);
                 float[] modelMat = streamer.getModelMatrix();
 
@@ -228,6 +238,8 @@ public class MetalPassEncoder {
                     MemoryUtil.memPutFloat(baseAddr + 188L, 1.0f);
 
                     MemoryUtil.memPutFloat(baseAddr + 208L, item.reflectionStrength);
+                    MemoryUtil.memPutFloat(baseAddr + 216L, DirectionalShadowFrustum.SHADOW_BIAS);
+                    streamer.writeLightSpaceMatrix(baseAddr);
 
                     MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_HAS_TEXTURE, item.hasTexture ? 1 : 0);
                     MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_IS_UNLIT, 0);
@@ -275,7 +287,7 @@ public class MetalPassEncoder {
                 if (heightFade < 0.05f) continue;
 
                 float shadowScale = Math.max(item.sx, item.sz) * 1.25f;
-                long shadowUniformOffset = currentSlotOffset + MetalUniformStream.UNIFORM_STRIDE * (1 + shadowIndex);
+                long shadowUniformOffset = currentSlotOffset + MetalUniformStream.UNIFORM_STRIDE * (MetalUniformStream.SLOT_BASE_SHADOW_BLOBS + shadowIndex);
                 float shadowY = item.groundY + 0.005f;
                 float[] mvpShadow = streamer.create3DMVPMatrix(aspect, camPanX, camPanY, camZoom, camPitch, camYaw, item.px, shadowY, item.pz, 0.0f, 0.0f, 0.0f, shadowScale, 1.0f, shadowScale);
                 float[] modelMat = streamer.getModelMatrix();
@@ -328,6 +340,8 @@ public class MetalPassEncoder {
         long encoderWin = invokePPPP(commandBuffer, SEL_RENDER_COMMAND_ENCODER, windowPassDesc, send);
         if (encoderWin == 0L) return;
         beginEncoder(encoderWin);
+        // The composition pipeline shares fragmentMain, which declares the shadow map arguments
+        bindShadowMap(resourceCache);
 
         // 1. Viewport Quad Pass-Through Composition
         long pipelineComp = pipeline.getPipelineStateComposition();
@@ -358,6 +372,101 @@ public class MetalPassEncoder {
 
         invokePPP(encoderWin, SEL_END_ENCODING, send);
         encoder = 0L;
+    }
+
+    /**
+     * Assigns each skinned entity a bone palette slot (in sorted queue order) and streams its palette once,
+     * so the shadow map pass and the main pass bind identical skinning data.
+     */
+    private void assignSkinningSlots(List<RenderEntity> sceneQueue, MetalUniformStream streamer, long pBoneContents) {
+        int skinnedIndex = 0;
+        int count = Math.min(sceneQueue.size(), MetalUniformStream.MAX_ENTITIES_PER_FRAME);
+        for (int i = 0; i < count; i++) {
+            RenderEntity item = sceneQueue.get(i);
+            item.skinnedSlot = -1;
+            if (item.stride >= 30 && item.bonePalette != null && pBoneContents != 0L
+                    && skinnedIndex < MetalUniformStream.MAX_SKINNED_ENTITIES_PER_FRAME) {
+                streamer.writeBonePalette(pBoneContents, skinnedIndex, item.bonePalette);
+                item.skinnedSlot = skinnedIndex++;
+            }
+        }
+    }
+
+    /**
+     * Renders every queued mesh into the 2048x2048 Depth32Float shadow map with mvp = lightSpace * model.
+     * Always encoded (an empty queue still clears the map) because the main pass samples it unconditionally.
+     */
+    private void encodeShadowMapPass(long commandBuffer, MetalPipeline pipeline, MetalTexture texture,
+                                     MetalGpuCache resourceCache, MetalUniformStream streamer,
+                                     List<RenderEntity> sceneQueue, long pBufferContents, long currentSlotOffset) {
+        long shadowMap = resourceCache.getShadowMapTexture();
+        if (shadowMap == 0L) return;
+
+        long shadowPassDesc = invokePPP(renderPassDescClass(), SEL_RENDER_PASS_DESCRIPTOR, send);
+        long depthAttach = invokePPP(shadowPassDesc, SEL_DEPTH_ATTACHMENT, send);
+        invokePPPP(depthAttach, SEL_SET_TEXTURE, shadowMap, send);
+        invokePPPP(depthAttach, SEL_SET_LOAD_ACTION, 2L, send);  // Clear (clearDepth defaults to 1.0)
+        invokePPPP(depthAttach, SEL_SET_STORE_ACTION, 1L, send); // Store for sampling in the main pass
+
+        long encoderShadow = invokePPPP(commandBuffer, SEL_RENDER_COMMAND_ENCODER, shadowPassDesc, send);
+        if (encoderShadow == 0L) return;
+        beginEncoder(encoderShadow);
+
+        long shadowPipeline = pipeline.getPipelineStateShadowMap();
+        long streamingUniformBuffer = streamer.getStreamingUniformBuffer();
+        long bonePaletteBuffer = streamer.getBonePaletteBuffer();
+
+        if (shadowPipeline != 0L && pBufferContents != 0L && sceneQueue != null && !sceneQueue.isEmpty()) {
+            bindPipeline(shadowPipeline);
+            bindDepthStencil(pipeline.getDepthStencilStateShadowMap());
+            bindVertexBuffer(bonePaletteBuffer, streamer.getBonePaletteOffset(0), 2);
+            if (texture.getSamplerStateHandle() != 0L) {
+                bindFragmentSampler(texture.getSamplerStateHandle());
+            }
+
+            int count = Math.min(sceneQueue.size(), MetalUniformStream.MAX_ENTITIES_PER_FRAME);
+            for (int i = 0; i < count; i++) {
+                RenderEntity item = sceneQueue.get(i);
+                // Same skinning rule as the main pass: unskinned 30-float meshes draw in bind pose there too
+                boolean skinned = item.skinnedSlot >= 0;
+
+                long casterOffset = currentSlotOffset + MetalUniformStream.UNIFORM_STRIDE * (MetalUniformStream.SLOT_BASE_SHADOW_CASTERS + i);
+                long baseAddr = pBufferContents + casterOffset;
+                float[] lightMvp = streamer.createLightSpaceMVPMatrix(item.px, item.py, item.pz, item.rx, item.ry, item.rz, item.sx, item.sy, item.sz);
+                MemoryUtil.memFloatBuffer(baseAddr + MetalUniformStream.OFFSET_MVP, 16).put(lightMvp);
+                MemoryUtil.memFloatBuffer(baseAddr + MetalUniformStream.OFFSET_MODEL, 16).put(streamer.getModelMatrix());
+                streamer.writeLightSpaceMatrix(baseAddr);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_HAS_TEXTURE, item.hasTexture ? 1 : 0);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_IS_UNLIT, 0);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_STRIDE, item.stride);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PASS_FLAGS, skinned ? MetalUniformStream.PASS_FLAG_SKINNED : 0);
+
+                bindVertexBuffer(item.vertexBufferHandle, 0L, 0);
+                if (skinned) {
+                    bindVertexBuffer(bonePaletteBuffer, streamer.getBonePaletteOffset(item.skinnedSlot), 2);
+                }
+                bindFragmentTexture((item.hasTexture && item.textureHandle != 0L) ? item.textureHandle : texture.getBindableTexture());
+                bindVertexBuffer(streamingUniformBuffer, casterOffset, 1);
+                bindFragmentBuffer(streamingUniformBuffer, casterOffset, 1);
+
+                if (item.indexBufferHandle != 0L && item.indexCount > 0) {
+                    invokePPPPPPPV(encoderShadow, SEL_DRAW_INDEXED_PRIMITIVES,
+                            3L, (long) item.indexCount, item.indexType, item.indexBufferHandle, 0L, send);
+                } else {
+                    invokePPPPPP(encoderShadow, SEL_DRAW_PRIMITIVES, 3L, 0L, (long) item.vertexCount, send);
+                }
+            }
+        }
+
+        invokePPP(encoderShadow, SEL_END_ENCODING, send);
+        encoder = 0L;
+    }
+
+    /** Binds the shadow map and its comparison sampler at fragment slot 1; never call inside the shadow map pass. */
+    private void bindShadowMap(MetalGpuCache resourceCache) {
+        if (!resourceCache.hasShadowMap()) return;
+        invokePPPPP(encoder, SEL_SET_FRAGMENT_TEXTURE, resourceCache.getShadowMapTexture(), 1L, send);
+        invokePPPPP(encoder, SEL_SET_FRAGMENT_SAMPLER_STATE, resourceCache.getShadowSamplerState(), 1L, send);
     }
 
     private long renderPassDescClass() {

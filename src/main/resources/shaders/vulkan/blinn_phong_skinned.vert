@@ -18,6 +18,7 @@ layout(location = 3) out vec4 vColor;
 layout(location = 4) out vec3 vTangent;
 layout(location = 5) out vec3 vBitangent;
 layout(location = 6) out float vViewDist;
+layout(location = 7) out vec4 vLightSpacePos;
 
 struct DirectionalLight {
     vec4 direction; // xyz = direction, w = intensity
@@ -46,12 +47,13 @@ layout(std140, set = 0, binding = 0) uniform LightBuffer {
     vec4 viewPos;     // xyz = camera position, w = groundY
     mat4 view;        // byte offset 176
     mat4 proj;        // byte offset 240
+    mat4 lightSpaceMatrix; // byte offset 304: directional shadow map view-projection (368 bytes total)
 } u_Lights;
 
 // 80 bytes: stays within the 128-byte maxPushConstantsSize every Vulkan implementation guarantees
 layout(push_constant) uniform MeshPushConstants {
     mat4 model;
-    vec4 params; // x = passFlags (1.0 = shadow blob), y = heightFade, z = reflection, w = unused
+    vec4 params; // x = passFlags (1.0 = shadow blob, 2.0 = shadow map depth), y = heightFade, z = reflection, w = unused
 } u_PushConstants;
 
 layout(std430, set = 0, binding = 3) readonly buffer BonePalette {
@@ -89,7 +91,10 @@ void main() {
     vTexCoord = aTexCoord;
     vColor = aColor;
 
-    vec4 clipPos = u_Lights.proj * u_Lights.view * worldPos;
+    vLightSpacePos = u_Lights.lightSpaceMatrix * worldPos;
+
+    // Shadow map depth pass renders the same geometry from the directional light
+    vec4 clipPos = (u_PushConstants.params.x > 1.5) ? vLightSpacePos : u_Lights.proj * u_Lights.view * worldPos;
     vViewDist = clipPos.w;
     gl_Position = clipPos;
 }

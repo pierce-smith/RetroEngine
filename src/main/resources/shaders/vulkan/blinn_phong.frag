@@ -7,6 +7,7 @@ layout(location = 3) in vec4 vColor;
 layout(location = 4) in vec3 vTangent;
 layout(location = 5) in vec3 vBitangent;
 layout(location = 6) in float vViewDist;
+layout(location = 7) in vec4 vLightSpacePos;
 
 layout(location = 0) out vec4 outFragColor;
 
@@ -32,20 +33,43 @@ layout(std140, set = 0, binding = 0) uniform LightBuffer {
     DirectionalLight dirLight;
     PointLight pointLights;
     SpotLight spotLights;
-    vec4 numLights;   // x = numDir, y = numPoint, z = numSpot, w = shadowMapBias
+    vec4 numLights;   // x = numDir, y = numPoint, z = numSpot, w = shadow map slope bias
     vec4 viewPos;     // xyz = camera position, w = groundY
     mat4 view;        // byte offset 176
     mat4 proj;        // byte offset 240
+    mat4 lightSpaceMatrix; // byte offset 304: directional shadow map view-projection (368 bytes total)
 } u_Lights;
 
 layout(set = 0, binding = 1) uniform sampler2D u_MainTexture;
-layout(set = 0, binding = 2) uniform sampler2D u_ShadowMap;
+// 2048x2048 D32 directional shadow map; comparison sampler (LESS_OR_EQUAL, clamp-to-border opaque white)
+layout(set = 0, binding = 2) uniform sampler2DShadow u_ShadowMap;
 
 // 80 bytes: stays within the 128-byte maxPushConstantsSize every Vulkan implementation guarantees
 layout(push_constant) uniform MeshPushConstants {
     mat4 model;
-    vec4 params; // x = passFlags (1.0 = shadow blob), y = heightFade, z = reflection, w = unused
+    vec4 params; // x = passFlags (1.0 = shadow blob, 2.0 = shadow map depth), y = heightFade, z = reflection, w = unused
 } u_PushConstants;
+
+// 3x3 PCF over the directional shadow map: 1.0 = fully lit, 0.0 = fully shadowed
+float computeDirectionalShadow(float NdotL) {
+    vec3 proj = vLightSpacePos.xyz / vLightSpacePos.w;
+    if (proj.z > 1.0) return 1.0;
+
+    // The shadow pass uses a positive-height viewport, so NDC maps straight to texture space
+    vec2 uv = proj.xy * 0.5 + 0.5;
+    float baseBias = u_Lights.numLights.w;
+    float bias = max(baseBias * (1.0 - NdotL), baseBias * 0.2);
+    float refDepth = proj.z - bias;
+
+    vec2 texel = 1.0 / vec2(textureSize(u_ShadowMap, 0));
+    float lit = 0.0;
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
+            lit += texture(u_ShadowMap, vec3(uv + vec2(x, y) * texel, refDepth));
+        }
+    }
+    return lit / 9.0;
+}
 
 void main() {
     // Dynamic Ground Shadow Blob Pass (PassFlags == 1.0)
@@ -78,6 +102,7 @@ void main() {
 
     vec3 L = vec3(0.0, 1.0, 0.0);
     float attenuation = 1.0;
+    float shadow = 1.0;
     vec3 lightColor = vec3(1.0, 1.0, 1.0);
     float intensity = 1.0;
 
@@ -109,12 +134,13 @@ void main() {
     } else if (u_Lights.numLights.x > 0.5) {
         // Directional Light
         L = normalize(-u_Lights.dirLight.direction.xyz);
+        shadow = computeDirectionalShadow(clamp(dot(N, L), 0.0, 1.0));
         lightColor = u_Lights.dirLight.color.rgb;
         intensity = u_Lights.dirLight.color.a;
     }
 
     float diff = max(dot(N, L), 0.0);
-    vec3 diffuse = diff * lightColor * intensity * attenuation;
+    vec3 diffuse = diff * lightColor * intensity * attenuation * shadow;
     vec3 ambient = max(u_Lights.dirLight.color.rgb * 0.35, vec3(0.35, 0.35, 0.38));
 
     vec3 finalRGB = (ambient + diffuse) * baseColor.rgb;

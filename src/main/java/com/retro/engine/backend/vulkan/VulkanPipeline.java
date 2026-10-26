@@ -14,7 +14,7 @@ import static org.lwjgl.vulkan.VK13.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_
  * Manages Vulkan 1.3 Graphics Pipelines for offscreen 3D Blinn-Phong geometry (88-byte 22-float stride),
  * GPU-skinned geometry (120-byte 30-float stride with bone palette storage buffer at binding 3),
  * infinite 3D grid rendering (36-byte 9-float stride VBO from GizmoState matching Metal backend),
- * dynamic ground shadow blobs, vertical Y-axis pillar lines, and swapchain 2D UI composition
+ * dynamic ground shadow blobs, depth-only directional shadow map passes, vertical Y-axis pillar lines, and swapchain 2D UI composition
  * using Dynamic Rendering (VK_KHR_dynamic_rendering).
  * Delegates binary pipeline cache disk serialization to VulkanPipelineCache.
  */
@@ -29,6 +29,9 @@ public class VulkanPipeline {
     private long graphicsPipeline3D = 0L;
     private long graphicsPipelineShadow = 0L;
     private long graphicsPipelineSkinned = 0L;
+    // Depth-only directional shadow map pipelines (static 88 B and skinned 120 B strides)
+    private long graphicsPipelineShadowDepth = 0L;
+    private long graphicsPipelineShadowDepthSkinned = 0L;
 
     private long descriptorSetLayoutGrid = 0L;
     private long pipelineLayoutGrid = 0L;
@@ -294,7 +297,15 @@ public class VulkanPipeline {
                         graphicsPipelineSkinned = pPipelineSkinned.get(0);
                         System.out.println("[VulkanPipeline] Created GPU Skinned 3D VkPipeline [0x" + Long.toHexString(graphicsPipelineSkinned) + "].");
                     }
+
+                    graphicsPipelineShadowDepthSkinned = createShadowDepthPipeline(vkDevice, cacheHandle, vertSkinnedModule, vertexInputSkinned, inputAssembly, viewportState, rasterizer, multisampling, dynamicState3D);
                     VulkanShaderLoader.destroyShaderModule(vkDevice, vertSkinnedModule);
+                }
+
+                // 2D. Directional Shadow Map Depth Pipeline (88-Byte Stride, no color attachments)
+                graphicsPipelineShadowDepth = createShadowDepthPipeline(vkDevice, cacheHandle, vert3DModule, vertexInputInfo3D, inputAssembly, viewportState, rasterizer, multisampling, dynamicState3D);
+                if (graphicsPipelineShadowDepth != 0L) {
+                    System.out.println("[VulkanPipeline] Created Directional Shadow Map Depth VkPipeline [0x" + Long.toHexString(graphicsPipelineShadowDepth) + "].");
                 }
 
                 VulkanShaderLoader.destroyShaderModule(vkDevice, vert3DModule);
@@ -353,12 +364,60 @@ public class VulkanPipeline {
         }
     }
 
+    /**
+     * Depth-only pipeline rendering into the D32 shadow map. Reuses the blinn_phong vertex stage (passFlags 2.0 selects
+     * the light-space transform) with shadow_depth.frag, which only performs the alpha cutout and never touches the
+     * shadow map binding, so binding 2 is not statically used while the shadow map is a depth attachment.
+     */
+    private long createShadowDepthPipeline(VkDevice vkDevice, long cacheHandle, long vertModule,
+                                           VkPipelineVertexInputStateCreateInfo vertexInput,
+                                           VkPipelineInputAssemblyStateCreateInfo inputAssembly,
+                                           VkPipelineViewportStateCreateInfo viewportState,
+                                           VkPipelineRasterizationStateCreateInfo rasterizer,
+                                           VkPipelineMultisampleStateCreateInfo multisampling,
+                                           VkPipelineDynamicStateCreateInfo dynamicState) {
+        long fragModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/shadow_depth.frag.spv");
+        if (vertModule == 0L || fragModule == 0L) {
+            VulkanShaderLoader.destroyShaderModule(vkDevice, fragModule);
+            return 0L;
+        }
+
+        try (MemoryStack stack = stackPush()) {
+            VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(2, stack);
+            stages.get(0).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_VERTEX_BIT).module(vertModule).pName(stack.UTF8("main"));
+            stages.get(1).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_FRAGMENT_BIT).module(fragModule).pName(stack.UTF8("main"));
+
+            VkPipelineDepthStencilStateCreateInfo depthStencil = VkPipelineDepthStencilStateCreateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO)
+                    .depthTestEnable(true)
+                    .depthWriteEnable(true)
+                    .depthCompareOp(VK_COMPARE_OP_LESS_OR_EQUAL);
+
+            VkPipelineColorBlendStateCreateInfo colorBlending = VkPipelineColorBlendStateCreateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);
+
+            VkPipelineRenderingCreateInfo renderingCreateInfo = VkPipelineRenderingCreateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO)
+                    .depthAttachmentFormat(VulkanGpuCache.SHADOW_MAP_FORMAT);
+
+            VkGraphicsPipelineCreateInfo.Buffer pipelineInfo = VkGraphicsPipelineCreateInfo.calloc(1, stack)
+                    .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO).pNext(renderingCreateInfo.address()).pStages(stages).pVertexInputState(vertexInput).pInputAssemblyState(inputAssembly).pViewportState(viewportState).pRasterizationState(rasterizer).pMultisampleState(multisampling).pDepthStencilState(depthStencil).pColorBlendState(colorBlending).pDynamicState(dynamicState).layout(pipelineLayout3D).renderPass(VK_NULL_HANDLE).subpass(0);
+
+            LongBuffer pPipeline = stack.mallocLong(1);
+            long pipeline = vkCreateGraphicsPipelines(vkDevice, cacheHandle, pipelineInfo, null, pPipeline) == VK_SUCCESS ? pPipeline.get(0) : 0L;
+            VulkanShaderLoader.destroyShaderModule(vkDevice, fragModule);
+            return pipeline;
+        }
+    }
+
     public long getMinUniformBufferOffsetAlignment() { return minUniformBufferOffsetAlignment; }
     public long getDescriptorSetLayout3D() { return descriptorSetLayout3D; }
     public long getPipelineLayout3D() { return pipelineLayout3D; }
     public long getGraphicsPipeline3D() { return graphicsPipeline3D; }
     public long getGraphicsPipelineShadow() { return graphicsPipelineShadow != 0L ? graphicsPipelineShadow : graphicsPipeline3D; }
     public long getGraphicsPipelineSkinned() { return graphicsPipelineSkinned; }
+    public long getGraphicsPipelineShadowDepth() { return graphicsPipelineShadowDepth; }
+    public long getGraphicsPipelineShadowDepthSkinned() { return graphicsPipelineShadowDepthSkinned; }
 
     public long getDescriptorSetLayoutGrid() { return descriptorSetLayoutGrid; }
     public long getPipelineLayoutGrid() { return pipelineLayoutGrid; }
@@ -378,6 +437,8 @@ public class VulkanPipeline {
         if (graphicsPipeline3D != 0L) { vkDestroyPipeline(vkDevice, graphicsPipeline3D, null); graphicsPipeline3D = 0L; }
         if (graphicsPipelineShadow != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineShadow, null); graphicsPipelineShadow = 0L; }
         if (graphicsPipelineSkinned != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineSkinned, null); graphicsPipelineSkinned = 0L; }
+        if (graphicsPipelineShadowDepth != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineShadowDepth, null); graphicsPipelineShadowDepth = 0L; }
+        if (graphicsPipelineShadowDepthSkinned != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineShadowDepthSkinned, null); graphicsPipelineShadowDepthSkinned = 0L; }
         if (pipelineLayout3D != 0L) { vkDestroyPipelineLayout(vkDevice, pipelineLayout3D, null); pipelineLayout3D = 0L; }
         if (descriptorSetLayout3D != 0L) { vkDestroyDescriptorSetLayout(vkDevice, descriptorSetLayout3D, null); descriptorSetLayout3D = 0L; }
 
