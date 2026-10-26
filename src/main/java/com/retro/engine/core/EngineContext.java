@@ -77,8 +77,8 @@ public class EngineContext {
         renderSubmitter = new SceneRenderPipeline();
 
         BackendLoader loader = new BackendLoader();
-        if (!loader.loadTargetBackend(cliArgs)) {
-            System.err.println("[Fatal] Target backend failed to load. Halting execution.");
+        if (!loader.initializeWithFallback(window.getWindowInfo(), cliArgs)) {
+            System.err.println("[Fatal] Target backend failed to initialize with automatic fallback. Halting execution.");
             shutdown();
             return false;
         }
@@ -131,11 +131,6 @@ public class EngineContext {
             });
         }
 
-        if (!rhi.initialize(window.getWindowInfo())) {
-            System.err.println("[Fatal] Failed to initialize RHI backend.");
-            shutdown();
-            return false;
-        }
         streamingService.bindRenderBackend(rhi);
 
         if (rhi != null && rhi.getAPI() != null) {
