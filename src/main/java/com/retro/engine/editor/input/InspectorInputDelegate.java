@@ -51,8 +51,8 @@ public class InspectorInputDelegate {
         Entity selected = manager.getSelectedEntity();
         if (selected == null || ndcX < 0.55f) return;
 
-        // Top Header: "+ PREFAB" Button (0.82f to 0.98f, 0.800f to 0.845f)
-        if (ndcX >= 0.82f && ndcX <= 0.98f && ndcY >= 0.800f && ndcY <= 0.845f) {
+        // Top Header: "+ PREFAB" Button
+        if (ndcX >= InspectorPanel.PREFAB_X0 && ndcX <= InspectorPanel.PREFAB_X1 && ndcY >= InspectorPanel.PREFAB_Y0 && ndcY <= InspectorPanel.PREFAB_Y1) {
             UISoundPlayer.play(UISound.OPEN_MODAL);
             manager.getSceneManager().promptSaveSelectedAsPrefab(
                 manager.getAssetDatabase().getMutableAssetDirectory(),
@@ -62,11 +62,11 @@ public class InspectorInputDelegate {
         }
 
         float scrollOffset = InspectorPanel.getScrollOffset();
-        float curY = 0.74f;
+        float curY = InspectorPanel.CONTENT_TOP;
 
         for (Component comp : selected.getAllComponents()) {
             if (comp == null) continue;
-            curY -= 0.055f; // Header margin
+            curY -= InspectorPanel.HEADER_ADVANCE;
 
             Class<?> compClass = comp.getClass();
             Field[] fields = CACHED_FIELDS.computeIfAbsent(compClass, Class::getDeclaredFields);
@@ -78,32 +78,34 @@ public class InspectorInputDelegate {
                 field.setAccessible(true);
                 String label = prop.label().isEmpty() ? field.getName().toUpperCase() : prop.label();
                 float drawY = curY + scrollOffset;
-                boolean isVisible = (drawY <= 0.77f && drawY - 0.045f >= -0.48f);
+                boolean isVisible = InspectorPanel.isRowVisible(drawY);
+                boolean inRow = isVisible && ndcY >= drawY - InspectorPanel.CTRL_BELOW && ndcY <= drawY + InspectorPanel.CTRL_ABOVE;
 
                 try {
                     Object val = field.get(comp);
 
                     if (prop.type() == InspectorProperty.PropertyType.ASSET_PICKER) {
-                        if (isVisible && ndcY >= drawY - 0.036f && ndcY <= drawY + 0.008f) {
-                            // [PICK] Button (0.80f to 0.88f)
-                            if (ndcX >= 0.80f && ndcX <= 0.88f) {
+                        if (inRow) {
+                            // [PICK] Button
+                            if (ndcX >= InspectorPanel.PICK_X0 && ndcX <= InspectorPanel.PICK_X1) {
                                 UISoundPlayer.play(UISound.OPEN_MODAL);
                                 AssetType assetType = parseAssetType(prop.assetType());
                                 manager.getOverlayManager().openAssetPicker(assetType);
                                 return;
                             }
-                            // [IMPORT] Button (0.89f to 0.98f)
-                            if (ndcX >= 0.89f && ndcX <= 0.98f) {
+                            // [IMPORT] Button
+                            if (ndcX >= InspectorPanel.IMPORT_X0 && ndcX <= InspectorPanel.IMPORT_X1) {
                                 UISoundPlayer.play(UISound.OPEN_MODAL);
                                 promptImportAssetForType(manager, prop.assetType());
                                 return;
                             }
                         }
-                        curY -= 0.054f;
+                        curY -= InspectorPanel.ASSET_ROW_ADVANCE;
 
                     } else if (prop.type() == InspectorProperty.PropertyType.TOGGLE || field.getType() == boolean.class) {
-                        if (isVisible && ndcY >= drawY - 0.030f && ndcY <= drawY + 0.008f) {
-                            if (ndcX >= 0.58f && ndcX <= 0.85f) {
+                        if (inRow) {
+                            // Whole row toggles (label or switch), like a macOS checkbox label
+                            if (ndcX >= InspectorPanel.LABEL_X && ndcX <= InspectorPanel.VALUE_X1) {
                                 UISoundPlayer.play(UISound.CLICK);
                                 boolean currentBool = (val != null) && (Boolean) val;
                                 boolean newBool = !currentBool;
@@ -112,11 +114,11 @@ public class InspectorInputDelegate {
                                 return;
                             }
                         }
-                        curY -= 0.048f;
+                        curY -= InspectorPanel.ROW_ADVANCE;
 
                     } else if (prop.type() == InspectorProperty.PropertyType.BUTTON_GROUP || field.getType().isEnum()) {
-                        if (isVisible && ndcY >= drawY - 0.030f && ndcY <= drawY + 0.008f) {
-                            if (ndcX >= 0.84f && ndcX <= 0.98f) {
+                        if (inRow) {
+                            if (ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.VALUE_X1) {
                                 UISoundPlayer.play(UISound.CLICK);
                                 Object[] enumConstants = field.getType().getEnumConstants();
                                 if (enumConstants != null && enumConstants.length > 0) {
@@ -134,23 +136,23 @@ public class InspectorInputDelegate {
                                 }
                             }
                         }
-                        curY -= 0.048f;
+                        curY -= InspectorPanel.ROW_ADVANCE;
 
                     } else if (prop.type() == InspectorProperty.PropertyType.COLOR || field.getType() == float.class || field.getType() == Float.class) {
-                        if (isVisible && ndcY >= drawY - 0.030f && ndcY <= drawY + 0.008f) {
+                        if (inRow) {
                             float currentVal = (val != null) ? (Float) val : 0.0f;
                             float step = prop.step() > 0.0f ? prop.step() : 0.1f;
 
-                            // [-] Button (0.84f to 0.90f)
-                            if (ndcX >= 0.84f && ndcX <= 0.90f) {
+                            // [-] Stepper segment
+                            if (ndcX >= InspectorPanel.DEC_X0 && ndcX < InspectorPanel.DEC_X1) {
                                 UISoundPlayer.play(UISound.CLICK);
                                 float newVal = Math.max(prop.min(), Math.min(prop.max(), currentVal - step));
                                 EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, currentVal, newVal, label);
                                 manager.getCommandHistory().executeCommand(cmd);
                                 return;
                             }
-                            // [+] Button (0.91f to 0.97f)
-                            if (ndcX >= 0.91f && ndcX <= 0.97f) {
+                            // [+] Stepper segment
+                            if (ndcX >= InspectorPanel.INC_X0 && ndcX <= InspectorPanel.INC_X1) {
                                 UISoundPlayer.play(UISound.CLICK);
                                 float newVal = Math.max(prop.min(), Math.min(prop.max(), currentVal + step));
                                 EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, currentVal, newVal, label);
@@ -158,22 +160,23 @@ public class InspectorInputDelegate {
                                 return;
                             }
                         }
-                        curY -= 0.048f;
+                        curY -= InspectorPanel.ROW_ADVANCE;
 
                     } else {
-                        curY -= 0.044f;
+                        curY -= InspectorPanel.TEXT_ROW_ADVANCE;
                     }
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
             }
-            curY -= 0.020f;
+            curY -= InspectorPanel.COMPONENT_GAP;
         }
 
         // "+ ADD COMPONENT" Button
         float drawAddBtnY = curY + scrollOffset;
-        if (drawAddBtnY <= 0.77f && drawAddBtnY - 0.04f >= -0.48f) {
-            if (ndcX >= 0.58f && ndcX <= 0.98f && ndcY >= drawAddBtnY - 0.04f && ndcY <= drawAddBtnY + 0.01f) {
+        if (drawAddBtnY + InspectorPanel.ADD_ABOVE <= InspectorPanel.VIEW_TOP && drawAddBtnY - InspectorPanel.ADD_BELOW >= InspectorPanel.VIEW_BOTTOM) {
+            if (ndcX >= InspectorPanel.ADD_X0 && ndcX <= InspectorPanel.ADD_X1
+                    && ndcY >= drawAddBtnY - InspectorPanel.ADD_BELOW && ndcY <= drawAddBtnY + InspectorPanel.ADD_ABOVE) {
                 UISoundPlayer.play(UISound.OPEN_MODAL);
                 promptAddComponentMenu(manager, selected, ndcX, ndcY);
                 return;

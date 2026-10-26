@@ -5,6 +5,7 @@ import com.retro.engine.editor.audio.UISoundPlayer.UISound;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.panels.EngineConsolePanel;
 import com.retro.engine.editor.ui.panels.ViewportPanel;
+import com.retro.engine.editor.ui.theme.EditorTheme;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -104,6 +105,7 @@ public final class DockSpace {
     public static void layout(int winW, int winH) {
         if (winW > 0) windowW = winW;
         if (winH > 0) windowH = winH;
+        UIGeometryBatch.setWindowSize(windowW, windowH);
 
         syncConsoleVisibility();
 
@@ -531,7 +533,7 @@ public final class DockSpace {
         for (int i = 0; i < leaves.size(); i++) {
             DockNode leaf = leaves.get(i);
             if (leaf.activePanel() == DockPanel.SCENE) continue;
-            UIGeometryBatch.addQuad(buffer, leaf.x0, leaf.y0, leaf.x1, leaf.tabBarBottom(), 0.08f, 0.08f, 0.10f, 1.0f);
+            UIGeometryBatch.addQuad(buffer, leaf.x0, leaf.y0, leaf.x1, leaf.tabBarBottom(), EditorTheme.SURFACE, 1.0f);
         }
     }
 
@@ -539,26 +541,31 @@ public final class DockSpace {
     public static void renderChrome(UIGeometryBatch.Buffer buffer) {
         DockNode hoverSplit = (draggingSplit != null) ? draggingSplit : (draggingTab == null ? splitterAt(cursorX, cursorY) : null);
 
+        // Splitters read as the charcoal window background showing between tiles; accent while grabbed/hovered
         for (int i = 0; i < splits.size(); i++) {
             DockNode n = splits.get(i);
             boolean hot = (n == hoverSplit);
-            float r = hot ? 0.0f : 0.04f, g = hot ? 0.55f : 0.04f, b = hot ? 0.90f : 0.05f;
+            int color = hot ? EditorTheme.ACCENT : EditorTheme.BACKGROUND;
             if (n.horizontal) {
                 float line = n.x0 + (n.x1 - n.x0) * n.ratio;
-                UIGeometryBatch.addQuad(buffer, line - GAP * 0.5f, n.y0, line + GAP * 0.5f, n.y1, r, g, b, 1.0f);
+                UIGeometryBatch.addQuad(buffer, line - GAP * 0.5f, n.y0, line + GAP * 0.5f, n.y1, color, 1.0f);
             } else {
                 float line = n.y1 - (n.y1 - n.y0) * n.ratio;
-                UIGeometryBatch.addQuad(buffer, n.x0, line - GAP * 0.5f, n.x1, line + GAP * 0.5f, r, g, b, 1.0f);
+                UIGeometryBatch.addQuad(buffer, n.x0, line - GAP * 0.5f, n.x1, line + GAP * 0.5f, color, 1.0f);
             }
         }
+
+        DockNode hoverLeaf = (draggingTab == null && hoverSplit == null) ? leafAt(cursorX, cursorY) : null;
 
         for (int i = 0; i < leaves.size(); i++) {
             DockNode leaf = leaves.get(i);
             float barY0 = leaf.tabBarBottom(), barY1 = leaf.y1;
 
-            UIGeometryBatch.addQuad(buffer, leaf.x0, barY0, leaf.x1, barY1, 0.09f, 0.09f, 0.11f, 1.0f);
-            UIGeometryBatch.addQuad(buffer, leaf.x0, barY0, leaf.x1, barY0 + 0.002f, 0.22f, 0.24f, 0.30f, 1.0f);
+            // Toolbar-style tab strip with a hairline separating it from the panel surface
+            UIGeometryBatch.addQuad(buffer, leaf.x0, barY0, leaf.x1, barY1, EditorTheme.BACKGROUND, 1.0f);
+            UIGeometryBatch.addQuad(buffer, leaf.x0, barY0, leaf.x1, barY0 + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
 
+            int hoverTab = (leaf == hoverLeaf && cursorY >= barY0) ? tabIndexAt(leaf, cursorX) : -1;
             float scale = tabScale(leaf);
             float tx = leaf.x0 + 0.005f;
             for (int t = 0; t < leaf.tabs.size(); t++) {
@@ -566,14 +573,22 @@ public final class DockSpace {
                 float w = naturalTabWidth(p) * scale;
                 boolean active = (t == leaf.activeTab);
                 boolean beingDragged = (p == draggingTab && tabDragActive);
-                float bg = active ? 0.17f : 0.12f;
-                UIGeometryBatch.addQuad(buffer, tx + 0.002f, barY0 + 0.002f, tx + w - 0.002f, barY1 - 0.006f,
-                        bg, bg + 0.01f, bg + 0.05f, beingDragged ? 0.5f : 1.0f);
-                if (active) {
-                    UIGeometryBatch.addQuad(buffer, tx + 0.002f, barY1 - 0.010f, tx + w - 0.002f, barY1 - 0.006f, 0.0f, 0.6f, 1.0f, 1.0f);
+                float alpha = beingDragged ? 0.4f : 1.0f;
+
+                float px0 = tx + 0.003f, px1 = tx + w - 0.003f;
+                float py0 = barY0 + 0.009f, py1 = barY1 - 0.007f;
+                if (px1 > px0) {
+                    if (active) {
+                        UIGeometryBatch.addPill(buffer, px0, py0, px1, py1, EditorTheme.BORDER, alpha);
+                        // High-contrast accent indicator under the active pill
+                        float inset = Math.min(0.012f, (px1 - px0) * 0.25f);
+                        UIGeometryBatch.addPill(buffer, px0 + inset, barY0 + 0.003f, px1 - inset, barY0 + 0.0065f, EditorTheme.ACCENT, alpha);
+                    } else if (t == hoverTab) {
+                        UIGeometryBatch.addPill(buffer, px0, py0, px1, py1, EditorTheme.SURFACE_RAISED, alpha);
+                    }
                 }
-                float tc = active ? 1.0f : 0.6f;
-                UIGeometryBatch.addBoundedText(buffer, p.title, tx + 0.015f, barY1 - 0.017f, tx + w - 0.006f, TAB_TEXT_SIZE, tc, tc, tc, 1.0f);
+                int tc = active ? EditorTheme.TEXT : EditorTheme.TEXT_MUTED;
+                UIGeometryBatch.addBoundedText(buffer, p.title, tx + 0.015f, barY1 - 0.0165f, tx + w - 0.006f, TAB_TEXT_SIZE, tc, alpha);
                 tx += w;
             }
 
@@ -584,11 +599,11 @@ public final class DockSpace {
                 float capW = caption.length() * capSize * 0.012f;
                 float capX = Math.max(tx + 0.02f, leaf.x1 - 0.012f - capW);
                 if (capX + 0.05f < leaf.x1) {
-                    UIGeometryBatch.addBoundedText(buffer, caption, capX, barY1 - 0.019f, leaf.x1 - 0.008f, capSize, 0.3f, 0.75f, 1.0f, 1.0f);
+                    UIGeometryBatch.addBoundedText(buffer, caption, capX, barY1 - 0.019f, leaf.x1 - 0.008f, capSize, EditorTheme.TEXT_MUTED, 1.0f);
                 }
             }
 
-            UIGeometryBatch.addFrameBorder(buffer, leaf.x0, leaf.y0, leaf.x1, barY1, 0.002f, 0.22f, 0.24f, 0.30f, 1.0f);
+            UIGeometryBatch.addFrameBorder(buffer, leaf.x0, leaf.y0, leaf.x1, barY1, EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
         }
     }
 
@@ -614,13 +629,14 @@ public final class DockSpace {
                 case BOTTOM -> y1 = midY;
                 default -> {}
             }
-            UIGeometryBatch.addQuad(buffer, x0, y0, x1, y1, 0.05f, 0.45f, 0.95f, 0.28f);
-            UIGeometryBatch.addFrameBorder(buffer, x0, y0, x1, y1, 0.004f, 0.2f, 0.7f, 1.0f, 1.0f);
+            float inset = 0.006f;
+            UIGeometryBatch.addRoundedQuad(buffer, x0 + inset, y0 + inset, x1 - inset, y1 - inset, EditorTheme.RADIUS * 1.5f, EditorTheme.ACCENT, 0.22f);
+            UIGeometryBatch.addFrameBorder(buffer, x0 + inset, y0 + inset, x1 - inset, y1 - inset, 0.003f, EditorTheme.ACCENT, 0.9f);
         }
 
         float gw = naturalTabWidth(draggingTab);
         float gx = cursorX + 0.01f, gy = cursorY - 0.01f;
-        UIGeometryBatch.addQuad(buffer, gx, gy - TAB_BAR_H + 0.008f, gx + gw, gy, 0.12f, 0.30f, 0.50f, 0.95f);
-        UIGeometryBatch.addBoundedText(buffer, draggingTab.title, gx + 0.015f, gy - 0.011f, gx + gw - 0.006f, TAB_TEXT_SIZE, 1.0f, 1.0f, 1.0f, 1.0f);
+        UIGeometryBatch.addPill(buffer, gx, gy - TAB_BAR_H + 0.012f, gx + gw, gy, EditorTheme.ACCENT, 0.95f);
+        UIGeometryBatch.addBoundedText(buffer, draggingTab.title, gx + 0.015f, gy - 0.011f, gx + gw - 0.006f, TAB_TEXT_SIZE, EditorTheme.TEXT, 1.0f);
     }
 }

@@ -1,6 +1,11 @@
 package com.retro.engine.editor.ui.panels;
 
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
+import com.retro.engine.editor.ui.theme.EditorTheme;
+import com.retro.engine.scene.components.media.AudioSource;
+import com.retro.engine.scene.components.rendering.Camera;
+import com.retro.engine.scene.components.rendering.Light;
+import com.retro.engine.scene.components.rendering.MeshFilter;
 import com.retro.engine.scene.entity.Entity;
 
 import java.util.ArrayList;
@@ -94,51 +99,120 @@ public class HierarchyPanel {
         return null;
     }
 
+    // --- Shared row layout (design-space NDC); AssetBrowserInputDelegate hit-tests with the same values ---
+    public static final float ROW_TOP = 0.85f;
+    public static final float ROW_HEIGHT = 0.08f;
+    private static final float VIEW_BOTTOM = -0.48f;
+
+    private static final float ROW_X0 = -0.985f, ROW_X1 = -0.565f;
+    private static final float INDENT_X0 = -0.965f, INDENT = 0.04f, MAX_INDENT_X = -0.70f;
+    private static final float GUIDE_OFFSET = 0.006f; // guides sit under the parent's disclosure triangle
+    private static final float NAME_TEXT = 1.0f;
+
+    /** Entity categories shown as colored badges, in priority order. */
+    public enum Category {
+        CAMERA("C", EditorTheme.PURPLE),
+        LIGHT("L", EditorTheme.YELLOW),
+        AUDIO("A", EditorTheme.PINK),
+        MESH("M", EditorTheme.TEAL),
+        EMPTY("E", EditorTheme.GRAPHITE);
+
+        public final String glyph;
+        public final int color;
+
+        Category(String glyph, int color) {
+            this.glyph = glyph;
+            this.color = color;
+        }
+    }
+
+    public static Category categoryOf(Entity e) {
+        if (e.getComponent(Camera.class) != null) return Category.CAMERA;
+        if (e.getComponent(Light.class) != null) return Category.LIGHT;
+        if (e.getComponent(AudioSource.class) != null) return Category.AUDIO;
+        if (e.getComponent(MeshFilter.class) != null || e.getMeshAssetPath() != null) return Category.MESH;
+        return Category.EMPTY;
+    }
+
     public static void render(UIGeometryBatch.Buffer buffer, List<Entity> sceneEntities) {
-        UIGeometryBatch.addQuad(buffer, -1.0f, -0.5f, -0.55f, 1.0f, 0.08f, 0.08f, 0.10f, 1.0f);
-        UIGeometryBatch.addQuad(buffer, -1.0f, 0.88f, -0.55f, 1.0f, 0.14f, 0.14f, 0.18f, 1.0f);
-        UIGeometryBatch.addFrameBorder(buffer, -1.0f, -0.5f, -0.55f, 1.0f, 0.003f, 0.25f, 0.25f, 0.32f, 1.0f);
-        UIGeometryBatch.addBoundedText(buffer, "SCENE MANAGER", -0.96f, 0.95f, -0.57f, 1.6f, 1.0f, 1.0f, 1.0f, 1.0f);
+        UIGeometryBatch.addQuad(buffer, -1.0f, -0.5f, -0.55f, 1.0f, EditorTheme.SURFACE, 1.0f);
 
         List<HierarchyNode> visibleTree = buildFlattenedTree(sceneEntities);
 
         if (visibleTree.isEmpty()) {
-            UIGeometryBatch.addBoundedText(buffer, "NO ENTITIES IN SCENE", -0.95f, 0.80f, -0.58f, 1.2f, 0.5f, 0.5f, 0.5f, 1.0f);
-            UIGeometryBatch.addBoundedText(buffer, "RIGHT-CLICK OR SPAWN", -0.95f, 0.72f, -0.58f, 1.1f, 0.3f, 0.7f, 0.9f, 1.0f);
-            UIGeometryBatch.addBoundedText(buffer, "3D MESH TO START", -0.95f, 0.65f, -0.58f, 1.1f, 0.3f, 0.7f, 0.9f, 1.0f);
-        } else {
-            float itemY = 0.80f;
-            for (int i = 0; i < visibleTree.size(); i++) {
-                HierarchyNode node = visibleTree.get(i);
-                if (itemY < -0.45f) break;
-
-                Entity entity = node.entity;
-                if (entity == null) continue;
-
-                float indentX = -0.96f + (node.depth * 0.04f);
-                if (indentX > -0.65f) indentX = -0.65f;
-
-                String prefix = "";
-                if (node.hasChildren) {
-                    prefix = entity.expandedInHierarchy ? "v " : "> ";
-                } else if (node.depth > 0) {
-                    prefix = "• ";
-                } else {
-                    prefix = "  ";
-                }
-
-                String label = prefix + entity.name;
-
-                if (entity.selected) {
-                    UIGeometryBatch.addQuad(buffer, -0.98f, itemY - 0.02f, -0.57f, itemY + 0.05f, 0.0f, 0.35f, 0.70f, 1.0f);
-                    UIGeometryBatch.addBoundedText(buffer, label, indentX, itemY + 0.03f, -0.58f, 1.3f, 1.0f, 1.0f, 1.0f, 1.0f);
-                } else {
-                    UIGeometryBatch.addBoundedText(buffer, label, indentX, itemY + 0.03f, -0.58f, 1.3f, 0.8f, 0.8f, 0.8f, 1.0f);
-                }
-
-                itemY -= 0.08f;
-            }
+            centeredText(buffer, "NO ENTITIES", 0.30f, 1.15f, EditorTheme.TEXT_MUTED);
+            centeredText(buffer, "RIGHT-CLICK THE VIEWPORT OR", 0.22f, 0.8f, EditorTheme.TEXT_DISABLED);
+            centeredText(buffer, "USE ENTITY > SPAWN TO START", 0.17f, 0.8f, EditorTheme.TEXT_DISABLED);
+            return;
         }
+
+        for (int i = 0; i < visibleTree.size(); i++) {
+            HierarchyNode node = visibleTree.get(i);
+            float top = ROW_TOP - i * ROW_HEIGHT;
+            float bottom = top - ROW_HEIGHT;
+            if (bottom < VIEW_BOTTOM) break;
+
+            Entity entity = node.entity;
+            if (entity == null) continue;
+
+            float mid = (top + bottom) * 0.5f;
+            boolean selected = entity.selected;
+
+            // Mac source-list selection: rounded accent row
+            if (selected) {
+                UIGeometryBatch.addRoundedQuad(buffer, ROW_X0, bottom + 0.008f, ROW_X1, top - 0.008f, EditorTheme.RADIUS, EditorTheme.ACCENT, 1.0f);
+            }
+
+            // Indent guides: one hairline per ancestor level, plus an elbow into this node
+            float guideHalf = UIGeometryBatch.squareWidth(buffer, 0.002f) * 0.5f;
+            int guideColor = selected ? EditorTheme.TEXT : EditorTheme.BORDER;
+            float guideAlpha = selected ? 0.35f : 1.0f;
+            for (int d = 0; d < node.depth; d++) {
+                float gx = guideX(d);
+                if (gx > MAX_INDENT_X) break;
+                UIGeometryBatch.addQuad(buffer, gx - guideHalf, bottom, gx + guideHalf, top, guideColor, guideAlpha);
+            }
+
+            float indentX = Math.min(MAX_INDENT_X, INDENT_X0 + node.depth * INDENT);
+            if (node.depth > 0) {
+                float gx = guideX(node.depth - 1);
+                if (gx < indentX) {
+                    UIGeometryBatch.addQuad(buffer, gx, mid - 0.001f, indentX - 0.004f, mid + 0.001f, guideColor, guideAlpha);
+                }
+            }
+
+            // Disclosure triangle for nodes with children
+            float triW = UIGeometryBatch.squareWidth(buffer, 0.016f);
+            if (node.hasChildren) {
+                int triColor = selected ? EditorTheme.TEXT : EditorTheme.TEXT_MUTED;
+                if (entity.expandedInHierarchy) {
+                    UIGeometryBatch.addTriangle(buffer, indentX, mid + 0.007f, indentX + triW, mid + 0.007f, indentX + triW * 0.5f, mid - 0.008f, triColor, 1.0f);
+                } else {
+                    UIGeometryBatch.addTriangle(buffer, indentX + triW * 0.15f, mid + 0.008f, indentX + triW * 0.15f, mid - 0.008f, indentX + triW, mid, triColor, 1.0f);
+                }
+            }
+
+            // Category badge
+            Category cat = categoryOf(entity);
+            float badgeH = 0.036f;
+            float badgeX0 = indentX + triW + 0.008f;
+            float badgeX1 = badgeX0 + Math.max(UIGeometryBatch.squareWidth(buffer, badgeH), UIGeometryBatch.textWidth(buffer, 1, 0.8f) + 0.008f);
+            UIGeometryBatch.addRoundedQuad(buffer, badgeX0, mid - badgeH * 0.5f, badgeX1, mid + badgeH * 0.5f, 0.007f, cat.color, selected ? 1.0f : 0.9f);
+            float gw = UIGeometryBatch.textWidth(buffer, 1, 0.8f);
+            UIGeometryBatch.addBoundedText(buffer, cat.glyph, (badgeX0 + badgeX1 - gw) * 0.5f, mid + 0.8f * 0.009f, badgeX1, 0.8f, EditorTheme.BACKGROUND, 1.0f);
+
+            UIGeometryBatch.addTruncatedText(buffer, entity.name, badgeX1 + 0.012f, mid + NAME_TEXT * 0.009f, ROW_X1 - 0.008f, NAME_TEXT, EditorTheme.TEXT, 1.0f);
+        }
+    }
+
+    private static float guideX(int depth) {
+        return INDENT_X0 + depth * INDENT + GUIDE_OFFSET;
+    }
+
+    private static void centeredText(UIGeometryBatch.Buffer buffer, String text, float midY, float size, int rgb) {
+        float w = UIGeometryBatch.textWidth(buffer, text, size);
+        float x = -1.0f + Math.max(0.01f, (0.45f - w) * 0.5f);
+        UIGeometryBatch.addBoundedText(buffer, text, x, midY + size * 0.009f, -0.555f, size, rgb, 1.0f);
     }
 
     public static void render(List<Float> verts, List<Entity> sceneEntities) {

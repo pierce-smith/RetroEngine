@@ -1,6 +1,8 @@
 package com.retro.engine.editor.ui.panels;
 
+import com.retro.engine.editor.input.PlatformShortcuts;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
+import com.retro.engine.editor.ui.theme.EditorTheme;
 
 import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
@@ -39,6 +41,8 @@ public class EngineConsolePanel {
     private static final StringBuilder statsSb = new StringBuilder(64);
     private static final StringBuilder memSb = new StringBuilder(64);
 
+    private static final String CONSOLE_HINT = "TOGGLE  " + PlatformShortcuts.TOGGLE_CONSOLE.label();
+
     public static boolean isConsoleVisible() { return consoleVisible; }
     public static void setConsoleVisible(boolean visible) { consoleVisible = visible; }
     public static void toggleConsole() { consoleVisible = !consoleVisible; }
@@ -76,36 +80,60 @@ public class EngineConsolePanel {
     public static void renderConsole(UIGeometryBatch.Buffer buffer) {
         if (!consoleVisible) return;
 
-        // Floating console overlay bounds
+        // Console bounds (design space; the dock maps this onto the Console tile)
         float minX = -0.85f, maxX = 0.85f;
         float minY = -0.85f, maxY = -0.20f;
+        float headerH = 0.05f;
 
-        // Panel Background & Border
-        UIGeometryBatch.addQuad(buffer, minX, minY, maxX, maxY, 0.08f, 0.08f, 0.12f, 0.95f);
-        UIGeometryBatch.addFrameBorder(buffer, minX, minY, maxX, maxY, 0.003f, 0.0f, 0.55f, 0.90f, 1.0f);
+        UIGeometryBatch.addQuad(buffer, minX, minY, maxX, maxY, EditorTheme.SURFACE, 1.0f);
 
-        // Header Title
-        UIGeometryBatch.addQuad(buffer, minX, maxY - 0.05f, maxX, maxY, 0.12f, 0.14f, 0.20f, 1.0f);
-        UIGeometryBatch.addBoundedText(buffer, "ENGINE CONSOLE & SYSTEM LOGS (Cmd + ~)", minX + 0.02f, maxY - 0.035f, maxX - 0.02f, 1.1f, 0.3f, 0.8f, 1.0f, 1.0f);
+        // Header strip: title left, toggle shortcut right
+        UIGeometryBatch.addQuad(buffer, minX, maxY - headerH, maxX, maxY, EditorTheme.BACKGROUND, 1.0f);
+        UIGeometryBatch.addQuad(buffer, minX, maxY - headerH, maxX, maxY - headerH + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
+        float headerMid = maxY - headerH * 0.5f;
+        UIGeometryBatch.addBoundedText(buffer, "ENGINE CONSOLE", minX + 0.02f, headerMid + 0.009f, maxX - 0.3f, 1.0f, EditorTheme.TEXT, 1.0f);
+        UIGeometryBatch.addRightAlignedText(buffer, CONSOLE_HINT, maxX - 0.02f, headerMid + 0.0081f, 0.9f, EditorTheme.TEXT_MUTED, 1.0f);
 
-        // Render Log Lines from Ring Buffer
-        float lineY = maxY - 0.09f;
+        // Log rows from the ring buffer (newest at the bottom)
+        float rowH = 0.07f;
         int maxVisibleLines = 8;
-
         LogEntry[] entries = logBuffer.toArray(new LogEntry[0]);
         int startIndex = Math.max(0, entries.length - maxVisibleLines);
 
+        float rowTop = maxY - headerH - 0.006f;
         for (int i = startIndex; i < entries.length; i++) {
-            if (lineY < minY + 0.02f) break;
+            float rowBottom = rowTop - rowH;
+            if (rowBottom < minY + 0.005f) break;
             LogEntry entry = entries[i];
+            float mid = (rowTop + rowBottom) * 0.5f;
 
-            float r = 0.9f, g = 0.9f, b = 0.9f;
-            if (entry.level() == LogLevel.WARN) { r = 1.0f; g = 0.85f; b = 0.2f; }
-            else if (entry.level() == LogLevel.ERROR) { r = 1.0f; g = 0.3f; b = 0.3f; }
+            if (((i - startIndex) & 1) == 1) {
+                UIGeometryBatch.addQuad(buffer, minX + 0.004f, rowBottom, maxX - 0.004f, rowTop, EditorTheme.SURFACE_RAISED, 0.45f);
+            }
 
-            String lineText = "[" + entry.timestamp() + "] " + entry.message();
-            UIGeometryBatch.addBoundedText(buffer, lineText, minX + 0.02f, lineY, maxX - 0.02f, 0.95f, r, g, b, 1.0f);
-            lineY -= 0.07f;
+            int levelColor;
+            int textColor;
+            String levelTag;
+            switch (entry.level()) {
+                case WARN -> { levelColor = EditorTheme.ORANGE; textColor = EditorTheme.YELLOW; levelTag = "WARN"; }
+                case ERROR -> { levelColor = EditorTheme.RED; textColor = EditorTheme.RED; levelTag = "ERR"; }
+                default -> { levelColor = EditorTheme.GRAPHITE; textColor = EditorTheme.TEXT; levelTag = "INFO"; }
+            }
+
+            // Level pill
+            float pillX0 = minX + 0.02f, pillX1 = pillX0 + 0.075f;
+            UIGeometryBatch.addPill(buffer, pillX0, mid - 0.016f, pillX1, mid + 0.016f, levelColor, 1.0f);
+            float tagW = UIGeometryBatch.textWidth(buffer, levelTag, 0.75f);
+            UIGeometryBatch.addBoundedText(buffer, levelTag, (pillX0 + pillX1 - tagW) * 0.5f, mid + 0.75f * 0.009f, pillX1, 0.75f,
+                    entry.level() == LogLevel.INFO ? EditorTheme.TEXT : EditorTheme.BACKGROUND, 1.0f);
+
+            // Timestamp (muted) + message
+            float tsX = pillX1 + 0.018f;
+            UIGeometryBatch.addBoundedText(buffer, entry.timestamp(), tsX, mid + 0.95f * 0.009f, maxX - 0.02f, 0.95f, EditorTheme.TEXT_MUTED, 1.0f);
+            float msgX = tsX + UIGeometryBatch.textWidth(buffer, 8, 0.95f) + 0.02f;
+            UIGeometryBatch.addTruncatedText(buffer, entry.message(), msgX, mid + 0.95f * 0.009f, maxX - 0.02f, 0.95f, textColor, 1.0f);
+
+            rowTop = rowBottom;
         }
     }
 
@@ -127,12 +155,11 @@ public class EngineConsolePanel {
         int fps = (int) (1.0f / Math.max(0.0001f, deltaTime));
         float frameTimeMs = deltaTime * 1000.0f;
 
-        // Panel Background & Border
-        UIGeometryBatch.addQuad(buffer, minX, minY, maxX, maxY, 0.08f, 0.09f, 0.13f, 0.85f);
-        UIGeometryBatch.addFrameBorder(buffer, minX, minY, maxX, maxY, 0.002f, 0.25f, 0.30f, 0.40f, 1.0f);
+        // Translucent rounded HUD
+        UIGeometryBatch.addRoundedCard(buffer, minX, minY, maxX, maxY, EditorTheme.RADIUS * 1.5f, EditorTheme.BACKGROUND, EditorTheme.BORDER, 0.82f);
 
         // Header Title
-        UIGeometryBatch.addBoundedText(buffer, "SYSTEM PROFILER TELEMETRY", minX + 0.015f, maxY - 0.035f, maxX - 0.015f, 1.0f, 0.25f, 0.8f, 1.0f, 1.0f);
+        UIGeometryBatch.addBoundedText(buffer, "PROFILER", minX + 0.015f, maxY - 0.030f, maxX - 0.015f, 0.9f, EditorTheme.TEXT_MUTED, 1.0f);
 
         // FPS Metric
         fpsSb.setLength(0);
@@ -140,15 +167,13 @@ public class EngineConsolePanel {
         appendFloat1Decimal(fpsSb, frameTimeMs);
         fpsSb.append(" ms)");
 
-        float fpsR = (fps >= 50) ? 0.3f : (fps >= 30 ? 1.0f : 1.0f);
-        float fpsG = (fps >= 50) ? 1.0f : (fps >= 30 ? 0.85f : 0.3f);
-        float fpsB = (fps >= 50) ? 0.4f : (fps >= 30 ? 0.2f : 0.3f);
-        UIGeometryBatch.addBoundedText(buffer, fpsSb, minX + 0.015f, maxY - 0.08f, maxX - 0.015f, 0.95f, fpsR, fpsG, fpsB, 1.0f);
+        int fpsColor = (fps >= 50) ? EditorTheme.GREEN : (fps >= 30 ? EditorTheme.YELLOW : EditorTheme.RED);
+        UIGeometryBatch.addBoundedText(buffer, fpsSb, minX + 0.015f, maxY - 0.08f, maxX - 0.015f, 0.95f, fpsColor, 1.0f);
 
         // Draw Calls & Vertex Count Metric
         statsSb.setLength(0);
         statsSb.append("DRAWS: ").append(drawCalls).append(" | VERTS: ").append(activeVertices);
-        UIGeometryBatch.addBoundedText(buffer, statsSb, minX + 0.015f, maxY - 0.125f, maxX - 0.015f, 0.95f, 0.85f, 0.85f, 0.9f, 1.0f);
+        UIGeometryBatch.addBoundedText(buffer, statsSb, minX + 0.015f, maxY - 0.125f, maxX - 0.015f, 0.95f, EditorTheme.TEXT, 1.0f);
 
         // JVM Heap Metric (Used / Currently Allotted Committed)
         memSb.setLength(0);
@@ -157,7 +182,7 @@ public class EngineConsolePanel {
         memSb.append(" / ");
         appendFloat1Decimal(memSb, totalMb);
         memSb.append(" MB");
-        UIGeometryBatch.addBoundedText(buffer, memSb, minX + 0.015f, maxY - 0.170f, maxX - 0.015f, 0.95f, 0.9f, 0.75f, 0.3f, 1.0f);
+        UIGeometryBatch.addBoundedText(buffer, memSb, minX + 0.015f, maxY - 0.170f, maxX - 0.015f, 0.95f, EditorTheme.TEXT_MUTED, 1.0f);
     }
 
     private static void appendFloat1Decimal(StringBuilder sb, float val) {

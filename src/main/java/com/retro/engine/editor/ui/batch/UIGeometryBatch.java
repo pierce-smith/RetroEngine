@@ -98,6 +98,17 @@ public class UIGeometryBatch {
         public float mapY(float y) { return mapped ? y * mapSy + mapTy : y; }
         public float getTextScale() { return mapped ? textScale : 1.0f; }
 
+        /** Ratio of current-space X units to Y units that yields equal on-screen pixel lengths. */
+        float pixelSquareXPerY() {
+            float base = pixelAspect;
+            return mapped && !transformSuspended ? base * (mapSy / mapSx) : base;
+        }
+
+        /** Converts a screen-space text width into the current (possibly mapped) drawing space. */
+        float screenToLocalWidth(float w) {
+            return mapped && !transformSuspended && mapSx > 0.0f ? w / mapSx : w;
+        }
+
         void suspendTransform(boolean suspended) { this.transformSuspended = suspended; }
 
         void stageVertex(float x, float y, float r, float g, float b, float a) {
@@ -190,6 +201,160 @@ public class UIGeometryBatch {
         FONT[')'] = 0x1008080810L; FONT['_'] = 0x000000003eL; FONT['/'] = 0x0204081020L;
         FONT['>'] = 0x2010081020L; FONT['<'] = 0x0810201008L; FONT['='] = 0x003e003e00L;
         FONT['|'] = 0x0808080808L; FONT['%'] = 0x2408102024L; FONT['~'] = 0x000a150a00L;
+        FONT['+'] = 0x08083e0808L; FONT[','] = 0x0000000810L; FONT['!'] = 0x0808080008L;
+        FONT['?'] = 0x1c22040008L; FONT['\''] = 0x0808000000L; FONT['*'] = 0x002a1c2a00L;
+        FONT['&'] = 0x18241a241aL;
+    }
+
+    // Mac modifier symbols and other glyphs outside the 7-bit table
+    private static final long GLYPH_COMMAND = 0x363e143e36L;   // ⌘
+    private static final long GLYPH_SHIFT = 0x081436141cL;     // ⇧
+    private static final long GLYPH_OPTION = 0x3610080406L;    // ⌥
+    private static final long GLYPH_DELETE = 0x0e122a120eL;    // ⌫
+    private static final long GLYPH_BULLET = 0x00081c0800L;    // •
+    private static final long GLYPH_ELLIPSIS = 0x000000002aL;  // …
+
+    private static long glyph(char c) {
+        if (c >= 'a' && c <= 'z') c = (char) (c - 32);
+        if (c < FONT.length) return FONT[c];
+        return switch (c) {
+            case '⌘' -> GLYPH_COMMAND;
+            case '⇧' -> GLYPH_SHIFT;
+            case '⌥' -> GLYPH_OPTION;
+            case '⌫' -> GLYPH_DELETE;
+            case '•' -> GLYPH_BULLET;
+            case '…' -> GLYPH_ELLIPSIS;
+            default -> 0L;
+        };
+    }
+
+    /** Pixel-height / pixel-width of the window; makes rounded corners circular on screen. */
+    private static float pixelAspect = 720.0f / 1280.0f;
+
+    public static void setWindowSize(int width, int height) {
+        if (width > 0 && height > 0) pixelAspect = (float) height / (float) width;
+    }
+
+    // --- Packed 0xRRGGBB color overloads ---
+    private static float red(int rgb) { return ((rgb >> 16) & 0xFF) / 255.0f; }
+    private static float green(int rgb) { return ((rgb >> 8) & 0xFF) / 255.0f; }
+    private static float blue(int rgb) { return (rgb & 0xFF) / 255.0f; }
+
+    public static void addQuad(Buffer buffer, float x1, float y1, float x2, float y2, int rgb, float a) {
+        addQuad(buffer, x1, y1, x2, y2, red(rgb), green(rgb), blue(rgb), a);
+    }
+
+    public static void addFrameBorder(Buffer buffer, float x1, float y1, float x2, float y2, float t, int rgb, float a) {
+        addFrameBorder(buffer, x1, y1, x2, y2, t, red(rgb), green(rgb), blue(rgb), a);
+    }
+
+    public static void addTriangle(Buffer buffer, float x1, float y1, float x2, float y2, float x3, float y3, int rgb, float a) {
+        addTriangle(buffer, x1, y1, x2, y2, x3, y3, red(rgb), green(rgb), blue(rgb), a);
+    }
+
+    public static void addBoundedText(Buffer buffer, CharSequence text, float startX, float startY, float maxX, float size, int rgb, float a) {
+        addBoundedText(buffer, text, startX, startY, maxX, size, red(rgb), green(rgb), blue(rgb), a);
+    }
+
+    // --- Rounded shapes ---
+    private static final int CORNER_SEGMENTS = 5;
+    private static final float[] CORNER_COS = new float[CORNER_SEGMENTS + 1];
+    private static final float[] CORNER_SIN = new float[CORNER_SEGMENTS + 1];
+    static {
+        for (int i = 0; i <= CORNER_SEGMENTS; i++) {
+            double t = (Math.PI * 0.5) * i / CORNER_SEGMENTS;
+            CORNER_COS[i] = (float) Math.cos(t);
+            CORNER_SIN[i] = (float) Math.sin(t);
+        }
+    }
+
+    /**
+     * Filled rounded rectangle. {@code radius} is in Y units of the current drawing space; the X radius
+     * is derived so corners stay circular on screen, even inside a non-uniformly mapped dock panel.
+     * A radius of half the height yields a pill.
+     */
+    public static void addRoundedQuad(Buffer buffer, float x1, float y1, float x2, float y2, float radius, int rgb, float a) {
+        float r = red(rgb), g = green(rgb), b = blue(rgb);
+        float w = x2 - x1, h = y2 - y1;
+        if (w <= 0.0f || h <= 0.0f) return;
+        float ry = Math.min(radius, h * 0.5f);
+        float rx = Math.min(ry * buffer.pixelSquareXPerY(), w * 0.5f);
+        if (rx <= 0.0f || ry <= 0.0f) {
+            addQuad(buffer, x1, y1, x2, y2, r, g, b, a);
+            return;
+        }
+        // Center column plus left/right strips between the corners
+        addQuad(buffer, x1 + rx, y1, x2 - rx, y2, r, g, b, a);
+        if (h > 2.0f * ry) {
+            addQuad(buffer, x1, y1 + ry, x1 + rx, y2 - ry, r, g, b, a);
+            addQuad(buffer, x2 - rx, y1 + ry, x2, y2 - ry, r, g, b, a);
+        }
+        addCorner(buffer, x2 - rx, y2 - ry, rx, ry, 1.0f, 1.0f, r, g, b, a);
+        addCorner(buffer, x1 + rx, y2 - ry, rx, ry, -1.0f, 1.0f, r, g, b, a);
+        addCorner(buffer, x1 + rx, y1 + ry, rx, ry, -1.0f, -1.0f, r, g, b, a);
+        addCorner(buffer, x2 - rx, y1 + ry, rx, ry, 1.0f, -1.0f, r, g, b, a);
+    }
+
+    private static void addCorner(Buffer buffer, float cx, float cy, float rx, float ry, float sx, float sy, float r, float g, float b, float a) {
+        for (int i = 0; i < CORNER_SEGMENTS; i++) {
+            addTriangle(buffer, cx, cy,
+                    cx + sx * rx * CORNER_COS[i], cy + sy * ry * CORNER_SIN[i],
+                    cx + sx * rx * CORNER_COS[i + 1], cy + sy * ry * CORNER_SIN[i + 1],
+                    r, g, b, a);
+        }
+    }
+
+    /** Rounded card with a hairline border: border-colored shape with the fill inset on top. */
+    public static void addRoundedCard(Buffer buffer, float x1, float y1, float x2, float y2, float radius, int fillRgb, int borderRgb, float a) {
+        float ty = 0.0025f;
+        float tx = ty * buffer.pixelSquareXPerY();
+        addRoundedQuad(buffer, x1, y1, x2, y2, radius, borderRgb, a);
+        addRoundedQuad(buffer, x1 + tx, y1 + ty, x2 - tx, y2 - ty, Math.max(0.0f, radius - ty), fillRgb, a);
+    }
+
+    /** X extent that matches {@code height} on screen in the buffer's current drawing space (for squares, circles, knobs). */
+    public static float squareWidth(Buffer buffer, float height) {
+        return height * buffer.pixelSquareXPerY();
+    }
+
+    public static void addPill(Buffer buffer, float x1, float y1, float x2, float y2, int rgb, float a) {
+        addRoundedQuad(buffer, x1, y1, x2, y2, (y2 - y1) * 0.5f, rgb, a);
+    }
+
+    // --- Text measurement & truncation ---
+    private static final StringBuilder truncScratch = new StringBuilder(128);
+
+    /** Width of {@code len} glyphs at {@code size}, in the buffer's current drawing space. */
+    public static float textWidth(Buffer buffer, int len, float size) {
+        if (len <= 0) return 0.0f;
+        float screenW = len * size * 0.012f * buffer.getTextScale();
+        return buffer.screenToLocalWidth(screenW);
+    }
+
+    public static float textWidth(Buffer buffer, CharSequence text, float size) {
+        return text == null ? 0.0f : textWidth(buffer, text.length(), size);
+    }
+
+    /** Text right-aligned so it ends at {@code rightX}. */
+    public static void addRightAlignedText(Buffer buffer, CharSequence text, float rightX, float startY, float size, int rgb, float a) {
+        if (text == null) return;
+        float x = rightX - textWidth(buffer, text, size);
+        addBoundedText(buffer, text, x, startY, rightX + 0.001f, size, rgb, a);
+    }
+
+    /** Text clipped to [startX, maxX], ending in an ellipsis instead of a hard cut when it doesn't fit. */
+    public static void addTruncatedText(Buffer buffer, CharSequence text, float startX, float startY, float maxX, float size, int rgb, float a) {
+        if (text == null) return;
+        float perChar = textWidth(buffer, 1, size);
+        int fit = perChar > 0.0f ? (int) ((maxX - startX) / perChar) : text.length();
+        if (text.length() <= fit) {
+            addBoundedText(buffer, text, startX, startY, maxX + 0.001f, size, rgb, a);
+            return;
+        }
+        if (fit <= 0) return;
+        truncScratch.setLength(0);
+        truncScratch.append(text, 0, Math.max(0, fit - 1)).append('…');
+        addBoundedText(buffer, truncScratch, startX, startY, maxX + 0.001f, size, rgb, a);
     }
 
     // --- Primitive Buffer Overloads (Zero Allocation) ---
@@ -310,21 +475,15 @@ public class UIGeometryBatch {
             float cx = startX + i * (charW + pixelW * 1.2f);
             if (cx + charW > maxX) break;
 
-            char c = text.charAt(i);
-            if (c >= 'a' && c <= 'z') {
-                c = (char) (c - 32);
-            }
-            if (c >= 0 && c < FONT.length) {
-                long mask = FONT[c];
-                if (mask != 0L) {
-                    for (int row = 0; row < 5; row++) {
-                        for (int col = 0; col < 6; col++) {
-                            int shift = (4 - row) * 8 + (5 - col);
-                            if (((mask >> shift) & 1L) != 0L) {
-                                float px1 = cx + col * pixelW;
-                                float py1 = startY - row * pixelH;
-                                addQuad(buffer, px1, py1 - pixelH, px1 + pixelW, py1, r, g, b, a);
-                            }
+            long mask = glyph(text.charAt(i));
+            if (mask != 0L) {
+                for (int row = 0; row < 5; row++) {
+                    for (int col = 0; col < 6; col++) {
+                        int shift = (4 - row) * 8 + (5 - col);
+                        if (((mask >> shift) & 1L) != 0L) {
+                            float px1 = cx + col * pixelW;
+                            float py1 = startY - row * pixelH;
+                            addQuad(buffer, px1, py1 - pixelH, px1 + pixelW, py1, r, g, b, a);
                         }
                     }
                 }
@@ -430,21 +589,15 @@ public class UIGeometryBatch {
             float cx = startX + i * (charW + pixelW * 1.2f);
             if (cx + charW > maxX) break;
 
-            char c = text.charAt(i);
-            if (c >= 'a' && c <= 'z') {
-                c = (char) (c - 32);
-            }
-            if (c >= 0 && c < FONT.length) {
-                long mask = FONT[c];
-                if (mask != 0L) {
-                    for (int row = 0; row < 5; row++) {
-                        for (int col = 0; col < 6; col++) {
-                            int shift = (4 - row) * 8 + (5 - col);
-                            if (((mask >> shift) & 1L) != 0L) {
-                                float px1 = cx + col * pixelW;
-                                float py1 = startY - row * pixelH;
-                                addQuad(verts, px1, py1 - pixelH, px1 + pixelW, py1, r, g, b, a);
-                            }
+            long mask = glyph(text.charAt(i));
+            if (mask != 0L) {
+                for (int row = 0; row < 5; row++) {
+                    for (int col = 0; col < 6; col++) {
+                        int shift = (4 - row) * 8 + (5 - col);
+                        if (((mask >> shift) & 1L) != 0L) {
+                            float px1 = cx + col * pixelW;
+                            float py1 = startY - row * pixelH;
+                            addQuad(verts, px1, py1 - pixelH, px1 + pixelW, py1, r, g, b, a);
                         }
                     }
                 }
