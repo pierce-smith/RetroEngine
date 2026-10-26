@@ -9,8 +9,8 @@ import com.retro.engine.editor.ui.batch.UIGeometryBatch;
  * AnimatorGraphPanel Facade: Orchestrates rendering and event dispatching across
  * specialized sub-delegates:
  * - AnimatorCanvasDelegate: Graph Canvas & State Nodes
- * - AnimatorParametersDelegate: Parameters Sidebar & Controls
- * - AnimatorInspectorDelegate: State & Transition Inspector
+ * - AnimatorParametersDelegate: Parameter list & inline value editors
+ * - AnimatorInspectorDelegate: State Inspector & Dope Sheet timeline
  */
 public class AnimatorGraphPanel {
 
@@ -59,22 +59,46 @@ public class AnimatorGraphPanel {
 
     public static boolean handleParametersClick(float ndcX, float ndcY, int button, int action, EditorWorkspace manager) {
         if (manager == null || button != 0 || action != 1) return false;
-        return AnimatorParametersDelegate.handleParametersClick(ndcX, ndcY, manager.getActiveAnimatorController());
+        return AnimatorParametersDelegate.handleParametersClick(ndcX, ndcY, manager);
     }
 
     public static boolean handleMouseClick(float ndcX, float ndcY, int button, int action, EditorWorkspace manager) {
         if (manager == null) return false;
 
-        // 1. Route to Parameters Sidebar (left press only; it has no button discrimination of its own)
-        if (button == 0 && action == 1 && AnimatorParametersDelegate.handleParametersClick(ndcX, ndcY, manager.getActiveAnimatorController())) {
-            return true;
+        if (button == 0 && action == 1) {
+            // 1. Parameters list (left press only; it has no button discrimination of its own)
+            if (AnimatorParametersDelegate.handleParametersClick(ndcX, ndcY, manager)) {
+                return true;
+            }
+            // 2. Dope sheet playhead scrub
+            if (AnimatorInspectorDelegate.handleInspectorClick(ndcX, ndcY, manager)) {
+                return true;
+            }
         }
 
-        // 2. Route to Graph Canvas
+        // 3. Route to Graph Canvas
         return AnimatorCanvasDelegate.handleCanvasClick(ndcX, ndcY, button, action, manager);
     }
 
     public static boolean handleCursorPos(float ndcX, float ndcY, EditorWorkspace manager) {
         return AnimatorCanvasDelegate.handleCursorPos(ndcX, ndcY, manager);
+    }
+
+    /** Cursor in the inspector panel's design space; drives an active playhead scrub. */
+    public static boolean handleInspectorCursorPos(float ndcX, float ndcY, EditorWorkspace manager) {
+        return AnimatorInspectorDelegate.handleCursorPos(ndcX, ndcY, manager);
+    }
+
+    /** Ends a playhead scrub wherever the button is released. */
+    public static boolean handleInspectorRelease() {
+        return AnimatorInspectorDelegate.handleRelease();
+    }
+
+    public static boolean handleCanvasScroll(float ndcX, float ndcY, double yOffset) {
+        return AnimatorCanvasDelegate.handleScroll(ndcX, ndcY, yOffset);
+    }
+
+    public static boolean handleInspectorScroll(float ndcX, float ndcY, double yOffset) {
+        return AnimatorInspectorDelegate.handleScroll(ndcX, ndcY, yOffset);
     }
 }

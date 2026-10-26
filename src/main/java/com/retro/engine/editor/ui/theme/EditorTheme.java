@@ -39,6 +39,19 @@ public final class EditorTheme {
     public static final int PURPLE = 0xBF5AF2;
     public static final int PINK = 0xFF375F;
 
+    // Animator graph nodes
+    public static final int NODE_ENTRY = 0xD97706;     // Muted amber
+    public static final int NODE_ANY_STATE = 0x475569; // Slate
+    public static final int NODE_ACTIVE = ACCENT;
+    public static final int NODE_INACTIVE = SURFACE;
+    public static final int SHADOW = 0x000000;
+
+    // Dope sheet channels
+    public static final int CHANNEL_TRANSLATION = TEAL;
+    public static final int CHANNEL_ROTATION = GREEN;
+    public static final int CHANNEL_SCALE = ORANGE;
+    public static final int PLAYHEAD = RED;
+
     /** Corner radius (in NDC Y units) for cards, buttons and fields. */
     public static final float RADIUS = 0.010f;
     public static final float RADIUS_SMALL = 0.006f;

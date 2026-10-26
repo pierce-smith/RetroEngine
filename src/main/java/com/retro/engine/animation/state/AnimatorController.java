@@ -282,6 +282,12 @@ public class AnimatorController {
     public AnimatorState getTargetState() { return targetState; }
     public float getCurrentStateTime() { return currentStateTime; }
     public float getTargetStateTime() { return targetStateTime; }
+    /** Seeks the current state's timeline (editor scrubbing), bounded exactly like normal playback. */
+    public void setCurrentStateTime(float stateTime) {
+        if (currentState == null) return;
+        currentStateTime = currentState.boundStateTime(stateTime, this);
+    }
+
     public boolean isTransitioning() { return transitioning; }
     public boolean isCrossfading() { return transitioning; }
 

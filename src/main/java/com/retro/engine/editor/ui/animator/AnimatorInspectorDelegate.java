@@ -1,86 +1,491 @@
 package com.retro.engine.editor.ui.animator;
 
+import com.retro.engine.animation.clips.AnimationClip;
+import com.retro.engine.animation.clips.KeyframeTrack;
 import com.retro.engine.animation.state.AnimatorController;
 import com.retro.engine.animation.state.AnimatorState;
 import com.retro.engine.animation.state.AnimatorTransition;
 import com.retro.engine.animation.state.BlendTree;
+import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
+import com.retro.engine.editor.ui.theme.EditorTheme;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 
 /**
- * SRP Delegate: Manages Animator Inspector Sidebar rendering, state details,
- * motion clip specs, speed/loop toggles, and outgoing transition condition lists.
+ * SRP Delegate: Manages the Animator Inspector: state details and outgoing transitions on top,
+ * and a dope sheet below — time ruler, per-bone Translation/Rotation/Scale keyframe tracks,
+ * and a draggable playhead synced to the controller's playback time.
+ *
+ * The playhead seeks the controller when the inspected state is the one currently playing;
+ * for any other state it scrubs a local preview time that only drives this view.
  */
 public class AnimatorInspectorDelegate {
 
+    // --- Layout (design-space NDC of DockPanel.ANIMATOR_INSPECTOR); hit-tests share these values ---
+    private static final float PANEL_X0 = 0.55f, PANEL_Y0 = -0.50f, PANEL_X1 = 1.00f, PANEL_Y1 = 0.86f;
+    private static final float HEADER_Y0 = 0.81f;
+    private static final float CX0 = 0.565f, CX1 = 0.985f;
+    private static final float PROP_ROW_H = 0.045f;
+
+    private static final float DOPE_TOP = 0.215f;
+    private static final float DOPE_HEADER_Y0 = 0.175f;
+    private static final float RULER_Y0 = 0.125f, RULER_Y1 = 0.165f;
+    private static final float TRACK_TOP = RULER_Y0, TRACK_BOTTOM = -0.49f;
+    private static final float TRACK_ROW_H = 0.038f;
+    private static final float LABEL_X1 = 0.705f;
+    private static final float TL_X0 = 0.718f, TL_X1 = 0.972f;
+    private static final float DIAMOND_H = 0.010f;
+
+    private static final float MIN_TICK_GAP = 0.010f;
+    private static final float MIN_LABEL_GAP = 0.07f;
+    private static final int[] MINOR_FRAME_STEPS = {1, 2, 5, 10, 25, 50, 100, 250, 500, 1000};
+    private static final float[] MAJOR_SECOND_STEPS = {0.05f, 0.1f, 0.2f, 0.25f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f, 30.0f, 60.0f};
+
+    // Playhead / scrubbing
+    private static boolean scrubbing = false;
+    private static float previewTime = 0.0f;
+    private static String previewStateName = null;
+
+    // Track list scrolling (in rows)
+    private static float scrollRows = 0.0f;
+    private static int maxScrollRows = 0;
+
+    // Sorted track cache, rebuilt when the displayed clip or its track count changes
+    private static final List<KeyframeTrack> sortedTracks = new ArrayList<>();
+    private static final Comparator<KeyframeTrack> BY_BONE = Comparator.comparing(t -> t.boneName == null ? "" : t.boneName);
+    private static AnimationClip cachedClip = null;
+    private static int cachedTrackCount = -1;
+
+    private static final StringBuilder textScratch = new StringBuilder(64);
+
+    private static float textTop(float midY, float size) { return midY + size * 0.009f; }
+
+    /** Selected state, or the playing state when nothing is selected. Shared by render and input. */
+    private static AnimatorState resolveInspectedState(AnimatorController controller, String selectedStateName) {
+        if (controller == null) return null;
+        AnimatorState state = selectedStateName != null ? controller.getState(selectedStateName) : null;
+        return state != null ? state : controller.getCurrentState();
+    }
+
+    /** Clip shown on the dope sheet: the state's clip, or a blend tree's currently dominant motion. */
+    private static AnimationClip displayClip(AnimatorState state, AnimatorController controller) {
+        if (state == null) return null;
+        if (state.blendTree == null) return state.clip;
+        List<BlendTree.Motion> motions = state.blendTree.getMotions();
+        if (motions.isEmpty()) return null;
+        float[] weights = state.blendTree.evaluateWeights(controller);
+        int best = 0;
+        for (int i = 1; i < motions.size(); i++) {
+            if (weights[i] > weights[best]) best = i;
+        }
+        return motions.get(best).clip;
+    }
+
+    /** Only the playing state is seekable, so only it shows (and scrubs) the controller's time. */
+    private static boolean isLive(AnimatorState state, AnimatorController controller) {
+        return state == controller.getCurrentState();
+    }
+
+    /** Clip-local playhead time for the inspected state. */
+    private static float playheadTime(AnimatorState state, AnimationClip clip, AnimatorController controller) {
+        if (!isLive(state, controller)) {
+            return state.name.equals(previewStateName) ? Math.min(previewTime, clip.durationSeconds) : 0.0f;
+        }
+        float stateTime = controller.getCurrentStateTime();
+        if (state.blendTree == null) return state.getClipSampleTime(stateTime);
+        return state.getNormalizedTime(stateTime, controller) * clip.durationSeconds;
+    }
+
+    private static float frameRate(AnimationClip clip) {
+        float fps = clip.ticksPerSecond;
+        return (fps > 0.0f && fps <= 240.0f) ? fps : 30.0f;
+    }
+
+    private static float timeToX(float t, float duration) {
+        return TL_X0 + (t / duration) * (TL_X1 - TL_X0);
+    }
+
+    // --- Rendering ---
+
     public static void renderInspectorSidebar(UIGeometryBatch.Buffer buffer, AnimatorController controller, String selectedStateName, AnimatorTransition transition) {
-        float x1 = 0.55f, y1 = -0.50f, x2 = 1.00f, y2 = 0.86f;
+        UIGeometryBatch.addQuad(buffer, PANEL_X0, PANEL_Y0, PANEL_X1, PANEL_Y1, EditorTheme.SURFACE, 1.0f);
 
-        UIGeometryBatch.addQuad(buffer, x1, y1, x2, y2, 0.12f, 0.12f, 0.15f, 1.0f);
-        UIGeometryBatch.addFrameBorder(buffer, x1, y1, x2, y2, 0.002f, 0.22f, 0.25f, 0.32f, 1.0f);
-
-        // Inspector Header
-        UIGeometryBatch.addQuad(buffer, x1, y2 - 0.05f, x2, y2, 0.16f, 0.17f, 0.22f, 1.0f);
-        UIGeometryBatch.addFrameBorder(buffer, x1, y2 - 0.05f, x2, y2, 0.002f, 0.22f, 0.25f, 0.32f, 1.0f);
-        UIGeometryBatch.addBoundedText(buffer, "ANIMATOR INSPECTOR", x1 + 0.02f, y2 - 0.018f, x2 - 0.02f, 1.1f, 1.0f, 1.0f, 1.0f, 1.0f);
-
-        AnimatorState selectedState = (controller != null && selectedStateName != null) ? controller.getState(selectedStateName) : null;
-        if (selectedState == null && controller != null && controller.getCurrentState() != null) {
-            selectedState = controller.getCurrentState();
-        }
-
-        if (selectedState != null) {
-            float itemY = y2 - 0.09f;
-            UIGeometryBatch.addBoundedText(buffer, "STATE: " + selectedState.name.toUpperCase(), x1 + 0.02f, itemY, x2 - 0.02f, 1.1f, 0.0f, 0.7f, 1.0f, 1.0f);
-
-            itemY -= 0.06f;
-            if (selectedState.blendTree != null) {
-                String treeStr = String.format("BLEND TREE: %s ON %s (%d MOTIONS)",
-                        selectedState.blendTree.type == BlendTree.BlendType.SIMPLE_1D ? "1D" : "2D",
-                        selectedState.blendTree.parameterX, selectedState.blendTree.getMotions().size());
-                UIGeometryBatch.addBoundedText(buffer, treeStr, x1 + 0.02f, itemY, x2 - 0.02f, 0.9f, 0.8f, 0.8f, 0.85f, 1.0f);
-            } else {
-                String clipStr = (selectedState.clip != null && selectedState.clip.name != null) ? selectedState.clip.name : "None";
-                UIGeometryBatch.addBoundedText(buffer, "MOTION CLIP: " + clipStr, x1 + 0.02f, itemY, x2 - 0.02f, 0.9f, 0.8f, 0.8f, 0.85f, 1.0f);
-            }
-
-            itemY -= 0.05f;
-            UIGeometryBatch.addBoundedText(buffer, String.format("SPEED: %.2fx", selectedState.speed), x1 + 0.02f, itemY, x2 - 0.02f, 0.9f, 0.8f, 0.8f, 0.85f, 1.0f);
-
-            itemY -= 0.05f;
-            UIGeometryBatch.addBoundedText(buffer, "LOOP: " + (selectedState.isLooping ? "TRUE" : "FALSE"), x1 + 0.02f, itemY, x2 - 0.02f, 0.9f, 0.8f, 0.8f, 0.85f, 1.0f);
-
-            // Dynamic Outgoing Transitions
-            itemY -= 0.08f;
-            UIGeometryBatch.addQuad(buffer, x1 + 0.01f, itemY - 0.03f, x2 - 0.01f, itemY + 0.02f, 0.18f, 0.20f, 0.26f, 1.0f);
-            UIGeometryBatch.addBoundedText(buffer, "OUTGOING TRANSITIONS", x1 + 0.02f, itemY, x2 - 0.02f, 1.0f, 1.0f, 0.8f, 0.2f, 1.0f);
-
-            itemY -= 0.07f;
-            if (!selectedState.transitions.isEmpty()) {
-                for (AnimatorTransition trans : selectedState.transitions) {
-                    StringBuilder rules = new StringBuilder();
-                    for (int i = 0; i < trans.conditions.size(); i++) {
-                        if (i > 0) rules.append(", ");
-                        rules.append(trans.conditions.get(i).getFormattedRule());
-                    }
-                    if (trans.conditions.isEmpty() && trans.hasExitTime) {
-                        rules.append(String.format("Exit %.0f%%", trans.exitTime * 100.0f));
-                    } else if (trans.conditions.isEmpty()) {
-                        rules.append("Immediate");
-                    }
-
-                    String transLine = "-> " + trans.destinationStateName + " (" + rules + ")";
-                    UIGeometryBatch.addBoundedText(buffer, transLine, x1 + 0.02f, itemY, x2 - 0.02f, 0.85f, 0.9f, 0.9f, 0.9f, 1.0f);
-                    itemY -= 0.05f;
-
-                    UIGeometryBatch.addBoundedText(buffer, String.format("   BLEND: %.2fs | EXIT: %s", trans.duration, trans.hasExitTime ? "YES" : "NO"), x1 + 0.02f, itemY, x2 - 0.02f, 0.80f, 0.6f, 0.8f, 1.0f, 1.0f);
-                    itemY -= 0.06f;
-                    if (itemY < y1 + 0.05f) break;
-                }
-            } else {
-                UIGeometryBatch.addBoundedText(buffer, "NO OUTGOING TRANSITIONS", x1 + 0.02f, itemY, x2 - 0.02f, 0.9f, 0.5f, 0.5f, 0.5f, 1.0f);
-            }
+        AnimatorState state = resolveInspectedState(controller, selectedStateName);
+        if (state == null) {
+            centeredTextIn(buffer, "NOTHING TO INSPECT", PANEL_X0, PANEL_X1, 0.30f, 1.0f, EditorTheme.TEXT_MUTED);
+            centeredTextIn(buffer, "SELECT A STATE NODE IN THE GRAPH", PANEL_X0, PANEL_X1, 0.24f, 0.72f, EditorTheme.TEXT_DISABLED);
         } else {
-            UIGeometryBatch.addBoundedText(buffer, "SELECT A STATE NODE TO INSPECT", x1 + 0.02f, y2 - 0.10f, x2 - 0.02f, 1.0f, 0.5f, 0.5f, 0.5f, 1.0f);
+            renderStateDetails(buffer, controller, state);
+            renderDopeSheet(buffer, controller, state);
         }
+
+        // Header
+        UIGeometryBatch.addQuad(buffer, PANEL_X0, HEADER_Y0, PANEL_X1, PANEL_Y1, EditorTheme.SURFACE, 1.0f);
+        UIGeometryBatch.addQuad(buffer, PANEL_X0, HEADER_Y0, PANEL_X1, HEADER_Y0 + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
+        UIGeometryBatch.addBoundedText(buffer, "INSPECTOR", CX0, textTop(0.835f, 0.85f), CX1, 0.85f, EditorTheme.TEXT, 1.0f);
+    }
+
+    private static void renderStateDetails(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorState state) {
+        boolean active = state == controller.getCurrentState();
+        boolean entry = state == controller.getEntryState();
+
+        // Title: status dot, name, status pills
+        float mid = 0.775f;
+        float dotH = 0.014f, dotW = UIGeometryBatch.squareWidth(buffer, dotH);
+        UIGeometryBatch.addPill(buffer, CX0 + 0.004f, mid - dotH * 0.5f, CX0 + 0.004f + dotW, mid + dotH * 0.5f, active ? EditorTheme.ACCENT : EditorTheme.GRAPHITE, 1.0f);
+
+        float pillsX = CX1;
+        if (active) pillsX = statusPill(buffer, "PLAYING", pillsX, mid, EditorTheme.NODE_ACTIVE);
+        if (entry) pillsX = statusPill(buffer, "ENTRY", pillsX, mid, EditorTheme.NODE_ENTRY);
+        UIGeometryBatch.addTruncatedText(buffer, state.name, CX0 + dotW + 0.016f, textTop(mid, 1.0f), pillsX - 0.01f, 1.0f, EditorTheme.TEXT, 1.0f);
+
+        // Properties
+        float rowMid = 0.725f;
+        textScratch.setLength(0);
+        if (state.blendTree != null) {
+            textScratch.append(state.blendTree.type == BlendTree.BlendType.SIMPLE_1D ? "BLEND 1D ON " : "BLEND 2D ON ").append(state.blendTree.parameterX);
+        } else {
+            textScratch.append(state.clip != null && state.clip.name != null ? state.clip.name : "NONE");
+        }
+        propertyRow(buffer, "MOTION", textScratch, rowMid);
+        rowMid -= PROP_ROW_H;
+
+        textScratch.setLength(0);
+        AnimatorParametersDelegate.appendFixed2(textScratch, state.speed);
+        textScratch.append('x');
+        propertyRow(buffer, "SPEED", textScratch, rowMid);
+        rowMid -= PROP_ROW_H;
+
+        propertyRow(buffer, "LOOP", state.isLooping ? "YES" : "NO", rowMid);
+        rowMid -= PROP_ROW_H;
+
+        textScratch.setLength(0);
+        AnimatorParametersDelegate.appendFixed2(textScratch, state.getCycleDuration(controller));
+        textScratch.append('s');
+        propertyRow(buffer, "LENGTH", textScratch, rowMid);
+        rowMid -= PROP_ROW_H + 0.012f;
+
+        // Outgoing transitions
+        textScratch.setLength(0);
+        textScratch.append("TRANSITIONS  ").append(state.transitions.size());
+        sectionHeader(buffer, textScratch, rowMid);
+        rowMid -= PROP_ROW_H + 0.004f;
+
+        if (state.transitions.isEmpty()) {
+            UIGeometryBatch.addBoundedText(buffer, "NO OUTGOING TRANSITIONS", CX0 + 0.008f, textTop(rowMid, 0.72f), CX1, 0.72f, EditorTheme.TEXT_DISABLED, 1.0f);
+            return;
+        }
+        for (int i = 0; i < state.transitions.size(); i++) {
+            if (rowMid - PROP_ROW_H * 0.5f < DOPE_TOP + 0.005f) {
+                textScratch.setLength(0);
+                textScratch.append('+').append(state.transitions.size() - i).append(" MORE");
+                UIGeometryBatch.addRightAlignedText(buffer, textScratch, CX1, textTop(rowMid + PROP_ROW_H, 0.62f), 0.62f, EditorTheme.TEXT_DISABLED, 1.0f);
+                break;
+            }
+            AnimatorTransition t = state.transitions.get(i);
+            float arrowW = UIGeometryBatch.textWidth(buffer, 2, 0.75f);
+            UIGeometryBatch.addBoundedText(buffer, "->", CX0 + 0.008f, textTop(rowMid, 0.75f), CX1, 0.75f, EditorTheme.ACCENT, 1.0f);
+
+            textScratch.setLength(0);
+            int count = t.conditions.size();
+            if (count > 0) {
+                textScratch.append(t.conditions.get(0).getFormattedRule());
+                if (count > 1) textScratch.append(" +").append(count - 1);
+            } else if (t.hasExitTime) {
+                textScratch.append("EXIT ").append(Math.round(t.exitTime * 100.0f)).append('%');
+            } else {
+                textScratch.append("AUTO");
+            }
+            float condW = Math.min(UIGeometryBatch.textWidth(buffer, textScratch, 0.62f), (CX1 - CX0) * 0.5f);
+            float condX0 = CX1 - condW;
+            UIGeometryBatch.addTruncatedText(buffer, textScratch, condX0, textTop(rowMid, 0.62f), CX1, 0.62f, EditorTheme.TEXT_MUTED, 1.0f);
+            UIGeometryBatch.addTruncatedText(buffer, t.destinationStateName, CX0 + 0.016f + arrowW, textTop(rowMid, 0.75f), condX0 - 0.012f, 0.75f, EditorTheme.TEXT, 1.0f);
+            rowMid -= PROP_ROW_H;
+        }
+    }
+
+    /** Right-aligned status pill ending at {@code x1}; returns its left edge. */
+    private static float statusPill(UIGeometryBatch.Buffer buffer, String text, float x1, float mid, int color) {
+        float size = 0.6f;
+        float w = UIGeometryBatch.textWidth(buffer, text, size) + 0.016f;
+        float h = 0.026f;
+        float x0 = x1 - w;
+        UIGeometryBatch.addPill(buffer, x0, mid - h * 0.5f, x1, mid + h * 0.5f, color, 1.0f);
+        centeredTextIn(buffer, text, x0, x1, mid, size, EditorTheme.TEXT);
+        return x0 - 0.008f;
+    }
+
+    private static void propertyRow(UIGeometryBatch.Buffer buffer, String label, CharSequence value, float mid) {
+        float valueX0 = CX0 + 0.12f;
+        UIGeometryBatch.addBoundedText(buffer, label, CX0 + 0.008f, textTop(mid, 0.68f), valueX0 - 0.01f, 0.68f, EditorTheme.TEXT_MUTED, 1.0f);
+        UIGeometryBatch.addTruncatedText(buffer, value, valueX0, textTop(mid, 0.78f), CX1, 0.78f, EditorTheme.TEXT, 1.0f);
+    }
+
+    private static void sectionHeader(UIGeometryBatch.Buffer buffer, CharSequence title, float mid) {
+        float h = 0.040f;
+        UIGeometryBatch.addRoundedQuad(buffer, CX0, mid - h * 0.5f, CX1, mid + h * 0.5f, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, 1.0f);
+        UIGeometryBatch.addBoundedText(buffer, title, CX0 + 0.008f, textTop(mid, 0.75f), CX1 - 0.008f, 0.75f, EditorTheme.TEXT, 1.0f);
+    }
+
+    private static void renderDopeSheet(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorState state) {
+        AnimationClip clip = displayClip(state, controller);
+        float headerMid = (DOPE_HEADER_Y0 + DOPE_TOP) * 0.5f;
+
+        textScratch.setLength(0);
+        textScratch.append("DOPE SHEET");
+        sectionHeader(buffer, textScratch, headerMid);
+
+        if (clip == null || clip.durationSeconds <= 0.0f) {
+            centeredTextIn(buffer, "NO CLIP ON THIS STATE", PANEL_X0, PANEL_X1, 0.0f, 0.8f, EditorTheme.TEXT_DISABLED);
+            return;
+        }
+
+        float duration = clip.durationSeconds;
+        float fps = frameRate(clip);
+        float playTime = Math.max(0.0f, Math.min(duration, playheadTime(state, clip, controller)));
+        boolean live = isLive(state, controller);
+
+        // Header readout: [PREVIEW]  0.45 / 2.00s
+        textScratch.setLength(0);
+        AnimatorParametersDelegate.appendFixed2(textScratch, playTime);
+        textScratch.append(" / ");
+        AnimatorParametersDelegate.appendFixed2(textScratch, duration);
+        textScratch.append('s');
+        float readoutX0 = CX1 - 0.008f - UIGeometryBatch.textWidth(buffer, textScratch, 0.68f);
+        UIGeometryBatch.addBoundedText(buffer, textScratch, readoutX0, textTop(headerMid, 0.68f), CX1, 0.68f, live ? EditorTheme.TEXT : EditorTheme.TEXT_MUTED, 1.0f);
+        if (!live) statusPill(buffer, "PREVIEW", readoutX0 - 0.008f, headerMid, EditorTheme.GRAPHITE);
+
+        // Track area backgrounds
+        UIGeometryBatch.addQuad(buffer, TL_X0 - 0.008f, TRACK_BOTTOM, CX1, TRACK_TOP, EditorTheme.SURFACE_SUNKEN, 1.0f);
+        UIGeometryBatch.addQuad(buffer, CX0, RULER_Y0, CX1, RULER_Y1, EditorTheme.SURFACE_RAISED, 1.0f);
+        UIGeometryBatch.addQuad(buffer, CX0, RULER_Y0 - EditorTheme.HAIRLINE * 0.5f, CX1, RULER_Y0 + EditorTheme.HAIRLINE * 0.5f, EditorTheme.BORDER, 1.0f);
+
+        textScratch.setLength(0);
+        textScratch.append(Math.round(fps)).append(" FPS");
+        UIGeometryBatch.addBoundedText(buffer, textScratch, CX0 + 0.008f, textTop((RULER_Y0 + RULER_Y1) * 0.5f, 0.6f), LABEL_X1, 0.6f, EditorTheme.TEXT_MUTED, 1.0f);
+
+        renderRuler(buffer, duration, fps);
+        renderTracks(buffer, clip, duration, playTime, fps);
+        renderPlayhead(buffer, playTime, duration, fps);
+    }
+
+    private static void renderRuler(UIGeometryBatch.Buffer buffer, float duration, float fps) {
+        float secToX = (TL_X1 - TL_X0) / duration;
+        float frameDur = 1.0f / fps;
+        float tickHalf = UIGeometryBatch.squareWidth(buffer, 0.0015f) * 0.5f;
+
+        // Minor ticks on frame multiples
+        int minorStep = MINOR_FRAME_STEPS[MINOR_FRAME_STEPS.length - 1];
+        for (int s : MINOR_FRAME_STEPS) {
+            if (s * frameDur * secToX >= MIN_TICK_GAP) { minorStep = s; break; }
+        }
+        int totalFrames = (int) Math.floor(duration * fps + 0.0001f);
+        for (int f = 0; f <= totalFrames; f += minorStep) {
+            float x = timeToX(f * frameDur, duration);
+            UIGeometryBatch.addQuad(buffer, x - tickHalf, RULER_Y0, x + tickHalf, RULER_Y0 + 0.008f, EditorTheme.TEXT_DISABLED, 1.0f);
+        }
+
+        // Labeled major ticks on round seconds, with faint guides down through the tracks
+        float major = MAJOR_SECOND_STEPS[MAJOR_SECOND_STEPS.length - 1];
+        for (float s : MAJOR_SECOND_STEPS) {
+            if (s * secToX >= MIN_LABEL_GAP) { major = s; break; }
+        }
+        int decimals = major >= 1.0f ? 0 : (Math.abs(major * 10.0f - Math.round(major * 10.0f)) < 0.001f ? 1 : 2);
+        int majorCount = (int) Math.floor(duration / major + 0.0001f);
+        for (int i = 0; i <= majorCount; i++) {
+            float t = i * major;
+            float x = timeToX(t, duration);
+            UIGeometryBatch.addQuad(buffer, x - tickHalf, RULER_Y0, x + tickHalf, RULER_Y0 + 0.018f, EditorTheme.TEXT_MUTED, 1.0f);
+            UIGeometryBatch.addQuad(buffer, x - tickHalf, TRACK_BOTTOM, x + tickHalf, TRACK_TOP, EditorTheme.BORDER, 0.6f);
+
+            textScratch.setLength(0);
+            appendDecimal(textScratch, t, decimals);
+            UIGeometryBatch.addBoundedText(buffer, textScratch, x + 0.004f, textTop(RULER_Y1 - 0.011f, 0.55f), TL_X1 + 0.012f, 0.55f, EditorTheme.TEXT_MUTED, 1.0f);
+        }
+        // Clip end marker
+        float endX = timeToX(duration, duration);
+        UIGeometryBatch.addQuad(buffer, endX - tickHalf, TRACK_BOTTOM, endX + tickHalf, RULER_Y1, EditorTheme.BORDER_STRONG, 1.0f);
+    }
+
+    private static void appendDecimal(StringBuilder sb, float v, int decimals) {
+        if (decimals == 0) {
+            sb.append(Math.round(v));
+        } else if (decimals == 1) {
+            long tenths = Math.round(v * 10.0f);
+            sb.append(tenths / 10).append('.').append(tenths % 10);
+        } else {
+            AnimatorParametersDelegate.appendFixed2(sb, v);
+        }
+    }
+
+    private static void refreshTrackCache(AnimationClip clip) {
+        int count = clip.getTracks().size();
+        if (clip == cachedClip && count == cachedTrackCount) return;
+        sortedTracks.clear();
+        for (KeyframeTrack track : clip.getTracks()) sortedTracks.add(track);
+        sortedTracks.sort(BY_BONE);
+        cachedClip = clip;
+        cachedTrackCount = count;
+        scrollRows = 0.0f;
+    }
+
+    /** One bone row (summary of all channels) followed by Translation / Rotation / Scale channel rows. */
+    private static void renderTracks(UIGeometryBatch.Buffer buffer, AnimationClip clip, float duration, float playTime, float fps) {
+        refreshTrackCache(clip);
+        if (sortedTracks.isEmpty()) {
+            maxScrollRows = 0;
+            centeredTextIn(buffer, "NO KEYFRAME TRACKS", PANEL_X0, PANEL_X1, (TRACK_TOP + TRACK_BOTTOM) * 0.5f, 0.75f, EditorTheme.TEXT_DISABLED);
+            return;
+        }
+
+        int totalRows = sortedTracks.size() * 4;
+        int visibleRows = (int) ((TRACK_TOP - TRACK_BOTTOM) / TRACK_ROW_H);
+        maxScrollRows = Math.max(0, totalRows - visibleRows);
+        scrollRows = Math.max(0.0f, Math.min(scrollRows, maxScrollRows));
+        int firstRow = (int) scrollRows;
+        float halfFrame = 0.5f / fps;
+
+        for (int v = 0; v < visibleRows && firstRow + v < totalRows; v++) {
+            int row = firstRow + v;
+            KeyframeTrack track = sortedTracks.get(row / 4);
+            int channel = row % 4; // 0 = bone summary, 1 = T, 2 = R, 3 = S
+            float top = TRACK_TOP - v * TRACK_ROW_H;
+            float bottom = top - TRACK_ROW_H;
+            float mid = (top + bottom) * 0.5f;
+
+            if (channel == 0) {
+                UIGeometryBatch.addQuad(buffer, CX0, bottom, CX1, top, EditorTheme.SURFACE_RAISED, 0.55f);
+                // Disclosure triangle (expanded) + bone name
+                float tw = UIGeometryBatch.squareWidth(buffer, 0.010f);
+                float tx = CX0 + 0.006f;
+                UIGeometryBatch.addTriangle(buffer, tx, mid + 0.004f, tx + tw, mid + 0.004f, tx + tw * 0.5f, mid - 0.005f, EditorTheme.TEXT_MUTED, 1.0f);
+                UIGeometryBatch.addTruncatedText(buffer, track.boneName, tx + tw + 0.008f, textTop(mid, 0.62f), LABEL_X1, 0.62f, EditorTheme.TEXT, 1.0f);
+                renderKeys(buffer, track.positionTimes, mid, duration, playTime, halfFrame, EditorTheme.TEXT_MUTED, 0.8f);
+                renderKeys(buffer, track.rotationTimes, mid, duration, playTime, halfFrame, EditorTheme.TEXT_MUTED, 0.8f);
+                renderKeys(buffer, track.scaleTimes, mid, duration, playTime, halfFrame, EditorTheme.TEXT_MUTED, 0.8f);
+            } else {
+                int color = channel == 1 ? EditorTheme.CHANNEL_TRANSLATION : (channel == 2 ? EditorTheme.CHANNEL_ROTATION : EditorTheme.CHANNEL_SCALE);
+                String label = channel == 1 ? "POSITION" : (channel == 2 ? "ROTATION" : "SCALE");
+                float[] times = channel == 1 ? track.positionTimes : (channel == 2 ? track.rotationTimes : track.scaleTimes);
+
+                float chipH = 0.014f, chipW = UIGeometryBatch.squareWidth(buffer, chipH * 0.5f);
+                float chipX = CX0 + 0.022f;
+                UIGeometryBatch.addPill(buffer, chipX, mid - chipH * 0.5f, chipX + chipW, mid + chipH * 0.5f, color, 1.0f);
+                UIGeometryBatch.addBoundedText(buffer, label, chipX + chipW + 0.008f, textTop(mid, 0.55f), LABEL_X1, 0.55f,
+                        times.length > 0 ? EditorTheme.TEXT_MUTED : EditorTheme.TEXT_DISABLED, 1.0f);
+                renderKeys(buffer, times, mid, duration, playTime, halfFrame, color, 1.0f);
+            }
+
+            UIGeometryBatch.addQuad(buffer, CX0, bottom - EditorTheme.HAIRLINE * 0.25f, CX1, bottom + EditorTheme.HAIRLINE * 0.25f, EditorTheme.BORDER, 0.5f);
+        }
+
+        // Scroll indicator
+        if (maxScrollRows > 0) {
+            float trackH = TRACK_TOP - TRACK_BOTTOM;
+            float thumbH = Math.max(0.04f, trackH * visibleRows / totalRows);
+            float thumbTop = TRACK_TOP - (trackH - thumbH) * (scrollRows / maxScrollRows);
+            float tw = UIGeometryBatch.squareWidth(buffer, 0.008f);
+            UIGeometryBatch.addPill(buffer, PANEL_X1 - 0.004f - tw, thumbTop - thumbH, PANEL_X1 - 0.004f, thumbTop, EditorTheme.GRAPHITE, 0.85f);
+        }
+    }
+
+    /** Keyframe diamonds along one row; keys under the playhead are highlighted, near-coincident keys drawn once. */
+    private static void renderKeys(UIGeometryBatch.Buffer buffer, float[] times, float mid, float duration,
+                                   float playTime, float halfFrame, int color, float alpha) {
+        float lastX = -10.0f;
+        float h = DIAMOND_H;
+        float w = UIGeometryBatch.squareWidth(buffer, h);
+        float ow = UIGeometryBatch.squareWidth(buffer, h + 0.003f);
+        for (float t : times) {
+            if (t < -0.0001f || t > duration + 0.0001f) continue;
+            float x = timeToX(t, duration);
+            if (x - lastX < w * 0.5f) continue;
+            lastX = x;
+            boolean current = Math.abs(t - playTime) <= halfFrame;
+            diamond(buffer, x, mid, ow, h + 0.003f, EditorTheme.BACKGROUND, 1.0f);
+            diamond(buffer, x, mid, w, h, current ? EditorTheme.TEXT : color, current ? 1.0f : alpha);
+        }
+    }
+
+    private static void diamond(UIGeometryBatch.Buffer buffer, float cx, float cy, float halfW, float halfH, int rgb, float a) {
+        UIGeometryBatch.addTriangle(buffer, cx - halfW, cy, cx + halfW, cy, cx, cy + halfH, rgb, a);
+        UIGeometryBatch.addTriangle(buffer, cx - halfW, cy, cx, cy - halfH, cx + halfW, cy, rgb, a);
+    }
+
+    private static void renderPlayhead(UIGeometryBatch.Buffer buffer, float playTime, float duration, float fps) {
+        float x = timeToX(playTime, duration);
+        float lineHalf = UIGeometryBatch.squareWidth(buffer, 0.003f) * 0.5f;
+        UIGeometryBatch.addQuad(buffer, x - lineHalf, TRACK_BOTTOM, x + lineHalf, RULER_Y0, EditorTheme.PLAYHEAD, 1.0f);
+
+        // Head: frame-number tag in the ruler with a pointer down onto the tracks
+        textScratch.setLength(0);
+        textScratch.append(Math.round(playTime * fps));
+        float size = 0.55f;
+        float halfW = (UIGeometryBatch.textWidth(buffer, textScratch, size) + 0.012f) * 0.5f;
+        float y0 = RULER_Y0 + 0.006f, y1 = RULER_Y1 - 0.004f;
+        UIGeometryBatch.addRoundedQuad(buffer, x - halfW, y0, x + halfW, y1, EditorTheme.RADIUS_SMALL, EditorTheme.PLAYHEAD, 1.0f);
+        float pw = UIGeometryBatch.squareWidth(buffer, 0.008f);
+        UIGeometryBatch.addTriangle(buffer, x - pw, y0, x + pw, y0, x, RULER_Y0 - 0.004f, EditorTheme.PLAYHEAD, 1.0f);
+        centeredTextIn(buffer, textScratch, x - halfW, x + halfW, (y0 + y1) * 0.5f, size, EditorTheme.TEXT);
+    }
+
+    private static void centeredTextIn(UIGeometryBatch.Buffer buffer, CharSequence text, float x0, float x1, float midY, float size, int rgb) {
+        float w = UIGeometryBatch.textWidth(buffer, text, size);
+        float x = Math.max(x0 + 0.002f, (x0 + x1 - w) * 0.5f);
+        UIGeometryBatch.addBoundedText(buffer, text, x, textTop(midY, size), x1 + 0.001f, size, rgb, 1.0f);
+    }
+
+    // --- Input ---
+
+    /** Left press: starts a playhead scrub when it lands on the ruler or the track area. */
+    public static boolean handleInspectorClick(float ndcX, float ndcY, EditorWorkspace manager) {
+        if (manager == null) return false;
+        if (ndcX < TL_X0 - 0.012f || ndcX > TL_X1 + 0.012f || ndcY < TRACK_BOTTOM || ndcY > RULER_Y1) return false;
+        if (!seek(ndcX, manager)) return false;
+        scrubbing = true;
+        return true;
+    }
+
+    public static boolean handleCursorPos(float ndcX, float ndcY, EditorWorkspace manager) {
+        if (!scrubbing) return false;
+        if (!seek(ndcX, manager)) scrubbing = false;
+        return true;
+    }
+
+    public static boolean handleRelease() {
+        if (!scrubbing) return false;
+        scrubbing = false;
+        return true;
+    }
+
+    public static boolean handleScroll(float ndcX, float ndcY, double yOffset) {
+        if (ndcX < PANEL_X0 || ndcX > PANEL_X1 || ndcY < TRACK_BOTTOM || ndcY > TRACK_TOP) return false;
+        scrollRows = Math.max(0.0f, Math.min(maxScrollRows, scrollRows - (float) yOffset * 1.5f));
+        return true;
+    }
+
+    /** Moves the playhead to the time under {@code ndcX}; returns false when there is nothing to scrub. */
+    private static boolean seek(float ndcX, EditorWorkspace manager) {
+        AnimatorController controller = manager.getActiveAnimatorController();
+        AnimatorState state = resolveInspectedState(controller, manager.getSelectedStateName());
+        AnimationClip clip = displayClip(state, controller);
+        if (clip == null || clip.durationSeconds <= 0.0f) return false;
+
+        float duration = clip.durationSeconds;
+        float t = (ndcX - TL_X0) / (TL_X1 - TL_X0) * duration;
+        // Looping states wrap at exactly the clip length, so stop just short of it
+        t = Math.max(0.0f, Math.min(state.isLooping ? duration * 0.9999f : duration, t));
+
+        if (isLive(state, controller)) {
+            float stateTime = state.blendTree == null ? t : (t / duration) * state.getCycleDuration(controller);
+            controller.setCurrentStateTime(stateTime);
+        } else {
+            previewTime = t;
+            previewStateName = state.name;
+        }
+        return true;
     }
 }

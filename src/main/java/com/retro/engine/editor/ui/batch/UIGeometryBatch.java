@@ -256,6 +256,14 @@ public class UIGeometryBatch {
         addBoundedText(buffer, text, startX, startY, maxX, size, red(rgb), green(rgb), blue(rgb), a);
     }
 
+    public static void addLineSegment(Buffer buffer, float x1, float y1, float x2, float y2, float thickness, int rgb, float a) {
+        addLineSegment(buffer, x1, y1, x2, y2, thickness, red(rgb), green(rgb), blue(rgb), a);
+    }
+
+    public static void addArrowhead(Buffer buffer, float tipX, float tipY, float dirX, float dirY, float length, float width, int rgb, float a) {
+        addArrowhead(buffer, tipX, tipY, dirX, dirY, length, width, red(rgb), green(rgb), blue(rgb), a);
+    }
+
     // --- Rounded shapes ---
     private static final int CORNER_SEGMENTS = 5;
     private static final float[] CORNER_COS = new float[CORNER_SEGMENTS + 1];
