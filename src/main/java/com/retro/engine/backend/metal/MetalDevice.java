@@ -13,6 +13,13 @@ import static org.lwjgl.system.macosx.ObjCRuntime.*;
 
 public class MetalDevice {
 
+    private static final long SEL_ALLOC = sel_registerName("alloc");
+    private static final long SEL_INIT = sel_registerName("init");
+    private static final long SEL_INIT_WITH_UTF8_STRING = sel_registerName("initWithUTF8String:");
+    private static final long SEL_RELEASE = sel_registerName("release");
+    private static final long SEL_DRAIN = sel_registerName("drain");
+    private static final long MTL_GPU_FAMILY_METAL3 = 5001L;
+
     private long device = 0L;
     private long commandQueue = 0L;
     private long metalLayer = 0L;
@@ -64,14 +71,41 @@ public class MetalDevice {
         return true;
     }
 
+    /**
+     * Returns an owned (+1) NSString; the caller must {@link #release} it. An autoreleased string would either leak
+     * into whatever pool happens to be active (none during startup) or be freed by a pool drained around this call.
+     */
     public long createNSString(String text) {
         if (text == null || objc_msgSend == 0L) return 0L;
         ByteBuffer utf8 = MemoryUtil.memUTF8(text, true);
-        long nsStringClass = objc_getClass("NSString");
-        long sel_stringWithUTF8 = sel_registerName("stringWithUTF8String:");
-        long nsStr = invokePPPP(nsStringClass, sel_stringWithUTF8, MemoryUtil.memAddress(utf8), objc_msgSend);
-        MemoryUtil.memFree(utf8);
-        return nsStr;
+        try {
+            long alloc = invokePPP(objc_getClass("NSString"), SEL_ALLOC, objc_msgSend);
+            return invokePPPP(alloc, SEL_INIT_WITH_UTF8_STRING, MemoryUtil.memAddress(utf8), objc_msgSend);
+        } finally {
+            MemoryUtil.memFree(utf8);
+        }
+    }
+
+    public void release(long object) {
+        if (object != 0L && objc_msgSend != 0L) invokePPP(object, SEL_RELEASE, objc_msgSend);
+    }
+
+    /** Opens an NSAutoreleasePool; pair with {@link #drainAutoreleasePool} in a finally block. */
+    public long pushAutoreleasePool() {
+        if (objc_msgSend == 0L) return 0L;
+        long poolClass = objc_getClass("NSAutoreleasePool");
+        if (poolClass == 0L) return 0L;
+        return invokePPP(invokePPP(poolClass, SEL_ALLOC, objc_msgSend), SEL_INIT, objc_msgSend);
+    }
+
+    public void drainAutoreleasePool(long pool) {
+        if (pool != 0L && objc_msgSend != 0L) invokePPP(pool, SEL_DRAIN, objc_msgSend);
+    }
+
+    /** True when the GPU supports MTLGPUFamilyMetal3 (gpuAddress / gpuResourceID argument buffers). */
+    public boolean supportsMetal3() {
+        if (device == 0L || objc_msgSend == 0L) return false;
+        return (invokePPPP(device, sel_registerName("supportsFamily:"), MTL_GPU_FAMILY_METAL3, objc_msgSend) & 0xFFL) != 0L;
     }
 
     public long getDevice() { return device; }

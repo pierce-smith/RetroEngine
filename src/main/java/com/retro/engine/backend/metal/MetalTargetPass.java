@@ -1,7 +1,5 @@
 package com.retro.engine.backend.metal;
 
-import com.retro.engine.backend.metal.MetalDevice;
-
 import static org.lwjgl.system.JNI.*;
 import static org.lwjgl.system.macosx.ObjCRuntime.*;
 
@@ -9,6 +7,8 @@ import static org.lwjgl.system.macosx.ObjCRuntime.*;
  * Delegate managing offscreen BGRA8 color textures and Depth32Float depth textures
  * for offscreen viewport rendering and swapchain depth testing.
  * Hardened with zero-leak native Objective-C ARC release semantics and NSAutoreleasePool scope management during viewport resizes.
+ * Targets replaced by a resize are retired through MetalGpuCache's fenced disposal queue, since in-flight frames and the
+ * editor's viewport panel may still reference the previous offscreen color texture.
  */
 public class MetalTargetPass {
 
@@ -34,6 +34,11 @@ public class MetalTargetPass {
     }
 
     public void initFramebuffer(MetalDevice metalDevice, int width, int height) {
+        initFramebuffer(metalDevice, width, height, null);
+    }
+
+    /** Allocates the targets; previous targets go to {@code retireQueue} when given, otherwise they are released at once. */
+    private void initFramebuffer(MetalDevice metalDevice, int width, int height, MetalGpuCache retireQueue) {
         if (metalDevice == null) return;
         this.width = width;
         this.height = height;
@@ -41,28 +46,16 @@ public class MetalTargetPass {
         long send = metalDevice.getObjcMsgSend();
         if (d == 0L || send == 0L) return;
 
-        long poolClass = objc_getClass("NSAutoreleasePool");
-        long selAlloc = sel_registerName("alloc");
-        long selInit = sel_registerName("init");
-        long selDrain = sel_registerName("drain");
-        long autoPool = invokePPP(invokePPP(poolClass, selAlloc, send), selInit, send);
-
+        long autoPool = metalDevice.pushAutoreleasePool();
         try {
             long selRelease = sel_registerName("release");
 
-            // Release previously allocated native GPU textures if resizing
-            if (offscreenColorTexture != 0L) {
-                invokePPP(offscreenColorTexture, selRelease, send);
-                offscreenColorTexture = 0L;
-            }
-            if (offscreenDepthTexture != 0L) {
-                invokePPP(offscreenDepthTexture, selRelease, send);
-                offscreenDepthTexture = 0L;
-            }
-            if (windowDepthTexture != 0L) {
-                invokePPP(windowDepthTexture, selRelease, send);
-                windowDepthTexture = 0L;
-            }
+            retire(metalDevice, retireQueue, offscreenColorTexture);
+            retire(metalDevice, retireQueue, offscreenDepthTexture);
+            retire(metalDevice, retireQueue, windowDepthTexture);
+            offscreenColorTexture = 0L;
+            offscreenDepthTexture = 0L;
+            windowDepthTexture = 0L;
 
             long descClass = objc_getClass("MTLTextureDescriptor");
             long selNew = sel_registerName("new");
@@ -104,22 +97,37 @@ public class MetalTargetPass {
             windowDepthTexture = invokePPPP(d, selNewTexture, winDepthDesc, send);
             invokePPP(winDepthDesc, selRelease, send); // Release descriptor retain count
         } finally {
-            if (autoPool != 0L) {
-                invokePPP(autoPool, selDrain, send);
-            }
+            metalDevice.drainAutoreleasePool(autoPool);
         }
     }
 
-    public void resizeViewport(MetalDevice metalDevice, int width, int height) {
-        if (width > 0 && height > 0) {
-            initFramebuffer(metalDevice, width, height);
+    private static void retire(MetalDevice metalDevice, MetalGpuCache retireQueue, long texture) {
+        if (texture == 0L) return;
+        if (retireQueue != null) {
+            retireQueue.enqueueDeferredDisposal(texture);
+        } else {
+            metalDevice.release(texture);
+        }
+    }
+
+    /**
+     * Reallocates the targets at the new size inside an explicit autorelease pool, so descriptor and texture temporaries
+     * are drained per resize instead of accumulating in a frame pool. Same-size calls are no-ops.
+     */
+    public void resizeViewport(MetalDevice metalDevice, int width, int height, MetalGpuCache retireQueue) {
+        if (metalDevice == null || width <= 0 || height <= 0) return;
+        if (width == this.width && height == this.height && offscreenColorTexture != 0L) return;
+
+        long pool = metalDevice.pushAutoreleasePool();
+        try {
+            initFramebuffer(metalDevice, width, height, retireQueue);
+        } finally {
+            metalDevice.drainAutoreleasePool(pool);
         }
     }
 
     public void dispose(MetalDevice metalDevice) {
         if (metalDevice == null) return;
-        this.width = width;
-        this.height = height;
         long send = metalDevice.getObjcMsgSend();
         if (send == 0L) return;
         long selRelease = sel_registerName("release");

@@ -1,5 +1,8 @@
 @file:Suppress("SpellCheckingInspection")
 
+import org.gradle.internal.os.OperatingSystem
+import java.security.MessageDigest
+
 plugins {
     java
     application
@@ -49,7 +52,7 @@ java {
 
 application {
     mainClass.set("com.retro.engine.Main")
-    val isMac = org.gradle.internal.os.OperatingSystem.current().isMacOsX
+    val isMac = OperatingSystem.current().isMacOsX
     val jvmArgsList = mutableListOf(
         "-Xms256m",
         "-Xmx512m",
@@ -113,7 +116,7 @@ fun findGlslcExecutable(): String? {
     return null
 }
 
-tasks.register("compileShaders") {
+tasks.register("compileVulkanShaders") {
     group = "build"
     description = "Compiles GLSL shaders into SPIR-V binaries using glslc."
 
@@ -158,6 +161,80 @@ tasks.register("compileShaders") {
             }
         }
     }
+}
+
+// ==============================================================================
+// Metal Shader Precompilation (.metal -> .metallib)
+// ==============================================================================
+// MetalPipeline always ships the .metal sources and compiles them at runtime when no matching .metallib is present,
+// so skipping this task (Windows/Linux, or macOS without the Metal toolchain) never breaks the build or the engine.
+val metalShaderDir = file("src/main/resources/shaders/metal")
+val metalLibOutputDir = layout.buildDirectory.dir("generated/metal")
+
+fun metalToolchainAvailable(): Boolean = try {
+    // `xcrun -f metal` succeeds even when the toolchain component is missing, so actually run the compiler
+    val proc = ProcessBuilder("xcrun", "-sdk", "macosx", "metal", "--version").redirectErrorStream(true).start()
+    proc.inputStream.readAllBytes()
+    proc.waitFor() == 0
+} catch (e: Exception) {
+    false
+}
+
+val compileMetalShaders = tasks.register("compileMetalShaders") {
+    group = "build"
+    description = "Precompiles Metal shaders into .metallib archives with xcrun (macOS only)."
+
+    inputs.files(fileTree(metalShaderDir) { include("*.metal") })
+    outputs.dir(metalLibOutputDir)
+
+    onlyIf("host OS is macOS") { OperatingSystem.current().isMacOsX }
+    onlyIf("Metal toolchain is installed") {
+        metalToolchainAvailable().also { available ->
+            if (!available) {
+                println("[WARNING] Metal toolchain unavailable (install with: xcodebuild -downloadComponent MetalToolchain).")
+                println("          Skipping .metallib precompilation; Metal shaders will compile from source at runtime.")
+            }
+        }
+    }
+
+    val shaderDir = metalShaderDir
+    val outputRoot = metalLibOutputDir
+    doLast {
+        val outDir = outputRoot.get().dir("shaders/metal").asFile
+        outDir.deleteRecursively()
+        outDir.mkdirs()
+        val airDir = temporaryDir
+
+        shaderDir.listFiles { f -> f.extension == "metal" }?.sortedBy { it.name }?.forEach { shader ->
+            val air = File(airDir, "${shader.nameWithoutExtension}.air")
+            val metallib = File(outDir, "${shader.nameWithoutExtension}.metallib")
+            val steps = listOf(
+                listOf("xcrun", "-sdk", "macosx", "metal", "-std=metal3.0", "-mmacosx-version-min=13.0",
+                       "-c", shader.absolutePath, "-o", air.absolutePath),
+                listOf("xcrun", "-sdk", "macosx", "metallib", air.absolutePath, "-o", metallib.absolutePath)
+            )
+            for (cmd in steps) {
+                val exitCode = ProcessBuilder(cmd).inheritIO().start().waitFor()
+                if (exitCode != 0) {
+                    throw GradleException("Failed to compile ${shader.name} (exit code $exitCode): ${cmd.joinToString(" ")}")
+                }
+            }
+            // MetalPipeline only trusts a .metallib whose recorded source hash matches the shipped .metal source
+            val sha = MessageDigest.getInstance("SHA-256").digest(shader.readBytes()).joinToString("") { "%02x".format(it) }
+            File(outDir, "${metallib.name}.sha256").writeText(sha)
+            println("Compiled ${shader.name} -> ${metallib.name}")
+        }
+    }
+}
+
+sourceSets.named("main") {
+    resources.srcDir(compileMetalShaders)
+}
+
+tasks.register("compileShaders") {
+    group = "build"
+    description = "Compiles all shader backends: GLSL -> SPIR-V (Vulkan) and, on macOS, MSL -> metallib (Metal)."
+    dependsOn("compileVulkanShaders", compileMetalShaders)
 }
 
 tasks.named("processResources") {

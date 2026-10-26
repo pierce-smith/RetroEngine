@@ -8,6 +8,7 @@ import java.nio.ByteBuffer;
 import java.util.Iterator;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.lwjgl.system.JNI.invokePPP;
 import static org.lwjgl.system.JNI.invokePPPP;
@@ -21,10 +22,13 @@ import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
  * management to MetalTextureRegistry and dynamic geometry buffering to MetalRingBuffer.
  * Registered meshes and textures live in opaque-handle tables; unregistered resources are released
  * through the deferred disposal queue once no in-flight frame can still reference them.
+ * <p>
+ * Deferred disposal is fenced on real GPU completion: MetalBackend reports every committed command buffer through
+ * {@link #onFrameSubmitted()} and every completion handler through {@link #onFrameCompleted()}. A handle retired while
+ * frame N may still be encoded is tagged N and released only once the completion count reaches N. With at most three
+ * frames in flight, a handle waits for no more than the three frames that could reference it.
  */
 public class MetalGpuCache {
-
-    private static final int RING_SLOTS = 3;
 
     public static final long MTL_INDEX_TYPE_UINT16 = 0L;
     public static final long MTL_INDEX_TYPE_UINT32 = 1L;
@@ -39,6 +43,8 @@ public class MetalGpuCache {
         public final long indexType;
         // Local-space bounding sphere radius around the mesh origin, used to fit the shadow frustum
         public float boundsRadius = 1.0f;
+        // Vertex buffer gpuAddress, written into DrawArgs.vertices
+        public long vertexAddress;
 
         public MetalMesh(MetalBuffer vertices, long indexBufferHandle, int indexCount, long indexType) {
             super(vertices.getHandle(), vertices.getElementCount(), vertices.getFloatStride());
@@ -50,18 +56,14 @@ public class MetalGpuCache {
         public boolean isIndexed() { return indexBufferHandle != 0L && indexCount > 0; }
     }
 
-    public static class DeferredHandle {
-        public final long handle;
-        public final long safeFrameIndex;
-
-        public DeferredHandle(long handle, long safeFrameIndex) {
-            this.handle = handle;
-            this.safeFrameIndex = safeFrameIndex;
-        }
-    }
+    /** A retired MTLBuffer / MTLTexture released once {@code framesCompleted >= retireAfterFrame}. */
+    private record DeferredHandle(long handle, long retireAfterFrame) {}
 
     private final Queue<DeferredHandle> deferredDisposalQueue = new ConcurrentLinkedQueue<>();
-    private volatile long currentFrameCounter = 0L;
+    // Written only by the render thread at commit time; read by streaming threads that unregister assets
+    private volatile long framesSubmitted = 0L;
+    // Advanced from Metal's completion handler thread; command buffers on one queue complete in commit order
+    private final AtomicLong framesCompleted = new AtomicLong();
 
     // Opaque handle tables for registered assets; written from any thread, resolved lock-free per frame
     private final HandleRegistry<MetalBuffer> meshHandles = new HandleRegistry<>();
@@ -76,36 +78,47 @@ public class MetalGpuCache {
     private float quadMinX = -0.55f, quadMinY = -0.50f, quadMaxX = 0.55f, quadMaxY = 0.88f;
     private boolean viewportQuadVisible = true;
     private long groundQuadBuffer = 0L;
+    private long groundQuadAddress = 0L;
 
     // Persistent 2048x2048 Depth32Float shadow map (RenderTarget | ShaderRead) and its comparison sampler
     private long shadowMapTexture = 0L;
     private long shadowSamplerState = 0L;
 
-    public void beginFrame(MetalDevice metalDevice, long frameIndex) {
-        this.currentFrameCounter = frameIndex;
+    public void beginFrame(MetalDevice metalDevice) {
         processDeferredDisposals(metalDevice);
+    }
+
+    /** Render thread: a frame's command buffer was committed. */
+    public void onFrameSubmitted() {
+        framesSubmitted++;
+    }
+
+    /** Metal completion handler thread: the oldest in-flight command buffer finished on the GPU. */
+    public void onFrameCompleted() {
+        framesCompleted.incrementAndGet();
     }
 
     public void processDeferredDisposals(MetalDevice metalDevice) {
         if (metalDevice == null || metalDevice.getObjcMsgSend() == 0L) return;
-        long send = metalDevice.getObjcMsgSend();
-        long selRelease = sel_registerName("release");
+        long completed = framesCompleted.get();
 
         Iterator<DeferredHandle> it = deferredDisposalQueue.iterator();
         while (it.hasNext()) {
             DeferredHandle item = it.next();
-            if (currentFrameCounter >= item.safeFrameIndex) {
-                if (item.handle != 0L) {
-                    invokePPP(item.handle, selRelease, send);
-                }
+            if (completed >= item.retireAfterFrame()) {
+                metalDevice.release(item.handle());
                 it.remove();
             }
         }
     }
 
+    /**
+     * Retires a handle the render thread stops referencing: the frame currently being encoded (or the next one, when
+     * called between frames) is the last that can use it.
+     */
     public void enqueueDeferredDisposal(long handle) {
         if (handle != 0L) {
-            deferredDisposalQueue.add(new DeferredHandle(handle, currentFrameCounter + RING_SLOTS));
+            deferredDisposalQueue.add(new DeferredHandle(handle, framesSubmitted + 1));
         }
     }
 
@@ -131,6 +144,10 @@ public class MetalGpuCache {
 
     public long getGroundQuadBuffer() {
         return groundQuadBuffer;
+    }
+
+    public long getGroundQuadAddress() {
+        return groundQuadAddress;
     }
 
     public long getShadowMapTexture() { return shadowMapTexture; }
@@ -221,16 +238,17 @@ public class MetalGpuCache {
         };
         MetalBuffer groundBuf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), groundVerts, 14);
         this.groundQuadBuffer = groundBuf.getHandle();
+        this.groundQuadAddress = MetalBuffer.gpuAddress(groundQuadBuffer, metalDevice.getObjcMsgSend());
 
         textureRegistry.initDefaultTextureAndSampler(metalDevice);
     }
 
     public void updateGridMesh(MetalDevice metalDevice, float[] vertices, int count) {
-        gridRingBuffer.updateBuffer(metalDevice, vertices, count, 9, deferredDisposalQueue, currentFrameCounter);
+        gridRingBuffer.updateBuffer(metalDevice, vertices, count, 9, this);
     }
 
     public void updateUiMesh(MetalDevice metalDevice, float[] vertices, int count) {
-        uiRingBuffer.updateBuffer(metalDevice, vertices, count, 6, deferredDisposalQueue, currentFrameCounter);
+        uiRingBuffer.updateBuffer(metalDevice, vertices, count, 6, this);
     }
 
     /** Uploads a static VBO once (or returns the live handle for assetKey). Thread-safe. */
@@ -253,6 +271,7 @@ public class MetalGpuCache {
                 return null;
             }
             mesh.boundsRadius = DirectionalShadowFrustum.computeLocalBoundsRadius(vertices, buf.getFloatStride(), vertexCount);
+            mesh.vertexAddress = MetalBuffer.gpuAddress(buf.getHandle(), metalDevice.getObjcMsgSend());
             return mesh;
         });
     }
@@ -289,13 +308,13 @@ public class MetalGpuCache {
         if (metalDevice == null || pixels == null || width <= 0 || height <= 0 || pixels.length < width * height * 4) return HandleRegistry.NULL_HANDLE;
         return textureHandles.register(assetKey, () -> {
             // Registration may run on a streaming thread with no autorelease pool; drain the descriptor locally
-            long pool = pushAutoreleasePool(metalDevice);
+            long pool = metalDevice.pushAutoreleasePool();
             try {
                 MetalTexture tex = new MetalTexture();
                 tex.uploadTexture(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), pixels, width, height);
                 return tex.getHasActiveTexture() == 1 ? tex : null;
             } finally {
-                drainAutoreleasePool(metalDevice, pool);
+                metalDevice.drainAutoreleasePool(pool);
             }
         });
     }
@@ -318,25 +337,13 @@ public class MetalGpuCache {
     public MetalTexture getTexture(long textureHandle) { return textureHandles.get(textureHandle); }
 
     /**
-     * Unregistration can race with the submitEntity that resolves the handle for the next frame, so the
-     * release waits one extra frame beyond the ring depth compared to buffers retired by the render thread.
+     * Unregistration runs on streaming threads and can race with the submitEntity that resolves the handle for the
+     * frame after the one being encoded, so the release also waits for that frame to complete.
      */
     private void enqueueHandleDisposal(long handle) {
         if (handle != 0L) {
-            deferredDisposalQueue.add(new DeferredHandle(handle, currentFrameCounter + RING_SLOTS + 1));
+            deferredDisposalQueue.add(new DeferredHandle(handle, framesSubmitted + 2));
         }
-    }
-
-    private static long pushAutoreleasePool(MetalDevice metalDevice) {
-        long send = metalDevice.getObjcMsgSend();
-        long poolClass = objc_getClass("NSAutoreleasePool");
-        if (send == 0L || poolClass == 0L) return 0L;
-        long alloc = invokePPP(poolClass, sel_registerName("alloc"), send);
-        return invokePPP(alloc, sel_registerName("init"), send);
-    }
-
-    private static void drainAutoreleasePool(MetalDevice metalDevice, long pool) {
-        if (pool != 0L) invokePPP(pool, sel_registerName("drain"), metalDevice.getObjcMsgSend());
     }
 
     public void clearCaches(MetalDevice metalDevice) {
@@ -355,6 +362,11 @@ public class MetalGpuCache {
             if (shadowSamplerState != 0L) { invokePPP(shadowSamplerState, selRelease, send); shadowSamplerState = 0L; }
             gridRingBuffer.cleanup(metalDevice);
             uiRingBuffer.cleanup(metalDevice);
+
+            // Callers drain in-flight frames first, so every retired handle is safe to release now
+            for (DeferredHandle item; (item = deferredDisposalQueue.poll()) != null; ) {
+                metalDevice.release(item.handle());
+            }
         } else {
             meshHandles.clear(null);
             textureHandles.clear(null);

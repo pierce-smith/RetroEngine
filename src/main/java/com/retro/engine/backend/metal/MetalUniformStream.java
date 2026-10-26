@@ -16,7 +16,7 @@ import static org.lwjgl.system.macosx.ObjCRuntime.*;
 public class MetalUniformStream {
 
     private static final int RING_SLOTS = 3;
-    // 304-byte Uniforms struct rounded up to keep every slot 256-byte aligned for constant buffer binding
+    // 336-byte Uniforms struct rounded up to keep every slot 256-byte aligned for constant buffer binding
     public static final long UNIFORM_STRIDE = 512L;
     public static final int MAX_ENTITIES_PER_FRAME = 256;
 
@@ -24,7 +24,8 @@ public class MetalUniformStream {
     public static final int SLOT_BASE_SHADOW_BLOBS = 1;
     public static final int SLOT_BASE_ENTITIES = 1 + 64;
     public static final int SLOT_BASE_SHADOW_CASTERS = 1 + 64 + MAX_ENTITIES_PER_FRAME;
-    private static final long FRAME_SLOT_SIZE = UNIFORM_STRIDE * (1 + 64 + 2 * MAX_ENTITIES_PER_FRAME);
+    public static final int SLOTS_PER_FRAME = 1 + 64 + 2 * MAX_ENTITIES_PER_FRAME;
+    private static final long FRAME_SLOT_SIZE = UNIFORM_STRIDE * SLOTS_PER_FRAME;
     private static final long TOTAL_RING_BUFFER_SIZE = FRAME_SLOT_SIZE * RING_SLOTS;
 
     // Locked Byte Offsets for MSL Uniforms Struct
@@ -36,25 +37,47 @@ public class MetalUniformStream {
     public static final long OFFSET_AMBIENT = 176L;
     public static final long OFFSET_FOG = 192L;
     public static final long OFFSET_MAT_PARAMS = 208L;
-    public static final long OFFSET_HAS_TEXTURE = 224L;
+    public static final long OFFSET_MATERIAL_MASK = 224L;
     public static final long OFFSET_IS_UNLIT = 228L;
     public static final long OFFSET_STRIDE = 232L;
     public static final long OFFSET_PASS_FLAGS = 236L;
     public static final long OFFSET_LIGHT_SPACE = 240L;
+    public static final long OFFSET_SURFACE = 304L;
+    public static final long OFFSET_VIEW_POS = 320L;
 
-    // passFlags bit 4: vertex shader applies the bone palette bound at vertex buffer index 2
+    // materialMask bits: which DrawArgs texture channels the fragment stage samples
+    public static final int MATERIAL_ALBEDO = 1;
+    public static final int MATERIAL_NORMAL = 2;
+    public static final int MATERIAL_SPECULAR = 4;
+    public static final int MATERIAL_LIGHTMAP = 8;
+    public static final int MATERIAL_EMISSIVE = 16;
+
+    // Metal 3 argument buffer table: one 64-byte DrawArgs entry per uniform slot, so a draw's [[base_instance]]
+    // is both its DrawArgs index and its uniform slot. Pointers are gpuAddress values, textures gpuResourceID values.
+    public static final long DRAW_ARGS_STRIDE = 64L;
+    public static final long DRAW_ARGS_VERTICES = 0L;
+    public static final long DRAW_ARGS_UNIFORMS = 8L;
+    public static final long DRAW_ARGS_BONES = 16L;
+    public static final long DRAW_ARGS_TEXTURES = 24L; // albedo, normal, specular, lightmap, emissive (8 bytes each)
+    public static final int MATERIAL_CHANNELS = 5;
+    private static final long DRAW_ARGS_FRAME_SIZE = DRAW_ARGS_STRIDE * SLOTS_PER_FRAME;
+
+    // passFlags bit 4: vertex shader applies the bone palette referenced by DrawArgs.bones
     public static final int PASS_FLAG_SKINNED = 16;
 
     // Bone palettes (64 column-major float4x4) are too large for the 256-byte uniform slot,
-    // so they stream through a dedicated ring buffer bound at vertex buffer index 2.
+    // so they stream through a dedicated ring buffer referenced from each skinned draw's DrawArgs.bones.
     public static final int MAX_PALETTE_BONES = 64;
     public static final long BONE_PALETTE_STRIDE = MAX_PALETTE_BONES * 64L;
     public static final int MAX_SKINNED_ENTITIES_PER_FRAME = 64;
     private static final long BONE_FRAME_SLOT_SIZE = BONE_PALETTE_STRIDE * MAX_SKINNED_ENTITIES_PER_FRAME;
 
     private long streamingUniformBuffer = 0L;
-    private long uniformBufferIdentity = 0L;
     private long bonePaletteBuffer = 0L;
+    private long drawArgsBuffer = 0L;
+    // gpuAddress is fixed for a buffer's lifetime, so these are resolved once instead of per draw
+    private long streamingUniformAddress = 0L;
+    private long bonePaletteAddress = 0L;
     private int frameIndex = 0;
 
     private final float[] matP = new float[16];
@@ -72,6 +95,7 @@ public class MetalUniformStream {
     private final DirectionalShadowFrustum shadowFrustum = new DirectionalShadowFrustum();
     private final float[] matLightSpace = new float[16];
     private final float[] matLightMVP = new float[16];
+    private final float[] cameraPos = new float[3];
 
     public void initialize(MetalDevice device) {
         long d = device.getDevice();
@@ -79,38 +103,29 @@ public class MetalUniformStream {
 
         streamingUniformBuffer = MetalBuffer.createUniformBuffer(d, send, TOTAL_RING_BUFFER_SIZE);
         bonePaletteBuffer = MetalBuffer.createUniformBuffer(d, send, BONE_FRAME_SLOT_SIZE * RING_SLOTS);
-        initIdentityUniform(device);
-    }
-
-    private void initIdentityUniform(MetalDevice device) {
-        float[] identityMVP = new float[] {
-            1.0f, 0.0f, 0.0f, 0.0f,
-            0.0f, 1.0f, 0.0f, 0.0f,
-            0.0f, 0.0f, 1.0f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f
-        };
-        long send = device.getObjcMsgSend();
-        uniformBufferIdentity = MetalBuffer.createUniformBuffer(device.getDevice(), send, UNIFORM_STRIDE);
-        long pIdentity = invokePPP(uniformBufferIdentity, sel_registerName("contents"), send);
-        if (pIdentity != 0L) {
-            FloatBuffer fb = MemoryUtil.memFloatBuffer(pIdentity + OFFSET_MVP, 16);
-            fb.clear();
-            fb.put(identityMVP);
-
-            FloatBuffer fbModel = MemoryUtil.memFloatBuffer(pIdentity + OFFSET_MODEL, 16);
-            fbModel.clear();
-            fbModel.put(identityMVP);
-
-            MemoryUtil.memPutInt(pIdentity + OFFSET_HAS_TEXTURE, 1);
-            MemoryUtil.memPutInt(pIdentity + OFFSET_IS_UNLIT, 2); // 2 = Viewport Pass-through Mode
-            MemoryUtil.memPutInt(pIdentity + OFFSET_STRIDE, 9);
-            MemoryUtil.memPutInt(pIdentity + OFFSET_PASS_FLAGS, 0);
-        }
+        drawArgsBuffer = MetalBuffer.createUniformBuffer(d, send, DRAW_ARGS_FRAME_SIZE * RING_SLOTS);
+        streamingUniformAddress = MetalBuffer.gpuAddress(streamingUniformBuffer, send);
+        bonePaletteAddress = MetalBuffer.gpuAddress(bonePaletteBuffer, send);
     }
 
     public long getStreamingUniformBuffer() { return streamingUniformBuffer; }
-    public long getUniformBufferIdentity() { return uniformBufferIdentity; }
     public long getBonePaletteBuffer() { return bonePaletteBuffer; }
+    public long getDrawArgsBuffer() { return drawArgsBuffer; }
+
+    /** GPU virtual address of uniform slot {@code slot} in the current frame, for DrawArgs.uniforms. */
+    public long getUniformSlotAddress(int slot) {
+        return streamingUniformAddress + getCurrentSlotOffset() + UNIFORM_STRIDE * slot;
+    }
+
+    /** GPU virtual address of a skinned entity's palette in the current frame (slot 0 for unskinned draws). */
+    public long getBonePaletteAddress(int skinnedIndex) {
+        return bonePaletteAddress + getBonePaletteOffset(Math.max(skinnedIndex, 0));
+    }
+
+    /** Byte offset of the current frame's DrawArgs table inside {@link #getDrawArgsBuffer()}. */
+    public long getCurrentDrawArgsOffset() {
+        return frameIndex * DRAW_ARGS_FRAME_SIZE;
+    }
 
     public long getBonePaletteOffset(int skinnedIndex) {
         return frameIndex * BONE_FRAME_SLOT_SIZE + skinnedIndex * BONE_PALETTE_STRIDE;
@@ -171,6 +186,15 @@ public class MetalUniformStream {
         matV[12] = camPanX;  matV[13] = camPanY;  matV[14] = camZoom;  matV[15] = 1.0f;
 
         return matV;
+    }
+
+    /** Camera world position (-R^T * t of the view matrix) for specular and reflection view vectors. */
+    public float[] computeCameraPosition(float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
+        createCameraViewMatrix(camPanX, camPanY, camZoom, camPitch, camYaw);
+        for (int i = 0; i < 3; i++) {
+            cameraPos[i] = -(matV[i * 4] * matV[12] + matV[i * 4 + 1] * matV[13] + matV[i * 4 + 2] * matV[14]);
+        }
+        return cameraPos;
     }
 
     public float[] createModelMatrix(float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {

@@ -19,6 +19,11 @@ public class MetalTexture {
     private long defaultTextureHandle = 0L;
     private long samplerStateHandle = 0L;
     private int hasActiveTexture = 0;
+    // MTLTexture.gpuResourceID values (Metal 3), resolved once so argument buffer writes need no FFI call
+    private long activeResourceId = 0L;
+    private long defaultResourceId = 0L;
+
+    private static final long SEL_GPU_RESOURCE_ID = sel_registerName("gpuResourceID");
 
     public void initDefaultTextureAndSampler(long device, long objc_msgSend) {
         if (device == 0L) return;
@@ -44,6 +49,7 @@ public class MetalTexture {
                 invokePPPPPPP(defaultTextureHandle, sel_replaceRegion, MemoryUtil.memAddress(region), 0L, MemoryUtil.memAddress(buf), 4L, objc_msgSend);
             }
             MemoryUtil.memFree(buf);
+            defaultResourceId = invokePPP(defaultTextureHandle, SEL_GPU_RESOURCE_ID, objc_msgSend);
         }
 
         long samplerDescClass = objc_getClass("MTLSamplerDescriptor");
@@ -79,12 +85,18 @@ public class MetalTexture {
 
         MemoryUtil.memFree(buf);
         this.activeTextureHandle = texture;
+        this.activeResourceId = invokePPP(texture, SEL_GPU_RESOURCE_ID, objc_msgSend);
         this.hasActiveTexture = 1;
         System.out.println("[MetalTexture] Bound " + width + "x" + height + " RGBA texture to Metal GPU pipeline.");
     }
 
     public long getBindableTexture() {
         return (hasActiveTexture == 1 && activeTextureHandle != 0L) ? activeTextureHandle : defaultTextureHandle;
+    }
+
+    /** gpuResourceID of {@link #getBindableTexture()}; an MTLResourceID is a single 64-bit value returned in a register. */
+    public long getBindableResourceId() {
+        return (hasActiveTexture == 1 && activeTextureHandle != 0L) ? activeResourceId : defaultResourceId;
     }
 
     public long getSamplerStateHandle() { return samplerStateHandle; }
