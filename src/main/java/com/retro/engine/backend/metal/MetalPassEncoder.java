@@ -23,6 +23,9 @@ public class MetalPassEncoder {
     public static class RenderEntity {
         public long vertexBufferHandle;
         public int vertexCount;
+        public long indexBufferHandle;   // 0L = non-indexed draw
+        public int indexCount;
+        public long indexType;           // MTLIndexType (0 = UInt16, 1 = UInt32)
         public long textureHandle;
         public boolean hasTexture;
         public float px, py, pz;
@@ -208,7 +211,12 @@ public class MetalPassEncoder {
 
                 invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), streamingUniformBuffer, entityUniformOffset, 1L, send);
                 invokePPPPPP(encoder3D, sel_registerName("setFragmentBuffer:offset:atIndex:"), streamingUniformBuffer, entityUniformOffset, 1L, send);
-                invokePPPPPP(encoder3D, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, (long) item.vertexCount, send);
+                if (item.indexBufferHandle != 0L && item.indexCount > 0) {
+                    invokePPPPPPPV(encoder3D, sel_registerName("drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:"),
+                            3L, (long) item.indexCount, item.indexType, item.indexBufferHandle, 0L, send);
+                } else {
+                    invokePPPPPP(encoder3D, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, (long) item.vertexCount, send);
+                }
 
                 entityIndex++;
             }

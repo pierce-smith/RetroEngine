@@ -31,7 +31,16 @@ public interface IRenderBackend {
      * Safe to call from any thread (e.g. AssetStreamer virtual threads). Returns 0L when the backend
      * has no GPU (headless/null rendering) or the upload fails.
      */
-    default long registerMesh(String assetKey, float[] vertices, int vertexCount) { return 0L; }
+    default long registerMesh(String assetKey, float[] vertices, int vertexCount) {
+        return registerMesh(assetKey, vertices, vertexCount, null, 0);
+    }
+
+    /**
+     * Indexed variant of {@link #registerMesh(String, float[], int)}. When indices is null or indexCount is 0
+     * the mesh is drawn non-indexed; otherwise the backend picks 16-bit indices when every index fits in a
+     * uint16 and 32-bit indices otherwise.
+     */
+    default long registerMesh(String assetKey, float[] vertices, int vertexCount, int[] indices, int indexCount) { return 0L; }
 
     /** Texture counterpart of {@link #registerMesh}; pixels are tightly packed RGBA8. */
     default long registerTexture(String assetKey, byte[] pixels, int width, int height) { return 0L; }

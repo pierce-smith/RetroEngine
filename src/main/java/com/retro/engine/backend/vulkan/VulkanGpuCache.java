@@ -37,6 +37,11 @@ public class VulkanGpuCache {
         public long memoryHandle;
         public int vertexCount;
         public int floatStride;
+        // Optional index buffer; indexBufferHandle == 0L means the mesh is drawn non-indexed
+        public long indexBufferHandle;
+        public long indexMemoryHandle;
+        public int indexCount;
+        public int indexType = VK_INDEX_TYPE_UINT32;
 
         public VulkanBuffer(long bufferHandle, long memoryHandle, int vertexCount) {
             this.bufferHandle = bufferHandle;
@@ -184,8 +189,56 @@ public class VulkanGpuCache {
 
     /** Uploads a static VBO once (or returns the live handle for assetKey). Thread-safe. */
     public long registerMesh(VulkanDevice device, String assetKey, float[] vertices, int vertexCount) {
+        return registerMesh(device, assetKey, vertices, vertexCount, null, 0);
+    }
+
+    /** Uploads a static VBO plus an optional IBO once (or returns the live handle for assetKey). Thread-safe. */
+    public long registerMesh(VulkanDevice device, String assetKey, float[] vertices, int vertexCount, int[] indices, int indexCount) {
         if (vertices == null || vertexCount <= 0 || vertices.length < vertexCount) return HandleRegistry.NULL_HANDLE;
-        return meshHandles.register(assetKey, () -> createHostVisibleBuffer(device, vertices, vertices.length / vertexCount));
+        return meshHandles.register(assetKey, () -> {
+            VulkanBuffer buf = createHostVisibleBuffer(device, vertices, vertices.length / vertexCount);
+            if (buf == null || indices == null || indexCount <= 0) return buf;
+            if (!attachIndexBuffer(device, buf, indices, Math.min(indexCount, indices.length))) {
+                vkDestroyBuffer(device.getLogicalDevice(), buf.bufferHandle, null);
+                vkFreeMemory(device.getLogicalDevice(), buf.memoryHandle, null);
+                return null;
+            }
+            return buf;
+        });
+    }
+
+    /** Uploads indices as uint16 when every index fits, uint32 otherwise, and records them on the mesh. */
+    private boolean attachIndexBuffer(VulkanDevice device, VulkanBuffer mesh, int[] indices, int indexCount) {
+        int maxIndex = 0;
+        for (int i = 0; i < indexCount; i++) {
+            int idx = indices[i];
+            if (idx < 0 || idx >= mesh.vertexCount) return false;
+            if (idx > maxIndex) maxIndex = idx;
+        }
+        boolean use16 = maxIndex <= 0xFFFF;
+        long bufferSize = (long) indexCount * (use16 ? Short.BYTES : Integer.BYTES);
+
+        long[] handles = allocateHostVisibleBuffer(device, bufferSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+        if (handles == null) return false;
+
+        VkDevice vkDevice = device.getLogicalDevice();
+        try (MemoryStack stack = stackPush()) {
+            PointerBuffer pData = stack.mallocPointer(1);
+            vkMapMemory(vkDevice, handles[1], 0, bufferSize, 0, pData);
+            long dst = pData.get(0);
+            if (use16) {
+                for (int i = 0; i < indexCount; i++) MemoryUtil.memPutShort(dst + (long) i * Short.BYTES, (short) indices[i]);
+            } else {
+                MemoryUtil.memIntBuffer(dst, indexCount).put(indices, 0, indexCount);
+            }
+            vkUnmapMemory(vkDevice, handles[1]);
+        }
+
+        mesh.indexBufferHandle = handles[0];
+        mesh.indexMemoryHandle = handles[1];
+        mesh.indexCount = indexCount;
+        mesh.indexType = use16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
+        return true;
     }
 
     /** Uploads image data into a VkImage + VkImageView + VkSampler once (or returns the live handle). Thread-safe. */
@@ -199,6 +252,9 @@ public class VulkanGpuCache {
         if (buf == null) return;
         synchronized (deferredDisposalQueue) {
             deferredDisposalQueue.add(new DeferredVulkanResource(buf.bufferHandle, buf.memoryHandle, totalFrameCount));
+            if (buf.indexBufferHandle != 0L || buf.indexMemoryHandle != 0L) {
+                deferredDisposalQueue.add(new DeferredVulkanResource(buf.indexBufferHandle, buf.indexMemoryHandle, totalFrameCount));
+            }
         }
     }
 
@@ -226,11 +282,34 @@ public class VulkanGpuCache {
         VkDevice vkDevice = device.getLogicalDevice();
         long bufferSize = (long) vertices.length * Float.BYTES;
 
+        long[] handles = allocateHostVisibleBuffer(device, bufferSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+        if (handles == null) return null;
+        long buffer = handles[0];
+        long bufferMemory = handles[1];
+
+        try (MemoryStack stack = stackPush()) {
+            PointerBuffer pData = stack.mallocPointer(1);
+            vkMapMemory(vkDevice, bufferMemory, 0, bufferSize, 0, pData);
+            FloatBuffer floatBuf = pData.getFloatBuffer(0, vertices.length);
+            floatBuf.put(vertices);
+            vkUnmapMemory(vkDevice, bufferMemory);
+        }
+
+        VulkanBuffer created = new VulkanBuffer(buffer, bufferMemory, vertices.length / floatStride);
+        created.floatStride = floatStride;
+        return created;
+    }
+
+    /** Creates a host-visible, coherent buffer with bound memory; returns {buffer, memory} or null on failure. */
+    private static long[] allocateHostVisibleBuffer(VulkanDevice device, long bufferSize, int usage) {
+        if (device == null || device.getLogicalDevice() == null || bufferSize <= 0) return null;
+        VkDevice vkDevice = device.getLogicalDevice();
+
         try (MemoryStack stack = stackPush()) {
             VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
                     .size(bufferSize)
-                    .usage(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)
+                    .usage(usage)
                     .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
 
             LongBuffer pBuffer = stack.mallocLong(1);
@@ -256,16 +335,7 @@ public class VulkanGpuCache {
             long bufferMemory = pBufferMemory.get(0);
 
             vkBindBufferMemory(vkDevice, buffer, bufferMemory, 0);
-
-            PointerBuffer pData = stack.mallocPointer(1);
-            vkMapMemory(vkDevice, bufferMemory, 0, bufferSize, 0, pData);
-            FloatBuffer floatBuf = pData.getFloatBuffer(0, vertices.length);
-            floatBuf.put(vertices);
-            vkUnmapMemory(vkDevice, bufferMemory);
-
-            VulkanBuffer created = new VulkanBuffer(buffer, bufferMemory, vertices.length / floatStride);
-            created.floatStride = floatStride;
-            return created;
+            return new long[] { buffer, bufferMemory };
         }
     }
 
@@ -654,6 +724,8 @@ public class VulkanGpuCache {
         meshHandles.clear(buf -> {
             if (buf.bufferHandle != 0L) vkDestroyBuffer(vkDevice, buf.bufferHandle, null);
             if (buf.memoryHandle != 0L) vkFreeMemory(vkDevice, buf.memoryHandle, null);
+            if (buf.indexBufferHandle != 0L) vkDestroyBuffer(vkDevice, buf.indexBufferHandle, null);
+            if (buf.indexMemoryHandle != 0L) vkFreeMemory(vkDevice, buf.indexMemoryHandle, null);
         });
         textureHandles.clear(tex -> {
             if (tex.imageViewHandle != 0L) vkDestroyImageView(vkDevice, tex.imageViewHandle, null);
