@@ -10,7 +10,6 @@ import org.lwjgl.vulkan.*;
 import java.nio.FloatBuffer;
 import java.nio.LongBuffer;
 import java.util.ArrayDeque;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Queue;
 
@@ -19,16 +18,24 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /**
  * Service Registry & VRAM Coordinator (SRP Pattern matching EditorWorkspace):
- * Coordinates static VBO mesh buffers, Light UBO allocations, ground shadow quad VBOs, the directional shadow map,
- * and delegates texture management to VulkanTextureRegistry and dynamic geometry buffering to VulkanRingBuffer.
+ * Coordinates static VBO mesh buffers, the Light UBO, ground shadow quad VBOs, the directional shadow map, bone
+ * palettes and the bindless material descriptor set, and delegates texture creation to VulkanTextureRegistry,
+ * staging uploads to VulkanUploadRing and dynamic geometry buffering to VulkanRingBuffer.
  * Registered meshes and textures are owned by opaque-handle tables; command recording resolves them by handle.
+ *
+ * <p>Bindless model: one persistent descriptor set (set 0) holds the light UBO, the shared material sampler, the
+ * shadow map, the bone palette buffer and a partially bound table of every registered texture. Draws select their
+ * material channels and bone palette through push constant slot indices, so the set is bound once per pass and
+ * never rewritten per draw. Texture registrations (any thread) only queue table writes; the render thread applies
+ * them in {@link #beginFrame} after the in-flight fence wait, so the set is never updated while the GPU reads it.
  */
 public class VulkanGpuCache {
 
+    // Deferred disposal latency in frames; ticks once per frame after the in-flight fence wait
     private static final int RING_SLOTS = 3;
 
-    // Bone palettes: 64 column-major mat4 per skinned entity, read by blinn_phong_skinned.vert at binding 3.
-    // A single slot set suffices because VulkanBackend waits on the in-flight fence before recording.
+    // Bone palettes: 64 column-major mat4 per skinned entity packed into one storage buffer at binding 3.
+    // A single buffer suffices because VulkanBackend waits on the in-flight fence before rewriting it.
     public static final int MAX_PALETTE_BONES = 64;
     public static final long BONE_PALETTE_STRIDE = MAX_PALETTE_BONES * 64L;
     public static final int MAX_SKINNED_ENTITIES_PER_FRAME = 64;
@@ -40,6 +47,26 @@ public class VulkanGpuCache {
     // LightBuffer (binding 0) std140 layout: lightSpaceMatrix at byte 304, 368 bytes total
     public static final int LIGHT_UBO_LIGHT_SPACE_FLOAT_INDEX = 76;
     public static final long LIGHT_UBO_SIZE = 368L;
+
+    // Set 0 bindings shared by every 3D pipeline (see blinn_phong.vert/.frag, blinn_phong_skinned.vert, shadow_depth.frag)
+    public static final int BINDING_LIGHT_UBO = 0;
+    public static final int BINDING_MATERIAL_SAMPLER = 1;
+    public static final int BINDING_SHADOW_MAP = 2;
+    public static final int BINDING_BONE_PALETTES = 3;
+    public static final int BINDING_TEXTURE_TABLE = 4;
+
+    // Material channels, in push constant order: texIndices.xyzw then texIndices2.x
+    public static final int CHANNEL_ALBEDO = 0;
+    public static final int CHANNEL_NORMAL = 1;
+    public static final int CHANNEL_SPECULAR = 2;
+    public static final int CHANNEL_LIGHTMAP = 3;
+    public static final int CHANNEL_EMISSIVE = 4;
+    public static final int CHANNEL_COUNT = 5;
+
+    /** Push constant slot value for an absent channel; the shaders substitute the channel's neutral value. */
+    public static final int NO_TEXTURE = -1;
+    /** Table slot permanently holding the 1x1 white texture; released slots are pointed back at it. */
+    public static final int WHITE_TEXTURE_SLOT = 0;
 
     public static class VulkanBuffer {
         public long bufferHandle;
@@ -66,6 +93,12 @@ public class VulkanGpuCache {
         public long memoryHandle;
         public long imageViewHandle;
         public long samplerHandle;
+        /** Timeline value of VulkanUploadRing that signals when the texels have landed (0 = no pending upload). */
+        public long uploadValue;
+        /** Slot in the bindless texture table, or NO_TEXTURE when the table is full. */
+        public int bindlessSlot = NO_TEXTURE;
+        /** Set by the render thread once the table write for bindlessSlot has been applied. */
+        public volatile boolean resident;
 
         public VulkanTexture(long imageHandle, long memoryHandle, long imageViewHandle, long samplerHandle) {
             this.imageHandle = imageHandle;
@@ -82,34 +115,39 @@ public class VulkanGpuCache {
         public final long imageViewHandle;
         public final long samplerHandle;
         public final int frameEnqueued;
+        /** Upload timeline value that must have completed before the resource can be destroyed. */
+        public final long uploadValue;
+        /** Bindless table slot to recycle once the resource is gone, or NO_TEXTURE. */
+        public final int bindlessSlot;
 
         public DeferredVulkanResource(long bufferHandle, long memoryHandle, int frameEnqueued) {
-            this(bufferHandle, memoryHandle, 0L, 0L, 0L, frameEnqueued);
+            this(bufferHandle, memoryHandle, 0L, 0L, 0L, frameEnqueued, 0L, NO_TEXTURE);
         }
 
         public DeferredVulkanResource(long bufferHandle, long memoryHandle, long imageHandle,
                                       long imageViewHandle, long samplerHandle, int frameEnqueued) {
+            this(bufferHandle, memoryHandle, imageHandle, imageViewHandle, samplerHandle, frameEnqueued, 0L, NO_TEXTURE);
+        }
+
+        public DeferredVulkanResource(long bufferHandle, long memoryHandle, long imageHandle, long imageViewHandle,
+                                      long samplerHandle, int frameEnqueued, long uploadValue, int bindlessSlot) {
             this.bufferHandle = bufferHandle;
             this.memoryHandle = memoryHandle;
             this.imageHandle = imageHandle;
             this.imageViewHandle = imageViewHandle;
             this.samplerHandle = samplerHandle;
             this.frameEnqueued = frameEnqueued;
+            this.uploadValue = uploadValue;
+            this.bindlessSlot = bindlessSlot;
         }
     }
 
-    public static class SingleTimeCmdContext {
-        public final VkCommandBuffer cmd;
-        public final long pool;
-
-        public SingleTimeCmdContext(VkCommandBuffer cmd, long pool) {
-            this.cmd = cmd;
-            this.pool = pool;
-        }
-    }
+    /** Texture table write queued by registration/disposal and applied on the render thread. */
+    private record PendingTableWrite(int slot, long imageView, VulkanTexture texture, boolean releaseSlot) {}
 
     // Subsystem Domain Managers
     private final VulkanTextureRegistry textureRegistry = new VulkanTextureRegistry();
+    private final VulkanUploadRing uploadRing = new VulkanUploadRing();
     private final VulkanRingBuffer uiRingBuffer = new VulkanRingBuffer();
     private final VulkanRingBuffer gridRingBuffer = new VulkanRingBuffer();
 
@@ -129,23 +167,34 @@ public class VulkanGpuCache {
     private long shadowMapImageView = 0L;
     private long shadowMapSampler = 0L;
 
+    // Bindless descriptor state: a dedicated one-set pool that is never reset
+    private long materialSampler = 0L;
+    private long bindlessPool = 0L;
+    private long bindlessSet = 0L;
+    private int bindlessCapacity = 0;
+    private final Queue<PendingTableWrite> pendingTableWrites = new ArrayDeque<>();
+    // Render-thread scratch for flushTextureTableWrites, reused so idle frames stay allocation-free
+    private final PendingTableWrite[] tableWriteBatch = new PendingTableWrite[64];
+    // Slot allocator: recycled slots first, then never-used ones; guarded by slotLock
+    private final Object slotLock = new Object();
+    private int[] freeSlots = new int[64];
+    private int freeSlotCount = 0;
+    private int nextUnusedSlot = WHITE_TEXTURE_SLOT + 1;
+    private boolean tableFullLogged = false;
+
     private volatile int totalFrameCount = 0;
 
-    // Per-frame descriptor state built by prepareSceneDescriptors before recording; reused to keep frames allocation-free
-    private long[] entityDescriptorSets = new long[256];
-    private int[] entityPaletteOffsets = new int[256];
-    // Texture-view -> set cache, fixed capacity so recording never reallocates; overflow views get uncached sets
-    private static final int MAX_UNIQUE_SETS = 256;
-    private final long[] uniqueSets = new long[MAX_UNIQUE_SETS];
-    private final long[] uniqueSetViews = new long[MAX_UNIQUE_SETS];
-    private int uniqueSetCount = 0;
-    private long shadowDescriptorSet = 0L;
+    // Per-frame draw state built by prepareScene before recording; reused to keep frames allocation-free
+    private int[] entityPaletteSlots = new int[256];
+    private int[] entityTextureSlots = new int[256 * CHANNEL_COUNT];
 
     public long getUiVertexBuffer() { return uiRingBuffer.getCurrentBufferHandle(); }
     public int getUiVertexCount() { return uiRingBuffer.getVertexCount(); }
 
     public long getGridVertexBuffer() { return gridRingBuffer.getCurrentBufferHandle(); }
     public int getGridVertexCount() { return gridRingBuffer.getVertexCount(); }
+
+    public VulkanUploadRing getUploadRing() { return uploadRing; }
 
     public long getGroundQuadBuffer(VulkanDevice device) {
         if (groundQuadBuffer != null) return groundQuadBuffer.bufferHandle;
@@ -167,15 +216,22 @@ public class VulkanGpuCache {
     }
 
     public void updateUiMesh(VulkanDevice device, float[] vertices, int count) {
-        totalFrameCount++;
-        processDeferredDisposals(device);
         uiRingBuffer.updateBuffer(device, vertices, count, 6, deferredDisposalQueue, totalFrameCount);
     }
 
     public void updateGridMesh(VulkanDevice device, float[] vertices, int count) {
+        gridRingBuffer.updateBuffer(device, vertices, count, 9, deferredDisposalQueue, totalFrameCount);
+    }
+
+    /**
+     * Render-thread frame prologue; must run after the in-flight fence wait and before command recording. Advances the
+     * disposal clock, destroys resources no in-flight work can reference, and applies queued texture table writes,
+     * so neither destruction nor descriptor updates ever land between recording and submission.
+     */
+    public void beginFrame(VulkanDevice device) {
         totalFrameCount++;
         processDeferredDisposals(device);
-        gridRingBuffer.updateBuffer(device, vertices, count, 9, deferredDisposalQueue, totalFrameCount);
+        flushTextureTableWrites(device);
     }
 
     private void processDeferredDisposals(VulkanDevice device) {
@@ -185,12 +241,11 @@ public class VulkanGpuCache {
         synchronized (deferredDisposalQueue) {
             while (!deferredDisposalQueue.isEmpty()) {
                 DeferredVulkanResource res = deferredDisposalQueue.peek();
-                if (totalFrameCount - res.frameEnqueued >= RING_SLOTS) {
-                    deferredDisposalQueue.poll();
-                    destroyDeferred(vkDevice, res);
-                } else {
-                    break;
-                }
+                if (totalFrameCount - res.frameEnqueued < RING_SLOTS || !uploadRing.isComplete(res.uploadValue)) break;
+                deferredDisposalQueue.poll();
+                destroyDeferred(vkDevice, res);
+                // The slot still names the destroyed view; repoint it at white before it can be handed out again
+                if (res.bindlessSlot != NO_TEXTURE) queueTableWrite(new PendingTableWrite(res.bindlessSlot, 0L, null, true));
             }
         }
     }
@@ -258,10 +313,27 @@ public class VulkanGpuCache {
         return true;
     }
 
-    /** Uploads image data into a VkImage + VkImageView + VkSampler once (or returns the live handle). Thread-safe. */
+    /**
+     * Creates a VkImage + VkImageView, queues its texel upload on the staging ring without waiting for it, and reserves
+     * a bindless table slot (or returns the live handle for assetKey). Thread-safe. The texture becomes visible to
+     * shaders on the first frame whose prologue applies its table write.
+     */
     public long registerTexture(VulkanDevice device, String assetKey, byte[] pixels, int width, int height) {
         if (pixels == null || width <= 0 || height <= 0 || pixels.length < width * height * 4) return HandleRegistry.NULL_HANDLE;
-        return textureHandles.register(assetKey, () -> textureRegistry.createTextureFromPixels(device, pixels, width, height));
+        return textureHandles.register(assetKey, () -> {
+            VulkanTexture tex = textureRegistry.createTextureFromPixels(device, uploadRing, pixels, width, height);
+            if (tex == null) return null;
+            if (tex.imageViewHandle == 0L) {
+                // The upload is already in flight, so the image must outlive it
+                deferTextureDisposal(tex);
+                return null;
+            }
+            tex.bindlessSlot = allocateTableSlot();
+            if (tex.bindlessSlot != NO_TEXTURE) {
+                queueTableWrite(new PendingTableWrite(tex.bindlessSlot, tex.imageViewHandle, tex, false));
+            }
+            return tex;
+        });
     }
 
     public void unregisterMesh(long meshHandle) {
@@ -277,10 +349,13 @@ public class VulkanGpuCache {
 
     public void unregisterTexture(long textureHandle) {
         VulkanTexture tex = textureHandles.remove(textureHandle);
-        if (tex == null) return;
+        if (tex != null) deferTextureDisposal(tex);
+    }
+
+    private void deferTextureDisposal(VulkanTexture tex) {
         synchronized (deferredDisposalQueue) {
-            deferredDisposalQueue.add(new DeferredVulkanResource(0L, tex.memoryHandle, tex.imageHandle,
-                    tex.imageViewHandle, tex.samplerHandle, totalFrameCount));
+            deferredDisposalQueue.add(new DeferredVulkanResource(0L, tex.memoryHandle, tex.imageHandle, tex.imageViewHandle,
+                    tex.samplerHandle, totalFrameCount, tex.uploadValue, tex.bindlessSlot));
         }
     }
 
@@ -289,9 +364,99 @@ public class VulkanGpuCache {
 
     public VulkanTexture getTexture(long textureHandle) { return textureHandles.get(textureHandle); }
 
-    public VulkanTexture getDefaultWhiteTexture(VulkanDevice device) {
-        return textureRegistry.getDefaultWhiteTexture(device);
+    /** Bindless slot for a texture handle, or NO_TEXTURE when the handle is 0L/stale or its table write is still pending. */
+    public int resolveTextureSlot(long textureHandle) {
+        if (textureHandle == 0L) return NO_TEXTURE;
+        VulkanTexture tex = textureHandles.get(textureHandle);
+        return (tex != null && tex.resident) ? tex.bindlessSlot : NO_TEXTURE;
     }
+
+    public VulkanTexture getDefaultWhiteTexture(VulkanDevice device) {
+        return textureRegistry.getDefaultWhiteTexture(device, uploadRing);
+    }
+
+    // ---------------------------------------------------------------------------------
+    // Bindless texture table
+    // ---------------------------------------------------------------------------------
+
+    private int allocateTableSlot() {
+        synchronized (slotLock) {
+            if (freeSlotCount > 0) return freeSlots[--freeSlotCount];
+            if (nextUnusedSlot < bindlessCapacity) return nextUnusedSlot++;
+            if (!tableFullLogged) {
+                tableFullLogged = true;
+                System.err.println("[VulkanGpuCache] WARNING: Bindless texture table full (" + bindlessCapacity
+                        + " slots); further textures render with their channel's fallback until slots are released.");
+            }
+            return NO_TEXTURE;
+        }
+    }
+
+    private void releaseTableSlot(int slot) {
+        synchronized (slotLock) {
+            if (freeSlotCount == freeSlots.length) {
+                int[] grown = new int[freeSlots.length * 2];
+                System.arraycopy(freeSlots, 0, grown, 0, freeSlotCount);
+                freeSlots = grown;
+            }
+            freeSlots[freeSlotCount++] = slot;
+        }
+    }
+
+    private void queueTableWrite(PendingTableWrite write) {
+        synchronized (pendingTableWrites) {
+            pendingTableWrites.add(write);
+        }
+    }
+
+    /**
+     * Applies queued table writes in FIFO order (so a slot's release always lands before its reuse) in batches. Runs on
+     * the render thread after the in-flight fence wait, when no pending GPU work references the set.
+     */
+    private void flushTextureTableWrites(VulkanDevice device) {
+        if (bindlessSet == 0L || device == null || device.getLogicalDevice() == null) return;
+        VulkanTexture white = textureRegistry.peekDefaultWhiteTexture();
+        if (white == null || white.imageViewHandle == 0L) return;
+
+        PendingTableWrite[] batch = tableWriteBatch;
+        int batchSize = batch.length;
+        while (true) {
+            int count = 0;
+            synchronized (pendingTableWrites) {
+                while (count < batchSize && !pendingTableWrites.isEmpty()) batch[count++] = pendingTableWrites.poll();
+            }
+            if (count == 0) return;
+
+            try (MemoryStack stack = stackPush()) {
+                VkDescriptorImageInfo.Buffer imageInfos = VkDescriptorImageInfo.calloc(count, stack);
+                VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(count, stack);
+                for (int i = 0; i < count; i++) {
+                    PendingTableWrite w = batch[i];
+                    long view = (w.imageView() != 0L) ? w.imageView() : white.imageViewHandle;
+                    imageInfos.get(i).imageView(view).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                    writes.get(i)
+                            .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+                            .dstSet(bindlessSet)
+                            .dstBinding(BINDING_TEXTURE_TABLE)
+                            .dstArrayElement(w.slot())
+                            .descriptorCount(1)
+                            .descriptorType(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
+                            .pImageInfo(VkDescriptorImageInfo.create(imageInfos.address(i), 1));
+                }
+                vkUpdateDescriptorSets(device.getLogicalDevice(), writes, null);
+            }
+
+            for (int i = 0; i < count; i++) {
+                PendingTableWrite w = batch[i];
+                if (w.texture() != null) w.texture().resident = true;
+                if (w.releaseSlot()) releaseTableSlot(w.slot());
+                batch[i] = null;
+            }
+        }
+    }
+
+    /** The persistent bindless set 0 shared by every 3D pipeline; 0L if initialization failed. */
+    public long getBindlessDescriptorSet() { return bindlessSet; }
 
     public VulkanBuffer createHostVisibleBuffer(VulkanDevice device, float[] vertices, int floatStride) {
         if (device == null || device.getLogicalDevice() == null || vertices == null || vertices.length == 0 || floatStride <= 0) return null;
@@ -365,8 +530,8 @@ public class VulkanGpuCache {
     }
 
     /**
-     * Permanent one-slot identity palette bound to binding 3 whenever the real palette buffer is unavailable, so every
-     * 3D descriptor set writes all four bindings and always matches the layout's two dynamic offsets.
+     * Permanent one-slot identity palette bound to binding 3 whenever the real palette buffer is unavailable, so the
+     * bindless set always has a valid storage buffer there (every draw then uses palette slot 0).
      */
     public VulkanBuffer getOrCreateDummyBonePaletteBuffer(VulkanDevice device) {
         if (dummyBonePaletteBuffer != null) return dummyBonePaletteBuffer;
@@ -374,11 +539,116 @@ public class VulkanGpuCache {
         return dummyBonePaletteBuffer;
     }
 
-    /** Creates long-lived resources that descriptor writes depend on; call once after the logical device exists. */
-    public void initialize(VulkanDevice device) {
-        getOrCreateDummyBonePaletteBuffer(device);
+    /**
+     * Creates every long-lived resource set 0 references and writes the bindless set. Call once after the logical
+     * device and VulkanPipeline (which owns the set layout and sizes the texture table) exist.
+     */
+    public boolean initialize(VulkanDevice device, long setLayout, int textureTableCapacity) {
+        if (device == null || device.getLogicalDevice() == null || setLayout == 0L || textureTableCapacity <= WHITE_TEXTURE_SLOT) return false;
+
+        if (!uploadRing.initialize(device)) {
+            System.err.println("[VulkanGpuCache] ERROR: Failed to create the staging upload ring.");
+            return false;
+        }
         if (!createShadowMap(device)) {
             System.err.println("[VulkanGpuCache] ERROR: Failed to allocate the " + SHADOW_MAP_SIZE + "x" + SHADOW_MAP_SIZE + " directional shadow map.");
+            return false;
+        }
+        if (!createMaterialSampler(device)) {
+            System.err.println("[VulkanGpuCache] ERROR: Failed to create the shared material sampler.");
+            return false;
+        }
+
+        VulkanTexture white = getDefaultWhiteTexture(device);
+        VulkanBuffer lightUbo = getOrCreateLightUniformBuffer(device);
+        VulkanBuffer palette = getOrCreateBonePaletteBuffer(device);
+        if (palette == null) palette = getOrCreateDummyBonePaletteBuffer(device);
+        if (white == null || white.imageViewHandle == 0L || lightUbo == null || palette == null) {
+            System.err.println("[VulkanGpuCache] ERROR: Failed to create resources required by the bindless descriptor set.");
+            return false;
+        }
+
+        this.bindlessCapacity = textureTableCapacity;
+        if (!createBindlessSet(device, setLayout, white, lightUbo, palette)) {
+            System.err.println("[VulkanGpuCache] ERROR: Failed to allocate the bindless descriptor set (" + textureTableCapacity + " texture slots).");
+            return false;
+        }
+        white.bindlessSlot = WHITE_TEXTURE_SLOT;
+        white.resident = true;
+        System.out.println("[VulkanGpuCache] Bindless material table ready (" + textureTableCapacity + " texture slots).");
+        return true;
+    }
+
+    private boolean createMaterialSampler(VulkanDevice device) {
+        try (MemoryStack stack = stackPush()) {
+            VkSamplerCreateInfo samplerInfo = VkSamplerCreateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO)
+                    .magFilter(VK_FILTER_LINEAR)
+                    .minFilter(VK_FILTER_LINEAR)
+                    .mipmapMode(VK_SAMPLER_MIPMAP_MODE_LINEAR)
+                    .addressModeU(VK_SAMPLER_ADDRESS_MODE_REPEAT)
+                    .addressModeV(VK_SAMPLER_ADDRESS_MODE_REPEAT)
+                    .addressModeW(VK_SAMPLER_ADDRESS_MODE_REPEAT)
+                    .anisotropyEnable(false)
+                    .maxAnisotropy(1.0f)
+                    .compareEnable(false)
+                    .compareOp(VK_COMPARE_OP_ALWAYS)
+                    .borderColor(VK_BORDER_COLOR_INT_OPAQUE_BLACK)
+                    .unnormalizedCoordinates(false);
+
+            LongBuffer pSampler = stack.mallocLong(1);
+            if (vkCreateSampler(device.getLogicalDevice(), samplerInfo, null, pSampler) != VK_SUCCESS) return false;
+            materialSampler = pSampler.get(0);
+            return true;
+        }
+    }
+
+    /** Allocates set 0 from a dedicated pool and writes its static bindings plus the white texture in slot 0. */
+    private boolean createBindlessSet(VulkanDevice device, long setLayout, VulkanTexture white, VulkanBuffer lightUbo, VulkanBuffer palette) {
+        VkDevice vkDevice = device.getLogicalDevice();
+        try (MemoryStack stack = stackPush()) {
+            VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(5, stack);
+            poolSizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1);
+            poolSizes.get(1).type(VK_DESCRIPTOR_TYPE_SAMPLER).descriptorCount(1);
+            poolSizes.get(2).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1);
+            poolSizes.get(3).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1);
+            poolSizes.get(4).type(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).descriptorCount(bindlessCapacity);
+
+            VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO)
+                    .maxSets(1)
+                    .pPoolSizes(poolSizes);
+
+            LongBuffer pPool = stack.mallocLong(1);
+            if (vkCreateDescriptorPool(vkDevice, poolInfo, null, pPool) != VK_SUCCESS) return false;
+            bindlessPool = pPool.get(0);
+
+            VkDescriptorSetAllocateInfo allocInfo = VkDescriptorSetAllocateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO)
+                    .descriptorPool(bindlessPool)
+                    .pSetLayouts(stack.longs(setLayout));
+
+            LongBuffer pSet = stack.mallocLong(1);
+            if (vkAllocateDescriptorSets(vkDevice, allocInfo, pSet) != VK_SUCCESS) return false;
+            bindlessSet = pSet.get(0);
+
+            VkDescriptorBufferInfo.Buffer lightInfo = VkDescriptorBufferInfo.calloc(1, stack).buffer(lightUbo.bufferHandle).offset(0).range(LIGHT_UBO_SIZE);
+            VkDescriptorImageInfo.Buffer samplerInfo = VkDescriptorImageInfo.calloc(1, stack).sampler(materialSampler);
+            VkDescriptorImageInfo.Buffer shadowInfo = VkDescriptorImageInfo.calloc(1, stack)
+                    .imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(shadowMapImageView).sampler(shadowMapSampler);
+            VkDescriptorBufferInfo.Buffer paletteInfo = VkDescriptorBufferInfo.calloc(1, stack).buffer(palette.bufferHandle).offset(0).range(VK_WHOLE_SIZE);
+            VkDescriptorImageInfo.Buffer whiteInfo = VkDescriptorImageInfo.calloc(1, stack)
+                    .imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(white.imageViewHandle);
+
+            VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(5, stack);
+            writes.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(bindlessSet).dstBinding(BINDING_LIGHT_UBO).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).pBufferInfo(lightInfo);
+            writes.get(1).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(bindlessSet).dstBinding(BINDING_MATERIAL_SAMPLER).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_SAMPLER).pImageInfo(samplerInfo);
+            writes.get(2).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(bindlessSet).dstBinding(BINDING_SHADOW_MAP).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(shadowInfo);
+            writes.get(3).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(bindlessSet).dstBinding(BINDING_BONE_PALETTES).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(paletteInfo);
+            writes.get(4).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(bindlessSet).dstBinding(BINDING_TEXTURE_TABLE).dstArrayElement(WHITE_TEXTURE_SLOT).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).pImageInfo(whiteInfo);
+
+            vkUpdateDescriptorSets(vkDevice, writes, null);
+            return true;
         }
     }
 
@@ -550,37 +820,30 @@ public class VulkanGpuCache {
     }
 
     /**
-     * Allocates and writes every 3D descriptor set the frame needs, plus each entity's bone palette, before command
-     * recording begins so no vkUpdateDescriptorSets ever lands inside a render pass. One set is shared per unique
-     * texture view; the per-entity palette slot is selected at bind time through binding 3's dynamic offset.
-     * Must run after the in-flight fence wait and descriptor pool reset.
+     * Resolves every queued entity's material channel slots and bone palette slot, writing the palettes, before command
+     * recording begins. Nothing here touches descriptors: draws hand these slots to the shaders as push constants.
+     * Must run after {@link #beginFrame} so freshly flushed textures are already resident.
      */
-    public void prepareSceneDescriptors(VulkanDevice device, long descriptorPool, long setLayout,
-                                        List<VulkanPassEncoder.RenderEntity> sceneQueue, int sceneQueueCount) {
-        uniqueSetCount = 0;
-        shadowDescriptorSet = 0L;
-        if (entityDescriptorSets.length < sceneQueueCount) {
-            int cap = Math.max(sceneQueueCount, entityDescriptorSets.length * 2);
-            entityDescriptorSets = new long[cap];
-            entityPaletteOffsets = new int[cap];
+    public void prepareScene(VulkanDevice device, List<VulkanPassEncoder.RenderEntity> sceneQueue, int sceneQueueCount) {
+        if (entityPaletteSlots.length < sceneQueueCount) {
+            int cap = Math.max(sceneQueueCount, entityPaletteSlots.length * 2);
+            entityPaletteSlots = new int[cap];
+            entityTextureSlots = new int[cap * CHANNEL_COUNT];
         }
-        Arrays.fill(entityDescriptorSets, 0, sceneQueueCount, 0L);
-        Arrays.fill(entityPaletteOffsets, 0, sceneQueueCount, 0);
 
-        VkDevice vkDevice = (device != null) ? device.getLogicalDevice() : null;
-        VulkanTexture whiteTex = getDefaultWhiteTexture(device);
-        VulkanBuffer lightUbo = getOrCreateLightUniformBuffer(device);
         VulkanBuffer bonePaletteBuf = getOrCreateBonePaletteBuffer(device);
-        // Binding 3 is always written: fall back to the one-slot identity palette (dynamic offsets then stay 0)
-        VulkanBuffer binding3Buf = (bonePaletteBuf != null) ? bonePaletteBuf : getOrCreateDummyBonePaletteBuffer(device);
-        // Binding 2 always samples the shadow map, which the pass encoder leaves in SHADER_READ_ONLY_OPTIMAL every frame
-        if (vkDevice == null || descriptorPool == 0L || setLayout == 0L || lightUbo == null || whiteTex == null || binding3Buf == null || !hasShadowMap()) return;
-
-        shadowDescriptorSet = acquireTextureSet(vkDevice, descriptorPool, setLayout, whiteTex.imageViewHandle, whiteTex, lightUbo, binding3Buf);
-
         int skinnedIndex = 0;
         for (int i = 0; i < sceneQueueCount; i++) {
             VulkanPassEncoder.RenderEntity entity = sceneQueue.get(i);
+            entityPaletteSlots[i] = 0;
+
+            int base = i * CHANNEL_COUNT;
+            entityTextureSlots[base + CHANNEL_ALBEDO] = resolveTextureSlot(entity.textureHandle);
+            entityTextureSlots[base + CHANNEL_NORMAL] = resolveTextureSlot(entity.normalTextureHandle);
+            entityTextureSlots[base + CHANNEL_SPECULAR] = resolveTextureSlot(entity.specularTextureHandle);
+            entityTextureSlots[base + CHANNEL_LIGHTMAP] = resolveTextureSlot(entity.lightmapTextureHandle);
+            entityTextureSlots[base + CHANNEL_EMISSIVE] = resolveTextureSlot(entity.emissiveTextureHandle);
+
             VulkanBuffer mesh = getMesh(entity.meshHandle);
             if (mesh == null || mesh.bufferHandle == 0L || mesh.vertexCount <= 0) continue;
 
@@ -589,65 +852,18 @@ public class VulkanGpuCache {
                     && skinnedIndex < MAX_SKINNED_ENTITIES_PER_FRAME - 1) {
                 int paletteSlot = ++skinnedIndex;
                 writeBonePalette(paletteSlot, entity.bonePalette);
-                entityPaletteOffsets[i] = (int) (paletteSlot * BONE_PALETTE_STRIDE);
+                entityPaletteSlots[i] = paletteSlot;
             }
-
-            VulkanTexture entityTex = getTexture(entity.textureHandle);
-            long texView = (entityTex != null && entityTex.imageViewHandle != 0L) ? entityTex.imageViewHandle : whiteTex.imageViewHandle;
-            entityDescriptorSets[i] = acquireTextureSet(vkDevice, descriptorPool, setLayout, texView, whiteTex, lightUbo, binding3Buf);
         }
     }
 
-    /** Descriptor set prepared for the given scene-queue index this frame, or 0 if the entity has none. */
-    public long getEntityDescriptorSet(int index) { return index < entityDescriptorSets.length ? entityDescriptorSets[index] : 0L; }
+    /** Bone palette slot (index into binding 3) for the given scene-queue index this frame. */
+    public int getEntityPaletteSlot(int index) { return index < entityPaletteSlots.length ? entityPaletteSlots[index] : 0; }
 
-    /** Byte offset into the bone palette buffer for the given scene-queue index, passed as binding 3's dynamic offset. */
-    public int getEntityPaletteOffset(int index) { return index < entityPaletteOffsets.length ? entityPaletteOffsets[index] : 0; }
-
-    /** White-textured set shared by every shadow blob draw this frame. */
-    public long getShadowDescriptorSet() { return shadowDescriptorSet; }
-
-    private long acquireTextureSet(VkDevice vkDevice, long descriptorPool, long setLayout, long texView,
-                                   VulkanTexture whiteTex, VulkanBuffer lightUbo, VulkanBuffer bonePaletteBuf) {
-        for (int s = 0; s < uniqueSetCount; s++) {
-            if (uniqueSetViews[s] == texView) return uniqueSets[s];
-        }
-
-        try (MemoryStack stack = stackPush()) {
-            VkDescriptorSetAllocateInfo allocSetInfo = VkDescriptorSetAllocateInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO)
-                    .descriptorPool(descriptorPool)
-                    .pSetLayouts(stack.longs(setLayout));
-
-            LongBuffer pSet = stack.mallocLong(1);
-            if (vkAllocateDescriptorSets(vkDevice, allocSetInfo, pSet) != VK_SUCCESS) return 0L;
-            long set = pSet.get(0);
-
-            VkDescriptorBufferInfo.Buffer bufferInfo = VkDescriptorBufferInfo.calloc(1, stack).buffer(lightUbo.bufferHandle).offset(0).range(LIGHT_UBO_SIZE);
-            VkDescriptorImageInfo.Buffer imageInfoTex = VkDescriptorImageInfo.calloc(1, stack).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(texView).sampler(whiteTex.samplerHandle);
-            VkDescriptorImageInfo.Buffer imageInfoShadow = VkDescriptorImageInfo.calloc(1, stack).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(shadowMapImageView).sampler(shadowMapSampler);
-
-            // Base offset 0 with a one-slot range; the entity's slot is chosen by the dynamic offset at bind time
-            VkDescriptorBufferInfo.Buffer boneInfo = VkDescriptorBufferInfo.calloc(1, stack)
-                    .buffer(bonePaletteBuf.bufferHandle)
-                    .offset(0)
-                    .range(BONE_PALETTE_STRIDE);
-
-            VkWriteDescriptorSet.Buffer descriptorWrites = VkWriteDescriptorSet.calloc(4, stack);
-            descriptorWrites.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(set).dstBinding(0).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC).pBufferInfo(bufferInfo);
-            descriptorWrites.get(1).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(set).dstBinding(1).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(imageInfoTex);
-            descriptorWrites.get(2).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(set).dstBinding(2).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(imageInfoShadow);
-            descriptorWrites.get(3).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(set).dstBinding(3).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC).pBufferInfo(boneInfo);
-
-            vkUpdateDescriptorSets(vkDevice, descriptorWrites, null);
-
-            if (uniqueSetCount < MAX_UNIQUE_SETS) {
-                uniqueSets[uniqueSetCount] = set;
-                uniqueSetViews[uniqueSetCount] = texView;
-                uniqueSetCount++;
-            }
-            return set;
-        }
+    /** Bindless slot of one material channel for the given scene-queue index, or NO_TEXTURE when absent. */
+    public int getEntityTextureSlot(int index, int channel) {
+        int i = index * CHANNEL_COUNT + channel;
+        return i < entityTextureSlots.length ? entityTextureSlots[i] : NO_TEXTURE;
     }
 
     public VulkanBuffer getOrCreateLightUniformBuffer(VulkanDevice device) {
@@ -680,7 +896,10 @@ public class VulkanGpuCache {
                     .memoryTypeIndex(memTypeIndex);
 
             LongBuffer pMemory = stack.mallocLong(1);
-            if (vkAllocateMemory(vkDevice, allocInfo, null, pMemory) != VK_SUCCESS) return null;
+            if (vkAllocateMemory(vkDevice, allocInfo, null, pMemory) != VK_SUCCESS) {
+                vkDestroyBuffer(vkDevice, buffer, null);
+                return null;
+            }
             long memory = pMemory.get(0);
 
             vkBindBufferMemory(vkDevice, buffer, memory, 0);
@@ -731,7 +950,7 @@ public class VulkanGpuCache {
 
                 floatBuf.put(40, camX); floatBuf.put(41, camY); floatBuf.put(42, camZ); floatBuf.put(43, groundY);
 
-                // Camera matrices live here (byte offset 176) rather than in push constants to keep those at 80 bytes
+                // Camera matrices live here (byte offset 176) rather than in push constants, which carry material slots
                 putMatrixOrIdentity(floatBuf, 44, viewMatrix);
                 putMatrixOrIdentity(floatBuf, 60, projMatrix);
                 putMatrixOrIdentity(floatBuf, LIGHT_UBO_LIGHT_SPACE_FLOAT_INDEX, lightSpaceMatrix);
@@ -744,76 +963,6 @@ public class VulkanGpuCache {
     private static void putMatrixOrIdentity(FloatBuffer dst, int index, float[] matrix) {
         boolean valid = matrix != null && matrix.length == 16;
         for (int i = 0; i < 16; i++) dst.put(index + i, valid ? matrix[i] : ((i % 5 == 0) ? 1.0f : 0.0f));
-    }
-
-    public static SingleTimeCmdContext beginSingleTimeCommands(VulkanDevice device) {
-        VkDevice vkDevice = device.getLogicalDevice();
-        try (MemoryStack stack = stackPush()) {
-            VkCommandPoolCreateInfo poolInfo = VkCommandPoolCreateInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO)
-                    .queueFamilyIndex(device.getGraphicsQueueFamilyIndex());
-
-            LongBuffer pPool = stack.mallocLong(1);
-            vkCreateCommandPool(vkDevice, poolInfo, null, pPool);
-            long pool = pPool.get(0);
-
-            VkCommandBufferAllocateInfo allocInfo = VkCommandBufferAllocateInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO)
-                    .commandPool(pool)
-                    .level(VK_COMMAND_BUFFER_LEVEL_PRIMARY)
-                    .commandBufferCount(1);
-
-            PointerBuffer pCmd = stack.mallocPointer(1);
-            vkAllocateCommandBuffers(vkDevice, allocInfo, pCmd);
-            VkCommandBuffer cmd = new VkCommandBuffer(pCmd.get(0), vkDevice);
-
-            VkCommandBufferBeginInfo beginInfo = VkCommandBufferBeginInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO)
-                    .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
-
-            vkBeginCommandBuffer(cmd, beginInfo);
-            return new SingleTimeCmdContext(cmd, pool);
-        }
-    }
-
-    public static void endSingleTimeCommands(VulkanDevice device, SingleTimeCmdContext stc) {
-        if (stc == null || device == null || device.getLogicalDevice() == null) return;
-        VkDevice vkDevice = device.getLogicalDevice();
-        try (MemoryStack stack = stackPush()) {
-            vkEndCommandBuffer(stc.cmd);
-
-            VkFenceCreateInfo fenceInfo = VkFenceCreateInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
-
-            LongBuffer pFence = stack.mallocLong(1);
-            if (vkCreateFence(vkDevice, fenceInfo, null, pFence) == VK_SUCCESS) {
-                long fence = pFence.get(0);
-
-                VkSubmitInfo submitInfo = VkSubmitInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
-                        .pCommandBuffers(stack.pointers(stc.cmd));
-
-                synchronized (device.getQueueLock()) {
-                    vkQueueSubmit(device.getGraphicsQueue(), submitInfo, fence);
-                }
-                vkWaitForFences(vkDevice, fence, true, 1000000000L);
-                vkDestroyFence(vkDevice, fence, null);
-            } else {
-                VkSubmitInfo submitInfo = VkSubmitInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
-                        .pCommandBuffers(stack.pointers(stc.cmd));
-
-                synchronized (device.getQueueLock()) {
-                    vkQueueSubmit(device.getGraphicsQueue(), submitInfo, VK_NULL_HANDLE);
-                    vkQueueWaitIdle(device.getGraphicsQueue());
-                }
-            }
-
-            if (stc.pool != 0L) {
-                vkFreeCommandBuffers(vkDevice, stc.pool, stc.cmd);
-                vkDestroyCommandPool(vkDevice, stc.pool, null);
-            }
-        }
     }
 
     public static int findMemoryType(VkPhysicalDevice physicalDevice, int typeFilter, int properties) {
@@ -833,6 +982,19 @@ public class VulkanGpuCache {
     public void cleanup(VulkanDevice device) {
         if (device == null || device.getLogicalDevice() == null) return;
         VkDevice vkDevice = device.getLogicalDevice();
+
+        // Waits for outstanding uploads before anything they write is destroyed
+        uploadRing.cleanup(vkDevice);
+
+        if (bindlessPool != 0L) {
+            vkDestroyDescriptorPool(vkDevice, bindlessPool, null);
+            bindlessPool = 0L;
+            bindlessSet = 0L;
+        }
+        if (materialSampler != 0L) {
+            vkDestroySampler(vkDevice, materialSampler, null);
+            materialSampler = 0L;
+        }
 
         textureRegistry.cleanup(vkDevice);
         destroyShadowMap(vkDevice);
@@ -858,6 +1020,9 @@ public class VulkanGpuCache {
             while ((res = deferredDisposalQueue.poll()) != null) {
                 destroyDeferred(vkDevice, res);
             }
+        }
+        synchronized (pendingTableWrites) {
+            pendingTableWrites.clear();
         }
 
         if (lightUniformBuffer != null) {

@@ -90,13 +90,18 @@ public class InspectorInputDelegate {
                             if (ndcX >= InspectorPanel.PICK_X0 && ndcX <= InspectorPanel.PICK_X1) {
                                 UISoundPlayer.play(UISound.OPEN_MODAL);
                                 AssetType assetType = parseAssetType(prop.assetType());
-                                manager.getOverlayManager().openAssetPicker(assetType);
+                                // Material channels each have their own picker row, so route the pick to this field
+                                manager.getOverlayManager().openAssetPicker(assetType, (comp instanceof Material) ? field.getName() : null);
                                 return;
                             }
                             // [IMPORT] Button
                             if (ndcX >= InspectorPanel.IMPORT_X0 && ndcX <= InspectorPanel.IMPORT_X1) {
                                 UISoundPlayer.play(UISound.OPEN_MODAL);
-                                promptImportAssetForType(manager, prop.assetType());
+                                if (comp instanceof Material && "TEXTURE".equalsIgnoreCase(prop.assetType())) {
+                                    promptImportTexture(manager, field.getName());
+                                } else {
+                                    promptImportAssetForType(manager, prop.assetType());
+                                }
                                 return;
                             }
                         }
@@ -290,6 +295,11 @@ public class InspectorInputDelegate {
     }
 
     public static void promptImportTexture(EditorWorkspace manager) {
+        promptImportTexture(manager, "textureAssetPath");
+    }
+
+    /** Imports texture file(s) and assigns the first one to the given Material channel field of the selection. */
+    public static void promptImportTexture(EditorWorkspace manager, String materialFieldName) {
         if (manager == null) return;
         List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
             "Select Texture Asset(s)", "", "Image Files (*.png, *.jpg, *.jpeg, *.tga)", "png", "jpg", "jpeg", "tga"
@@ -303,8 +313,8 @@ public class InspectorInputDelegate {
                 Material mat = selected.getComponent(Material.class);
                 if (mat != null) {
                     try {
-                        Field field = Material.class.getDeclaredField("textureAssetPath");
-                        EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(mat, field, mat.textureAssetPath, primaryPath, "TEXTURE");
+                        Field field = Material.class.getDeclaredField(materialFieldName);
+                        EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(mat, field, field.get(mat), primaryPath, "TEXTURE");
                         manager.getCommandHistory().executeCommand(cmd);
                     } catch (Exception e) {
                         e.printStackTrace();

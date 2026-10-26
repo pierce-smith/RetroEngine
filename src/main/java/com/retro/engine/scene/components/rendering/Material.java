@@ -5,13 +5,35 @@ import com.retro.engine.editor.ui.panels.InspectorProperty.PropertyType;
 import com.retro.engine.scene.components.Component;
 
 /**
- * Links an Entity to its shader and 2D texture resources.
- * Exposes specular reflection properties for RenderWare-style material rendering.
+ * Links an Entity to its shader and multi-channel texture resources: albedo/diffuse, tangent-space normal map,
+ * specular/roughness (R = specular mask, G = roughness multiplier), lightmap/AO (sampled with UV2) and emissive.
+ * Exposes Blinn-Phong surface properties for RenderWare-style material rendering.
  */
 public class Material implements Component {
 
-    @InspectorProperty(label = "TEXTURE", type = PropertyType.ASSET_PICKER, assetType = "TEXTURE")
+    // Channel indices for the per-channel path accessors and GPU handle cache
+    public static final int CHANNEL_ALBEDO = 0;
+    public static final int CHANNEL_NORMAL = 1;
+    public static final int CHANNEL_SPECULAR = 2;
+    public static final int CHANNEL_LIGHTMAP = 3;
+    public static final int CHANNEL_EMISSIVE = 4;
+    public static final int CHANNEL_COUNT = 5;
+
+    /** Albedo / diffuse channel. Field name kept for serializer and editor compatibility. */
+    @InspectorProperty(label = "ALBEDO", type = PropertyType.ASSET_PICKER, assetType = "TEXTURE")
     public String textureAssetPath;
+
+    @InspectorProperty(label = "NORMAL MAP", type = PropertyType.ASSET_PICKER, assetType = "TEXTURE")
+    public String normalMapAssetPath;
+
+    @InspectorProperty(label = "SPEC / ROUGH", type = PropertyType.ASSET_PICKER, assetType = "TEXTURE")
+    public String specularMapAssetPath;
+
+    @InspectorProperty(label = "LIGHTMAP / AO", type = PropertyType.ASSET_PICKER, assetType = "TEXTURE")
+    public String lightmapAssetPath;
+
+    @InspectorProperty(label = "EMISSIVE", type = PropertyType.ASSET_PICKER, assetType = "TEXTURE")
+    public String emissiveMapAssetPath;
 
     @InspectorProperty(label = "TEX NAME", type = PropertyType.TEXT)
     public String textureName = "DEFAULT_CHECKER";
@@ -22,20 +44,56 @@ public class Material implements Component {
     @InspectorProperty(label = "REFLECT", min = 0.0f, max = 1.0f, step = 0.05f)
     public float reflect = 0.0f;
 
-    // Runtime-only GPU handle cache filled by SceneRenderPipeline; never serialized or shown in the inspector
-    private transient long gpuTextureHandle = 0L;
-    private transient String gpuTextureKey;
-    private transient int gpuHandleEpoch;
+    /** Scales the specular map's R channel (or acts alone without a map); 0 disables highlights. */
+    @InspectorProperty(label = "SPECULAR", min = 0.0f, max = 2.0f, step = 0.05f)
+    public float specularStrength = 0.0f;
 
-    /** Returns the cached GPU texture handle if it was resolved for this path in this epoch, otherwise 0L. */
+    /** Scales the specular map's G channel (or acts alone without a map); 0 = mirror-sharp, 1 = fully rough. */
+    @InspectorProperty(label = "ROUGHNESS", min = 0.0f, max = 1.0f, step = 0.05f)
+    public float roughness = 0.6f;
+
+    @InspectorProperty(label = "NORMAL STR", min = 0.0f, max = 2.0f, step = 0.05f)
+    public float normalStrength = 1.0f;
+
+    @InspectorProperty(label = "EMISSIVE STR", min = 0.0f, max = 10.0f, step = 0.1f)
+    public float emissiveIntensity = 1.0f;
+
+    // Runtime-only GPU handle cache per channel, filled by SceneRenderPipeline; never serialized or shown in the inspector
+    private final transient long[] gpuTextureHandles = new long[CHANNEL_COUNT];
+    private final transient String[] gpuTextureKeys = new String[CHANNEL_COUNT];
+    private final transient int[] gpuHandleEpochs = new int[CHANNEL_COUNT];
+
+    /** Asset path assigned to the given channel, or null when the channel is empty. */
+    public String getChannelPath(int channel) {
+        return switch (channel) {
+            case CHANNEL_ALBEDO -> textureAssetPath;
+            case CHANNEL_NORMAL -> normalMapAssetPath;
+            case CHANNEL_SPECULAR -> specularMapAssetPath;
+            case CHANNEL_LIGHTMAP -> lightmapAssetPath;
+            case CHANNEL_EMISSIVE -> emissiveMapAssetPath;
+            default -> null;
+        };
+    }
+
+    /** Returns the cached GPU texture handle if it was resolved for this channel's path in this epoch, otherwise 0L. */
+    public long getCachedChannelHandle(int channel, String path, int epoch) {
+        long handle = gpuTextureHandles[channel];
+        return (handle != 0L && epoch == gpuHandleEpochs[channel] && path.equals(gpuTextureKeys[channel])) ? handle : 0L;
+    }
+
+    public void cacheChannelHandle(int channel, String path, long handle, int epoch) {
+        gpuTextureKeys[channel] = path;
+        gpuTextureHandles[channel] = handle;
+        gpuHandleEpochs[channel] = epoch;
+    }
+
+    /** Returns the cached albedo GPU texture handle if it was resolved for this path in this epoch, otherwise 0L. */
     public long getCachedTextureHandle(String path, int epoch) {
-        return (gpuTextureHandle != 0L && epoch == gpuHandleEpoch && path.equals(gpuTextureKey)) ? gpuTextureHandle : 0L;
+        return getCachedChannelHandle(CHANNEL_ALBEDO, path, epoch);
     }
 
     public void cacheTextureHandle(String path, long handle, int epoch) {
-        this.gpuTextureKey = path;
-        this.gpuTextureHandle = handle;
-        this.gpuHandleEpoch = epoch;
+        cacheChannelHandle(CHANNEL_ALBEDO, path, handle, epoch);
     }
 
     public Material() {}

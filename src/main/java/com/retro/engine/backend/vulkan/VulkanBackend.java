@@ -4,6 +4,7 @@ import com.retro.engine.rhi.BufferDesc;
 import com.retro.engine.rhi.DirectionalShadowFrustum;
 import com.retro.engine.rhi.GraphicsAPI;
 import com.retro.engine.rhi.IRenderBackend;
+import com.retro.engine.rhi.MaterialBinding;
 import com.retro.engine.rhi.TextureDesc;
 import com.retro.engine.rhi.ViewportSpec;
 import org.lwjgl.system.MemoryStack;
@@ -14,11 +15,13 @@ import java.util.List;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
+import static org.lwjgl.vulkan.VK13.*;
 
 /**
  * Modular Vulkan 1.3 IRenderBackend implementation. Integrates Apple Silicon / MoltenVK
  * dynamic buffer alignment rules, zero-allocation frame loops, and orchestrates
- * the 4-Phase rendering pipeline with 3-slot ring buffers.
+ * the 4-Phase rendering pipeline with 3-slot ring buffers, a bindless multi-channel material table,
+ * synchronization2 frame submission and asynchronous timeline-semaphore texture uploads.
  */
 public class VulkanBackend implements IRenderBackend {
 
@@ -75,7 +78,7 @@ public class VulkanBackend implements IRenderBackend {
 
         targetPass.initFramebuffer(deviceManager, 712, 488);
         if (!pipelineManager.initialize(deviceManager, swapchainManager)) return false;
-        gpuCache.initialize(deviceManager);
+        if (!gpuCache.initialize(deviceManager, pipelineManager.getDescriptorSetLayout3D(), pipelineManager.getBindlessTextureCapacity())) return false;
 
         System.out.println("[VulkanBackend] Vulkan 1.3 Multi-Pass Architecture Active on Apple Silicon / MoltenVK.");
         return true;
@@ -105,7 +108,10 @@ public class VulkanBackend implements IRenderBackend {
         if (activeImageIndex < 0) return;
 
         vkResetFences(device, queueSubmitter.getInFlightFence());
-        queueSubmitter.resetDescriptorPool(device);
+
+        // The GPU is idle with respect to this backend's set and buffers: retire deferred resources and apply queued
+        // bindless texture table writes before anything is recorded against them
+        gpuCache.beginFrame(deviceManager);
 
         // View/projection feed the light UBO (binding 0), so they must be ready before it is written
         computeViewMatrix();
@@ -127,14 +133,8 @@ public class VulkanBackend implements IRenderBackend {
                 lightSpaceMatrix
         );
 
-        // All descriptor allocation and vkUpdateDescriptorSets happen here, never during command recording
-        gpuCache.prepareSceneDescriptors(
-                deviceManager,
-                queueSubmitter.getDescriptorPoolHandle(),
-                pipelineManager.getDescriptorSetLayout3D(),
-                sceneQueuePool,
-                activeSceneQueueCount
-        );
+        // Material slots and bone palettes are resolved here; recording only pushes constants
+        gpuCache.prepareScene(deviceManager, sceneQueuePool, activeSceneQueueCount);
 
         VkCommandBuffer cmd = queueSubmitter.getCommandBuffer();
         vkResetCommandBuffer(cmd, 0);
@@ -210,15 +210,41 @@ public class VulkanBackend implements IRenderBackend {
         VkCommandBuffer cmd = queueSubmitter.getCommandBuffer();
 
         try (MemoryStack stack = stackPush()) {
-            VkSubmitInfo submitInfo = VkSubmitInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
-                    .pWaitSemaphores(stack.longs(queueSubmitter.getImageAvailableSemaphore()))
-                    .pWaitDstStageMask(stack.ints(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT))
-                    .pCommandBuffers(stack.pointers(cmd))
-                    .pSignalSemaphores(stack.longs(queueSubmitter.getRenderFinishedSemaphore()));
+            VulkanUploadRing uploads = gpuCache.getUploadRing();
 
+            // Wait 0: swapchain image acquisition. The first swapchain write is a transfer (clear/blit), so the wait
+            // covers transfer as well as color output; the pass encoder's swapchain barrier chains off this stage.
+            // Wait 1: every texture upload submitted so far (timeline), before any fragment shader samples them.
+            VkSemaphoreSubmitInfo.Buffer waits = VkSemaphoreSubmitInfo.calloc(2, stack);
+            waits.get(0).sType$Default()
+                    .semaphore(queueSubmitter.getImageAvailableSemaphore())
+                    .stageMask(VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+            waits.get(1).sType$Default()
+                    .semaphore(uploads.getTimelineSemaphore())
+                    .value(uploads.getSubmittedValue())
+                    .stageMask(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+
+            VkCommandBufferSubmitInfo.Buffer cmdInfo = VkCommandBufferSubmitInfo.calloc(1, stack)
+                    .sType$Default()
+                    .commandBuffer(cmd);
+
+            VkSemaphoreSubmitInfo.Buffer signals = VkSemaphoreSubmitInfo.calloc(1, stack);
+            signals.get(0).sType$Default()
+                    .semaphore(queueSubmitter.getRenderFinishedSemaphore())
+                    .stageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+
+            VkSubmitInfo2.Buffer submitInfo = VkSubmitInfo2.calloc(1, stack)
+                    .sType$Default()
+                    .pWaitSemaphoreInfos(waits)
+                    .pCommandBufferInfos(cmdInfo)
+                    .pSignalSemaphoreInfos(signals);
+
+            int result;
             synchronized (deviceManager.getQueueLock()) {
-                vkQueueSubmit(deviceManager.getGraphicsQueue(), submitInfo, queueSubmitter.getInFlightFence());
+                result = vkQueueSubmit2(deviceManager.getGraphicsQueue(), submitInfo, queueSubmitter.getInFlightFence());
+            }
+            if (result != VK_SUCCESS) {
+                System.err.println("[VulkanBackend] ERROR: vkQueueSubmit2 failed with code: " + result);
             }
         }
     }
@@ -311,6 +337,36 @@ public class VulkanBackend implements IRenderBackend {
         item.sx = sx; item.sy = sy; item.sz = sz;
         item.groundY = groundY;
         item.reflectionStrength = reflectionStrength;
+        // Legacy single-texture submissions carry no extra channels; reset what a pooled item may still hold
+        item.normalTextureHandle = 0L;
+        item.specularTextureHandle = 0L;
+        item.lightmapTextureHandle = 0L;
+        item.emissiveTextureHandle = 0L;
+        item.specularStrength = 0.0f;
+        item.roughness = 0.6f;
+        item.normalStrength = 1.0f;
+        item.emissiveIntensity = 1.0f;
+    }
+
+    @Override
+    public void submitEntity(long meshHandle, MaterialBinding material, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float[][] bonePalette) {
+        if (material == null) {
+            submitEntity(meshHandle, 0L, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, 0.0f, bonePalette);
+            return;
+        }
+        int before = activeSceneQueueCount;
+        submitEntity(meshHandle, material.albedoTexture, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, material.reflect, bonePalette);
+        if (activeSceneQueueCount == before) return;
+
+        VulkanPassEncoder.RenderEntity item = sceneQueuePool.get(activeSceneQueueCount - 1);
+        item.normalTextureHandle = material.normalTexture;
+        item.specularTextureHandle = material.specularTexture;
+        item.lightmapTextureHandle = material.lightmapTexture;
+        item.emissiveTextureHandle = material.emissiveTexture;
+        item.specularStrength = material.specularStrength;
+        item.roughness = material.roughness;
+        item.normalStrength = material.normalStrength;
+        item.emissiveIntensity = material.emissiveIntensity;
     }
 
     @Override public long createBuffer(BufferDesc createInfo) { return 101L; }

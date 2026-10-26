@@ -19,6 +19,7 @@ layout(location = 4) out vec3 vTangent;
 layout(location = 5) out vec3 vBitangent;
 layout(location = 6) out float vViewDist;
 layout(location = 7) out vec4 vLightSpacePos;
+layout(location = 8) out vec2 vLightmapUV;
 
 struct DirectionalLight {
     vec4 direction; // xyz = direction, w = intensity
@@ -50,14 +51,20 @@ layout(std140, set = 0, binding = 0) uniform LightBuffer {
     mat4 lightSpaceMatrix; // byte offset 304: directional shadow map view-projection (368 bytes total)
 } u_Lights;
 
-// 80 bytes: stays within the 128-byte maxPushConstantsSize every Vulkan implementation guarantees
+// 128 bytes: must stay byte-identical to the block in blinn_phong.vert
 layout(push_constant) uniform MeshPushConstants {
     mat4 model;
-    vec4 params; // x = passFlags (1.0 = shadow blob, 2.0 = shadow map depth), y = heightFade, z = reflection, w = unused
+    vec4 params;       // x = passFlags (1.0 = shadow blob, 2.0 = shadow map depth), y = heightFade, z = reflection, w = emissiveIntensity
+    vec4 surface;      // x = specularStrength, y = roughness, z = normalStrength, w = unused
+    ivec4 texIndices;  // bindless slots: x = albedo, y = normal, z = specular/roughness, w = lightmap/AO (-1 = channel absent)
+    ivec4 texIndices2; // x = emissive slot, y = bone palette slot, zw = unused
 } u_PushConstants;
 
+// Every skinned entity's 64-bone palette packed back to back; the push constant slot selects this draw's palette,
+// so the descriptor set never needs rebinding (or a dynamic offset) between draws.
+const uint BONES_PER_PALETTE = 64u;
 layout(std430, set = 0, binding = 3) readonly buffer BonePalette {
-    mat4 u_Bones[64];
+    mat4 u_Bones[];
 };
 
 void main() {
@@ -68,7 +75,8 @@ void main() {
 
     float totalWeight = aBoneWeights.x + aBoneWeights.y + aBoneWeights.z + aBoneWeights.w;
     if (totalWeight > 0.001) {
-        uvec4 ids = min(aBoneIds, uvec4(63u));
+        uint base = uint(max(u_PushConstants.texIndices2.y, 0)) * BONES_PER_PALETTE;
+        uvec4 ids = min(aBoneIds, uvec4(BONES_PER_PALETTE - 1u)) + uvec4(base);
         mat4 skin = u_Bones[ids.x] * aBoneWeights.x
                   + u_Bones[ids.y] * aBoneWeights.y
                   + u_Bones[ids.z] * aBoneWeights.z
@@ -83,12 +91,14 @@ void main() {
     vec4 worldPos = u_PushConstants.model * localPos;
     vFragPos = worldPos.xyz;
 
-    mat3 normalMatrix = transpose(inverse(mat3(u_PushConstants.model)));
-    vNormal = normalize(normalMatrix * localNormal);
-    vTangent = normalize(normalMatrix * localTangent);
-    vBitangent = normalize(normalMatrix * localBitangent);
+    mat3 model3 = mat3(u_PushConstants.model);
+    mat3 normalMatrix = transpose(inverse(model3));
+    vNormal = normalMatrix * localNormal;
+    vTangent = model3 * localTangent;
+    vBitangent = model3 * localBitangent;
 
     vTexCoord = aTexCoord;
+    vLightmapUV = aLightmapUV;
     vColor = aColor;
 
     vLightSpacePos = u_Lights.lightSpaceMatrix * worldPos;

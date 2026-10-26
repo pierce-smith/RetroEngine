@@ -9,6 +9,7 @@ import com.retro.engine.editor.ui.dock.DockPanel;
 import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.panels.EngineConsolePanel;
 import com.retro.engine.rhi.IRenderBackend;
+import com.retro.engine.rhi.MaterialBinding;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.world.SceneWorld.WorldTransform;
 import com.retro.engine.scene.components.media.AnimatorComponent;
@@ -83,6 +84,8 @@ public class SceneRenderPipeline {
         public float groundY;
         public float reflectVal;
         public float[][] bonePalette;
+        // Full multi-channel material; albedo and reflection mirror textureHandle and reflectVal
+        public final MaterialBinding material = new MaterialBinding();
 
         public void set(long meshHandle, long textureHandle, float px, float py, float pz,
                         float rx, float ry, float rz, float sx, float sy, float sz,
@@ -95,6 +98,9 @@ public class SceneRenderPipeline {
             this.groundY = groundY;
             this.reflectVal = reflectVal;
             this.bonePalette = bonePalette;
+            this.material.reset();
+            this.material.albedoTexture = textureHandle;
+            this.material.reflect = reflectVal;
         }
     }
 
@@ -240,8 +246,13 @@ public class SceneRenderPipeline {
                         streamingService.requestModelAsync(meshPath);
                     }
 
-                    if (texturePath != null && !streamingService.isTextureLoaded(texturePath)) {
-                        streamingService.requestTextureAsync(texturePath);
+                    if (mat != null) {
+                        for (int channel = 0; channel < Material.CHANNEL_COUNT; channel++) {
+                            String channelPath = mat.getChannelPath(channel);
+                            if (channelPath != null && !streamingService.isTextureLoaded(channelPath)) {
+                                streamingService.requestTextureAsync(channelPath);
+                            }
+                        }
                     }
 
                     MeshBufferData model = streamingService.getModel(meshPath);
@@ -288,6 +299,17 @@ public class SceneRenderPipeline {
                             wt.sx(), wt.sy(), wt.sz(),
                             groundY, reflectVal, bonePalette
                     );
+                    if (mat != null) {
+                        MaterialBinding binding = desc.material;
+                        binding.normalTexture = resolveChannelHandle(mat, Material.CHANNEL_NORMAL, streamingService, handleEpoch);
+                        binding.specularTexture = resolveChannelHandle(mat, Material.CHANNEL_SPECULAR, streamingService, handleEpoch);
+                        binding.lightmapTexture = resolveChannelHandle(mat, Material.CHANNEL_LIGHTMAP, streamingService, handleEpoch);
+                        binding.emissiveTexture = resolveChannelHandle(mat, Material.CHANNEL_EMISSIVE, streamingService, handleEpoch);
+                        binding.specularStrength = mat.specularStrength;
+                        binding.roughness = mat.roughness;
+                        binding.normalStrength = mat.normalStrength;
+                        binding.emissiveIntensity = mat.emissiveIntensity;
+                    }
                     snapshot.activeEntityCount++;
                 }
             }
@@ -346,9 +368,9 @@ public class SceneRenderPipeline {
         for (int i = 0; i < snapshot.activeEntityCount; i++) {
             MutableRenderEntityDescriptor e = snapshot.pooledEntities.get(i);
             rhi.submitEntity(
-                    e.meshHandle, e.textureHandle,
+                    e.meshHandle, e.material,
                     e.px, e.py, e.pz, e.rx, e.ry, e.rz, e.sx, e.sy, e.sz,
-                    e.groundY, e.reflectVal, e.bonePalette
+                    e.groundY, e.bonePalette
             );
         }
 
@@ -373,6 +395,18 @@ public class SceneRenderPipeline {
     public void submitFrame(EditorWorkspace editorManager, AssetStreamer streamingService, IRenderBackend rhi) {
         RenderSceneSnapshot snapshot = extractSnapshot(editorManager, streamingService);
         submitFrame(snapshot, rhi);
+    }
+
+    /** GPU handle for one material channel, cached on the Material per handle epoch; 0L when empty or not yet streamed. */
+    private long resolveChannelHandle(Material mat, int channel, AssetStreamer streamingService, int handleEpoch) {
+        String path = mat.getChannelPath(channel);
+        if (path == null) return 0L;
+        long handle = mat.getCachedChannelHandle(channel, path, handleEpoch);
+        if (handle == 0L) {
+            handle = streamingService.getTextureHandle(path);
+            mat.cacheChannelHandle(channel, path, handle, handleEpoch);
+        }
+        return handle;
     }
 
     private float findGroundSurfaceY(Entity currentEntity, WorldTransform currentWt, List<Entity> allEntities, EditorWorkspace workspace) {

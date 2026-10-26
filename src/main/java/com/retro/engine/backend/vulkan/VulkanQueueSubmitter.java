@@ -10,8 +10,9 @@ import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
 
 /**
- * SRP Domain Manager: Encapsulates Command Pool creation, primary Command Buffer allocation,
- * frame synchronization primitives (VkSemaphore, VkFence), and integrated VkDescriptorPool management.
+ * SRP Domain Manager: Encapsulates Command Pool creation, primary Command Buffer allocation and
+ * frame synchronization primitives (VkSemaphore, VkFence). 3D descriptors live in VulkanGpuCache's persistent
+ * bindless set, so no per-frame descriptor pool is needed.
  */
 public class VulkanQueueSubmitter {
 
@@ -22,13 +23,10 @@ public class VulkanQueueSubmitter {
     private long renderFinishedSemaphore = 0L;
     private long inFlightFence = 0L;
 
-    private long descriptorPool = 0L;
-
     public VkCommandBuffer getCommandBuffer() { return commandBuffer; }
     public long getImageAvailableSemaphore() { return imageAvailableSemaphore; }
     public long getRenderFinishedSemaphore() { return renderFinishedSemaphore; }
     public long getInFlightFence() { return inFlightFence; }
-    public long getDescriptorPoolHandle() { return descriptorPool; }
 
     public boolean initialize(VulkanDevice device) {
         if (device == null || device.getLogicalDevice() == null) return false;
@@ -75,29 +73,7 @@ public class VulkanQueueSubmitter {
             if (vkCreateFence(vkDevice, fenceInfo, null, pFence) != VK_SUCCESS) return false;
             inFlightFence = pFence.get(0);
 
-            // Integrated VkDescriptorPool Allocation
-            VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(3, stack);
-            poolSizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC).descriptorCount(1024);
-            poolSizes.get(1).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(2048);
-            poolSizes.get(2).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC).descriptorCount(1024);
-
-            VkDescriptorPoolCreateInfo descPoolInfo = VkDescriptorPoolCreateInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO)
-                    .flags(VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT)
-                    .maxSets(1024)
-                    .pPoolSizes(poolSizes);
-
-            LongBuffer pDescPool = stack.mallocLong(1);
-            if (vkCreateDescriptorPool(vkDevice, descPoolInfo, null, pDescPool) != VK_SUCCESS) return false;
-            descriptorPool = pDescPool.get(0);
-
             return true;
-        }
-    }
-
-    public void resetDescriptorPool(VkDevice device) {
-        if (device != null && descriptorPool != 0L) {
-            vkResetDescriptorPool(device, descriptorPool, 0);
         }
     }
 
@@ -107,10 +83,6 @@ public class VulkanQueueSubmitter {
 
         vkDeviceWaitIdle(vkDevice);
 
-        if (descriptorPool != 0L) {
-            vkDestroyDescriptorPool(vkDevice, descriptorPool, null);
-            descriptorPool = 0L;
-        }
         if (inFlightFence != 0L) {
             vkDestroyFence(vkDevice, inFlightFence, null);
             inFlightFence = 0L;
