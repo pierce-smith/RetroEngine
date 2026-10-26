@@ -1,67 +1,97 @@
 package com.retro.engine.editor.ui.overlays;
 
-import com.retro.engine.editor.ui.batch.UIGeometryBatch;
-import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
+import com.retro.engine.editor.ui.batch.UIGeometryBatch;
+import com.retro.engine.editor.ui.theme.EditorTheme;
+import com.retro.engine.scene.entity.Entity;
 
 import java.util.List;
 
 /**
  * ModalDialogOverlay encapsulates rendering and layout for modal dialog overlays.
+ * Updated to match the macOS "Dark Graphite" design language with rounded cards,
+ * type badges, red accent close controls, and crisp button actions.
  */
 public class ModalDialogOverlay {
 
     public static void renderAssetPickerModal(UIGeometryBatch.Buffer buffer, AssetType pickerFilterType, List<AssetMeta> assetDirectory) {
         if (pickerFilterType == null) return;
 
-        UIGeometryBatch.addQuad(buffer, -1.0f, -1.0f, 1.0f, 1.0f, 0.02f, 0.02f, 0.04f, 0.75f);
+        // Fullscreen dim overlay
+        UIGeometryBatch.addQuad(buffer, -1.0f, -1.0f, 1.0f, 1.0f, 0x000000, 0.65f);
 
         float cardMinX = -0.45f, cardMaxX = 0.45f;
         float cardMinY = -0.45f, cardMaxY = 0.45f;
 
-        UIGeometryBatch.addQuad(buffer, cardMinX, cardMinY, cardMaxX, cardMaxY, 0.10f, 0.11f, 0.15f, 0.98f);
-        UIGeometryBatch.addFrameBorder(buffer, cardMinX, cardMinY, cardMaxX, cardMaxY, 0.004f, 0.0f, 0.55f, 0.90f, 1.0f);
+        // Modal Card Container
+        UIGeometryBatch.addRoundedCard(buffer, cardMinX, cardMinY, cardMaxX, cardMaxY, 0.016f, EditorTheme.SURFACE, EditorTheme.BORDER_STRONG, 0.98f);
 
-        UIGeometryBatch.addQuad(buffer, cardMinX, cardMaxY - 0.10f, cardMaxX, cardMaxY, 0.16f, 0.18f, 0.24f, 1.0f);
-        UIGeometryBatch.addBoundedText(buffer, "SELECT " + pickerFilterType.name() + " ASSET", cardMinX + 0.03f, cardMaxY - 0.04f, cardMaxX - 0.10f, 1.3f, 1.0f, 1.0f, 1.0f, 1.0f);
+        // Header Bar
+        float headerY0 = cardMaxY - 0.09f;
+        UIGeometryBatch.addRoundedQuad(buffer, cardMinX + 0.003f, headerY0, cardMaxX - 0.003f, cardMaxY - 0.003f, 0.014f, EditorTheme.SURFACE_RAISED, 1.0f);
+        UIGeometryBatch.addQuad(buffer, cardMinX + 0.003f, headerY0, cardMaxX - 0.003f, cardMaxY - 0.02f, EditorTheme.SURFACE_RAISED, 1.0f);
+        UIGeometryBatch.addQuad(buffer, cardMinX, headerY0, cardMaxX, headerY0 + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
 
-        UIGeometryBatch.addQuad(buffer, cardMaxX - 0.08f, cardMaxY - 0.08f, cardMaxX - 0.02f, cardMaxY - 0.02f, 0.65f, 0.15f, 0.15f, 1.0f);
-        UIGeometryBatch.addBoundedText(buffer, "X", cardMaxX - 0.065f, cardMaxY - 0.035f, cardMaxX - 0.03f, 1.2f, 1.0f, 1.0f, 1.0f, 1.0f);
+        String title = "SELECT " + pickerFilterType.name() + " ASSET";
+        UIGeometryBatch.addBoundedText(buffer, title, cardMinX + 0.03f, cardMaxY - 0.035f, cardMaxX - 0.10f, 1.0f, EditorTheme.TEXT, 1.0f);
 
-        UIGeometryBatch.addQuad(buffer, cardMinX + 0.03f, cardMaxY - 0.18f, cardMinX + 0.38f, cardMaxY - 0.12f, 0.25f, 0.15f, 0.15f, 1.0f);
-        UIGeometryBatch.addFrameBorder(buffer, cardMinX + 0.03f, cardMaxY - 0.18f, cardMinX + 0.38f, cardMaxY - 0.12f, 0.002f, 0.8f, 0.2f, 0.2f, 1.0f);
-        UIGeometryBatch.addBoundedText(buffer, "[NONE / UNBIND]", cardMinX + 0.05f, cardMaxY - 0.14f, cardMinX + 0.36f, 1.0f, 1.0f, 0.6f, 0.6f, 1.0f);
+        // Close "X" Button (macOS Red Close Badge)
+        UIGeometryBatch.addRoundedQuad(buffer, cardMaxX - 0.075f, cardMaxY - 0.075f, cardMaxX - 0.02f, cardMaxY - 0.02f, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_SUNKEN, 1.0f);
+        centeredTextIn(buffer, "✕", cardMaxX - 0.075f, cardMaxX - 0.02f, cardMaxY - 0.0475f, 0.9f, EditorTheme.RED);
 
-        UIGeometryBatch.addQuad(buffer, cardMaxX - 0.38f, cardMaxY - 0.18f, cardMaxX - 0.03f, cardMaxY - 0.12f, 0.15f, 0.45f, 0.30f, 1.0f);
-        UIGeometryBatch.addFrameBorder(buffer, cardMaxX - 0.38f, cardMaxY - 0.18f, cardMaxX - 0.03f, cardMaxY - 0.12f, 0.002f, 0.3f, 0.9f, 0.5f, 1.0f);
-        UIGeometryBatch.addBoundedText(buffer, "[IMPORT DISK...]", cardMaxX - 0.36f, cardMaxY - 0.14f, cardMaxX - 0.05f, 1.0f, 0.4f, 1.0f, 0.6f, 1.0f);
+        // Top Action Buttons: [NONE / UNBIND] & [+ IMPORT DISK...]
+        float actionY0 = 0.27f, actionY1 = 0.33f;
+        float actionMidY = (actionY0 + actionY1) * 0.5f;
+
+        // Unbind / Clear Button
+        UIGeometryBatch.addRoundedCard(buffer, -0.42f, actionY0, -0.07f, actionY1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
+        centeredTextIn(buffer, "NONE / UNBIND", -0.42f, -0.07f, actionMidY, 0.82f, EditorTheme.RED);
+
+        // Import Disk Button
+        UIGeometryBatch.addRoundedQuad(buffer, 0.07f, actionY0, 0.42f, actionY1, EditorTheme.RADIUS_SMALL, EditorTheme.ACCENT, 1.0f);
+        centeredTextIn(buffer, "+ IMPORT DISK...", 0.07f, 0.42f, actionMidY, 0.82f, EditorTheme.TEXT);
 
         List<AssetMeta> filtered = (assetDirectory != null) ? assetDirectory.stream()
                 .filter(a -> a.type == pickerFilterType)
                 .toList() : List.of();
 
-        float listY = cardMaxY - 0.24f;
+        float listY = 0.20f;
 
         if (filtered.isEmpty()) {
-            UIGeometryBatch.addBoundedText(buffer, "NO " + pickerFilterType.name() + " ASSETS IN PROJECT", cardMinX + 0.05f, listY, cardMaxX - 0.05f, 1.1f, 0.5f, 0.5f, 0.5f, 1.0f);
-            UIGeometryBatch.addBoundedText(buffer, "CLICK [IMPORT DISK...] TO BROWSE NATIVE FILES", cardMinX + 0.05f, listY - 0.08f, cardMaxX - 0.05f, 1.0f, 0.3f, 0.8f, 1.0f, 1.0f);
+            centeredTextIn(buffer, "NO " + pickerFilterType.name() + " ASSETS IN PROJECT", cardMinX, cardMaxX, listY - 0.02f, 0.95f, EditorTheme.TEXT_MUTED);
+            centeredTextIn(buffer, "CLICK [+ IMPORT DISK...] TO BROWSE NATIVE FILES", cardMinX, cardMaxX, listY - 0.08f, 0.80f, EditorTheme.TEXT_DISABLED);
         } else {
             for (AssetMeta asset : filtered) {
-                if (listY < cardMinY + 0.05f) break;
+                if (listY < -0.38f) break;
 
-                UIGeometryBatch.addQuad(buffer, cardMinX + 0.03f, listY - 0.05f, cardMaxX - 0.03f, listY + 0.03f, 0.15f, 0.18f, 0.24f, 1.0f);
-                UIGeometryBatch.addFrameBorder(buffer, cardMinX + 0.03f, listY - 0.05f, cardMaxX - 0.03f, listY + 0.03f, 0.001f, 0.25f, 0.30f, 0.40f, 1.0f);
+                float rowTop = listY + 0.03f;
+                float rowBottom = listY - 0.05f;
+                float rowMid = (rowTop + rowBottom) * 0.5f;
 
-                UIGeometryBatch.addBoundedText(buffer, "• " + asset.name, cardMinX + 0.05f, listY - 0.01f, cardMaxX - 0.22f, 1.1f, 0.95f, 0.95f, 0.95f, 1.0f);
+                // Asset Row Card
+                UIGeometryBatch.addRoundedCard(buffer, -0.42f, rowBottom, 0.42f, rowTop, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER, 1.0f);
 
-                UIGeometryBatch.addQuad(buffer, cardMaxX - 0.20f, listY - 0.04f, cardMaxX - 0.05f, listY + 0.02f, 0.0f, 0.45f, 0.70f, 1.0f);
-                UIGeometryBatch.addBoundedText(buffer, "SELECT", cardMaxX - 0.18f, listY - 0.01f, cardMaxX - 0.06f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f);
+                // Type Badge
+                float badgeH = 0.032f;
+                float badgeX0 = -0.40f;
+                float badgeX1 = badgeX0 + Math.max(UIGeometryBatch.squareWidth(buffer, badgeH), UIGeometryBatch.textWidth(buffer, 1, 0.75f) + 0.008f);
+                UIGeometryBatch.addRoundedQuad(buffer, badgeX0, rowMid - badgeH * 0.5f, badgeX1, rowMid + badgeH * 0.5f, 0.006f, typeColor(pickerFilterType), 0.95f);
+                centeredTextIn(buffer, typeGlyph(pickerFilterType), badgeX0, badgeX1, rowMid, 0.75f, EditorTheme.BACKGROUND);
+
+                // Asset Name
+                UIGeometryBatch.addTruncatedText(buffer, asset.name, badgeX1 + 0.012f, rowMid + 0.009f, 0.22f, 0.90f, EditorTheme.TEXT, 1.0f);
+
+                // SELECT Button
+                float btnX0 = 0.24f, btnX1 = 0.40f;
+                UIGeometryBatch.addRoundedQuad(buffer, btnX0, rowMid - 0.025f, btnX1, rowMid + 0.025f, EditorTheme.RADIUS_SMALL, EditorTheme.ACCENT, 1.0f);
+                centeredTextIn(buffer, "SELECT", btnX0, btnX1, rowMid, 0.80f, EditorTheme.TEXT);
 
                 listY -= 0.10f;
             }
         }
     }
+
     public static void renderAssetPickerModal(List<Float> verts, AssetType pickerFilterType, List<AssetMeta> assetDirectory) {
         UIGeometryBatch.Buffer tempBuf = new UIGeometryBatch.Buffer();
         renderAssetPickerModal(tempBuf, pickerFilterType, assetDirectory);
@@ -71,54 +101,104 @@ public class ModalDialogOverlay {
     public static void renderEntityParentPickerModal(UIGeometryBatch.Buffer buffer, Entity targetEntity, List<Entity> sceneEntities) {
         if (targetEntity == null) return;
 
-        UIGeometryBatch.addQuad(buffer, -1.0f, -1.0f, 1.0f, 1.0f, 0.02f, 0.02f, 0.04f, 0.75f);
+        // Fullscreen dim overlay
+        UIGeometryBatch.addQuad(buffer, -1.0f, -1.0f, 1.0f, 1.0f, 0x000000, 0.65f);
 
         float cardMinX = -0.45f, cardMaxX = 0.45f;
         float cardMinY = -0.45f, cardMaxY = 0.45f;
 
-        UIGeometryBatch.addQuad(buffer, cardMinX, cardMinY, cardMaxX, cardMaxY, 0.10f, 0.11f, 0.15f, 0.98f);
-        UIGeometryBatch.addFrameBorder(buffer, cardMinX, cardMinY, cardMaxX, cardMaxY, 0.004f, 0.0f, 0.55f, 0.90f, 1.0f);
+        // Modal Card Container
+        UIGeometryBatch.addRoundedCard(buffer, cardMinX, cardMinY, cardMaxX, cardMaxY, 0.016f, EditorTheme.SURFACE, EditorTheme.BORDER_STRONG, 0.98f);
 
-        UIGeometryBatch.addQuad(buffer, cardMinX, cardMaxY - 0.10f, cardMaxX, cardMaxY, 0.16f, 0.18f, 0.24f, 1.0f);
-        UIGeometryBatch.addBoundedText(buffer, "SET PARENT FOR '" + targetEntity.name.toUpperCase() + "'", cardMinX + 0.03f, cardMaxY - 0.04f, cardMaxX - 0.10f, 1.3f, 1.0f, 1.0f, 1.0f, 1.0f);
+        // Header Bar
+        float headerY0 = cardMaxY - 0.09f;
+        UIGeometryBatch.addRoundedQuad(buffer, cardMinX + 0.003f, headerY0, cardMaxX - 0.003f, cardMaxY - 0.003f, 0.014f, EditorTheme.SURFACE_RAISED, 1.0f);
+        UIGeometryBatch.addQuad(buffer, cardMinX + 0.003f, headerY0, cardMaxX - 0.003f, cardMaxY - 0.02f, EditorTheme.SURFACE_RAISED, 1.0f);
+        UIGeometryBatch.addQuad(buffer, cardMinX, headerY0, cardMaxX, headerY0 + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
 
-        // Close X Button
-        UIGeometryBatch.addQuad(buffer, cardMaxX - 0.08f, cardMaxY - 0.08f, cardMaxX - 0.02f, cardMaxY - 0.02f, 0.65f, 0.15f, 0.15f, 1.0f);
-        UIGeometryBatch.addBoundedText(buffer, "X", cardMaxX - 0.065f, cardMaxY - 0.035f, cardMaxX - 0.03f, 1.2f, 1.0f, 1.0f, 1.0f, 1.0f);
+        String title = "SET PARENT FOR '" + targetEntity.name.toUpperCase() + "'";
+        UIGeometryBatch.addBoundedText(buffer, title, cardMinX + 0.03f, cardMaxY - 0.035f, cardMaxX - 0.10f, 1.0f, EditorTheme.TEXT, 1.0f);
 
-        // Option 1: [NO PARENT / ROOT]
-        UIGeometryBatch.addQuad(buffer, cardMinX + 0.03f, cardMaxY - 0.18f, cardMaxX - 0.03f, cardMaxY - 0.11f, 0.25f, 0.15f, 0.15f, 1.0f);
-        UIGeometryBatch.addFrameBorder(buffer, cardMinX + 0.03f, cardMaxY - 0.18f, cardMaxX - 0.03f, cardMaxY - 0.11f, 0.002f, 0.8f, 0.2f, 0.2f, 1.0f);
-        UIGeometryBatch.addBoundedText(buffer, "[UNPARENT / MOVE TO ROOT SCENE]", cardMinX + 0.05f, cardMaxY - 0.13f, cardMaxX - 0.05f, 1.1f, 1.0f, 0.8f, 0.8f, 1.0f);
+        // Close "X" Button (macOS Red Close Badge)
+        UIGeometryBatch.addRoundedQuad(buffer, cardMaxX - 0.075f, cardMaxY - 0.075f, cardMaxX - 0.02f, cardMaxY - 0.02f, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_SUNKEN, 1.0f);
+        centeredTextIn(buffer, "✕", cardMaxX - 0.075f, cardMaxX - 0.02f, cardMaxY - 0.0475f, 0.9f, EditorTheme.RED);
+
+        // Option 1: [UNPARENT / MOVE TO ROOT SCENE]
+        float actionY0 = 0.27f, actionY1 = 0.33f;
+        float actionMidY = (actionY0 + actionY1) * 0.5f;
+
+        UIGeometryBatch.addRoundedCard(buffer, -0.42f, actionY0, 0.42f, actionY1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
+        centeredTextIn(buffer, "UNPARENT / MOVE TO ROOT SCENE", -0.42f, 0.42f, actionMidY, 0.85f, EditorTheme.RED);
 
         // Filter valid candidate parent entities
         List<Entity> candidates = (sceneEntities != null) ? sceneEntities.stream()
-                .filter(e -> !e.id.equalsIgnoreCase(targetEntity.id) && !e.isDescendantOf(targetEntity, sceneEntities))
+                .filter(e -> e != null && !e.id.equalsIgnoreCase(targetEntity.id) && !e.isDescendantOf(targetEntity, sceneEntities))
                 .toList() : List.of();
 
-        float listY = cardMaxY - 0.24f;
+        float listY = 0.20f;
 
         if (candidates.isEmpty()) {
-            UIGeometryBatch.addBoundedText(buffer, "NO OTHER VALID PARENT CANDIDATES", cardMinX + 0.05f, listY, cardMaxX - 0.05f, 1.1f, 0.5f, 0.5f, 0.5f, 1.0f);
+            centeredTextIn(buffer, "NO OTHER VALID PARENT CANDIDATES", cardMinX, cardMaxX, listY - 0.02f, 0.95f, EditorTheme.TEXT_MUTED);
         } else {
             for (Entity parentCandidate : candidates) {
-                if (listY < cardMinY + 0.05f) break;
+                if (listY < -0.38f) break;
 
-                UIGeometryBatch.addQuad(buffer, cardMinX + 0.03f, listY - 0.05f, cardMaxX - 0.03f, listY + 0.03f, 0.15f, 0.18f, 0.24f, 1.0f);
-                UIGeometryBatch.addFrameBorder(buffer, cardMinX + 0.03f, listY - 0.05f, cardMaxX - 0.03f, listY + 0.03f, 0.001f, 0.25f, 0.30f, 0.40f, 1.0f);
+                float rowTop = listY + 0.03f;
+                float rowBottom = listY - 0.05f;
+                float rowMid = (rowTop + rowBottom) * 0.5f;
 
-                UIGeometryBatch.addBoundedText(buffer, "• " + parentCandidate.name, cardMinX + 0.05f, listY - 0.01f, cardMaxX - 0.22f, 1.1f, 0.95f, 0.95f, 0.95f, 1.0f);
+                UIGeometryBatch.addRoundedCard(buffer, -0.42f, rowBottom, 0.42f, rowTop, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER, 1.0f);
 
-                UIGeometryBatch.addQuad(buffer, cardMaxX - 0.20f, listY - 0.04f, cardMaxX - 0.05f, listY + 0.02f, 0.0f, 0.45f, 0.70f, 1.0f);
-                UIGeometryBatch.addBoundedText(buffer, "PARENT", cardMaxX - 0.18f, listY - 0.01f, cardMaxX - 0.06f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f);
+                // Parent Entity Name
+                UIGeometryBatch.addTruncatedText(buffer, "• " + parentCandidate.name, -0.39f, rowMid + 0.009f, 0.22f, 0.90f, EditorTheme.TEXT, 1.0f);
+
+                // PARENT Button
+                float btnX0 = 0.24f, btnX1 = 0.40f;
+                UIGeometryBatch.addRoundedQuad(buffer, btnX0, rowMid - 0.025f, btnX1, rowMid + 0.025f, EditorTheme.RADIUS_SMALL, EditorTheme.ACCENT, 1.0f);
+                centeredTextIn(buffer, "PARENT", btnX0, btnX1, rowMid, 0.80f, EditorTheme.TEXT);
 
                 listY -= 0.10f;
             }
         }
     }
+
     public static void renderEntityParentPickerModal(List<Float> verts, Entity targetEntity, List<Entity> sceneEntities) {
         UIGeometryBatch.Buffer tempBuf = new UIGeometryBatch.Buffer();
         renderEntityParentPickerModal(tempBuf, targetEntity, sceneEntities);
         for (int idx = 0; idx < tempBuf.getSize(); idx++) verts.add(tempBuf.getArray()[idx]);
+    }
+
+    private static int typeColor(AssetType type) {
+        if (type == null) return EditorTheme.GRAPHITE;
+        return switch (type) {
+            case FOLDER -> EditorTheme.TEAL;
+            case PREFAB -> EditorTheme.PURPLE;
+            case MESH_3D -> EditorTheme.ORANGE;
+            case TEXTURE -> EditorTheme.GREEN;
+            case AUDIO -> EditorTheme.PINK;
+            case SCENE -> EditorTheme.ACCENT;
+            case SCRIPT -> EditorTheme.YELLOW;
+            default -> EditorTheme.GRAPHITE;
+        };
+    }
+
+    private static String typeGlyph(AssetType type) {
+        if (type == null) return "F";
+        return switch (type) {
+            case FOLDER -> "DIR";
+            case PREFAB -> "P";
+            case MESH_3D -> "M";
+            case TEXTURE -> "T";
+            case AUDIO -> "A";
+            case SCENE -> "S";
+            case SCRIPT -> "J";
+            default -> "F";
+        };
+    }
+
+    private static void centeredTextIn(UIGeometryBatch.Buffer buffer, String text, float x0, float x1, float midY, float size, int rgb) {
+        float w = UIGeometryBatch.textWidth(buffer, text, size);
+        float x = x0 + Math.max(0.0f, ((x1 - x0) - w) * 0.5f);
+        UIGeometryBatch.addBoundedText(buffer, text, x, midY + size * 0.009f, x1 + 0.001f, size, rgb, 1.0f);
     }
 }
