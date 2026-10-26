@@ -3,6 +3,7 @@ package com.retro.engine.backend.metal;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.FloatBuffer;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.lwjgl.system.JNI.*;
@@ -37,7 +38,49 @@ public class MetalPassEncoder {
         public float[][] bonePalette = null;
     }
 
+    // Selectors are interned once at class load; nothing on the encoding path performs a string lookup
+    private static final long SEL_RENDER_PASS_DESCRIPTOR = sel_registerName("renderPassDescriptor");
+    private static final long SEL_COLOR_ATTACHMENTS = sel_registerName("colorAttachments");
+    private static final long SEL_OBJECT_AT_INDEXED_SUBSCRIPT = sel_registerName("objectAtIndexedSubscript:");
+    private static final long SEL_DEPTH_ATTACHMENT = sel_registerName("depthAttachment");
+    private static final long SEL_SET_TEXTURE = sel_registerName("setTexture:");
+    private static final long SEL_SET_LOAD_ACTION = sel_registerName("setLoadAction:");
+    private static final long SEL_SET_STORE_ACTION = sel_registerName("setStoreAction:");
+    private static final long SEL_RENDER_COMMAND_ENCODER = sel_registerName("renderCommandEncoderWithDescriptor:");
+    private static final long SEL_SET_TRIANGLE_FILL_MODE = sel_registerName("setTriangleFillMode:");
+    private static final long SEL_CONTENTS = sel_registerName("contents");
+    private static final long SEL_SET_RENDER_PIPELINE_STATE = sel_registerName("setRenderPipelineState:");
+    private static final long SEL_SET_DEPTH_STENCIL_STATE = sel_registerName("setDepthStencilState:");
+    private static final long SEL_SET_VERTEX_BUFFER = sel_registerName("setVertexBuffer:offset:atIndex:");
+    private static final long SEL_SET_VERTEX_BUFFER_OFFSET = sel_registerName("setVertexBufferOffset:atIndex:");
+    private static final long SEL_SET_FRAGMENT_BUFFER = sel_registerName("setFragmentBuffer:offset:atIndex:");
+    private static final long SEL_SET_FRAGMENT_BUFFER_OFFSET = sel_registerName("setFragmentBufferOffset:atIndex:");
+    private static final long SEL_SET_FRAGMENT_TEXTURE = sel_registerName("setFragmentTexture:atIndex:");
+    private static final long SEL_SET_FRAGMENT_SAMPLER_STATE = sel_registerName("setFragmentSamplerState:atIndex:");
+    private static final long SEL_DRAW_PRIMITIVES = sel_registerName("drawPrimitives:vertexStart:vertexCount:");
+    private static final long SEL_DRAW_INDEXED_PRIMITIVES = sel_registerName("drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:");
+    private static final long SEL_END_ENCODING = sel_registerName("endEncoding");
+
+    // Highest buffer slot bound by any pass: 0 = vertices, 1 = uniforms, 2 = bone palette
+    private static final int MAX_BUFFER_SLOTS = 3;
+    private static final long UNBOUND = -1L;
+
     private float sceneAspect = 0.0f; // 0 = fall back to framebuffer aspect
+
+    // Resolved lazily: the Metal framework is not loaded until MetalDevice initializes, after this object is built
+    private long renderPassDescClass = 0L;
+
+    // Encoder-local binding state; reset whenever a new render command encoder is created
+    private long encoder = 0L;
+    private long send = 0L;
+    private long boundPipeline;
+    private long boundDepthStencil;
+    private long boundFragmentTexture;
+    private long boundFragmentSampler;
+    private final long[] boundVertexBuffers = new long[MAX_BUFFER_SLOTS];
+    private final long[] boundVertexOffsets = new long[MAX_BUFFER_SLOTS];
+    private final long[] boundFragmentBuffers = new long[MAX_BUFFER_SLOTS];
+    private final long[] boundFragmentOffsets = new long[MAX_BUFFER_SLOTS];
 
     public void setSceneAspect(float aspect) {
         this.sceneAspect = aspect;
@@ -51,38 +94,38 @@ public class MetalPassEncoder {
             float lightDirX, float lightDirY, float lightDirZ,
             float lightR, float lightG, float lightB, float lightIntensity) {
 
-        long send = device.getObjcMsgSend();
-        long passDescClass = objc_getClass("MTLRenderPassDescriptor");
-        long offscreenPassDesc = invokePPP(passDescClass, sel_registerName("renderPassDescriptor"), send);
+        send = device.getObjcMsgSend();
+        long offscreenPassDesc = invokePPP(renderPassDescClass(), SEL_RENDER_PASS_DESCRIPTOR, send);
 
-        long colorAttachOff = invokePPP(offscreenPassDesc, sel_registerName("colorAttachments"), send);
-        long colorAttachOff0 = invokePPPP(colorAttachOff, sel_registerName("objectAtIndexedSubscript:"), 0L, send);
+        long colorAttachOff = invokePPP(offscreenPassDesc, SEL_COLOR_ATTACHMENTS, send);
+        long colorAttachOff0 = invokePPPP(colorAttachOff, SEL_OBJECT_AT_INDEXED_SUBSCRIPT, 0L, send);
 
-        invokePPPP(colorAttachOff0, sel_registerName("setTexture:"), framebuffer.getOffscreenColorTexture(), send);
-        invokePPPP(colorAttachOff0, sel_registerName("setLoadAction:"), 2L, send);
-        invokePPPP(colorAttachOff0, sel_registerName("setStoreAction:"), 1L, send);
+        invokePPPP(colorAttachOff0, SEL_SET_TEXTURE, framebuffer.getOffscreenColorTexture(), send);
+        invokePPPP(colorAttachOff0, SEL_SET_LOAD_ACTION, 2L, send);
+        invokePPPP(colorAttachOff0, SEL_SET_STORE_ACTION, 1L, send);
 
         if (framebuffer.getOffscreenDepthTexture() != 0L) {
-            long depthAttachOff = invokePPP(offscreenPassDesc, sel_registerName("depthAttachment"), send);
-            invokePPPP(depthAttachOff, sel_registerName("setTexture:"), framebuffer.getOffscreenDepthTexture(), send);
-            invokePPPP(depthAttachOff, sel_registerName("setLoadAction:"), 2L, send);
-            invokePPPP(depthAttachOff, sel_registerName("setStoreAction:"), 0L, send);
+            long depthAttachOff = invokePPP(offscreenPassDesc, SEL_DEPTH_ATTACHMENT, send);
+            invokePPPP(depthAttachOff, SEL_SET_TEXTURE, framebuffer.getOffscreenDepthTexture(), send);
+            invokePPPP(depthAttachOff, SEL_SET_LOAD_ACTION, 2L, send);
+            invokePPPP(depthAttachOff, SEL_SET_STORE_ACTION, 0L, send);
         }
 
-        long encoder3D = invokePPPP(commandBuffer, sel_registerName("renderCommandEncoderWithDescriptor:"), offscreenPassDesc, send);
-        invokePPPP(encoder3D, sel_registerName("setTriangleFillMode:"), 0L, send); // MTLTriangleFillModeFill
+        long encoder3D = invokePPPP(commandBuffer, SEL_RENDER_COMMAND_ENCODER, offscreenPassDesc, send);
+        beginEncoder(encoder3D);
+        invokePPPP(encoder3D, SEL_SET_TRIANGLE_FILL_MODE, 0L, send); // MTLTriangleFillModeFill
 
         // The offscreen image is stretched over the docked Scene tile, so project with that tile's aspect
         float aspect = sceneAspect > 0.0f ? sceneAspect
                 : (framebuffer.getWidth() > 0 && framebuffer.getHeight() > 0) ? ((float) framebuffer.getWidth() / (float) framebuffer.getHeight()) : (712.0f / 488.0f);
         long currentSlotOffset = streamer.getCurrentSlotOffset();
         long streamingUniformBuffer = streamer.getStreamingUniformBuffer();
-        long pBufferContents = invokePPP(streamingUniformBuffer, sel_registerName("contents"), send);
+        long pBufferContents = invokePPP(streamingUniformBuffer, SEL_CONTENTS, send);
 
         // vertexMain declares the bone palette at buffer(2); keep it bound for every draw in this pass
         long bonePaletteBuffer = streamer.getBonePaletteBuffer();
-        long pBoneContents = bonePaletteBuffer != 0L ? invokePPP(bonePaletteBuffer, sel_registerName("contents"), send) : 0L;
-        invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), bonePaletteBuffer, streamer.getBonePaletteOffset(0), 2L, send);
+        long pBoneContents = bonePaletteBuffer != 0L ? invokePPP(bonePaletteBuffer, SEL_CONTENTS, send) : 0L;
+        bindVertexBuffer(bonePaletteBuffer, streamer.getBonePaletteOffset(0), 2);
 
         // 1A. Procedural Ray-Plane Infinite Grid Encoding
         if (resourceCache.getGridVertexBuffer() != 0L && resourceCache.getGridVertexCount() > 0) {
@@ -104,20 +147,20 @@ public class MetalPassEncoder {
                 MemoryUtil.memPutInt(gridAddr + MetalUniformStream.OFFSET_PASS_FLAGS, 0);
             }
 
-            invokePPPP(encoder3D, sel_registerName("setRenderPipelineState:"), pipeline.getPipelineState3D(), send);
+            bindPipeline(pipeline.getPipelineState3D());
             long shadowDepthState = pipeline.getDepthStencilStateShadow() != 0L ? pipeline.getDepthStencilStateShadow() : pipeline.getDepthStencilState3D();
-            invokePPPP(encoder3D, sel_registerName("setDepthStencilState:"), shadowDepthState, send);
+            bindDepthStencil(shadowDepthState);
 
-            invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), resourceCache.getGridVertexBuffer(), 0L, 0L, send);
-            invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), streamingUniformBuffer, currentSlotOffset, 1L, send);
-            invokePPPPPP(encoder3D, sel_registerName("setFragmentBuffer:offset:atIndex:"), streamingUniformBuffer, currentSlotOffset, 1L, send);
+            bindVertexBuffer(resourceCache.getGridVertexBuffer(), 0L, 0);
+            bindVertexBuffer(streamingUniformBuffer, currentSlotOffset, 1);
+            bindFragmentBuffer(streamingUniformBuffer, currentSlotOffset, 1);
 
             // Draw 6 vertices as Triangles (3L = MTLPrimitiveTypeTriangle) for Procedural Infinite Grid Quad
-            invokePPPPPP(encoder3D, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, 6L, send);
+            invokePPPPPP(encoder3D, SEL_DRAW_PRIMITIVES, 3L, 0L, 6L, send);
 
             // Draw remaining 2 vertices as Lines (1L = MTLPrimitiveTypeLine) for Vertical Green Y-Axis Pillar
             if (resourceCache.getGridVertexCount() >= 8) {
-                invokePPPPPP(encoder3D, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 1L, 6L, 2L, send);
+                invokePPPPPP(encoder3D, SEL_DRAW_PRIMITIVES, 1L, 6L, 2L, send);
             }
         }
 
@@ -126,11 +169,9 @@ public class MetalPassEncoder {
             sceneQueue.sort(BATCH_COMPARATOR);
 
             int entityIndex = 0;
-            invokePPPP(encoder3D, sel_registerName("setRenderPipelineState:"), pipeline.getPipelineState3D(), send);
-            invokePPPP(encoder3D, sel_registerName("setDepthStencilState:"), pipeline.getDepthStencilState3D(), send);
+            bindPipeline(pipeline.getPipelineState3D());
+            bindDepthStencil(pipeline.getDepthStencilState3D());
 
-            long lastVbo = -1L;
-            long lastTexture = -1L;
             int skinnedIndex = 0;
 
             for (RenderEntity item : sceneQueue) {
@@ -139,24 +180,17 @@ public class MetalPassEncoder {
                 long currentVbo = item.vertexBufferHandle;
                 long currentTex = (item.hasTexture && item.textureHandle != 0L) ? item.textureHandle : texture.getBindableTexture();
 
-                if (currentVbo != lastVbo) {
-                    invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), currentVbo, 0L, 0L, send);
-                    lastVbo = currentVbo;
-                }
-
-                if (currentTex != lastTexture) {
-                    invokePPPPP(encoder3D, sel_registerName("setFragmentTexture:atIndex:"), currentTex, 0L, send);
-                    if (texture.getSamplerStateHandle() != 0L) {
-                        invokePPPPP(encoder3D, sel_registerName("setFragmentSamplerState:atIndex:"), texture.getSamplerStateHandle(), 0L, send);
-                    }
-                    lastTexture = currentTex;
+                bindVertexBuffer(currentVbo, 0L, 0);
+                bindFragmentTexture(currentTex);
+                if (texture.getSamplerStateHandle() != 0L) {
+                    bindFragmentSampler(texture.getSamplerStateHandle());
                 }
 
                 boolean skinned = item.stride >= 30 && item.bonePalette != null && pBoneContents != 0L
                         && skinnedIndex < MetalUniformStream.MAX_SKINNED_ENTITIES_PER_FRAME;
                 if (skinned) {
                     streamer.writeBonePalette(pBoneContents, skinnedIndex, item.bonePalette);
-                    invokePPPPP(encoder3D, sel_registerName("setVertexBufferOffset:atIndex:"), streamer.getBonePaletteOffset(skinnedIndex), 2L, send);
+                    bindVertexBuffer(bonePaletteBuffer, streamer.getBonePaletteOffset(skinnedIndex), 2);
                     skinnedIndex++;
                 }
 
@@ -209,13 +243,13 @@ public class MetalPassEncoder {
                     MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PASS_FLAGS, passFlags);
                 }
 
-                invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), streamingUniformBuffer, entityUniformOffset, 1L, send);
-                invokePPPPPP(encoder3D, sel_registerName("setFragmentBuffer:offset:atIndex:"), streamingUniformBuffer, entityUniformOffset, 1L, send);
+                bindVertexBuffer(streamingUniformBuffer, entityUniformOffset, 1);
+                bindFragmentBuffer(streamingUniformBuffer, entityUniformOffset, 1);
                 if (item.indexBufferHandle != 0L && item.indexCount > 0) {
-                    invokePPPPPPPV(encoder3D, sel_registerName("drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:"),
+                    invokePPPPPPPV(encoder3D, SEL_DRAW_INDEXED_PRIMITIVES,
                             3L, (long) item.indexCount, item.indexType, item.indexBufferHandle, 0L, send);
                 } else {
-                    invokePPPPPP(encoder3D, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, (long) item.vertexCount, send);
+                    invokePPPPPP(encoder3D, SEL_DRAW_PRIMITIVES, 3L, 0L, (long) item.vertexCount, send);
                 }
 
                 entityIndex++;
@@ -226,10 +260,10 @@ public class MetalPassEncoder {
         long groundQuadBuf = resourceCache.getGroundQuadBuffer();
         if (sceneQueue != null && !sceneQueue.isEmpty() && groundQuadBuf != 0L) {
             int shadowIndex = 0;
-            invokePPPP(encoder3D, sel_registerName("setRenderPipelineState:"), pipeline.getPipelineState3D(), send);
+            bindPipeline(pipeline.getPipelineState3D());
             long shadowDepthState = pipeline.getDepthStencilStateShadow() != 0L ? pipeline.getDepthStencilStateShadow() : pipeline.getDepthStencilState3D();
-            invokePPPP(encoder3D, sel_registerName("setDepthStencilState:"), shadowDepthState, send);
-            invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), groundQuadBuf, 0L, 0L, send);
+            bindDepthStencil(shadowDepthState);
+            bindVertexBuffer(groundQuadBuf, 0L, 0);
 
             for (RenderEntity item : sceneQueue) {
                 if (shadowIndex >= 64) break;
@@ -262,65 +296,139 @@ public class MetalPassEncoder {
                     MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PASS_FLAGS, 1);
                 }
 
-                invokePPPPPP(encoder3D, sel_registerName("setVertexBuffer:offset:atIndex:"), streamingUniformBuffer, shadowUniformOffset, 1L, send);
-                invokePPPPPP(encoder3D, sel_registerName("setFragmentBuffer:offset:atIndex:"), streamingUniformBuffer, shadowUniformOffset, 1L, send);
-                invokePPPPPP(encoder3D, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, 6L, send);
+                bindVertexBuffer(streamingUniformBuffer, shadowUniformOffset, 1);
+                bindFragmentBuffer(streamingUniformBuffer, shadowUniformOffset, 1);
+                invokePPPPPP(encoder3D, SEL_DRAW_PRIMITIVES, 3L, 0L, 6L, send);
 
                 shadowIndex++;
             }
         }
 
-        invokePPP(encoder3D, sel_registerName("endEncoding"), send);
+        invokePPP(encoder3D, SEL_END_ENCODING, send);
+        encoder = 0L;
     }
 
     public void encodeWindowCompositionPass(
             long commandBuffer, long drawableTexture, MetalDevice device, MetalPipeline pipeline, MetalTexture texture,
             MetalTargetPass framebuffer, MetalGpuCache resourceCache, MetalUniformStream streamer) {
 
-        long send = device.getObjcMsgSend();
-        long passDescClass = objc_getClass("MTLRenderPassDescriptor");
-        long windowPassDesc = invokePPP(passDescClass, sel_registerName("renderPassDescriptor"), send);
+        send = device.getObjcMsgSend();
+        long windowPassDesc = invokePPP(renderPassDescClass(), SEL_RENDER_PASS_DESCRIPTOR, send);
 
-        long colorAttachWin = invokePPP(windowPassDesc, sel_registerName("colorAttachments"), send);
-        long colorAttachWin0 = invokePPPP(colorAttachWin, sel_registerName("objectAtIndexedSubscript:"), 0L, send);
+        long colorAttachWin = invokePPP(windowPassDesc, SEL_COLOR_ATTACHMENTS, send);
+        long colorAttachWin0 = invokePPPP(colorAttachWin, SEL_OBJECT_AT_INDEXED_SUBSCRIPT, 0L, send);
 
-        invokePPPP(colorAttachWin0, sel_registerName("setTexture:"), drawableTexture, send);
-        invokePPPP(colorAttachWin0, sel_registerName("setLoadAction:"), 2L, send); // Clear
-        invokePPPP(colorAttachWin0, sel_registerName("setStoreAction:"), 1L, send); // Store
+        invokePPPP(colorAttachWin0, SEL_SET_TEXTURE, drawableTexture, send);
+        invokePPPP(colorAttachWin0, SEL_SET_LOAD_ACTION, 2L, send); // Clear
+        invokePPPP(colorAttachWin0, SEL_SET_STORE_ACTION, 1L, send); // Store
 
         // NO DEPTH ATTACHMENT FOR WINDOW COMPOSITION PASS!
         // drawableTexture handles color output at native window/Retina resolution.
 
-        long encoderWin = invokePPPP(commandBuffer, sel_registerName("renderCommandEncoderWithDescriptor:"), windowPassDesc, send);
+        long encoderWin = invokePPPP(commandBuffer, SEL_RENDER_COMMAND_ENCODER, windowPassDesc, send);
         if (encoderWin == 0L) return;
+        beginEncoder(encoderWin);
 
         // 1. Viewport Quad Pass-Through Composition
         long pipelineComp = pipeline.getPipelineStateComposition();
         if (pipelineComp == 0L) pipelineComp = pipeline.getPipelineState3D();
 
         if (resourceCache.isViewportQuadVisible() && resourceCache.getViewportQuadBuffer() != 0L && framebuffer.getOffscreenColorTexture() != 0L && pipelineComp != 0L) {
-            invokePPPP(encoderWin, sel_registerName("setRenderPipelineState:"), pipelineComp, send);
+            bindPipeline(pipelineComp);
 
-            invokePPPPP(encoderWin, sel_registerName("setFragmentTexture:atIndex:"), framebuffer.getOffscreenColorTexture(), 0L, send);
+            bindFragmentTexture(framebuffer.getOffscreenColorTexture());
             if (texture.getSamplerStateHandle() != 0L) {
-                invokePPPPP(encoderWin, sel_registerName("setFragmentSamplerState:atIndex:"), texture.getSamplerStateHandle(), 0L, send);
+                bindFragmentSampler(texture.getSamplerStateHandle());
             }
 
-            invokePPPPPP(encoderWin, sel_registerName("setVertexBuffer:offset:atIndex:"), resourceCache.getViewportQuadBuffer(), 0L, 0L, send);
-            invokePPPPPP(encoderWin, sel_registerName("setVertexBuffer:offset:atIndex:"), streamer.getUniformBufferIdentity(), 0L, 1L, send);
-            invokePPPPPP(encoderWin, sel_registerName("setVertexBuffer:offset:atIndex:"), streamer.getBonePaletteBuffer(), 0L, 2L, send);
-            invokePPPPPP(encoderWin, sel_registerName("setFragmentBuffer:offset:atIndex:"), streamer.getUniformBufferIdentity(), 0L, 1L, send);
-            invokePPPPPP(encoderWin, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, 6L, send);
+            bindVertexBuffer(resourceCache.getViewportQuadBuffer(), 0L, 0);
+            bindVertexBuffer(streamer.getUniformBufferIdentity(), 0L, 1);
+            bindVertexBuffer(streamer.getBonePaletteBuffer(), 0L, 2);
+            bindFragmentBuffer(streamer.getUniformBufferIdentity(), 0L, 1);
+            invokePPPPPP(encoderWin, SEL_DRAW_PRIMITIVES, 3L, 0L, 6L, send);
         }
 
         // 2. 2D Editor UI Geometry Batch Pass
         if (resourceCache.getUiVertexBuffer() != 0L && resourceCache.getUiVertexCount() > 0 && pipeline.getPipelineStateUI() != 0L) {
-            invokePPPP(encoderWin, sel_registerName("setRenderPipelineState:"), pipeline.getPipelineStateUI(), send);
+            bindPipeline(pipeline.getPipelineStateUI());
 
-            invokePPPPPP(encoderWin, sel_registerName("setVertexBuffer:offset:atIndex:"), resourceCache.getUiVertexBuffer(), 0L, 0L, send);
-            invokePPPPPP(encoderWin, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), 3L, 0L, (long) resourceCache.getUiVertexCount(), send);
+            bindVertexBuffer(resourceCache.getUiVertexBuffer(), 0L, 0);
+            invokePPPPPP(encoderWin, SEL_DRAW_PRIMITIVES, 3L, 0L, (long) resourceCache.getUiVertexCount(), send);
         }
 
-        invokePPP(encoderWin, sel_registerName("endEncoding"), send);
+        invokePPP(encoderWin, SEL_END_ENCODING, send);
+        encoder = 0L;
+    }
+
+    private long renderPassDescClass() {
+        if (renderPassDescClass == 0L) {
+            renderPassDescClass = objc_getClass("MTLRenderPassDescriptor");
+        }
+        return renderPassDescClass;
+    }
+
+    private void beginEncoder(long newEncoder) {
+        encoder = newEncoder;
+        boundPipeline = UNBOUND;
+        boundDepthStencil = UNBOUND;
+        boundFragmentTexture = UNBOUND;
+        boundFragmentSampler = UNBOUND;
+        Arrays.fill(boundVertexBuffers, UNBOUND);
+        Arrays.fill(boundVertexOffsets, UNBOUND);
+        Arrays.fill(boundFragmentBuffers, UNBOUND);
+        Arrays.fill(boundFragmentOffsets, UNBOUND);
+    }
+
+    private void bindPipeline(long pipelineState) {
+        if (pipelineState == boundPipeline) return;
+        invokePPPP(encoder, SEL_SET_RENDER_PIPELINE_STATE, pipelineState, send);
+        boundPipeline = pipelineState;
+    }
+
+    private void bindDepthStencil(long depthStencilState) {
+        if (depthStencilState == boundDepthStencil) return;
+        invokePPPP(encoder, SEL_SET_DEPTH_STENCIL_STATE, depthStencilState, send);
+        boundDepthStencil = depthStencilState;
+    }
+
+    // Rebinding the same buffer at a new offset only needs the lighter offset-update entry point
+    private void bindVertexBuffer(long buffer, long offset, int index) {
+        if (buffer == boundVertexBuffers[index]) {
+            if (offset == boundVertexOffsets[index]) return;
+            if (buffer != 0L) {
+                invokePPPPP(encoder, SEL_SET_VERTEX_BUFFER_OFFSET, offset, (long) index, send);
+                boundVertexOffsets[index] = offset;
+                return;
+            }
+        }
+        invokePPPPPP(encoder, SEL_SET_VERTEX_BUFFER, buffer, offset, (long) index, send);
+        boundVertexBuffers[index] = buffer;
+        boundVertexOffsets[index] = offset;
+    }
+
+    private void bindFragmentBuffer(long buffer, long offset, int index) {
+        if (buffer == boundFragmentBuffers[index]) {
+            if (offset == boundFragmentOffsets[index]) return;
+            if (buffer != 0L) {
+                invokePPPPP(encoder, SEL_SET_FRAGMENT_BUFFER_OFFSET, offset, (long) index, send);
+                boundFragmentOffsets[index] = offset;
+                return;
+            }
+        }
+        invokePPPPPP(encoder, SEL_SET_FRAGMENT_BUFFER, buffer, offset, (long) index, send);
+        boundFragmentBuffers[index] = buffer;
+        boundFragmentOffsets[index] = offset;
+    }
+
+    private void bindFragmentTexture(long textureHandle) {
+        if (textureHandle == boundFragmentTexture) return;
+        invokePPPPP(encoder, SEL_SET_FRAGMENT_TEXTURE, textureHandle, 0L, send);
+        boundFragmentTexture = textureHandle;
+    }
+
+    private void bindFragmentSampler(long samplerState) {
+        if (samplerState == boundFragmentSampler) return;
+        invokePPPPP(encoder, SEL_SET_FRAGMENT_SAMPLER_STATE, samplerState, 0L, send);
+        boundFragmentSampler = samplerState;
     }
 }
