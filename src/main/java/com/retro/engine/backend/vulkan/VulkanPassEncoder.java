@@ -32,6 +32,9 @@ public class VulkanPassEncoder {
         public float[][] bonePalette = null;
     }
 
+    // 3D push constant block: mat4 model (64 B) + vec4 params (16 B) = 80 B, within the 128 B guaranteed minimum
+    private static final int MESH_PUSH_FLOATS = 20;
+
     // Reusable scratchpad arrays for zero-allocation frame loops
     private final float[] modelMatrixScratch = new float[16];
     private final float[] identityLightSpace = new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
@@ -53,13 +56,14 @@ public class VulkanPassEncoder {
                                      int imageIndex,
                                      VulkanPipeline pipelineManager,
                                      VulkanGpuCache gpuCache,
-                                     long descriptorPoolHandle,
                                      VulkanDevice deviceManager,
                                      float[] viewMatrix,
                                      float[] projMatrix,
                                      List<RenderEntity> sceneQueue,
                                      int sceneQueueCount) {
         try (MemoryStack stack = stackPush()) {
+            // Reused for every 3D/shadow draw: vkCmdPushConstants copies the data at record time
+            FloatBuffer meshPush = stack.mallocFloat(MESH_PUSH_FLOATS);
 
             // Dynamic Viewport & Scissor Setup for Offscreen Viewport (Negative height for Vulkan Y-Inversion)
             VkViewport.Buffer offscreenViewport = VkViewport.calloc(1, stack);
@@ -145,14 +149,15 @@ public class VulkanPassEncoder {
             // STEP 2: 3D Scene Mesh Pass
             // ---------------------------------------------------------------------------------
             if (pipelineManager.getGraphicsPipeline3D() != 0L && sceneQueue != null && sceneQueueCount > 0) {
-                VkDevice vkDevice = deviceManager.getDevice();
-                VulkanGpuCache.VulkanTexture whiteTex = gpuCache.getDefaultWhiteTexture(deviceManager);
-                VulkanGpuCache.VulkanBuffer lightUbo = gpuCache.getOrCreateLightUniformBuffer(deviceManager);
                 VulkanGpuCache.VulkanBuffer bonePaletteBuf = gpuCache.getOrCreateBonePaletteBuffer(deviceManager);
                 long skinnedPipeline = pipelineManager.getGraphicsPipelineSkinned();
 
+                // Binding 0 (light UBO) and binding 3 (bone palette) are dynamic: one offset each, in binding order
+                IntBuffer dynamicOffsets = stack.mallocInt(2);
+                LongBuffer pSet = stack.mallocLong(1);
                 long boundPipeline = 0L;
-                int skinnedIndex = 0;
+                long boundSet = 0L;
+                int boundPaletteOffset = -1;
 
                 for (int i = 0; i < sceneQueueCount; i++) {
                     RenderEntity entity = sceneQueue.get(i);
@@ -165,70 +170,35 @@ public class VulkanPassEncoder {
                     boolean skinnedLayout = mesh.floatStride >= 30;
                     if (skinnedLayout && (skinnedPipeline == 0L || bonePaletteBuf == null)) continue;
 
-                    int paletteSlot = 0;
-                    if (skinnedLayout && entity.bonePalette != null && skinnedIndex < VulkanGpuCache.MAX_SKINNED_ENTITIES_PER_FRAME - 1) {
-                        paletteSlot = ++skinnedIndex; // slot 0 stays identity for palette-less skinned meshes
-                        gpuCache.writeBonePalette(paletteSlot, entity.bonePalette);
-                    }
-
                     long wantedPipeline = skinnedLayout ? skinnedPipeline : pipelineManager.getGraphicsPipeline3D();
                     if (wantedPipeline != boundPipeline) {
                         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, wantedPipeline);
                         boundPipeline = wantedPipeline;
                     }
 
-                    if (vkDevice != null && descriptorPoolHandle != 0L && lightUbo != null && whiteTex != null) {
-                        VkDescriptorSetAllocateInfo allocSetInfo = VkDescriptorSetAllocateInfo.calloc(stack)
-                                .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO)
-                                .descriptorPool(descriptorPoolHandle)
-                                .pSetLayouts(stack.longs(pipelineManager.getDescriptorSetLayout3D()));
-
-                        LongBuffer pSet = stack.mallocLong(1);
-                        if (vkAllocateDescriptorSets(vkDevice, allocSetInfo, pSet) == VK_SUCCESS) {
-                            long descriptorSetEntity = pSet.get(0);
-
-                            VkDescriptorBufferInfo.Buffer bufferInfo = VkDescriptorBufferInfo.calloc(1, stack).buffer(lightUbo.bufferHandle).offset(0).range(512);
-
-                            VulkanGpuCache.VulkanTexture entityTex = gpuCache.getTexture(entity.textureHandle);
-                            long activeTexView = (entityTex != null && entityTex.imageViewHandle != 0L) ? entityTex.imageViewHandle : whiteTex.imageViewHandle;
-
-                            VkDescriptorImageInfo.Buffer imageInfoTex = VkDescriptorImageInfo.calloc(1, stack).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(activeTexView).sampler(whiteTex.samplerHandle);
-                            VkDescriptorImageInfo.Buffer imageInfoShadow = VkDescriptorImageInfo.calloc(1, stack).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(whiteTex.imageViewHandle).sampler(whiteTex.samplerHandle);
-
-                            int writeCount = (bonePaletteBuf != null) ? 4 : 3;
-                            VkWriteDescriptorSet.Buffer descriptorWrites = VkWriteDescriptorSet.calloc(writeCount, stack);
-                            descriptorWrites.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(0).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC).pBufferInfo(bufferInfo);
-                            descriptorWrites.get(1).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(1).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(imageInfoTex);
-                            descriptorWrites.get(2).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(2).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(imageInfoShadow);
-                            if (bonePaletteBuf != null) {
-                                VkDescriptorBufferInfo.Buffer boneInfo = VkDescriptorBufferInfo.calloc(1, stack)
-                                        .buffer(bonePaletteBuf.bufferHandle)
-                                        .offset(paletteSlot * VulkanGpuCache.BONE_PALETTE_STRIDE)
-                                        .range(VulkanGpuCache.BONE_PALETTE_STRIDE);
-                                descriptorWrites.get(3).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(3).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(boneInfo);
-                            }
-
-                            vkUpdateDescriptorSets(vkDevice, descriptorWrites, null);
-
-                            IntBuffer pDynamicOffsets = stack.ints(0);
-                            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, stack.longs(descriptorSetEntity), pDynamicOffsets);
-                        }
+                    // Sets were written by VulkanGpuCache.prepareSceneDescriptors before recording; only rebind
+                    // when the texture set or palette slot actually changes between draws.
+                    long entitySet = gpuCache.getEntityDescriptorSet(i);
+                    int paletteOffset = gpuCache.getEntityPaletteOffset(i);
+                    if (entitySet != 0L && (entitySet != boundSet || paletteOffset != boundPaletteOffset)) {
+                        dynamicOffsets.put(0, 0).put(1, paletteOffset);
+                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, pSet.put(0, entitySet), dynamicOffsets);
+                        boundSet = entitySet;
+                        boundPaletteOffset = paletteOffset;
                     }
 
                     computeModelMatrixInPlace(entity.px, entity.py, entity.pz, entity.rx, entity.ry, entity.rz, entity.sx, entity.sy, entity.sz, modelMatrixScratch);
 
-                    FloatBuffer push68 = stack.mallocFloat(68);
-                    push68.put(modelMatrixScratch);
-                    push68.put(viewMatrix != null && viewMatrix.length == 16 ? viewMatrix : identityLightSpace);
-                    push68.put(projMatrix != null && projMatrix.length == 16 ? projMatrix : identityLightSpace);
-                    push68.put(0.0f);                      // shadowParams.x = passFlags (0.0 = Standard 3D Mesh)
-                    push68.put(1.0f);                      // shadowParams.y = heightFade
-                    push68.put(entity.reflectionStrength); // shadowParams.z = reflection
-                    push68.put(0.0f);                      // shadowParams.w = unused
-                    push68.put(identityLightSpace);
-                    push68.flip();
+                    // 80-byte block: mat4 model + vec4 params (view/proj are read from the binding 0 UBO)
+                    meshPush.clear();
+                    meshPush.put(modelMatrixScratch);
+                    meshPush.put(0.0f);                      // params.x = passFlags (0.0 = Standard 3D Mesh)
+                    meshPush.put(1.0f);                      // params.y = heightFade
+                    meshPush.put(entity.reflectionStrength); // params.z = reflection
+                    meshPush.put(0.0f);                      // params.w = unused
+                    meshPush.flip();
 
-                    vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, push68);
+                    vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, meshPush);
 
                     LongBuffer pBuffers = stack.longs(vboHandle);
                     LongBuffer pOffsets = stack.longs(0L);
@@ -247,9 +217,11 @@ public class VulkanPassEncoder {
             if (shadowPipeline != 0L && sceneQueue != null && sceneQueueCount > 0 && groundQuadBuf != 0L) {
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline);
 
-                VkDevice vkDevice = deviceManager.getDevice();
-                VulkanGpuCache.VulkanTexture whiteTex = gpuCache.getDefaultWhiteTexture(deviceManager);
-                VulkanGpuCache.VulkanBuffer lightUbo = gpuCache.getOrCreateLightUniformBuffer(deviceManager);
+                // Every blob samples the same white set prepared before recording, so bind it once for the pass
+                long shadowSet = gpuCache.getShadowDescriptorSet();
+                if (shadowSet != 0L) {
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, stack.longs(shadowSet), stack.ints(0, 0));
+                }
 
                 int shadowIndex = 0;
                 for (int i = 0; i < sceneQueueCount; i++) {
@@ -264,46 +236,17 @@ public class VulkanPassEncoder {
                     float shadowScale = Math.max(entity.sx, entity.sz) * 1.25f;
                     float shadowY = entity.groundY + 0.005f;
 
-                    if (vkDevice != null && descriptorPoolHandle != 0L && lightUbo != null && whiteTex != null) {
-                        VkDescriptorSetAllocateInfo allocSetInfo = VkDescriptorSetAllocateInfo.calloc(stack)
-                                .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO)
-                                .descriptorPool(descriptorPoolHandle)
-                                .pSetLayouts(stack.longs(pipelineManager.getDescriptorSetLayout3D()));
-
-                        LongBuffer pSet = stack.mallocLong(1);
-                        if (vkAllocateDescriptorSets(vkDevice, allocSetInfo, pSet) == VK_SUCCESS) {
-                            long descriptorSetEntity = pSet.get(0);
-
-                            VkDescriptorBufferInfo.Buffer bufferInfo = VkDescriptorBufferInfo.calloc(1, stack).buffer(lightUbo.bufferHandle).offset(0).range(512);
-                            VkDescriptorImageInfo.Buffer imageInfoTex = VkDescriptorImageInfo.calloc(1, stack).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(whiteTex.imageViewHandle).sampler(whiteTex.samplerHandle);
-                            VkDescriptorImageInfo.Buffer imageInfoShadow = VkDescriptorImageInfo.calloc(1, stack).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(whiteTex.imageViewHandle).sampler(whiteTex.samplerHandle);
-
-                            VkWriteDescriptorSet.Buffer descriptorWrites = VkWriteDescriptorSet.calloc(3, stack);
-                            descriptorWrites.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(0).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC).pBufferInfo(bufferInfo);
-                            descriptorWrites.get(1).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(1).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(imageInfoTex);
-                            descriptorWrites.get(2).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(descriptorSetEntity).dstBinding(2).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(imageInfoShadow);
-
-                            vkUpdateDescriptorSets(vkDevice, descriptorWrites, null);
-
-                            IntBuffer pDynamicOffsets = stack.ints(0);
-                            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, stack.longs(descriptorSetEntity), pDynamicOffsets);
-                        }
-                    }
-
                     computeModelMatrixInPlace(entity.px, shadowY, entity.pz, 0.0f, 0.0f, 0.0f, shadowScale, 1.0f, shadowScale, modelMatrixScratch);
 
-                    FloatBuffer pushShadow = stack.mallocFloat(68);
-                    pushShadow.put(modelMatrixScratch);
-                    pushShadow.put(viewMatrix != null && viewMatrix.length == 16 ? viewMatrix : identityLightSpace);
-                    pushShadow.put(projMatrix != null && projMatrix.length == 16 ? projMatrix : identityLightSpace);
-                    pushShadow.put(1.0f);       // shadowParams.x = passFlags (1.0 = Shadow Blob Pass!)
-                    pushShadow.put(heightFade); // shadowParams.y = heightFade
-                    pushShadow.put(0.0f);       // shadowParams.z = unused
-                    pushShadow.put(0.0f);       // shadowParams.w = unused
-                    pushShadow.put(identityLightSpace);
-                    pushShadow.flip();
+                    meshPush.clear();
+                    meshPush.put(modelMatrixScratch);
+                    meshPush.put(1.0f);       // params.x = passFlags (1.0 = Shadow Blob Pass)
+                    meshPush.put(heightFade); // params.y = heightFade
+                    meshPush.put(0.0f);       // params.z = unused
+                    meshPush.put(0.0f);       // params.w = unused
+                    meshPush.flip();
 
-                    vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, pushShadow);
+                    vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, meshPush);
 
                     LongBuffer pBuffers = stack.longs(groundQuadBuf);
                     LongBuffer pOffsets = stack.longs(0L);

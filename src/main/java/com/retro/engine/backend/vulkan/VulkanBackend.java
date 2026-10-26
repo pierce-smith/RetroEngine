@@ -72,6 +72,7 @@ public class VulkanBackend implements IRenderBackend {
 
         targetPass.initFramebuffer(deviceManager, 712, 488);
         if (!pipelineManager.initialize(deviceManager, swapchainManager)) return false;
+        gpuCache.initialize(deviceManager);
 
         System.out.println("[VulkanBackend] Vulkan 1.3 Multi-Pass Architecture Active on Apple Silicon / MoltenVK.");
         return true;
@@ -91,13 +92,22 @@ public class VulkanBackend implements IRenderBackend {
         VkDevice device = deviceManager.getDevice();
         if (device == null) return;
 
-        queueSubmitter.resetDescriptorPool(device);
-
+        // The previous frame's command buffer, descriptor sets, light UBO and bone palettes are only safe to touch
+        // once its fence signals.
         vkWaitForFences(device, queueSubmitter.getInFlightFence(), true, Long.MAX_VALUE);
-        vkResetFences(device, queueSubmitter.getInFlightFence());
 
+        // Acquire before resetting the fence: if acquisition fails no submit follows, and a reset fence would
+        // never be signaled again, deadlocking the next frame's wait.
         activeImageIndex = swapchainManager.acquireNextImage(deviceManager, queueSubmitter.getImageAvailableSemaphore());
         if (activeImageIndex < 0) return;
+
+        vkResetFences(device, queueSubmitter.getInFlightFence());
+        queueSubmitter.resetDescriptorPool(device);
+
+        // View/projection feed the light UBO (binding 0), so they must be ready before it is written
+        computeViewMatrix();
+        float aspect = sceneAspect > 0.0f ? sceneAspect : (float) targetPass.getWidth() / (float) targetPass.getHeight();
+        computePerspectiveProjectionMatrix(50.0f, aspect, 0.1f, 500.0f);
 
         gpuCache.updateLightUniformBuffer(
                 deviceManager,
@@ -107,7 +117,18 @@ public class VulkanBackend implements IRenderBackend {
                 activeLightR, activeLightG, activeLightB,
                 activeLightIntensity,
                 camPanX, camPanY, camZoom,
-                0.0f
+                0.0f,
+                viewMatrix,
+                projMatrix
+        );
+
+        // All descriptor allocation and vkUpdateDescriptorSets happen here, never during command recording
+        gpuCache.prepareSceneDescriptors(
+                deviceManager,
+                queueSubmitter.getDescriptorPoolHandle(),
+                pipelineManager.getDescriptorSetLayout3D(),
+                sceneQueuePool,
+                activeSceneQueueCount
         );
 
         VkCommandBuffer cmd = queueSubmitter.getCommandBuffer();
@@ -120,10 +141,6 @@ public class VulkanBackend implements IRenderBackend {
 
             vkBeginCommandBuffer(cmd, beginInfo);
 
-            computeViewMatrix();
-            float aspect = sceneAspect > 0.0f ? sceneAspect : (float) targetPass.getWidth() / (float) targetPass.getHeight();
-            computePerspectiveProjectionMatrix(50.0f, aspect, 0.1f, 500.0f);
-
             passEncoder.record4PhasePipeline(
                     cmd,
                     targetPass,
@@ -131,7 +148,6 @@ public class VulkanBackend implements IRenderBackend {
                     activeImageIndex,
                     pipelineManager,
                     gpuCache,
-                    queueSubmitter.getDescriptorPoolHandle(),
                     deviceManager,
                     viewMatrix,
                     projMatrix,

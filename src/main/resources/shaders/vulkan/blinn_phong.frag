@@ -34,28 +34,28 @@ layout(std140, set = 0, binding = 0) uniform LightBuffer {
     SpotLight spotLights;
     vec4 numLights;   // x = numDir, y = numPoint, z = numSpot, w = shadowMapBias
     vec4 viewPos;     // xyz = camera position, w = groundY
+    mat4 view;        // byte offset 176
+    mat4 proj;        // byte offset 240
 } u_Lights;
 
 layout(set = 0, binding = 1) uniform sampler2D u_MainTexture;
 layout(set = 0, binding = 2) uniform sampler2D u_ShadowMap;
 
+// 80 bytes: stays within the 128-byte maxPushConstantsSize every Vulkan implementation guarantees
 layout(push_constant) uniform MeshPushConstants {
     mat4 model;
-    mat4 view;
-    mat4 proj;
-    vec4 shadowParams; // x = passFlags (1.0 = shadow blob), y = heightFade, z = reflection, w = unused
-    mat4 lightSpaceMatrix;
+    vec4 params; // x = passFlags (1.0 = shadow blob), y = heightFade, z = reflection, w = unused
 } u_PushConstants;
 
 void main() {
     // Dynamic Ground Shadow Blob Pass (PassFlags == 1.0)
-    if (u_PushConstants.shadowParams.x > 0.5) {
+    if (u_PushConstants.params.x > 0.5) {
         vec2 uvCentered = vTexCoord - vec2(0.5, 0.5);
         float distSq = dot(uvCentered, uvCentered) * 4.0;
         if (distSq >= 1.0) {
             discard;
         }
-        float heightFade = u_PushConstants.shadowParams.y;
+        float heightFade = u_PushConstants.params.y;
         float alpha = max(0.0, 1.0 - distSq) * heightFade * 0.75;
         outFragColor = vec4(0.02, 0.02, 0.05, alpha);
         return;
@@ -120,7 +120,7 @@ void main() {
     vec3 finalRGB = (ambient + diffuse) * baseColor.rgb;
 
     // Hemisphere Sky/Ground Environment Reflection Pass
-    float reflectStrength = u_PushConstants.shadowParams.z;
+    float reflectStrength = u_PushConstants.params.z;
     if (reflectStrength > 0.0) {
         vec3 V = normalize(u_Lights.viewPos.xyz - vFragPos);
         vec3 R = reflect(-V, N);

@@ -9,6 +9,8 @@ import org.lwjgl.vulkan.*;
 import java.nio.FloatBuffer;
 import java.nio.LongBuffer;
 import java.util.ArrayDeque;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Queue;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
@@ -104,8 +106,19 @@ public class VulkanGpuCache {
     private VulkanBuffer groundQuadBuffer = null;
     private VulkanBuffer bonePaletteBuffer = null;
     private long bonePaletteMapped = 0L;
+    private VulkanBuffer dummyBonePaletteBuffer = null;
 
     private volatile int totalFrameCount = 0;
+
+    // Per-frame descriptor state built by prepareSceneDescriptors before recording; reused to keep frames allocation-free
+    private long[] entityDescriptorSets = new long[256];
+    private int[] entityPaletteOffsets = new int[256];
+    // Texture-view -> set cache, fixed capacity so recording never reallocates; overflow views get uncached sets
+    private static final int MAX_UNIQUE_SETS = 256;
+    private final long[] uniqueSets = new long[MAX_UNIQUE_SETS];
+    private final long[] uniqueSetViews = new long[MAX_UNIQUE_SETS];
+    private int uniqueSetCount = 0;
+    private long shadowDescriptorSet = 0L;
 
     public long getUiVertexBuffer() { return uiRingBuffer.getCurrentBufferHandle(); }
     public int getUiVertexCount() { return uiRingBuffer.getVertexCount(); }
@@ -258,10 +271,36 @@ public class VulkanGpuCache {
 
     public VulkanBuffer getOrCreateBonePaletteBuffer(VulkanDevice device) {
         if (bonePaletteBuffer != null) return bonePaletteBuffer;
+        long[] mapped = new long[1];
+        bonePaletteBuffer = createIdentityPaletteBuffer(device, MAX_SKINNED_ENTITIES_PER_FRAME, mapped);
+        bonePaletteMapped = mapped[0];
+        return bonePaletteBuffer;
+    }
+
+    /**
+     * Permanent one-slot identity palette bound to binding 3 whenever the real palette buffer is unavailable, so every
+     * 3D descriptor set writes all four bindings and always matches the layout's two dynamic offsets.
+     */
+    public VulkanBuffer getOrCreateDummyBonePaletteBuffer(VulkanDevice device) {
+        if (dummyBonePaletteBuffer != null) return dummyBonePaletteBuffer;
+        dummyBonePaletteBuffer = createIdentityPaletteBuffer(device, 1, null);
+        return dummyBonePaletteBuffer;
+    }
+
+    /** Creates long-lived resources that descriptor writes depend on; call once after the logical device exists. */
+    public void initialize(VulkanDevice device) {
+        getOrCreateDummyBonePaletteBuffer(device);
+    }
+
+    /**
+     * Host-visible storage buffer of {@code slots} identity-seeded palettes. When {@code mappedOut} is non-null the
+     * memory stays persistently mapped and its address is returned there; otherwise it is unmapped after seeding.
+     */
+    private VulkanBuffer createIdentityPaletteBuffer(VulkanDevice device, int slots, long[] mappedOut) {
         if (device == null || device.getLogicalDevice() == null) return null;
 
         VkDevice vkDevice = device.getLogicalDevice();
-        long bufferSize = BONE_PALETTE_STRIDE * MAX_SKINNED_ENTITIES_PER_FRAME;
+        long bufferSize = BONE_PALETTE_STRIDE * slots;
 
         try (MemoryStack stack = stackPush()) {
             VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack)
@@ -293,23 +332,25 @@ public class VulkanGpuCache {
             long memory = pMemory.get(0);
             vkBindBufferMemory(vkDevice, buffer, memory, 0);
 
-            // Persistently mapped: palettes are rewritten every frame after the in-flight fence wait
             PointerBuffer pData = stack.mallocPointer(1);
             if (vkMapMemory(vkDevice, memory, 0, bufferSize, 0, pData) != VK_SUCCESS) {
                 vkDestroyBuffer(vkDevice, buffer, null);
                 vkFreeMemory(vkDevice, memory, null);
                 return null;
             }
-            bonePaletteMapped = pData.get(0);
+            long mapped = pData.get(0);
 
             // Seed every slot with identity matrices so an unwritten slot never skins with garbage
-            FloatBuffer fb = MemoryUtil.memFloatBuffer(bonePaletteMapped, (int) (bufferSize / Float.BYTES));
-            for (int m = 0; m < MAX_PALETTE_BONES * MAX_SKINNED_ENTITIES_PER_FRAME; m++) {
+            FloatBuffer fb = MemoryUtil.memFloatBuffer(mapped, (int) (bufferSize / Float.BYTES));
+            for (int m = 0; m < MAX_PALETTE_BONES * slots; m++) {
                 for (int i = 0; i < 16; i++) fb.put((i % 5 == 0) ? 1.0f : 0.0f);
             }
 
-            bonePaletteBuffer = new VulkanBuffer(buffer, memory, 0);
-            return bonePaletteBuffer;
+            // Persistently mapped palettes are rewritten every frame after the in-flight fence wait
+            if (mappedOut != null) mappedOut[0] = mapped;
+            else vkUnmapMemory(vkDevice, memory);
+
+            return new VulkanBuffer(buffer, memory, 0);
         }
     }
 
@@ -320,6 +361,106 @@ public class VulkanGpuCache {
         int count = Math.min(palette.length, MAX_PALETTE_BONES);
         for (int b = 0; b < count; b++) {
             fb.put(palette[b], 0, 16);
+        }
+    }
+
+    /**
+     * Allocates and writes every 3D descriptor set the frame needs, plus each entity's bone palette, before command
+     * recording begins so no vkUpdateDescriptorSets ever lands inside a render pass. One set is shared per unique
+     * texture view; the per-entity palette slot is selected at bind time through binding 3's dynamic offset.
+     * Must run after the in-flight fence wait and descriptor pool reset.
+     */
+    public void prepareSceneDescriptors(VulkanDevice device, long descriptorPool, long setLayout,
+                                        List<VulkanPassEncoder.RenderEntity> sceneQueue, int sceneQueueCount) {
+        uniqueSetCount = 0;
+        shadowDescriptorSet = 0L;
+        if (entityDescriptorSets.length < sceneQueueCount) {
+            int cap = Math.max(sceneQueueCount, entityDescriptorSets.length * 2);
+            entityDescriptorSets = new long[cap];
+            entityPaletteOffsets = new int[cap];
+        }
+        Arrays.fill(entityDescriptorSets, 0, sceneQueueCount, 0L);
+        Arrays.fill(entityPaletteOffsets, 0, sceneQueueCount, 0);
+
+        VkDevice vkDevice = (device != null) ? device.getLogicalDevice() : null;
+        VulkanTexture whiteTex = getDefaultWhiteTexture(device);
+        VulkanBuffer lightUbo = getOrCreateLightUniformBuffer(device);
+        VulkanBuffer bonePaletteBuf = getOrCreateBonePaletteBuffer(device);
+        // Binding 3 is always written: fall back to the one-slot identity palette (dynamic offsets then stay 0)
+        VulkanBuffer binding3Buf = (bonePaletteBuf != null) ? bonePaletteBuf : getOrCreateDummyBonePaletteBuffer(device);
+        if (vkDevice == null || descriptorPool == 0L || setLayout == 0L || lightUbo == null || whiteTex == null || binding3Buf == null) return;
+
+        shadowDescriptorSet = acquireTextureSet(vkDevice, descriptorPool, setLayout, whiteTex.imageViewHandle, whiteTex, lightUbo, binding3Buf);
+
+        int skinnedIndex = 0;
+        for (int i = 0; i < sceneQueueCount; i++) {
+            VulkanPassEncoder.RenderEntity entity = sceneQueue.get(i);
+            VulkanBuffer mesh = getMesh(entity.meshHandle);
+            if (mesh == null || mesh.bufferHandle == 0L || mesh.vertexCount <= 0) continue;
+
+            // slot 0 stays identity for palette-less skinned meshes
+            if (mesh.floatStride >= 30 && bonePaletteBuf != null && entity.bonePalette != null
+                    && skinnedIndex < MAX_SKINNED_ENTITIES_PER_FRAME - 1) {
+                int paletteSlot = ++skinnedIndex;
+                writeBonePalette(paletteSlot, entity.bonePalette);
+                entityPaletteOffsets[i] = (int) (paletteSlot * BONE_PALETTE_STRIDE);
+            }
+
+            VulkanTexture entityTex = getTexture(entity.textureHandle);
+            long texView = (entityTex != null && entityTex.imageViewHandle != 0L) ? entityTex.imageViewHandle : whiteTex.imageViewHandle;
+            entityDescriptorSets[i] = acquireTextureSet(vkDevice, descriptorPool, setLayout, texView, whiteTex, lightUbo, binding3Buf);
+        }
+    }
+
+    /** Descriptor set prepared for the given scene-queue index this frame, or 0 if the entity has none. */
+    public long getEntityDescriptorSet(int index) { return index < entityDescriptorSets.length ? entityDescriptorSets[index] : 0L; }
+
+    /** Byte offset into the bone palette buffer for the given scene-queue index, passed as binding 3's dynamic offset. */
+    public int getEntityPaletteOffset(int index) { return index < entityPaletteOffsets.length ? entityPaletteOffsets[index] : 0; }
+
+    /** White-textured set shared by every shadow blob draw this frame. */
+    public long getShadowDescriptorSet() { return shadowDescriptorSet; }
+
+    private long acquireTextureSet(VkDevice vkDevice, long descriptorPool, long setLayout, long texView,
+                                   VulkanTexture whiteTex, VulkanBuffer lightUbo, VulkanBuffer bonePaletteBuf) {
+        for (int s = 0; s < uniqueSetCount; s++) {
+            if (uniqueSetViews[s] == texView) return uniqueSets[s];
+        }
+
+        try (MemoryStack stack = stackPush()) {
+            VkDescriptorSetAllocateInfo allocSetInfo = VkDescriptorSetAllocateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO)
+                    .descriptorPool(descriptorPool)
+                    .pSetLayouts(stack.longs(setLayout));
+
+            LongBuffer pSet = stack.mallocLong(1);
+            if (vkAllocateDescriptorSets(vkDevice, allocSetInfo, pSet) != VK_SUCCESS) return 0L;
+            long set = pSet.get(0);
+
+            VkDescriptorBufferInfo.Buffer bufferInfo = VkDescriptorBufferInfo.calloc(1, stack).buffer(lightUbo.bufferHandle).offset(0).range(512);
+            VkDescriptorImageInfo.Buffer imageInfoTex = VkDescriptorImageInfo.calloc(1, stack).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(texView).sampler(whiteTex.samplerHandle);
+            VkDescriptorImageInfo.Buffer imageInfoShadow = VkDescriptorImageInfo.calloc(1, stack).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(whiteTex.imageViewHandle).sampler(whiteTex.samplerHandle);
+
+            // Base offset 0 with a one-slot range; the entity's slot is chosen by the dynamic offset at bind time
+            VkDescriptorBufferInfo.Buffer boneInfo = VkDescriptorBufferInfo.calloc(1, stack)
+                    .buffer(bonePaletteBuf.bufferHandle)
+                    .offset(0)
+                    .range(BONE_PALETTE_STRIDE);
+
+            VkWriteDescriptorSet.Buffer descriptorWrites = VkWriteDescriptorSet.calloc(4, stack);
+            descriptorWrites.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(set).dstBinding(0).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC).pBufferInfo(bufferInfo);
+            descriptorWrites.get(1).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(set).dstBinding(1).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(imageInfoTex);
+            descriptorWrites.get(2).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(set).dstBinding(2).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(imageInfoShadow);
+            descriptorWrites.get(3).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(set).dstBinding(3).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC).pBufferInfo(boneInfo);
+
+            vkUpdateDescriptorSets(vkDevice, descriptorWrites, null);
+
+            if (uniqueSetCount < MAX_UNIQUE_SETS) {
+                uniqueSets[uniqueSetCount] = set;
+                uniqueSetViews[uniqueSetCount] = texView;
+                uniqueSetCount++;
+            }
+            return set;
         }
     }
 
@@ -372,7 +513,8 @@ public class VulkanGpuCache {
     public void updateLightUniformBuffer(VulkanDevice device, int lightType, float posX, float posY, float posZ,
                                         float dirX, float dirY, float dirZ,
                                         float r, float g, float b, float intensity,
-                                        float camX, float camY, float camZ, float groundY) {
+                                        float camX, float camY, float camZ, float groundY,
+                                        float[] viewMatrix, float[] projMatrix) {
         VulkanBuffer buf = getOrCreateLightUniformBuffer(device);
         if (buf == null || device == null || device.getLogicalDevice() == null) return;
 
@@ -403,9 +545,18 @@ public class VulkanGpuCache {
 
                 floatBuf.put(40, camX); floatBuf.put(41, camY); floatBuf.put(42, camZ); floatBuf.put(43, groundY);
 
+                // Camera matrices live here (byte offset 176) rather than in push constants to keep those at 80 bytes
+                putMatrixOrIdentity(floatBuf, 44, viewMatrix);
+                putMatrixOrIdentity(floatBuf, 60, projMatrix);
+
                 vkUnmapMemory(vkDevice, buf.memoryHandle);
             }
         }
+    }
+
+    private static void putMatrixOrIdentity(FloatBuffer dst, int index, float[] matrix) {
+        boolean valid = matrix != null && matrix.length == 16;
+        for (int i = 0; i < 16; i++) dst.put(index + i, valid ? matrix[i] : ((i % 5 == 0) ? 1.0f : 0.0f));
     }
 
     public static SingleTimeCmdContext beginSingleTimeCommands(VulkanDevice device) {
@@ -530,6 +681,12 @@ public class VulkanGpuCache {
             if (bonePaletteBuffer.memoryHandle != 0L) vkFreeMemory(vkDevice, bonePaletteBuffer.memoryHandle, null);
             bonePaletteBuffer = null;
             bonePaletteMapped = 0L;
+        }
+
+        if (dummyBonePaletteBuffer != null) {
+            if (dummyBonePaletteBuffer.bufferHandle != 0L) vkDestroyBuffer(vkDevice, dummyBonePaletteBuffer.bufferHandle, null);
+            if (dummyBonePaletteBuffer.memoryHandle != 0L) vkFreeMemory(vkDevice, dummyBonePaletteBuffer.memoryHandle, null);
+            dummyBonePaletteBuffer = null;
         }
 
         if (groundQuadBuffer != null) {
