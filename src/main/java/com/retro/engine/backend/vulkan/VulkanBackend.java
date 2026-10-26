@@ -260,8 +260,8 @@ public class VulkanBackend implements IRenderBackend {
     @Override public void clearSceneQueue() { activeSceneQueueCount = 0; }
 
     @Override
-    public long registerMesh(String assetKey, float[] vertices, int vertexCount) {
-        return gpuCache.registerMesh(deviceManager, assetKey, vertices, vertexCount);
+    public long registerMesh(String assetKey, float[] vertices, int vertexCount, int[] indices, int indexCount) {
+        return gpuCache.registerMesh(deviceManager, assetKey, vertices, vertexCount, indices, indexCount);
     }
 
     @Override

@@ -203,7 +203,12 @@ public class VulkanPassEncoder {
                     LongBuffer pBuffers = stack.longs(vboHandle);
                     LongBuffer pOffsets = stack.longs(0L);
                     vkCmdBindVertexBuffers(cmd, 0, pBuffers, pOffsets);
-                    vkCmdDraw(cmd, mesh.vertexCount, 1, 0, 0);
+                    if (mesh.indexBufferHandle != 0L && mesh.indexCount > 0) {
+                        vkCmdBindIndexBuffer(cmd, mesh.indexBufferHandle, 0, mesh.indexType);
+                        vkCmdDrawIndexed(cmd, mesh.indexCount, 1, 0, 0, 0);
+                    } else {
+                        vkCmdDraw(cmd, mesh.vertexCount, 1, 0, 0);
+                    }
                 }
             }
 

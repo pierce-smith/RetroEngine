@@ -1,12 +1,15 @@
 package com.retro.engine.backend.metal;
 
 import com.retro.engine.rhi.HandleRegistry;
+import org.lwjgl.system.MemoryUtil;
 
+import java.nio.ByteBuffer;
 import java.util.Iterator;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static org.lwjgl.system.JNI.invokePPP;
+import static org.lwjgl.system.JNI.invokePPPPPP;
 import static org.lwjgl.system.macosx.ObjCRuntime.objc_getClass;
 import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 
@@ -20,6 +23,25 @@ import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 public class MetalGpuCache {
 
     private static final int RING_SLOTS = 3;
+
+    public static final long MTL_INDEX_TYPE_UINT16 = 0L;
+    public static final long MTL_INDEX_TYPE_UINT32 = 1L;
+
+    /** Registered mesh: the vertex MTLBuffer plus an optional index MTLBuffer (0L when non-indexed). */
+    public static class MetalMesh extends MetalBuffer {
+        public final long indexBufferHandle;
+        public final int indexCount;
+        public final long indexType;
+
+        public MetalMesh(MetalBuffer vertices, long indexBufferHandle, int indexCount, long indexType) {
+            super(vertices.getHandle(), vertices.getElementCount(), vertices.getFloatStride());
+            this.indexBufferHandle = indexBufferHandle;
+            this.indexCount = indexCount;
+            this.indexType = indexType;
+        }
+
+        public boolean isIndexed() { return indexBufferHandle != 0L && indexCount > 0; }
+    }
 
     public static class DeferredHandle {
         public final long handle;
@@ -165,11 +187,48 @@ public class MetalGpuCache {
 
     /** Uploads a static VBO once (or returns the live handle for assetKey). Thread-safe. */
     public long registerMesh(MetalDevice metalDevice, String assetKey, float[] vertices, int vertexCount) {
+        return registerMesh(metalDevice, assetKey, vertices, vertexCount, null, 0);
+    }
+
+    /** Uploads a static VBO plus an optional IBO once (or returns the live handle for assetKey). Thread-safe. */
+    public long registerMesh(MetalDevice metalDevice, String assetKey, float[] vertices, int vertexCount, int[] indices, int indexCount) {
         if (metalDevice == null || vertices == null || vertexCount <= 0 || vertices.length < vertexCount) return HandleRegistry.NULL_HANDLE;
         return meshHandles.register(assetKey, () -> {
             MetalBuffer buf = MetalBuffer.createWithFloatArray(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), vertices, vertices.length / vertexCount);
-            return buf.getHandle() != 0L ? buf : null;
+            if (buf.getHandle() == 0L) return null;
+            if (indices == null || indexCount <= 0) return new MetalMesh(buf, 0L, 0, MTL_INDEX_TYPE_UINT32);
+
+            MetalMesh mesh = createIndexedMesh(metalDevice, buf, indices, Math.min(indexCount, indices.length));
+            if (mesh == null) invokePPP(buf.getHandle(), sel_registerName("release"), metalDevice.getObjcMsgSend());
+            return mesh;
         });
+    }
+
+    /** Uploads indices as uint16 when every index fits, uint32 otherwise; null on invalid indices or upload failure. */
+    private static MetalMesh createIndexedMesh(MetalDevice metalDevice, MetalBuffer vertexBuf, int[] indices, int indexCount) {
+        int maxIndex = 0;
+        for (int i = 0; i < indexCount; i++) {
+            int idx = indices[i];
+            if (idx < 0 || idx >= vertexBuf.getElementCount()) return null;
+            if (idx > maxIndex) maxIndex = idx;
+        }
+        boolean use16 = maxIndex <= 0xFFFF;
+        long byteLength = (long) indexCount * (use16 ? Short.BYTES : Integer.BYTES);
+
+        ByteBuffer staging = MemoryUtil.memAlloc((int) byteLength);
+        try {
+            if (use16) {
+                for (int i = 0; i < indexCount; i++) staging.putShort(i * Short.BYTES, (short) indices[i]);
+            } else {
+                staging.asIntBuffer().put(indices, 0, indexCount);
+            }
+            long handle = invokePPPPPP(metalDevice.getDevice(), sel_registerName("newBufferWithBytes:length:options:"),
+                    MemoryUtil.memAddress(staging), byteLength, 0L, metalDevice.getObjcMsgSend());
+            if (handle == 0L) return null;
+            return new MetalMesh(vertexBuf, handle, indexCount, use16 ? MTL_INDEX_TYPE_UINT16 : MTL_INDEX_TYPE_UINT32);
+        } finally {
+            MemoryUtil.memFree(staging);
+        }
     }
 
     /** Uploads RGBA8 pixels into an MTLTexture once (or returns the live handle for assetKey). Thread-safe. */
@@ -190,7 +249,9 @@ public class MetalGpuCache {
 
     public void unregisterMesh(long meshHandle) {
         MetalBuffer buf = meshHandles.remove(meshHandle);
-        if (buf != null) enqueueHandleDisposal(buf.getHandle());
+        if (buf == null) return;
+        enqueueHandleDisposal(buf.getHandle());
+        if (buf instanceof MetalMesh mesh) enqueueHandleDisposal(mesh.indexBufferHandle);
     }
 
     public void unregisterTexture(long textureHandle) {
@@ -230,7 +291,10 @@ public class MetalGpuCache {
             long send = metalDevice.getObjcMsgSend();
             long selRelease = sel_registerName("release");
 
-            meshHandles.clear(buf -> invokePPP(buf.getHandle(), selRelease, send));
+            meshHandles.clear(buf -> {
+                invokePPP(buf.getHandle(), selRelease, send);
+                if (buf instanceof MetalMesh mesh && mesh.indexBufferHandle != 0L) invokePPP(mesh.indexBufferHandle, selRelease, send);
+            });
             textureHandles.clear(tex -> invokePPP(tex.getBindableTexture(), selRelease, send));
 
             textureRegistry.cleanup(metalDevice);

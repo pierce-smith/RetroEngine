@@ -176,8 +176,8 @@ public class MetalBackend implements IRenderBackend {
     }
 
     @Override
-    public long registerMesh(String assetKey, float[] vertices, int vertexCount) {
-        return resourceCache.registerMesh(metalDevice, assetKey, vertices, vertexCount);
+    public long registerMesh(String assetKey, float[] vertices, int vertexCount, int[] indices, int indexCount) {
+        return resourceCache.registerMesh(metalDevice, assetKey, vertices, vertexCount, indices, indexCount);
     }
 
     @Override
@@ -208,6 +208,15 @@ public class MetalBackend implements IRenderBackend {
 
         item.vertexBufferHandle = mesh.getHandle();
         item.vertexCount = mesh.getElementCount();
+        if (mesh instanceof MetalGpuCache.MetalMesh indexed && indexed.isIndexed()) {
+            item.indexBufferHandle = indexed.indexBufferHandle;
+            item.indexCount = indexed.indexCount;
+            item.indexType = indexed.indexType;
+        } else {
+            item.indexBufferHandle = 0L;
+            item.indexCount = 0;
+            item.indexType = MetalGpuCache.MTL_INDEX_TYPE_UINT32;
+        }
         item.stride = mesh.getFloatStride();
         item.textureHandle = texHandle;
         item.hasTexture = (texHandle != 0L);

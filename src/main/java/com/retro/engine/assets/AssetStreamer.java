@@ -59,7 +59,7 @@ public class AssetStreamer {
     private void registerMeshHandle(String key, MeshBufferData data) {
         IRenderBackend backend = renderBackend;
         if (backend == null || data == null) return;
-        long handle = backend.registerMesh(key, data.vertices, data.vertexCount);
+        long handle = backend.registerMesh(key, data.vertices, data.vertexCount, data.indices, data.indexCount);
         if (handle != 0L) meshHandles.put(key, handle);
     }
 
