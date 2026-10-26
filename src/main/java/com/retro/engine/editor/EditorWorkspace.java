@@ -226,7 +226,7 @@ public class EditorWorkspace {
         DockSpace.renderDragOverlay(uiGeometryBuffer);
 
         if (overlayManager.getActiveDropdownMenu() != DropdownMenu.NONE) {
-            MainMenuBar.renderDropdownMenuOverlay(uiGeometryBuffer, overlayManager.getActiveDropdownMenu(), commandHistory, gizmoStateController.is3DGridVisible());
+            MainMenuBar.renderDropdownMenuOverlay(uiGeometryBuffer, overlayManager.getActiveDropdownMenu(), commandHistory, gizmoStateController.is3DGridVisible(), lastNdcX, lastNdcY);
         }
 
         if (overlayManager.getActiveModal() == ModalState.ASSET_PICKER) {

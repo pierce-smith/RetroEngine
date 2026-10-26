@@ -9,6 +9,7 @@ import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
+import com.retro.engine.editor.ui.panels.AssetBrowserPanel;
 import com.retro.engine.editor.ui.panels.HierarchyPanel;
 import com.retro.engine.editor.commands.EditorCommands;
 
@@ -24,7 +25,8 @@ public class AssetBrowserInputDelegate {
         List<HierarchyPanel.HierarchyNode> visibleTree = HierarchyPanel.buildFlattenedTree(entities);
         if (visibleTree.isEmpty()) return;
 
-        int index = (int) ((0.85f - ndcY) / 0.08f);
+        float fromTop = HierarchyPanel.ROW_TOP - ndcY;
+        int index = fromTop >= 0.0f ? (int) (fromTop / HierarchyPanel.ROW_HEIGHT) : -1;
         if (index >= 0 && index < visibleTree.size()) {
             Entity clickedEntity = visibleTree.get(index).entity;
             if (visibleTree.get(index).hasChildren && manager.getSelectedEntity() == clickedEntity) {
@@ -44,14 +46,14 @@ public class AssetBrowserInputDelegate {
 
         // 1. Header Buttons
         // [+ NEW FOLDER] Button
-        if (ndcX >= 0.30f && ndcX <= 0.62f && ndcY >= -0.50f && ndcY <= -0.42f) {
+        if (ndcX >= AssetBrowserPanel.NEW_FOLDER_X0 && ndcX <= AssetBrowserPanel.NEW_FOLDER_X1 && ndcY >= AssetBrowserPanel.HEADER_Y0 && ndcY <= AssetBrowserPanel.HEADER_Y1) {
             UISoundPlayer.play(UISound.CLICK);
             manager.getAssetDatabase().createNewFolder();
             return;
         }
 
         // [+ IMPORT ASSET] Button
-        if (ndcX >= 0.65f && ndcX <= 0.98f && ndcY >= -0.50f && ndcY <= -0.42f) {
+        if (ndcX >= AssetBrowserPanel.IMPORT_X0 && ndcX <= AssetBrowserPanel.IMPORT_X1 && ndcY >= AssetBrowserPanel.HEADER_Y0 && ndcY <= AssetBrowserPanel.HEADER_Y1) {
             UISoundPlayer.play(UISound.OPEN_MODAL);
             InspectorInputDelegate.promptImportAssetForDirectory(manager);
             return;
@@ -70,21 +72,21 @@ public class AssetBrowserInputDelegate {
         }
 
         // 2. Click specific Asset or Folder Cards
-        float cardX = -0.95f;
+        float cardX = AssetBrowserPanel.CARD_START_X;
 
         // Check if clicked the Up Level card
         if (hasUpLevel) {
-            if (ndcX >= cardX && ndcX <= cardX + 0.32f && ndcY >= -0.92f && ndcY <= -0.55f) {
+            if (inCard(ndcX, ndcY, cardX)) {
                 UISoundPlayer.play(UISound.CLICK);
                 manager.getAssetDatabase().navigateUpFolder();
                 return;
             }
-            cardX += 0.36f;
+            cardX += AssetBrowserPanel.CARD_PITCH;
         }
 
         for (AssetMeta asset : visibleAssets) {
-            if (cardX + 0.35f > 0.95f) break;
-            if (ndcX >= cardX && ndcX <= cardX + 0.32f && ndcY >= -0.92f && ndcY <= -0.55f) {
+            if (!AssetBrowserPanel.cardFits(cardX)) break;
+            if (inCard(ndcX, ndcY, cardX)) {
                 if (asset.type == AssetType.FOLDER) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     String newPath = activePath.isEmpty() ? asset.name : activePath + "/" + asset.name;
@@ -132,7 +134,11 @@ public class AssetBrowserInputDelegate {
                 }
                 break;
             }
-            cardX += 0.36f;
+            cardX += AssetBrowserPanel.CARD_PITCH;
         }
+    }
+
+    private static boolean inCard(float ndcX, float ndcY, float cardX) {
+        return ndcX >= cardX && ndcX <= cardX + AssetBrowserPanel.CARD_W && ndcY >= AssetBrowserPanel.CARD_Y0 && ndcY <= AssetBrowserPanel.CARD_Y1;
     }
 }

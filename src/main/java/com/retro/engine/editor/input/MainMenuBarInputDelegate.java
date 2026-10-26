@@ -10,36 +10,31 @@ import com.retro.engine.editor.audio.UISoundPlayer.UISound;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.editor.commands.EditorCommands;
 import com.retro.engine.editor.ui.dock.DockSpace;
+import com.retro.engine.editor.ui.panels.MainMenuBar;
 
 import java.io.File;
 import java.util.List;
+
+import static org.lwjgl.glfw.GLFW.glfwSetWindowShouldClose;
 
 public class MainMenuBarInputDelegate {
 
     public static void processTopBarClick(float ndcX, EditorWorkspace manager) {
         if (manager == null) return;
         DropdownMenu current = manager.getOverlayManager().getActiveDropdownMenu();
-        if (ndcX >= -0.72f && ndcX <= -0.62f) {
+        DropdownMenu title = MainMenuBar.titleAt(ndcX);
+        if (title != DropdownMenu.NONE) {
             UISoundPlayer.play(UISound.CLICK);
-            manager.getOverlayManager().setActiveDropdownMenu((current == DropdownMenu.FILE) ? DropdownMenu.NONE : DropdownMenu.FILE);
-        } else if (ndcX >= -0.61f && ndcX <= -0.51f) {
-            UISoundPlayer.play(UISound.CLICK);
-            manager.getOverlayManager().setActiveDropdownMenu((current == DropdownMenu.EDIT) ? DropdownMenu.NONE : DropdownMenu.EDIT);
-        } else if (ndcX >= -0.50f && ndcX <= -0.38f) {
-            UISoundPlayer.play(UISound.CLICK);
-            manager.getOverlayManager().setActiveDropdownMenu((current == DropdownMenu.ENTITY) ? DropdownMenu.NONE : DropdownMenu.ENTITY);
-        } else if (ndcX >= -0.37f && ndcX <= -0.27f) {
-            UISoundPlayer.play(UISound.CLICK);
-            manager.getOverlayManager().setActiveDropdownMenu((current == DropdownMenu.VIEW) ? DropdownMenu.NONE : DropdownMenu.VIEW);
-        } else if (ndcX >= -0.14f && ndcX <= -0.02f) {
+            manager.getOverlayManager().setActiveDropdownMenu((current == title) ? DropdownMenu.NONE : title);
+        } else if (ndcX >= MainMenuBar.PLAY_X0 && ndcX <= MainMenuBar.PLAY_X1) {
             UISoundPlayer.play(UISound.TOGGLE);
             manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
             manager.play();
-        } else if (ndcX >= -0.01f && ndcX <= 0.10f) {
+        } else if (ndcX >= MainMenuBar.PAUSE_X0 && ndcX <= MainMenuBar.PAUSE_X1) {
             UISoundPlayer.play(UISound.TOGGLE);
             manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
             manager.pause();
-        } else if (ndcX >= 0.11f && ndcX <= 0.22f) {
+        } else if (ndcX >= MainMenuBar.STOP_X0 && ndcX <= MainMenuBar.STOP_X1) {
             UISoundPlayer.play(UISound.TOGGLE);
             manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
             manager.stop();
@@ -51,19 +46,9 @@ public class MainMenuBarInputDelegate {
     public static boolean processDropdownOverlayClick(float ndcX, float ndcY, EditorWorkspace manager) {
         if (manager == null) return false;
         DropdownMenu activeDropdownMenu = manager.getOverlayManager().getActiveDropdownMenu();
-        float minX = switch (activeDropdownMenu) {
-            case FILE -> -0.72f;
-            case EDIT -> -0.61f;
-            case ENTITY -> -0.50f;
-            case VIEW -> -0.37f;
-            default -> -0.72f;
-        };
-        float maxX = minX + 0.36f;
-        float minY = 0.50f;
-        float maxY = 0.92f;
 
-        if (ndcX >= minX && ndcX <= maxX && ndcY >= minY && ndcY <= maxY) {
-            int itemIndex = (int) ((maxY - ndcY) / 0.09f);
+        if (MainMenuBar.dropdownContains(activeDropdownMenu, ndcX, ndcY)) {
+            int itemIndex = MainMenuBar.dropdownItemAt(activeDropdownMenu, ndcX, ndcY);
 
             if (activeDropdownMenu == DropdownMenu.FILE) {
                 if (itemIndex == 0) {
@@ -89,6 +74,10 @@ public class MainMenuBarInputDelegate {
                 } else if (itemIndex == 2) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     manager.getSceneManager().promptSaveSceneWithNativeDialog(manager.getAssetDatabase().getMutableAssetDirectory(), manager.getAssetDatabase());
+                } else if (itemIndex == 3) {
+                    // Quit: same path as the OS-level ⌘Q / Alt + F4 (window close request)
+                    UISoundPlayer.play(UISound.CLICK);
+                    if (manager.getWindowHandle() != 0L) glfwSetWindowShouldClose(manager.getWindowHandle(), true);
                 }
             } else if (activeDropdownMenu == DropdownMenu.EDIT) {
                 if (itemIndex == 0) { UISoundPlayer.play(UISound.CLICK); manager.getCommandHistory().undo(); }
