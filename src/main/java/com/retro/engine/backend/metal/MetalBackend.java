@@ -34,6 +34,17 @@ import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
  */
 public class MetalBackend implements IRenderBackend {
 
+    // Selectors are interned once at class load so frame submission never performs a string lookup
+    private static final long SEL_ALLOC = sel_registerName("alloc");
+    private static final long SEL_INIT = sel_registerName("init");
+    private static final long SEL_DRAIN = sel_registerName("drain");
+    private static final long SEL_NEXT_DRAWABLE = sel_registerName("nextDrawable");
+    private static final long SEL_COMMAND_BUFFER = sel_registerName("commandBuffer");
+    private static final long SEL_TEXTURE = sel_registerName("texture");
+    private static final long SEL_PRESENT_DRAWABLE = sel_registerName("presentDrawable:");
+    private static final long SEL_ADD_COMPLETED_HANDLER = sel_registerName("addCompletedHandler:");
+    private static final long SEL_COMMIT = sel_registerName("commit");
+
     private final MetalDevice metalDevice = new MetalDevice();
     private final MetalTexture metalTexture = new MetalTexture();
     private final MetalPipeline metalPipeline = new MetalPipeline();
@@ -46,6 +57,7 @@ public class MetalBackend implements IRenderBackend {
     private long currentDrawable = 0L;
     private long currentCommandBuffer = 0L;
     private long currentAutoreleasePool = 0L;
+    private long autoreleasePoolClass = 0L;
 
     // Matches MetalUniformStream.RING_SLOTS: the CPU never writes a uniform slot the GPU may still be reading
     private static final int MAX_FRAMES_IN_FLIGHT = 3;
@@ -236,10 +248,12 @@ public class MetalBackend implements IRenderBackend {
 
         if (metalLayer == 0L || commandQueue == 0L || metalPipeline.getPipelineState3D() == 0L) return;
 
-        long poolClass = objc_getClass("NSAutoreleasePool");
-        if (poolClass != 0L && send != 0L) {
-            long alloc = invokePPP(poolClass, sel_registerName("alloc"), send);
-            currentAutoreleasePool = invokePPP(alloc, sel_registerName("init"), send);
+        if (autoreleasePoolClass == 0L) {
+            autoreleasePoolClass = objc_getClass("NSAutoreleasePool");
+        }
+        if (autoreleasePoolClass != 0L && send != 0L) {
+            long alloc = invokePPP(autoreleasePoolClass, SEL_ALLOC, send);
+            currentAutoreleasePool = invokePPP(alloc, SEL_INIT, send);
         }
 
         // Block until the GPU has retired the frame that last used the uniform slot we are about to advance into
@@ -251,17 +265,17 @@ public class MetalBackend implements IRenderBackend {
 
         uniformStreamer.advanceFrameIndex();
 
-        currentDrawable = invokePPP(metalLayer, sel_registerName("nextDrawable"), send);
+        currentDrawable = invokePPP(metalLayer, SEL_NEXT_DRAWABLE, send);
         if (currentDrawable == 0L) {
             releaseUnsubmittedFramePermit();
             if (currentAutoreleasePool != 0L && send != 0L) {
-                invokePPP(currentAutoreleasePool, sel_registerName("drain"), send);
+                invokePPP(currentAutoreleasePool, SEL_DRAIN, send);
                 currentAutoreleasePool = 0L;
             }
             return;
         }
 
-        currentCommandBuffer = invokePPP(commandQueue, sel_registerName("commandBuffer"), send);
+        currentCommandBuffer = invokePPP(commandQueue, SEL_COMMAND_BUFFER, send);
 
         passEncoder.encodeOffscreen3DPass(
             currentCommandBuffer, metalDevice, metalPipeline, metalTexture,
@@ -272,7 +286,7 @@ public class MetalBackend implements IRenderBackend {
             activeLightR, activeLightG, activeLightB, activeLightIntensity
         );
 
-        long drawableTexture = invokePPP(currentDrawable, sel_registerName("texture"), send);
+        long drawableTexture = invokePPP(currentDrawable, SEL_TEXTURE, send);
         passEncoder.encodeWindowCompositionPass(
             currentCommandBuffer, drawableTexture, metalDevice, metalPipeline, metalTexture,
             framebuffer, resourceCache, uniformStreamer
@@ -282,7 +296,7 @@ public class MetalBackend implements IRenderBackend {
     @Override
     public void endFrame() {
         if (currentCommandBuffer == 0L || currentDrawable == 0L) return;
-        invokePPPP(currentCommandBuffer, sel_registerName("presentDrawable:"), currentDrawable, metalDevice.getObjcMsgSend());
+        invokePPPP(currentCommandBuffer, SEL_PRESENT_DRAWABLE, currentDrawable, metalDevice.getObjcMsgSend());
     }
 
     @Override
@@ -292,17 +306,17 @@ public class MetalBackend implements IRenderBackend {
         if (currentCommandBuffer != 0L && send != 0L) {
             // The completion handler owns this frame's permit from here; it is released once the GPU finishes.
             if (framePermitHeld) {
-                invokePPPP(currentCommandBuffer, sel_registerName("addCompletedHandler:"), completedHandlerBlock, send);
+                invokePPPP(currentCommandBuffer, SEL_ADD_COMPLETED_HANDLER, completedHandlerBlock, send);
                 framePermitHeld = false;
             }
-            invokePPP(currentCommandBuffer, sel_registerName("commit"), send);
+            invokePPP(currentCommandBuffer, SEL_COMMIT, send);
             currentCommandBuffer = 0L;
             currentDrawable = 0L;
         }
         releaseUnsubmittedFramePermit();
 
         if (currentAutoreleasePool != 0L && send != 0L) {
-            invokePPP(currentAutoreleasePool, sel_registerName("drain"), send);
+            invokePPP(currentAutoreleasePool, SEL_DRAIN, send);
             currentAutoreleasePool = 0L;
         }
     }
