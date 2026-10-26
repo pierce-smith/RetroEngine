@@ -1,13 +1,23 @@
 package com.retro.engine.backend.vulkan;
 
+import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
 
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
+import static org.lwjgl.vulkan.VK12.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
 import static org.lwjgl.vulkan.VK13.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
 
 /**
@@ -16,11 +26,27 @@ import static org.lwjgl.vulkan.VK13.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_
  * infinite 3D grid rendering (36-byte 9-float stride VBO from GizmoState matching Metal backend),
  * dynamic ground shadow blobs, depth-only directional shadow map passes, vertical Y-axis pillar lines, and swapchain 2D UI composition
  * using Dynamic Rendering (VK_KHR_dynamic_rendering).
- * Delegates binary pipeline cache disk serialization to VulkanPipelineCache.
+ * All 3D pipelines share one bindless set 0 layout (see VulkanGpuCache) and a 128-byte push constant block carrying
+ * the model matrix, surface parameters and material/bone-palette slot indices.
+ * Owns the VkPipelineCache and its disk serialization (.pipeline_cache.bin): the blob is validated against this
+ * device's vendor/device ID and pipelineCacheUUID before reuse and written atomically so a crash never leaves a
+ * truncated cache behind.
  */
 public class VulkanPipeline {
 
-    private final VulkanPipelineCache pipelineCacheManager = new VulkanPipelineCache();
+    // 3D push constant block (bytes): mat4 model 0, vec4 params 64, vec4 surface 80, ivec4 texIndices 96, ivec4 texIndices2 112
+    public static final int MESH_PUSH_CONSTANT_SIZE = 128;
+
+    // Upper bound for the bindless texture table; clamped further to the device's descriptor limits
+    private static final int MAX_BINDLESS_TEXTURES = 4096;
+    // Non-table resources in set 0 that count against the same per-stage limits (shadow map + headroom)
+    private static final int RESERVED_STAGE_RESOURCES = 8;
+
+    private static final String PIPELINE_CACHE_FILE_NAME = ".pipeline_cache.bin";
+    private static final int PIPELINE_CACHE_HEADER_SIZE = 16 + VK_UUID_SIZE;
+
+    private long pipelineCache = 0L;
+    private int bindlessTextureCapacity = 0;
 
     private long minUniformBufferOffsetAlignment = 64L;
 
@@ -57,20 +83,39 @@ public class VulkanPipeline {
             vkGetPhysicalDeviceProperties(device.getPhysicalDevice(), deviceProperties);
             this.minUniformBufferOffsetAlignment = deviceProperties.limits().minUniformBufferOffsetAlignment();
             System.out.println("[VulkanPipeline] Hardware minUniformBufferOffsetAlignment: " + minUniformBufferOffsetAlignment + " bytes.");
+
+            VkPhysicalDeviceLimits limits = deviceProperties.limits();
+            this.bindlessTextureCapacity = computeBindlessCapacity(limits);
+            if (bindlessTextureCapacity < 2) {
+                System.err.println("[VulkanPipeline] ERROR: Device descriptor limits leave no room for a bindless texture table.");
+                return false;
+            }
+            if (limits.maxPushConstantsSize() < MESH_PUSH_CONSTANT_SIZE) {
+                System.err.println("[VulkanPipeline] ERROR: maxPushConstantsSize " + limits.maxPushConstantsSize() + " < " + MESH_PUSH_CONSTANT_SIZE + " bytes.");
+                return false;
+            }
+
+            createPipelineCache(vkDevice, deviceProperties);
         }
 
-        pipelineCacheManager.initialize(vkDevice);
-
         try (MemoryStack stack = stackPush()) {
-            // 1. 3D Scene Pass Layout
-            VkDescriptorSetLayoutBinding.Buffer bindings3D = VkDescriptorSetLayoutBinding.calloc(4, stack);
-            bindings3D.get(0).binding(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC).descriptorCount(1).stageFlags(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
-            bindings3D.get(1).binding(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
-            bindings3D.get(2).binding(2).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
-            bindings3D.get(3).binding(3).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC).descriptorCount(1).stageFlags(VK_SHADER_STAGE_VERTEX_BIT);
+            // 1. 3D Scene Pass Layout: one bindless set shared by the scene, skinned, blob and shadow depth pipelines.
+            // No dynamic descriptors: the palette slot travels in push constants, so the set is bound once per pass.
+            VkDescriptorSetLayoutBinding.Buffer bindings3D = VkDescriptorSetLayoutBinding.calloc(5, stack);
+            bindings3D.get(0).binding(VulkanGpuCache.BINDING_LIGHT_UBO).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+            bindings3D.get(1).binding(VulkanGpuCache.BINDING_MATERIAL_SAMPLER).descriptorType(VK_DESCRIPTOR_TYPE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+            bindings3D.get(2).binding(VulkanGpuCache.BINDING_SHADOW_MAP).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+            bindings3D.get(3).binding(VulkanGpuCache.BINDING_BONE_PALETTES).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_VERTEX_BIT);
+            bindings3D.get(4).binding(VulkanGpuCache.BINDING_TEXTURE_TABLE).descriptorType(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).descriptorCount(bindlessTextureCapacity).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+
+            // Only the texture table is partially bound: slots without a registered texture are never written
+            VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlags = VkDescriptorSetLayoutBindingFlagsCreateInfo.calloc(stack)
+                    .sType$Default()
+                    .pBindingFlags(stack.ints(0, 0, 0, 0, VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT));
 
             VkDescriptorSetLayoutCreateInfo dsCreateInfo3D = VkDescriptorSetLayoutCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)
+                    .pNext(bindingFlags.address())
                     .pBindings(bindings3D);
 
             LongBuffer pDSLayout3D = stack.mallocLong(1);
@@ -78,7 +123,7 @@ public class VulkanPipeline {
             descriptorSetLayout3D = pDSLayout3D.get(0);
 
             VkPushConstantRange.Buffer pushConstants3D = VkPushConstantRange.calloc(1, stack);
-            pushConstants3D.get(0).stageFlags(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT).offset(0).size(80); // mat4 model + vec4 params; view/proj come from the binding 0 UBO
+            pushConstants3D.get(0).stageFlags(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT).offset(0).size(MESH_PUSH_CONSTANT_SIZE); // view/proj come from the binding 0 UBO
 
             VkPipelineLayoutCreateInfo layoutCreateInfo3D = VkPipelineLayoutCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO)
@@ -120,16 +165,128 @@ public class VulkanPipeline {
             if (vkCreatePipelineLayout(vkDevice, layoutCreateInfoUI, null, pPipelineLayoutUI) != VK_SUCCESS) return false;
             pipelineLayoutUI = pPipelineLayoutUI.get(0);
 
-            System.out.println("[VulkanPipeline] Layouts and Descriptor Sets configured.");
+            System.out.println("[VulkanPipeline] Layouts and Descriptor Sets configured (bindless table: " + bindlessTextureCapacity + " textures).");
             createGraphicsPipelines(device);
 
-            return true;
+            // Persist right away so a crash later in the session still keeps this run's compiled pipelines
+            savePipelineCache(vkDevice);
+            return graphicsPipeline3D != 0L;
+        }
+    }
+
+    /** Largest texture table the fragment stage can address alongside set 0's other resources. */
+    private static int computeBindlessCapacity(VkPhysicalDeviceLimits limits) {
+        long capacity = MAX_BINDLESS_TEXTURES;
+        capacity = Math.min(capacity, Integer.toUnsignedLong(limits.maxPerStageDescriptorSampledImages()) - 1);
+        capacity = Math.min(capacity, Integer.toUnsignedLong(limits.maxDescriptorSetSampledImages()) - 1);
+        capacity = Math.min(capacity, Integer.toUnsignedLong(limits.maxPerStageResources()) - RESERVED_STAGE_RESOURCES);
+        return (int) Math.max(0L, capacity);
+    }
+
+    // ---------------------------------------------------------------------------------
+    // VkPipelineCache disk serialization (.pipeline_cache.bin)
+    // ---------------------------------------------------------------------------------
+
+    private static Path pipelineCachePath() {
+        return Path.of(System.getProperty("user.dir"), PIPELINE_CACHE_FILE_NAME);
+    }
+
+    /** Creates the pipeline cache, seeded from disk when the stored blob was produced by this exact device/driver. */
+    private void createPipelineCache(VkDevice vkDevice, VkPhysicalDeviceProperties props) {
+        ByteBuffer initialData = null;
+        try (MemoryStack stack = stackPush()) {
+            Path path = pipelineCachePath();
+            if (Files.isRegularFile(path)) {
+                try {
+                    byte[] bytes = Files.readAllBytes(path);
+                    if (isPipelineCacheCompatible(bytes, props)) {
+                        initialData = MemoryUtil.memAlloc(bytes.length);
+                        initialData.put(bytes).flip();
+                        System.out.println("[VulkanPipeline] Loaded VkPipelineCache from " + path.getFileName() + " (" + bytes.length + " bytes).");
+                    } else {
+                        System.out.println("[VulkanPipeline] Ignoring " + path.getFileName() + ": produced by a different GPU or driver.");
+                    }
+                } catch (IOException e) {
+                    System.err.println("[VulkanPipeline] Failed to read " + path.getFileName() + ", starting with an empty cache: " + e.getMessage());
+                }
+            }
+
+            VkPipelineCacheCreateInfo cacheInfo = VkPipelineCacheCreateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO);
+            if (initialData != null) cacheInfo.pInitialData(initialData);
+
+            LongBuffer pCache = stack.mallocLong(1);
+            int result = vkCreatePipelineCache(vkDevice, cacheInfo, null, pCache);
+            if (result != VK_SUCCESS && initialData != null) {
+                // A driver may still reject a blob that passed the header check; fall back to an empty cache
+                cacheInfo.pInitialData(null);
+                result = vkCreatePipelineCache(vkDevice, cacheInfo, null, pCache);
+            }
+            pipelineCache = (result == VK_SUCCESS) ? pCache.get(0) : 0L;
+            if (pipelineCache == 0L) {
+                System.err.println("[VulkanPipeline] WARNING: vkCreatePipelineCache failed (" + result + "); pipelines will compile uncached.");
+            }
+        } finally {
+            if (initialData != null) MemoryUtil.memFree(initialData);
+        }
+    }
+
+    /** Validates the VkPipelineCacheHeaderVersionOne prefix against the running device. */
+    private static boolean isPipelineCacheCompatible(byte[] bytes, VkPhysicalDeviceProperties props) {
+        if (bytes.length < PIPELINE_CACHE_HEADER_SIZE) return false;
+        ByteBuffer header = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
+        int headerSize = header.getInt(0);
+        int headerVersion = header.getInt(4);
+        int vendorId = header.getInt(8);
+        int deviceId = header.getInt(12);
+        if (headerSize < PIPELINE_CACHE_HEADER_SIZE || headerSize > bytes.length) return false;
+        if (headerVersion != VK_PIPELINE_CACHE_HEADER_VERSION_ONE) return false;
+        if (vendorId != props.vendorID() || deviceId != props.deviceID()) return false;
+        ByteBuffer uuid = props.pipelineCacheUUID();
+        for (int i = 0; i < VK_UUID_SIZE; i++) {
+            if (bytes[16 + i] != uuid.get(uuid.position() + i)) return false;
+        }
+        return true;
+    }
+
+    /** Writes the cache blob to a temp file and atomically swaps it in. */
+    public void savePipelineCache(VkDevice vkDevice) {
+        if (vkDevice == null || pipelineCache == 0L) return;
+
+        ByteBuffer data = null;
+        try (MemoryStack stack = stackPush()) {
+            PointerBuffer pSize = stack.mallocPointer(1);
+            if (vkGetPipelineCacheData(vkDevice, pipelineCache, pSize, null) != VK_SUCCESS) return;
+            long size = pSize.get(0);
+            if (size <= 0L || size > Integer.MAX_VALUE) return;
+
+            data = MemoryUtil.memAlloc((int) size);
+            if (vkGetPipelineCacheData(vkDevice, pipelineCache, pSize, data) != VK_SUCCESS) return;
+            byte[] bytes = new byte[(int) pSize.get(0)];
+            data.get(0, bytes);
+
+            Path target = pipelineCachePath();
+            Path temp = target.resolveSibling(PIPELINE_CACHE_FILE_NAME + ".tmp");
+            try {
+                Files.write(temp, bytes);
+                try {
+                    Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                } catch (AtomicMoveNotSupportedException e) {
+                    Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
+                }
+                System.out.println("[VulkanPipeline] Saved VkPipelineCache to " + target.getFileName() + " (" + bytes.length + " bytes).");
+            } catch (IOException e) {
+                System.err.println("[VulkanPipeline] Failed to save VkPipelineCache: " + e.getMessage());
+                try { Files.deleteIfExists(temp); } catch (IOException ignored) { }
+            }
+        } finally {
+            if (data != null) MemoryUtil.memFree(data);
         }
     }
 
     private void createGraphicsPipelines(VulkanDevice device) {
         VkDevice vkDevice = device.getLogicalDevice();
-        long cacheHandle = pipelineCacheManager.getHandle();
+        long cacheHandle = pipelineCache;
 
         try (MemoryStack stack = stackPush()) {
             // 1A. Grid Pipeline (Triangle List for Floor Quad - 36-Byte 9-Float Stride)
@@ -411,6 +568,8 @@ public class VulkanPipeline {
     }
 
     public long getMinUniformBufferOffsetAlignment() { return minUniformBufferOffsetAlignment; }
+    /** Number of slots in the bindless texture table (binding 4 descriptorCount). */
+    public int getBindlessTextureCapacity() { return bindlessTextureCapacity; }
     public long getDescriptorSetLayout3D() { return descriptorSetLayout3D; }
     public long getPipelineLayout3D() { return pipelineLayout3D; }
     public long getGraphicsPipeline3D() { return graphicsPipeline3D; }
@@ -432,7 +591,11 @@ public class VulkanPipeline {
         if (device == null || device.getLogicalDevice() == null) return;
         VkDevice vkDevice = device.getLogicalDevice();
 
-        pipelineCacheManager.cleanup(vkDevice);
+        if (pipelineCache != 0L) {
+            savePipelineCache(vkDevice);
+            vkDestroyPipelineCache(vkDevice, pipelineCache, null);
+            pipelineCache = 0L;
+        }
 
         if (graphicsPipeline3D != 0L) { vkDestroyPipeline(vkDevice, graphicsPipeline3D, null); graphicsPipeline3D = 0L; }
         if (graphicsPipelineShadow != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineShadow, null); graphicsPipelineShadow = 0L; }

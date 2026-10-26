@@ -77,6 +77,20 @@ public interface IRenderBackend {
         submitEntity(meshHandle, textureHandle, px, py, pz, rx, ry, rz, sx, sy, sz, 0.0f, 0.0f, null);
     }
 
+    /**
+     * Multi-channel material variant of {@link #submitEntity}. Backends without multi-texture support fall back to the
+     * albedo channel and reflection strength; the binding is read immediately and never retained.
+     */
+    default void submitEntity(long meshHandle, MaterialBinding material,
+                              float px, float py, float pz,
+                              float rx, float ry, float rz,
+                              float sx, float sy, float sz,
+                              float groundY, float[][] bonePalette) {
+        long albedo = (material != null) ? material.albedoTexture : 0L;
+        float reflect = (material != null) ? material.reflect : 0.0f;
+        submitEntity(meshHandle, albedo, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, reflect, bonePalette);
+    }
+
     void beginFrame();
     void endFrame();
     void present();

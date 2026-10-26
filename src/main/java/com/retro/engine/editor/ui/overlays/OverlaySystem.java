@@ -39,6 +39,7 @@ public class OverlaySystem {
     private DropdownMenu activeDropdownMenu = DropdownMenu.NONE;
     private ModalState activeModal = ModalState.NONE;
     private AssetType pickerFilterType = AssetType.TEXTURE;
+    private String pickerTargetField = null;
     private Entity parentPickerTargetEntity = null;
 
     private boolean contextMenuVisible = false;
@@ -67,9 +68,21 @@ public class OverlaySystem {
     public AssetType getPickerFilterType() { return pickerFilterType; }
 
     public void openAssetPicker(AssetType filterType) {
+        openAssetPicker(filterType, null);
+    }
+
+    /**
+     * Opens the picker for a specific component field (e.g. one Material texture channel). A null target keeps the
+     * legacy behaviour of assigning the selected entity's primary texture / mesh.
+     */
+    public void openAssetPicker(AssetType filterType, String targetFieldName) {
         this.pickerFilterType = filterType;
+        this.pickerTargetField = targetFieldName;
         this.activeModal = ModalState.ASSET_PICKER;
     }
+
+    /** Component field the open asset picker writes to, or null for the primary texture / mesh. */
+    public String getPickerTargetField() { return pickerTargetField; }
     public void openAssetPickerModal(AssetType filterType) { openAssetPicker(filterType); }
 
     public void closeModal() {

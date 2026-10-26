@@ -17,7 +17,8 @@ import static org.lwjgl.system.MemoryStack.stackPush;
 
 /**
  * Handles Vulkan Instance creation, physical GPU selection, queue family discovery,
- * and logical VkDevice instantiation (with Vulkan 1.3 dynamic rendering enabled).
+ * and logical VkDevice instantiation (Vulkan 1.3 dynamic rendering + synchronization2, Vulkan 1.2 timeline semaphores
+ * and descriptor indexing for the bindless material texture table).
  * Isolated for cross-platform execution across macOS (MoltenVK) and Windows/Linux (Native Vulkan).
  */
 public class VulkanDevice {
@@ -168,25 +169,48 @@ public class VulkanDevice {
             }
             ppExtensions.flip();
 
-            VkPhysicalDeviceVulkan12Features supported12 = VkPhysicalDeviceVulkan12Features.calloc(stack).sType$Default();
+            VkPhysicalDeviceVulkan13Features supported13 = VkPhysicalDeviceVulkan13Features.calloc(stack).sType$Default();
+            VkPhysicalDeviceVulkan12Features supported12 = VkPhysicalDeviceVulkan12Features.calloc(stack)
+                    .sType$Default()
+                    .pNext(supported13.address());
             VkPhysicalDeviceFeatures2 supportedFeatures = VkPhysicalDeviceFeatures2.calloc(stack)
                     .sType$Default()
                     .pNext(supported12.address());
             VK11.vkGetPhysicalDeviceFeatures2(physicalDevice, supportedFeatures);
             separateDepthStencilLayouts = supported12.separateDepthStencilLayouts();
 
+            // Bindless material table (descriptor indexing), sync2 barriers/submits and the timeline-semaphore upload
+            // ring are hard requirements of the renderer; fail loudly instead of hitting undefined behaviour later.
+            List<String> missing = new ArrayList<>();
+            if (!supported12.runtimeDescriptorArray()) missing.add("runtimeDescriptorArray");
+            if (!supported12.descriptorBindingPartiallyBound()) missing.add("descriptorBindingPartiallyBound");
+            if (!supportedFeatures.features().shaderSampledImageArrayDynamicIndexing()) missing.add("shaderSampledImageArrayDynamicIndexing");
+            if (!supported12.timelineSemaphore()) missing.add("timelineSemaphore");
+            if (!supported13.synchronization2()) missing.add("synchronization2");
+            if (!supported13.dynamicRendering()) missing.add("dynamicRendering");
+            if (!missing.isEmpty()) {
+                System.err.println("[VulkanDevice] ERROR: GPU lacks required Vulkan features: " + String.join(", ", missing)
+                        + (Platform.get() == Platform.MACOSX ? " (MoltenVK needs Metal argument buffers enabled for descriptor indexing)" : ""));
+                return false;
+            }
+
             VkPhysicalDeviceVulkan12Features features12 = VkPhysicalDeviceVulkan12Features.calloc(stack)
                     .sType$Default()
-                    .separateDepthStencilLayouts(separateDepthStencilLayouts);
+                    .separateDepthStencilLayouts(separateDepthStencilLayouts)
+                    .runtimeDescriptorArray(true)
+                    .descriptorBindingPartiallyBound(true)
+                    .timelineSemaphore(true);
 
             VkPhysicalDeviceVulkan13Features features13 = VkPhysicalDeviceVulkan13Features.calloc(stack)
                     .sType$Default()
                     .pNext(features12.address())
-                    .dynamicRendering(true);
+                    .dynamicRendering(true)
+                    .synchronization2(true);
 
             VkPhysicalDeviceFeatures2 features2 = VkPhysicalDeviceFeatures2.calloc(stack)
                     .sType$Default()
                     .pNext(features13.address());
+            features2.features().shaderSampledImageArrayDynamicIndexing(true);
 
             VkDeviceCreateInfo createInfo = VkDeviceCreateInfo.calloc(stack)
                     .sType$Default()

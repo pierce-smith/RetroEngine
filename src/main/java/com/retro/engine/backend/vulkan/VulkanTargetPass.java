@@ -174,6 +174,7 @@ public class VulkanTargetPass {
     public long getOffscreenImage() { return offscreenImage; }
     public long getOffscreenColorTexture() { return offscreenImageView != 0L ? offscreenImageView : offscreenImage; }
     public long getOffscreenImageView() { return offscreenImageView; }
+    public long getDepthImage() { return depthImage; }
     public long getDepthImageView() { return depthImageView; }
     public int getWidth() { return width; }
     public int getHeight() { return height; }

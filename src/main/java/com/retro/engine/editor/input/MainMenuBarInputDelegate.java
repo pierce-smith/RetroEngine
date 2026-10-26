@@ -11,8 +11,10 @@ import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.editor.commands.EditorCommands;
 import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.panels.MainMenuBar;
+import com.retro.engine.scene.components.rendering.Material;
 
 import java.io.File;
+import java.lang.reflect.Field;
 import java.util.List;
 
 import static org.lwjgl.glfw.GLFW.glfwSetWindowShouldClose;
@@ -140,7 +142,9 @@ public class MainMenuBarInputDelegate {
         if (ndcX >= -0.42f && ndcX <= -0.07f && ndcY >= 0.27f && ndcY <= 0.33f) {
             Entity selected = manager.getSelectedEntity();
             if (selected != null) {
-                if (pickerFilterType == AssetType.TEXTURE) {
+                if (assignMaterialChannel(manager, selected, null)) {
+                    // Non-albedo Material channel cleared through the undoable property command
+                } else if (pickerFilterType == AssetType.TEXTURE) {
                     selected.setTextureAsset(null, null);
                 } else if (pickerFilterType == AssetType.MESH_3D) {
                     selected.setMeshAssetPath(null);
@@ -163,7 +167,9 @@ public class MainMenuBarInputDelegate {
                 UISoundPlayer.play(UISound.CLICK);
                 Entity selected = manager.getSelectedEntity();
                 if (selected != null) {
-                    if (pickerFilterType == AssetType.TEXTURE) {
+                    if (assignMaterialChannel(manager, selected, asset.absolutePath)) {
+                        // Non-albedo Material channel assigned through the undoable property command
+                    } else if (pickerFilterType == AssetType.TEXTURE) {
                         selected.setTextureAsset(asset.absolutePath, asset.name);
                     } else if (pickerFilterType == AssetType.MESH_3D) {
                         selected.setMeshAssetPath(asset.absolutePath);
@@ -173,6 +179,26 @@ public class MainMenuBarInputDelegate {
                 return;
             }
             listY -= 0.10f;
+        }
+    }
+
+    /**
+     * Applies a picker result to the Material channel the picker was opened for. Returns false when the picker targets
+     * the primary albedo texture (or no Material field), leaving the legacy Entity.setTextureAsset path to handle it.
+     */
+    private static boolean assignMaterialChannel(EditorWorkspace manager, Entity selected, String assetPath) {
+        String targetField = manager.getOverlayManager().getPickerTargetField();
+        if (targetField == null || "textureAssetPath".equals(targetField)) return false;
+        Material mat = selected.getComponent(Material.class);
+        if (mat == null) return false;
+        try {
+            Field field = Material.class.getDeclaredField(targetField);
+            EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(mat, field, field.get(mat), assetPath, "TEXTURE");
+            manager.getCommandHistory().executeCommand(cmd);
+            return true;
+        } catch (ReflectiveOperationException e) {
+            e.printStackTrace();
+            return false;
         }
     }
 }

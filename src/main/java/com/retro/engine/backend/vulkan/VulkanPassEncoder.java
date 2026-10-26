@@ -4,8 +4,8 @@ import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
 
+import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
-import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 import java.util.List;
 
@@ -18,23 +18,35 @@ import static org.lwjgl.vulkan.KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 /**
  * Encodes the directional shadow map depth pass, offscreen 3D passes, dynamic ground shadow blobs, and final swapchain composition pass
  * (3D viewport blit + 2D UI overlay pass).
+ * All image layout transitions use VK_KHR_synchronization2 (vkCmdPipelineBarrier2). Every 3D pass binds the bindless
+ * set 0 exactly once; per-draw material channels and bone palette slots are pushed as constants.
  */
 public class VulkanPassEncoder {
 
-    /** One queued draw. Mesh and texture are opaque VulkanGpuCache handles, resolved during command recording. */
+    /** One queued draw. Mesh and textures are opaque VulkanGpuCache handles, resolved to bindless slots before recording. */
     public static class RenderEntity {
         public long meshHandle;
-        public long textureHandle;
+        public long textureHandle; // albedo / diffuse
+        public long normalTextureHandle;
+        public long specularTextureHandle;
+        public long lightmapTextureHandle;
+        public long emissiveTextureHandle;
         public float px, py, pz;
         public float rx, ry, rz;
         public float sx, sy, sz;
         public float groundY = 0.0f;
         public float reflectionStrength = 0.0f;
+        public float specularStrength = 0.0f;
+        public float roughness = 0.6f;
+        public float normalStrength = 1.0f;
+        public float emissiveIntensity = 1.0f;
         public float[][] bonePalette = null;
     }
 
-    // 3D push constant block: mat4 model (64 B) + vec4 params (16 B) = 80 B, within the 128 B guaranteed minimum
-    private static final int MESH_PUSH_FLOATS = 20;
+    // Pass flags read by blinn_phong.frag (params.x)
+    private static final float PASS_SCENE = 0.0f;
+    private static final float PASS_SHADOW_BLOB = 1.0f;
+    private static final float PASS_SHADOW_DEPTH = 2.0f;
 
     // Reusable scratchpad arrays for zero-allocation frame loops
     private final float[] modelMatrixScratch = new float[16];
@@ -64,10 +76,23 @@ public class VulkanPassEncoder {
                                      int sceneQueueCount) {
         try (MemoryStack stack = stackPush()) {
             // Reused for every 3D/shadow draw: vkCmdPushConstants copies the data at record time
-            FloatBuffer meshPush = stack.mallocFloat(MESH_PUSH_FLOATS);
+            ByteBuffer meshPush = stack.malloc(VulkanPipeline.MESH_PUSH_CONSTANT_SIZE);
+            long bindlessSet = gpuCache.getBindlessDescriptorSet();
 
             // PASS 0: DIRECTIONAL SHADOW MAP DEPTH PASS (leaves the shadow map in SHADER_READ_ONLY_OPTIMAL)
-            encodeShadowDepthPass(cmd, stack, meshPush, pipelineManager, gpuCache, deviceManager, sceneQueue, sceneQueueCount);
+            encodeShadowDepthPass(cmd, stack, meshPush, bindlessSet, pipelineManager, gpuCache, deviceManager, sceneQueue, sceneQueueCount);
+
+            // Offscreen color and depth are fully cleared each frame, so their previous contents (last frame's blit
+            // source / depth) are discarded; the source scopes only order this frame's writes after last frame's use.
+            imageBarrier(cmd, stack, targetPass.getOffscreenImage(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_NONE,
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+            imageBarrier(cmd, stack, targetPass.getDepthImage(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 
             // Dynamic Viewport & Scissor Setup for Offscreen Viewport (Negative height for Vulkan Y-Inversion)
             VkViewport.Buffer offscreenViewport = VkViewport.calloc(1, stack);
@@ -152,16 +177,15 @@ public class VulkanPassEncoder {
             // ---------------------------------------------------------------------------------
             // STEP 2: 3D Scene Mesh Pass
             // ---------------------------------------------------------------------------------
-            if (pipelineManager.getGraphicsPipeline3D() != 0L && sceneQueue != null && sceneQueueCount > 0) {
+            if (pipelineManager.getGraphicsPipeline3D() != 0L && bindlessSet != 0L && sceneQueue != null && sceneQueueCount > 0) {
                 VulkanGpuCache.VulkanBuffer bonePaletteBuf = gpuCache.getOrCreateBonePaletteBuffer(deviceManager);
                 long skinnedPipeline = pipelineManager.getGraphicsPipelineSkinned();
 
-                // Binding 0 (light UBO) and binding 3 (bone palette) are dynamic: one offset each, in binding order
-                IntBuffer dynamicOffsets = stack.mallocInt(2);
-                LongBuffer pSet = stack.mallocLong(1);
+                // Set 0 is bound once for the whole pass; every draw selects its textures and palette via push constants
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, stack.longs(bindlessSet), null);
+                LongBuffer pBuffers = stack.mallocLong(1);
+                LongBuffer pOffsets = stack.longs(0L);
                 long boundPipeline = 0L;
-                long boundSet = 0L;
-                int boundPaletteOffset = -1;
 
                 for (int i = 0; i < sceneQueueCount; i++) {
                     RenderEntity entity = sceneQueue.get(i);
@@ -180,33 +204,11 @@ public class VulkanPassEncoder {
                         boundPipeline = wantedPipeline;
                     }
 
-                    // Sets were written by VulkanGpuCache.prepareSceneDescriptors before recording; only rebind
-                    // when the texture set or palette slot actually changes between draws.
-                    long entitySet = gpuCache.getEntityDescriptorSet(i);
-                    int paletteOffset = gpuCache.getEntityPaletteOffset(i);
-                    if (entitySet != 0L && (entitySet != boundSet || paletteOffset != boundPaletteOffset)) {
-                        dynamicOffsets.put(0, 0).put(1, paletteOffset);
-                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, pSet.put(0, entitySet), dynamicOffsets);
-                        boundSet = entitySet;
-                        boundPaletteOffset = paletteOffset;
-                    }
-
                     computeModelMatrixInPlace(entity.px, entity.py, entity.pz, entity.rx, entity.ry, entity.rz, entity.sx, entity.sy, entity.sz, modelMatrixScratch);
-
-                    // 80-byte block: mat4 model + vec4 params (view/proj are read from the binding 0 UBO)
-                    meshPush.clear();
-                    meshPush.put(modelMatrixScratch);
-                    meshPush.put(0.0f);                      // params.x = passFlags (0.0 = Standard 3D Mesh)
-                    meshPush.put(1.0f);                      // params.y = heightFade
-                    meshPush.put(entity.reflectionStrength); // params.z = reflection
-                    meshPush.put(0.0f);                      // params.w = unused
-                    meshPush.flip();
-
+                    writeEntityPush(meshPush, modelMatrixScratch, PASS_SCENE, entity, gpuCache, i);
                     vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, meshPush);
 
-                    LongBuffer pBuffers = stack.longs(vboHandle);
-                    LongBuffer pOffsets = stack.longs(0L);
-                    vkCmdBindVertexBuffers(cmd, 0, pBuffers, pOffsets);
+                    vkCmdBindVertexBuffers(cmd, 0, pBuffers.put(0, vboHandle), pOffsets);
                     if (mesh.indexBufferHandle != 0L && mesh.indexCount > 0) {
                         vkCmdBindIndexBuffer(cmd, mesh.indexBufferHandle, 0, mesh.indexType);
                         vkCmdDrawIndexed(cmd, mesh.indexCount, 1, 0, 0, 0);
@@ -223,14 +225,12 @@ public class VulkanPassEncoder {
             long shadowPipeline = pipelineManager.getGraphicsPipelineShadow();
             if (shadowPipeline == 0L) shadowPipeline = pipelineManager.getGraphicsPipeline3D();
 
-            if (shadowPipeline != 0L && sceneQueue != null && sceneQueueCount > 0 && groundQuadBuf != 0L) {
+            if (shadowPipeline != 0L && bindlessSet != 0L && sceneQueue != null && sceneQueueCount > 0 && groundQuadBuf != 0L) {
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, stack.longs(bindlessSet), null);
 
-                // Every blob samples the same white set prepared before recording, so bind it once for the pass
-                long shadowSet = gpuCache.getShadowDescriptorSet();
-                if (shadowSet != 0L) {
-                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, stack.longs(shadowSet), stack.ints(0, 0));
-                }
+                // Every blob draws the same quad, so it is bound once for the pass
+                vkCmdBindVertexBuffers(cmd, 0, stack.longs(groundQuadBuf), stack.longs(0L));
 
                 int shadowIndex = 0;
                 for (int i = 0; i < sceneQueueCount; i++) {
@@ -247,19 +247,8 @@ public class VulkanPassEncoder {
 
                     computeModelMatrixInPlace(entity.px, shadowY, entity.pz, 0.0f, 0.0f, 0.0f, shadowScale, 1.0f, shadowScale, modelMatrixScratch);
 
-                    meshPush.clear();
-                    meshPush.put(modelMatrixScratch);
-                    meshPush.put(1.0f);       // params.x = passFlags (1.0 = Shadow Blob Pass)
-                    meshPush.put(heightFade); // params.y = heightFade
-                    meshPush.put(0.0f);       // params.z = unused
-                    meshPush.put(0.0f);       // params.w = unused
-                    meshPush.flip();
-
+                    writeBlobPush(meshPush, modelMatrixScratch, heightFade);
                     vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, meshPush);
-
-                    LongBuffer pBuffers = stack.longs(groundQuadBuf);
-                    LongBuffer pOffsets = stack.longs(0L);
-                    vkCmdBindVertexBuffers(cmd, 0, pBuffers, pOffsets);
                     vkCmdDraw(cmd, 6, 1, 0, 0);
 
                     shadowIndex++;
@@ -268,51 +257,25 @@ public class VulkanPassEncoder {
 
             vkCmdEndRendering(cmd);
 
-            // Transition Offscreen Viewport Image layout to SHADER_READ_ONLY_OPTIMAL
-            VkImageMemoryBarrier.Buffer hingeBarrier = VkImageMemoryBarrier.calloc(1, stack)
-                    .sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER)
-                    .oldLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-                    .newLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                    .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                    .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                    .image(targetPass.getOffscreenImage())
-                    .srcAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)
-                    .dstAccessMask(VK_ACCESS_SHADER_READ_BIT);
-
-            hingeBarrier.get(0).subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, null, null, hingeBarrier);
-
             // ---------------------------------------------------------------------------------
             // PHASE 4: FINAL SWAPCHAIN COMPOSITION PASS (3D Viewport Blit + 2D UI Overlay Pass)
             // ---------------------------------------------------------------------------------
             long currentSwapchainImageView = swapchainManager.getImageView(imageIndex);
             long currentSwapchainImage = swapchainManager.getSwapchainImage(imageIndex);
 
-            // 1. Blit Offscreen 3D Viewport to Swapchain Image inside Viewport Sub-Window Bounds
-            VkImageMemoryBarrier.Buffer srcBarrier = VkImageMemoryBarrier.calloc(1, stack)
-                    .sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER)
-                    .oldLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                    .newLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
-                    .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                    .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                    .image(targetPass.getOffscreenImage())
-                    .srcAccessMask(VK_ACCESS_SHADER_READ_BIT)
-                    .dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT);
-            srcBarrier.get(0).subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-
-            VkImageMemoryBarrier.Buffer dstBarrier = VkImageMemoryBarrier.calloc(1, stack)
-                    .sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER)
-                    .oldLayout(VK_IMAGE_LAYOUT_UNDEFINED)
-                    .newLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
-                    .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                    .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                    .image(currentSwapchainImage)
-                    .srcAccessMask(0)
-                    .dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT);
-            dstBarrier.get(0).subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, srcBarrier);
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, dstBarrier);
+            // 1. Offscreen color goes straight to the blit source; the swapchain image is discarded into TRANSFER_DST.
+            // The swapchain transition's source stage matches the acquire semaphore's wait stage in VulkanBackend.endFrame,
+            // which chains the layout change after presentation has released the image.
+            VkImageMemoryBarrier2.Buffer compositionBarriers = VkImageMemoryBarrier2.calloc(2, stack);
+            fillImageBarrier(compositionBarriers.get(0), targetPass.getOffscreenImage(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+            fillImageBarrier(compositionBarriers.get(1), currentSwapchainImage, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_NONE,
+                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            pipelineBarrier(cmd, stack, compositionBarriers);
 
             int dstWidth = swapchainManager.getWidth();
             int dstHeight = swapchainManager.getHeight();
@@ -327,6 +290,12 @@ public class VulkanPassEncoder {
                     .baseArrayLayer(0).layerCount(1);
 
             vkCmdClearColorImage(cmd, currentSwapchainImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, clearColor, clearRange);
+
+            // Clear and blit both write the swapchain image: order them (write-after-write) within TRANSFER_DST
+            imageBarrier(cmd, stack, currentSwapchainImage, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
 
             int dstX0 = Math.max(0, Math.min(dstWidth, (int) ((1.0f + sceneMinX) * 0.5f * dstWidth)));
             int dstX1 = Math.max(0, Math.min(dstWidth, (int) ((1.0f + sceneMaxX) * 0.5f * dstWidth)));
@@ -347,19 +316,11 @@ public class VulkanPassEncoder {
                 vkCmdBlitImage(cmd, targetPass.getOffscreenImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, currentSwapchainImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, blitRegion, VK_FILTER_LINEAR);
             }
 
-            // 2. Transition Swapchain Image TRANSFER_DST_OPTIMAL -> COLOR_ATTACHMENT_OPTIMAL
-            VkImageMemoryBarrier.Buffer uiBarrier = VkImageMemoryBarrier.calloc(1, stack)
-                    .sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER)
-                    .oldLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
-                    .newLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-                    .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                    .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                    .image(currentSwapchainImage)
-                    .srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)
-                    .dstAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-            uiBarrier.get(0).subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, null, null, uiBarrier);
+            // 2. Transition Swapchain Image TRANSFER_DST_OPTIMAL -> COLOR_ATTACHMENT_OPTIMAL (UI pass loads, then blends)
+            imageBarrier(cmd, stack, currentSwapchainImage, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_CLEAR_BIT | VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
 
             // 3. Render 2D UI Overlay quads directly over Swapchain Framebuffer
             long uiVbo = gpuCache.getUiVertexBuffer();
@@ -408,20 +369,75 @@ public class VulkanPassEncoder {
                 vkCmdEndRendering(cmd);
             }
 
-            // 4. Transition Swapchain Image COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR
-            VkImageMemoryBarrier.Buffer presentBarrier = VkImageMemoryBarrier.calloc(1, stack)
-                    .sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER)
-                    .oldLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-                    .newLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
-                    .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                    .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                    .image(currentSwapchainImage)
-                    .srcAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)
-                    .dstAccessMask(0);
-
-            presentBarrier.get(0).subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, null, null, presentBarrier);
+            // 4. Transition Swapchain Image COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR (presentation waits on the
+            // render-finished semaphore, so no destination stage is needed)
+            imageBarrier(cmd, stack, currentSwapchainImage, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE);
         }
+    }
+
+    /** Writes the 128-byte push block for a scene or shadow-depth draw of queued entity {@code index}. */
+    private static void writeEntityPush(ByteBuffer push, float[] model, float passFlag, RenderEntity entity, VulkanGpuCache gpuCache, int index) {
+        push.clear();
+        for (int m = 0; m < 16; m++) push.putFloat(model[m]);
+        // params: passFlags, heightFade, reflection, emissiveIntensity
+        push.putFloat(passFlag).putFloat(1.0f).putFloat(entity.reflectionStrength).putFloat(entity.emissiveIntensity);
+        // surface: specularStrength, roughness, normalStrength, unused
+        push.putFloat(entity.specularStrength).putFloat(entity.roughness).putFloat(entity.normalStrength).putFloat(0.0f);
+        // texIndices: albedo, normal, specular/roughness, lightmap/AO
+        push.putInt(gpuCache.getEntityTextureSlot(index, VulkanGpuCache.CHANNEL_ALBEDO))
+            .putInt(gpuCache.getEntityTextureSlot(index, VulkanGpuCache.CHANNEL_NORMAL))
+            .putInt(gpuCache.getEntityTextureSlot(index, VulkanGpuCache.CHANNEL_SPECULAR))
+            .putInt(gpuCache.getEntityTextureSlot(index, VulkanGpuCache.CHANNEL_LIGHTMAP));
+        // texIndices2: emissive, bone palette slot, unused, unused
+        push.putInt(gpuCache.getEntityTextureSlot(index, VulkanGpuCache.CHANNEL_EMISSIVE))
+            .putInt(gpuCache.getEntityPaletteSlot(index))
+            .putInt(0).putInt(0);
+        push.flip();
+    }
+
+    /** Push block for a ground shadow blob: procedural alpha in the fragment stage, so every channel is absent. */
+    private static void writeBlobPush(ByteBuffer push, float[] model, float heightFade) {
+        push.clear();
+        for (int m = 0; m < 16; m++) push.putFloat(model[m]);
+        push.putFloat(PASS_SHADOW_BLOB).putFloat(heightFade).putFloat(0.0f).putFloat(0.0f);
+        push.putFloat(0.0f).putFloat(1.0f).putFloat(1.0f).putFloat(0.0f);
+        push.putInt(VulkanGpuCache.NO_TEXTURE).putInt(VulkanGpuCache.NO_TEXTURE).putInt(VulkanGpuCache.NO_TEXTURE).putInt(VulkanGpuCache.NO_TEXTURE);
+        push.putInt(VulkanGpuCache.NO_TEXTURE).putInt(0).putInt(0).putInt(0);
+        push.flip();
+    }
+
+    /** Fills one synchronization2 image barrier covering mip 0 / layer 0 of {@code image}. */
+    static void fillImageBarrier(VkImageMemoryBarrier2 barrier, long image, int aspectMask, int oldLayout, int newLayout,
+                                 long srcStage, long srcAccess, long dstStage, long dstAccess) {
+        barrier.sType$Default()
+                .srcStageMask(srcStage)
+                .srcAccessMask(srcAccess)
+                .dstStageMask(dstStage)
+                .dstAccessMask(dstAccess)
+                .oldLayout(oldLayout)
+                .newLayout(newLayout)
+                .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .image(image);
+        barrier.subresourceRange().aspectMask(aspectMask).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+    }
+
+    static void pipelineBarrier(VkCommandBuffer cmd, MemoryStack stack, VkImageMemoryBarrier2.Buffer barriers) {
+        VkDependencyInfo dependency = VkDependencyInfo.calloc(stack)
+                .sType$Default()
+                .pImageMemoryBarriers(barriers);
+        vkCmdPipelineBarrier2(cmd, dependency);
+    }
+
+    /** Records a single synchronization2 image layout transition / memory dependency. */
+    static void imageBarrier(VkCommandBuffer cmd, MemoryStack stack, long image, int aspectMask, int oldLayout, int newLayout,
+                             long srcStage, long srcAccess, long dstStage, long dstAccess) {
+        VkImageMemoryBarrier2.Buffer barrier = VkImageMemoryBarrier2.calloc(1, stack);
+        fillImageBarrier(barrier.get(0), image, aspectMask, oldLayout, newLayout, srcStage, srcAccess, dstStage, dstAccess);
+        pipelineBarrier(cmd, stack, barrier);
     }
 
     /**
@@ -429,7 +445,7 @@ public class VulkanPassEncoder {
      * the vertex stage), then transitions it to SHADER_READ_ONLY_OPTIMAL for binding 2. Runs every frame, even with an
      * empty queue, because the main pass descriptors always expect the shadow map in the read-only layout.
      */
-    private void encodeShadowDepthPass(VkCommandBuffer cmd, MemoryStack stack, FloatBuffer meshPush,
+    private void encodeShadowDepthPass(VkCommandBuffer cmd, MemoryStack stack, ByteBuffer meshPush, long bindlessSet,
                                        VulkanPipeline pipelineManager, VulkanGpuCache gpuCache, VulkanDevice deviceManager,
                                        List<RenderEntity> sceneQueue, int sceneQueueCount) {
         if (!gpuCache.hasShadowMap()) return;
@@ -439,18 +455,11 @@ public class VulkanPassEncoder {
                 ? VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
         // Previous contents are cleared, so discard them; wait on last frame's fragment reads before writing depth
-        VkImageMemoryBarrier.Buffer toAttachment = VkImageMemoryBarrier.calloc(1, stack)
-                .sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER)
-                .oldLayout(VK_IMAGE_LAYOUT_UNDEFINED)
-                .newLayout(depthLayout)
-                .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                .image(gpuCache.getShadowMapImage())
-                .srcAccessMask(0)
-                .dstAccessMask(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-        toAttachment.get(0).subresourceRange().aspectMask(VK_IMAGE_ASPECT_DEPTH_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, 0, null, null, toAttachment);
+        imageBarrier(cmd, stack, gpuCache.getShadowMapImage(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, depthLayout,
+                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_NONE,
+                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 
         VkRenderingAttachmentInfo shadowDepthAttachment = VkRenderingAttachmentInfo.calloc(stack)
                 .sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO)
@@ -481,14 +490,12 @@ public class VulkanPassEncoder {
         long skinnedPipeline = pipelineManager.getGraphicsPipelineShadowDepthSkinned();
         VulkanGpuCache.VulkanBuffer bonePaletteBuf = gpuCache.getOrCreateBonePaletteBuffer(deviceManager);
 
-        if (staticPipeline != 0L && sceneQueue != null && sceneQueueCount > 0) {
-            IntBuffer dynamicOffsets = stack.mallocInt(2);
-            LongBuffer pSet = stack.mallocLong(1);
+        if (staticPipeline != 0L && bindlessSet != 0L && sceneQueue != null && sceneQueueCount > 0) {
+            // Bound once for the pass: shadow_depth.frag reads only the albedo slot for alpha cutout
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, stack.longs(bindlessSet), null);
             LongBuffer pBuffers = stack.mallocLong(1);
             LongBuffer pOffsets = stack.longs(0L);
             long boundPipeline = 0L;
-            long boundSet = 0L;
-            int boundPaletteOffset = -1;
 
             for (int i = 0; i < sceneQueueCount; i++) {
                 RenderEntity entity = sceneQueue.get(i);
@@ -499,32 +506,14 @@ public class VulkanPassEncoder {
                 boolean skinnedLayout = mesh.floatStride >= 30;
                 if (skinnedLayout && (skinnedPipeline == 0L || bonePaletteBuf == null)) continue;
 
-                long entitySet = gpuCache.getEntityDescriptorSet(i);
-                if (entitySet == 0L) continue;
-
                 long wantedPipeline = skinnedLayout ? skinnedPipeline : staticPipeline;
                 if (wantedPipeline != boundPipeline) {
                     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, wantedPipeline);
                     boundPipeline = wantedPipeline;
                 }
 
-                int paletteOffset = gpuCache.getEntityPaletteOffset(i);
-                if (entitySet != boundSet || paletteOffset != boundPaletteOffset) {
-                    dynamicOffsets.put(0, 0).put(1, paletteOffset);
-                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, pSet.put(0, entitySet), dynamicOffsets);
-                    boundSet = entitySet;
-                    boundPaletteOffset = paletteOffset;
-                }
-
                 computeModelMatrixInPlace(entity.px, entity.py, entity.pz, entity.rx, entity.ry, entity.rz, entity.sx, entity.sy, entity.sz, modelMatrixScratch);
-
-                meshPush.clear();
-                meshPush.put(modelMatrixScratch);
-                meshPush.put(2.0f); // params.x = passFlags (2.0 = Shadow Map Depth Pass)
-                meshPush.put(1.0f);
-                meshPush.put(0.0f);
-                meshPush.put(0.0f);
-                meshPush.flip();
+                writeEntityPush(meshPush, modelMatrixScratch, PASS_SHADOW_DEPTH, entity, gpuCache, i);
                 vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, meshPush);
 
                 vkCmdBindVertexBuffers(cmd, 0, pBuffers.put(0, mesh.bufferHandle), pOffsets);
@@ -539,17 +528,11 @@ public class VulkanPassEncoder {
 
         vkCmdEndRendering(cmd);
 
-        VkImageMemoryBarrier.Buffer toShaderRead = VkImageMemoryBarrier.calloc(1, stack)
-                .sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER)
-                .oldLayout(depthLayout)
-                .newLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                .image(gpuCache.getShadowMapImage())
-                .srcAccessMask(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
-                .dstAccessMask(VK_ACCESS_SHADER_READ_BIT);
-        toShaderRead.get(0).subresourceRange().aspectMask(VK_IMAGE_ASPECT_DEPTH_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, null, null, toShaderRead);
+        // Depth writes (including the load-op clear) can land in either fragment test stage
+        imageBarrier(cmd, stack, gpuCache.getShadowMapImage(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                depthLayout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     }
 
     private void computeModelMatrixInPlace(float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float[] outMatrix) {
