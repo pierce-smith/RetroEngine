@@ -37,7 +37,12 @@ public class NarrowphaseSolver {
                                  (b.sphereCollider != null && b.sphereCollider.isTrigger) ||
                                  (b.capsuleCollider != null && b.capsuleCollider.isTrigger);
 
-            if (isATrigger || isBTrigger) return;
+            if (isATrigger || isBTrigger) {
+                physicsSystem.recordTrigger(a, b);
+                return;
+            }
+
+            physicsSystem.recordCollision(a, b);
 
             if (overlapX < overlapY && overlapX < overlapZ) {
                 float sign = dx > 0 ? 1.0f : -1.0f;

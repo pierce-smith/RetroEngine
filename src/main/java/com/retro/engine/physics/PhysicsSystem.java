@@ -8,11 +8,14 @@ import com.retro.engine.scene.components.physics.RigidBodyComponent;
 import com.retro.engine.scene.components.physics.SphereCollider;
 import com.retro.engine.scene.components.transform.Transform;
 import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.scripting.ScriptEngine;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Modern 60 Hz 3D Physics Step Solver Orchestrator.
@@ -21,7 +24,7 @@ import java.util.Map;
  * - NarrowphaseSolver: Collision shape overlap manifolds & positional separation
  * - CharacterControllerSolver: Vice City ground snapping & movement stepping
  * - VehicleSuspensionSolver: 4-wheel raycast suspension & vehicle dynamics
- * Hardened with selective kinematic/scripted transform synchronization guards.
+ * Hardened with physics lifecycle script updates and collision/trigger event dispatches.
  */
 public class PhysicsSystem {
 
@@ -82,6 +85,40 @@ public class PhysicsSystem {
         public PhysicsBody bodyB;
     }
 
+    public static class PairKey {
+        public final Entity entityA;
+        public final Entity entityB;
+        private final String idA;
+        private final String idB;
+
+        public PairKey(Entity a, Entity b) {
+            if (a.id.compareTo(b.id) <= 0) {
+                this.idA = a.id;
+                this.idB = b.id;
+                this.entityA = a;
+                this.entityB = b;
+            } else {
+                this.idA = b.id;
+                this.idB = a.id;
+                this.entityA = b;
+                this.entityB = a;
+            }
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof PairKey)) return false;
+            PairKey pairKey = (PairKey) o;
+            return idA.equals(pairKey.idA) && idB.equals(pairKey.idB);
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * idA.hashCode() + idB.hashCode();
+        }
+    }
+
     private final Map<String, PhysicsBody> bodyMap = new HashMap<>();
     private final List<PhysicsBody> activeBodies = new ArrayList<>();
 
@@ -93,6 +130,12 @@ public class PhysicsSystem {
 
     private final List<BodyPair> broadphasePairs = new ArrayList<>();
     private int activePairCount = 0;
+
+    // Frame-to-frame collision & trigger state pairs
+    private Set<PairKey> previousCollisionPairs = new HashSet<>();
+    private Set<PairKey> currentCollisionPairs = new HashSet<>();
+    private Set<PairKey> previousTriggerPairs = new HashSet<>();
+    private Set<PairKey> currentTriggerPairs = new HashSet<>();
 
     private float accumulator = 0.0f;
     private final RaycastHit sharedRaycastHit = new RaycastHit();
@@ -106,6 +149,10 @@ public class PhysicsSystem {
         activeBodies.clear();
         broadphaseSolver.clear();
         broadphasePairs.clear();
+        previousCollisionPairs.clear();
+        currentCollisionPairs.clear();
+        previousTriggerPairs.clear();
+        currentTriggerPairs.clear();
         activePairCount = 0;
         accumulator = 0.0f;
 
@@ -164,11 +211,9 @@ public class PhysicsSystem {
         }
 
         if (steps >= MAX_PHYSICS_STEPS) {
-            accumulator = 0.0f; // Flush residual accumulator to prevent catch-up spirals
+            accumulator = 0.0f;
         }
 
-        // Only write back to transform if physics solver actually stepped,
-        // and only for DYNAMIC bodies or active character/vehicle controllers
         if (physicsRan) {
             for (PhysicsBody body : activeBodies) {
                 if (body.rigidBody != null && body.rigidBody.motionType == RigidBodyComponent.MotionType.DYNAMIC) {
@@ -180,8 +225,26 @@ public class PhysicsSystem {
         }
     }
 
+    public void recordCollision(PhysicsBody a, PhysicsBody b) {
+        if (a != null && b != null && a.entity != null && b.entity != null) {
+            currentCollisionPairs.add(new PairKey(a.entity, b.entity));
+        }
+    }
+
+    public void recordTrigger(PhysicsBody a, PhysicsBody b) {
+        if (a != null && b != null && a.entity != null && b.entity != null) {
+            currentTriggerPairs.add(new PairKey(a.entity, b.entity));
+        }
+    }
+
     private void fixedUpdate(float dt) {
-        // 1. Step RigidBodies Motion Integration
+        currentCollisionPairs.clear();
+        currentTriggerPairs.clear();
+
+        // 1. Dispatch 60 Hz onPhysicsUpdate(dt) to all active EntityScripts
+        ScriptEngine.physicsUpdateScripts(activeBodies, dt);
+
+        // 2. Step RigidBodies Motion Integration
         for (PhysicsBody body : activeBodies) {
             RigidBodyComponent rb = body.rigidBody;
             if (rb == null || rb.motionType == RigidBodyComponent.MotionType.STATIC) continue;
@@ -221,22 +284,65 @@ public class PhysicsSystem {
             }
         }
 
-        // 2. Delegate to Character Controller Solver
+        // 3. Delegate to Character Controller Solver
         characterSolver.updateControllers(activeBodies, dt, this, sharedRaycastHit);
 
-        // 3. Delegate to Vehicle Suspension Solver
+        // 4. Delegate to Vehicle Suspension Solver
         vehicleSolver.updateVehicles(activeBodies, dt, this, sharedRaycastHit);
 
-        // 4. Delegate to Broadphase Spatial Solver
+        // 5. Delegate to Broadphase Spatial Solver
         activePairCount = broadphaseSolver.generateOverlapPairs(broadphasePairs);
 
-        // 5. Delegate to Narrowphase Collision Solver
+        // 6. Delegate to Narrowphase Collision Solver
         for (int i = 0; i < activePairCount; i++) {
             BodyPair pair = broadphasePairs.get(i);
             if (pair.bodyA != null && pair.bodyB != null) {
                 narrowphaseSolver.resolveCollision(pair.bodyA, pair.bodyB, this);
             }
         }
+
+        // 7. Dispatch Collision Lifecycle Events
+        for (PairKey pair : currentCollisionPairs) {
+            if (previousCollisionPairs.contains(pair)) {
+                ScriptEngine.dispatchCollisionStay(pair.entityA, pair.entityB);
+                ScriptEngine.dispatchCollisionStay(pair.entityB, pair.entityA);
+            } else {
+                ScriptEngine.dispatchCollisionEnter(pair.entityA, pair.entityB);
+                ScriptEngine.dispatchCollisionEnter(pair.entityB, pair.entityA);
+            }
+        }
+        for (PairKey pair : previousCollisionPairs) {
+            if (!currentCollisionPairs.contains(pair)) {
+                ScriptEngine.dispatchCollisionExit(pair.entityA, pair.entityB);
+                ScriptEngine.dispatchCollisionExit(pair.entityB, pair.entityA);
+            }
+        }
+
+        // 8. Dispatch Trigger Lifecycle Events
+        for (PairKey pair : currentTriggerPairs) {
+            if (previousTriggerPairs.contains(pair)) {
+                ScriptEngine.dispatchTriggerStay(pair.entityA, pair.entityB);
+                ScriptEngine.dispatchTriggerStay(pair.entityB, pair.entityA);
+            } else {
+                ScriptEngine.dispatchTriggerEnter(pair.entityA, pair.entityB);
+                ScriptEngine.dispatchTriggerEnter(pair.entityB, pair.entityA);
+            }
+        }
+        for (PairKey pair : previousTriggerPairs) {
+            if (!currentTriggerPairs.contains(pair)) {
+                ScriptEngine.dispatchTriggerExit(pair.entityA, pair.entityB);
+                ScriptEngine.dispatchTriggerExit(pair.entityB, pair.entityA);
+            }
+        }
+
+        // 9. Swap state sets for next step
+        Set<PairKey> tempColl = previousCollisionPairs;
+        previousCollisionPairs = currentCollisionPairs;
+        currentCollisionPairs = tempColl;
+
+        Set<PairKey> tempTrig = previousTriggerPairs;
+        previousTriggerPairs = currentTriggerPairs;
+        currentTriggerPairs = tempTrig;
     }
 
     public float getHalfWidthX(PhysicsBody body) {
@@ -282,6 +388,10 @@ public class PhysicsSystem {
         activeBodies.clear();
         broadphaseSolver.clear();
         broadphasePairs.clear();
+        previousCollisionPairs.clear();
+        currentCollisionPairs.clear();
+        previousTriggerPairs.clear();
+        currentTriggerPairs.clear();
         activePairCount = 0;
     }
 }

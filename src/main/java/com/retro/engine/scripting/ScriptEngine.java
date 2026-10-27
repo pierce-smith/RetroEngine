@@ -1,17 +1,15 @@
 package com.retro.engine.scripting;
 
+import com.retro.engine.physics.PhysicsSystem;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.world.SceneWorld;
 import com.retro.engine.scene.components.gameplay.ScriptComponent;
 import org.codehaus.janino.SimpleCompiler;
 
-import javax.tools.JavaCompiler;
-import javax.tools.ToolProvider;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
-import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.List;
 import java.util.Map;
@@ -22,8 +20,8 @@ import java.util.regex.Pattern;
 
 /**
  * Hardened ScriptEngine managing script instantiation, lifecycle ticks,
- * reflection lookups, ClassLoader caching, Janino in-memory compilation,
- * and hot-loop exception suppression.
+ * physics update dispatches, collision/trigger events, reflection lookups,
+ * ClassLoader caching, Janino in-memory compilation, and hot-loop exception suppression.
  */
 public class ScriptEngine {
 
@@ -77,11 +75,100 @@ public class ScriptEngine {
                         sc.activeScriptInstance.onUpdate(deltaTime);
                     } catch (Exception e) {
                         System.err.println("[ScriptEngine] Exception during onUpdate() on Entity '" + entity.name + "': " + e.getMessage());
-                        // Disable script instance after runtime failure to prevent thrashing stderr on every frame
                         sc.activeScriptInstance = null;
                         sc.enabled = false;
                     }
                 }
+            }
+        }
+    }
+
+    public static void physicsUpdateScripts(List<PhysicsSystem.PhysicsBody> activeBodies, float fixedDeltaTime) {
+        if (activeBodies == null) return;
+        for (int i = 0; i < activeBodies.size(); i++) {
+            PhysicsSystem.PhysicsBody body = activeBodies.get(i);
+            if (body == null || body.entity == null) continue;
+            ScriptComponent sc = body.entity.getComponent(ScriptComponent.class);
+            if (sc != null && sc.enabled && sc.activeScriptInstance != null) {
+                try {
+                    sc.activeScriptInstance.onPhysicsUpdate(fixedDeltaTime);
+                } catch (Exception e) {
+                    System.err.println("[ScriptEngine] Exception during onPhysicsUpdate() on Entity '" + body.entity.name + "': " + e.getMessage());
+                    sc.activeScriptInstance = null;
+                    sc.enabled = false;
+                }
+            }
+        }
+    }
+
+    public static void dispatchCollisionEnter(Entity entity, Entity other) {
+        if (entity == null || other == null) return;
+        ScriptComponent sc = entity.getComponent(ScriptComponent.class);
+        if (sc != null && sc.enabled && sc.activeScriptInstance != null) {
+            try {
+                sc.activeScriptInstance.onCollisionEnter(other);
+            } catch (Exception e) {
+                System.err.println("[ScriptEngine] Exception during onCollisionEnter() on Entity '" + entity.name + "': " + e.getMessage());
+            }
+        }
+    }
+
+    public static void dispatchCollisionStay(Entity entity, Entity other) {
+        if (entity == null || other == null) return;
+        ScriptComponent sc = entity.getComponent(ScriptComponent.class);
+        if (sc != null && sc.enabled && sc.activeScriptInstance != null) {
+            try {
+                sc.activeScriptInstance.onCollisionStay(other);
+            } catch (Exception e) {
+                System.err.println("[ScriptEngine] Exception during onCollisionStay() on Entity '" + entity.name + "': " + e.getMessage());
+            }
+        }
+    }
+
+    public static void dispatchCollisionExit(Entity entity, Entity other) {
+        if (entity == null || other == null) return;
+        ScriptComponent sc = entity.getComponent(ScriptComponent.class);
+        if (sc != null && sc.enabled && sc.activeScriptInstance != null) {
+            try {
+                sc.activeScriptInstance.onCollisionExit(other);
+            } catch (Exception e) {
+                System.err.println("[ScriptEngine] Exception during onCollisionExit() on Entity '" + entity.name + "': " + e.getMessage());
+            }
+        }
+    }
+
+    public static void dispatchTriggerEnter(Entity entity, Entity other) {
+        if (entity == null || other == null) return;
+        ScriptComponent sc = entity.getComponent(ScriptComponent.class);
+        if (sc != null && sc.enabled && sc.activeScriptInstance != null) {
+            try {
+                sc.activeScriptInstance.onTriggerEnter(other);
+            } catch (Exception e) {
+                System.err.println("[ScriptEngine] Exception during onTriggerEnter() on Entity '" + entity.name + "': " + e.getMessage());
+            }
+        }
+    }
+
+    public static void dispatchTriggerStay(Entity entity, Entity other) {
+        if (entity == null || other == null) return;
+        ScriptComponent sc = entity.getComponent(ScriptComponent.class);
+        if (sc != null && sc.enabled && sc.activeScriptInstance != null) {
+            try {
+                sc.activeScriptInstance.onTriggerStay(other);
+            } catch (Exception e) {
+                System.err.println("[ScriptEngine] Exception during onTriggerStay() on Entity '" + entity.name + "': " + e.getMessage());
+            }
+        }
+    }
+
+    public static void dispatchTriggerExit(Entity entity, Entity other) {
+        if (entity == null || other == null) return;
+        ScriptComponent sc = entity.getComponent(ScriptComponent.class);
+        if (sc != null && sc.enabled && sc.activeScriptInstance != null) {
+            try {
+                sc.activeScriptInstance.onTriggerExit(other);
+            } catch (Exception e) {
+                System.err.println("[ScriptEngine] Exception during onTriggerExit() on Entity '" + entity.name + "': " + e.getMessage());
             }
         }
     }
@@ -117,7 +204,7 @@ public class ScriptEngine {
             cleanClassName = cleanClassName.substring(0, cleanClassName.length() - 6);
         }
 
-        // 1. Check negative cache: if resolution failed previously, skip immediately
+        // 1. Check negative cache
         if (failedScriptCache.contains(cleanClassName)) {
             return;
         }
@@ -125,7 +212,6 @@ public class ScriptEngine {
         // 2. Check positive cache
         Class<?> clazz = compiledClassCache.get(cleanClassName);
 
-        // Resolve source file location on disk
         File diskScriptFile = null;
         if (sc.scriptAssetPath != null && !sc.scriptAssetPath.trim().isEmpty()) {
             File f = new File(sc.scriptAssetPath);
@@ -139,11 +225,9 @@ public class ScriptEngine {
             if (alt.exists()) diskScriptFile = alt;
         }
 
-        // Parse package header from disk source file
         String declaredPackage = parsePackageDeclaration(diskScriptFile);
 
         if (clazz == null) {
-            // Static classpath lookups using parsed package and expanded sub-package list
             String[] candidateClassNames;
             if (declaredPackage != null && !declaredPackage.isEmpty()) {
                 candidateClassNames = new String[]{
@@ -173,7 +257,7 @@ public class ScriptEngine {
             }
         }
 
-        // 3. Dynamic runtime compilation if class is not on static classpath
+        // 3. Dynamic runtime compilation
         if (clazz == null && diskScriptFile != null && diskScriptFile.exists()) {
             clazz = compileAndLoadJavaFile(diskScriptFile, cleanClassName, declaredPackage);
             if (clazz != null) {
@@ -182,7 +266,6 @@ public class ScriptEngine {
         }
 
         if (clazz == null) {
-            // Record failure in negative cache to prevent re-compilation on subsequent frames
             failedScriptCache.add(cleanClassName);
             System.err.println("[ScriptEngine] Could not resolve or compile script class for '" + fileName + "'. Skipping further attempts.");
             return;
@@ -222,7 +305,6 @@ public class ScriptEngine {
     private static Class<?> compileAndLoadJavaFile(File scriptFile, String className, String declaredPackage) {
         System.out.println("[ScriptEngine] Dynamic in-memory Janino compilation triggered for script: " + scriptFile.getAbsolutePath());
 
-        // 1. Janino In-Memory Compiler (Zero JDK dependency, fast sub-millisecond compile)
         try {
             SimpleCompiler compiler = new SimpleCompiler();
             compiler.setParentClassLoader(EntityScript.class.getClassLoader());

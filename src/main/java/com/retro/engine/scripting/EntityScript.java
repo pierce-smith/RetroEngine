@@ -1,5 +1,7 @@
 package com.retro.engine.scripting;
 
+import com.retro.engine.physics.RaycastHit;
+import com.retro.engine.physics.PhysicsSystem;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.world.SceneWorld;
 import com.retro.engine.scene.components.Component;
@@ -17,7 +19,7 @@ import com.retro.engine.scene.components.gameplay.VehicleControllerComponent;
 /**
  * Base class for all user gameplay scripts in RetroEngine.
  * Provides virtual lifecycle hooks, spatial transform accessors,
- * component queries, and logging utilities.
+ * component queries, physics raycasting, and logging utilities.
  */
 public abstract class EntityScript {
 
@@ -236,6 +238,18 @@ public abstract class EntityScript {
 
     public AnimatorComponent getAnimator() {
         return getComponent(AnimatorComponent.class);
+    }
+
+    // =========================================================================
+    // Physics & Raycasting Utilities
+    // =========================================================================
+
+    public RaycastHit raycast(float rayOriginX, float rayOriginY, float rayOriginZ,
+                              float rayDirX, float rayDirY, float rayDirZ, float maxDistance) {
+        if (sceneWorld != null && sceneWorld.getPhysicsWorld() != null) {
+            return sceneWorld.getPhysicsWorld().raycastExcluding(entity, rayOriginX, rayOriginY, rayOriginZ, rayDirX, rayDirY, rayDirZ, maxDistance);
+        }
+        return new RaycastHit();
     }
 
     // =========================================================================

@@ -1,6 +1,8 @@
 package com.retro.engine.editor.input;
 
 import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.scene.components.rendering.Material;
+import com.retro.engine.scene.components.gameplay.ScriptComponent;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.EditorWorkspace.DropdownMenu;
 import com.retro.engine.assets.AssetMeta;
@@ -11,7 +13,7 @@ import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.editor.commands.EditorCommands;
 import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.panels.MainMenuBar;
-import com.retro.engine.scene.components.rendering.Material;
+import com.retro.engine.editor.ui.panels.InspectorPanel;
 
 import java.io.File;
 import java.lang.reflect.Field;
@@ -148,6 +150,13 @@ public class MainMenuBarInputDelegate {
                     selected.setTextureAsset(null, null);
                 } else if (pickerFilterType == AssetType.MESH_3D) {
                     selected.setMeshAssetPath(null);
+                } else if (pickerFilterType == AssetType.SCRIPT) {
+                    ScriptComponent sc = selected.getComponent(ScriptComponent.class);
+                    String oldPath = (sc != null) ? sc.scriptAssetPath : null;
+                    String oldName = (sc != null) ? sc.scriptName : null;
+                    EditorCommands.ScriptAssignCommand cmd = new EditorCommands.ScriptAssignCommand(selected, oldPath, oldName, null, null);
+                    manager.getCommandHistory().executeCommand(cmd);
+                    InspectorPanel.resetScroll();
                 }
             }
             UISoundPlayer.play(UISound.CLICK);
@@ -173,6 +182,13 @@ public class MainMenuBarInputDelegate {
                         selected.setTextureAsset(asset.absolutePath, asset.name);
                     } else if (pickerFilterType == AssetType.MESH_3D) {
                         selected.setMeshAssetPath(asset.absolutePath);
+                    } else if (pickerFilterType == AssetType.SCRIPT) {
+                        ScriptComponent sc = selected.getComponent(ScriptComponent.class);
+                        String oldPath = (sc != null) ? sc.scriptAssetPath : null;
+                        String oldName = (sc != null) ? sc.scriptName : null;
+                        EditorCommands.ScriptAssignCommand cmd = new EditorCommands.ScriptAssignCommand(selected, oldPath, oldName, asset.absolutePath, asset.name);
+                        manager.getCommandHistory().executeCommand(cmd);
+                        InspectorPanel.resetScroll();
                     }
                 }
                 manager.getOverlayManager().closeModal();
