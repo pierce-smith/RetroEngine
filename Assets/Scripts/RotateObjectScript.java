@@ -10,7 +10,6 @@ import com.retro.engine.scripting.Input;
 public class RotateObjectScript extends EntityScript {
 
     private float rotationSpeed = 60.0f; // degrees per second
-    private boolean spaceWasDown = false;
 
     @Override
     public void onStart() {
@@ -21,13 +20,6 @@ public class RotateObjectScript extends EntityScript {
     public void onUpdate(float deltaTime) {
         // GLFW_KEY_SPACE = 32
         boolean spaceIsDown = Input.isKeyDown(32);
-
-        // Single-frame edge detection: reverse direction on initial press
-        if (spaceIsDown && !spaceWasDown) {
-            rotationSpeed = -rotationSpeed;
-            logInfo("Spacebar pressed! Reversed rotation direction. Current speed: " + rotationSpeed);
-        }
-        spaceWasDown = spaceIsDown;
 
         // Rotate around Y axis
         rotate(0.0f, rotationSpeed * deltaTime, 0.0f);

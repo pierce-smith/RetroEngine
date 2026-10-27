@@ -36,6 +36,7 @@ public class BroadphaseSolver {
 
     // Stack buffers for zero-allocation tree traversal
     private final int[] queryStack = new int[128];
+    private final int[] pairStack = new int[128];
     private final int[] raycastStack = new int[128];
 
     public BroadphaseSolver() {
@@ -427,12 +428,12 @@ public class BroadphaseSolver {
 
     private int queryPairOverlap(int idA, int idB, List<PhysicsSystem.BodyPair> pairPool, int pairIndex) {
         int localStackTop = 0;
-        queryStack[localStackTop++] = idA;
-        queryStack[localStackTop++] = idB;
+        pairStack[localStackTop++] = idA;
+        pairStack[localStackTop++] = idB;
 
         while (localStackTop > 0) {
-            int b = queryStack[--localStackTop];
-            int a = queryStack[--localStackTop];
+            int b = pairStack[--localStackTop];
+            int a = pairStack[--localStackTop];
 
             Node nodeA = nodes[a];
             Node nodeB = nodes[b];
@@ -451,24 +452,24 @@ public class BroadphaseSolver {
                         pair.bodyB = nodeB.body;
                     }
                 } else if (nodeA.isLeaf()) {
-                    queryStack[localStackTop++] = a;
-                    queryStack[localStackTop++] = nodeB.left;
-                    queryStack[localStackTop++] = a;
-                    queryStack[localStackTop++] = nodeB.right;
+                    pairStack[localStackTop++] = a;
+                    pairStack[localStackTop++] = nodeB.left;
+                    pairStack[localStackTop++] = a;
+                    pairStack[localStackTop++] = nodeB.right;
                 } else if (nodeB.isLeaf()) {
-                    queryStack[localStackTop++] = nodeA.left;
-                    queryStack[localStackTop++] = b;
-                    queryStack[localStackTop++] = nodeA.right;
-                    queryStack[localStackTop++] = b;
+                    pairStack[localStackTop++] = nodeA.left;
+                    pairStack[localStackTop++] = b;
+                    pairStack[localStackTop++] = nodeA.right;
+                    pairStack[localStackTop++] = b;
                 } else {
-                    queryStack[localStackTop++] = nodeA.left;
-                    queryStack[localStackTop++] = nodeB.left;
-                    queryStack[localStackTop++] = nodeA.left;
-                    queryStack[localStackTop++] = nodeB.right;
-                    queryStack[localStackTop++] = nodeA.right;
-                    queryStack[localStackTop++] = nodeB.left;
-                    queryStack[localStackTop++] = nodeA.right;
-                    queryStack[localStackTop++] = nodeB.right;
+                    pairStack[localStackTop++] = nodeA.left;
+                    pairStack[localStackTop++] = nodeB.left;
+                    pairStack[localStackTop++] = nodeA.left;
+                    pairStack[localStackTop++] = nodeB.right;
+                    pairStack[localStackTop++] = nodeA.right;
+                    pairStack[localStackTop++] = nodeB.left;
+                    pairStack[localStackTop++] = nodeA.right;
+                    pairStack[localStackTop++] = nodeB.right;
                 }
             }
         }

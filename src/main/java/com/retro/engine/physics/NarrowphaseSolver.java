@@ -13,11 +13,6 @@ import com.retro.engine.scene.components.physics.SphereCollider;
 public class NarrowphaseSolver {
 
     public void resolveCollision(PhysicsSystem.PhysicsBody a, PhysicsSystem.PhysicsBody b, PhysicsSystem physicsSystem) {
-        if (a.rigidBody != null && a.rigidBody.motionType == RigidBodyComponent.MotionType.STATIC &&
-            b.rigidBody != null && b.rigidBody.motionType == RigidBodyComponent.MotionType.STATIC) {
-            return;
-        }
-
         float halfAx = physicsSystem.getHalfWidthX(a), halfAy = physicsSystem.getHalfWidthY(a), halfAz = physicsSystem.getHalfWidthZ(a);
         float halfBx = physicsSystem.getHalfWidthX(b), halfBy = physicsSystem.getHalfWidthY(b), halfBz = physicsSystem.getHalfWidthZ(b);
 
@@ -39,6 +34,11 @@ public class NarrowphaseSolver {
 
             if (isATrigger || isBTrigger) {
                 physicsSystem.recordTrigger(a, b);
+                return;
+            }
+
+            if (a.rigidBody != null && a.rigidBody.motionType == RigidBodyComponent.MotionType.STATIC &&
+                b.rigidBody != null && b.rigidBody.motionType == RigidBodyComponent.MotionType.STATIC) {
                 return;
             }
 

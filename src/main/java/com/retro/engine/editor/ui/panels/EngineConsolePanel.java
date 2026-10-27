@@ -26,7 +26,7 @@ public class EngineConsolePanel {
 
     private static final int MAX_LOG_ENTRIES = 100;
     private static final Deque<LogEntry> logBuffer = new ArrayDeque<>();
-    private static boolean consoleVisible = false;
+    private static boolean consoleVisible = true;
 
     private static PrintStream originalOut;
     private static PrintStream originalErr;
