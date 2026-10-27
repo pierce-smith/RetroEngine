@@ -80,10 +80,15 @@ public class EntityStateBackupManager {
         public float cameraFov, cameraNearPlane, cameraFarPlane;
         public boolean cameraIsPrimary;
 
-        // Material
+        // Material (All 5 channels + surface params)
         public boolean hasMaterial;
-        public String matTextureAssetPath, matTextureName, matShaderName;
-        public float matReflect;
+        public String matTextureAssetPath;
+        public String matNormalMapAssetPath;
+        public String matSpecularMapAssetPath;
+        public String matLightmapAssetPath;
+        public String matEmissiveMapAssetPath;
+        public String matTextureName, matShaderName;
+        public float matReflect, matSpecularStrength, matRoughness, matNormalStrength, matEmissiveIntensity;
 
         // MeshFilter
         public boolean hasMeshFilter;
@@ -205,9 +210,17 @@ public class EntityStateBackupManager {
             this.hasMaterial = (mat != null);
             if (hasMaterial) {
                 this.matTextureAssetPath = mat.textureAssetPath;
+                this.matNormalMapAssetPath = mat.normalMapAssetPath;
+                this.matSpecularMapAssetPath = mat.specularMapAssetPath;
+                this.matLightmapAssetPath = mat.lightmapAssetPath;
+                this.matEmissiveMapAssetPath = mat.emissiveMapAssetPath;
                 this.matTextureName = mat.textureName;
                 this.matShaderName = mat.shaderName;
                 this.matReflect = mat.reflect;
+                this.matSpecularStrength = mat.specularStrength;
+                this.matRoughness = mat.roughness;
+                this.matNormalStrength = mat.normalStrength;
+                this.matEmissiveIntensity = mat.emissiveIntensity;
             }
 
             MeshFilter mf = entity.getComponent(MeshFilter.class);
@@ -348,9 +361,17 @@ public class EntityStateBackupManager {
                 Material mat = targetEntity.getComponent(Material.class);
                 if (mat != null) {
                     mat.textureAssetPath = this.matTextureAssetPath;
+                    mat.normalMapAssetPath = this.matNormalMapAssetPath;
+                    mat.specularMapAssetPath = this.matSpecularMapAssetPath;
+                    mat.lightmapAssetPath = this.matLightmapAssetPath;
+                    mat.emissiveMapAssetPath = this.matEmissiveMapAssetPath;
                     mat.textureName = this.matTextureName;
                     mat.shaderName = this.matShaderName;
                     mat.reflect = this.matReflect;
+                    mat.specularStrength = this.matSpecularStrength;
+                    mat.roughness = this.matRoughness;
+                    mat.normalStrength = this.matNormalStrength;
+                    mat.emissiveIntensity = this.matEmissiveIntensity;
                 }
             }
 
@@ -464,8 +485,17 @@ public class EntityStateBackupManager {
                 Material cloneMat = cloned.getComponent(Material.class);
                 if (cloneMat == null) { cloneMat = new Material(); cloned.addComponent(cloneMat); }
                 cloneMat.textureAssetPath = origMat.textureAssetPath;
+                cloneMat.normalMapAssetPath = origMat.normalMapAssetPath;
+                cloneMat.specularMapAssetPath = origMat.specularMapAssetPath;
+                cloneMat.lightmapAssetPath = origMat.lightmapAssetPath;
+                cloneMat.emissiveMapAssetPath = origMat.emissiveMapAssetPath;
                 cloneMat.textureName = origMat.textureName;
                 cloneMat.shaderName = origMat.shaderName;
+                cloneMat.reflect = origMat.reflect;
+                cloneMat.specularStrength = origMat.specularStrength;
+                cloneMat.roughness = origMat.roughness;
+                cloneMat.normalStrength = origMat.normalStrength;
+                cloneMat.emissiveIntensity = origMat.emissiveIntensity;
             }
 
             Light origLc = orig.getComponent(Light.class);

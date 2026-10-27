@@ -90,8 +90,17 @@ public class EntitySpawner {
             Material copyMat = copy.getComponent(Material.class);
             if (copyMat == null) { copyMat = new Material(); copy.addComponent(copyMat); }
             copyMat.textureAssetPath = origMat.textureAssetPath;
+            copyMat.normalMapAssetPath = origMat.normalMapAssetPath;
+            copyMat.specularMapAssetPath = origMat.specularMapAssetPath;
+            copyMat.lightmapAssetPath = origMat.lightmapAssetPath;
+            copyMat.emissiveMapAssetPath = origMat.emissiveMapAssetPath;
             copyMat.textureName = origMat.textureName;
             copyMat.shaderName = origMat.shaderName;
+            copyMat.reflect = origMat.reflect;
+            copyMat.specularStrength = origMat.specularStrength;
+            copyMat.roughness = origMat.roughness;
+            copyMat.normalStrength = origMat.normalStrength;
+            copyMat.emissiveIntensity = origMat.emissiveIntensity;
         }
 
         Light origLc = selectedEntity.getComponent(Light.class);
@@ -171,7 +180,7 @@ public class EntitySpawner {
         ac.audioAssetPath = audioAsset.absolutePath;
     }
 
-        public static void attachAnimatorIfRigged(Entity entity, String meshPath) {
+    public static void attachAnimatorIfRigged(Entity entity, String meshPath) {
         if (entity == null || meshPath == null || meshPath.trim().isEmpty()) return;
         try {
             SkeletonImporter.SkeletonImportResult result = SkeletonImporter.loadSkeletonAndAnimations(meshPath);
@@ -226,10 +235,10 @@ public class EntitySpawner {
         }
     }
 
-private Entity findEntityById(String id, List<Entity> sceneEntities) {
+    private Entity findEntityById(String id, List<Entity> sceneEntities) {
         if (id == null || id.isEmpty() || sceneEntities == null) return null;
         for (Entity e : sceneEntities) {
-            if (e.id != null && e.id.equalsIgnoreCase(id)) return e;
+            if (e.id != null && e.id.equalsIgnoreCase(id)) return e; // Wait, let's make sure findEntityById matches original logic
         }
         return null;
     }
