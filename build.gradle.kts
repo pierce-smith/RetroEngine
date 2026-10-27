@@ -35,6 +35,9 @@ dependencies {
     implementation("org.lwjgl:lwjgl-stb")
     implementation("org.lwjgl:lwjgl-tinyfd")
 
+    // In-Memory Janino Scripting Compiler
+    implementation("org.codehaus.janino:janino:3.1.12")
+
     for (platformNative in lwjglNatives) {
         runtimeOnly("org.lwjgl:lwjgl::$platformNative")
         runtimeOnly("org.lwjgl:lwjgl-glfw::$platformNative")
@@ -73,7 +76,6 @@ tasks.withType<JavaCompile> {
 }
 
 fun findGlslcExecutable(): String? {
-    // 1. Check VULKAN_SDK environment variable (Windows glslc.exe and Unix glslc)
     val vulkanSdk = System.getenv("VULKAN_SDK")
     if (!vulkanSdk.isNullOrEmpty()) {
         val sdkGlslcWin = file("$vulkanSdk/bin/glslc.exe")
@@ -82,7 +84,6 @@ fun findGlslcExecutable(): String? {
         if (sdkGlslc.exists()) return sdkGlslc.absolutePath
     }
 
-    // 2. Scan standard Windows Vulkan SDK install directory (e.g. C:/VulkanSDK/1.3.296.0/Bin/glslc.exe)
     val vulkanBaseDir = file("C:/VulkanSDK")
     if (vulkanBaseDir.exists()) {
         val subDirs = vulkanBaseDir.listFiles()?.filter { it.isDirectory } ?: emptyList()
@@ -92,7 +93,6 @@ fun findGlslcExecutable(): String? {
         }
     }
 
-    // 3. Fallback common paths
     val commonPaths = listOf(
         "/opt/homebrew/bin/glslc",
         "/usr/local/bin/glslc",
@@ -103,7 +103,6 @@ fun findGlslcExecutable(): String? {
         if (f.exists()) return f.absolutePath
     }
 
-    // 4. System PATH execution check
     for (cmdName in listOf("glslc.exe", "glslc")) {
         try {
             val testProc = ProcessBuilder(cmdName, "--version").start()
@@ -132,17 +131,12 @@ tasks.register("compileVulkanShaders") {
         if (glslcExec == null) {
             println("==========================================================================")
             println("[WARNING] glslc executable not found on system PATH or Vulkan SDK location.")
-            println("Shader compilation skipped. To compile shaders automatically:")
-            println("  - macOS (Homebrew): brew install vulkan-sdk (or brew install shaderc)")
-            println("  - macOS/Windows/Linux: Install Vulkan SDK")
+            println("Shader compilation skipped.")
             println("==========================================================================")
 
             val missingSpv = shaderFiles.filter { !file("${it.absolutePath}.spv").exists() }
             if (missingSpv.isNotEmpty()) {
-                throw GradleException(
-                    "Missing pre-compiled .spv files for: ${missingSpv.map { it.name }}. " +
-                    "Please install the Vulkan SDK (glslc) or place pre-compiled .spv files in ${shaderDir.path}"
-                )
+                throw GradleException("Missing pre-compiled .spv files for: ${missingSpv.map { it.name }}.")
             }
             return@doLast
         }
@@ -154,25 +148,17 @@ tasks.register("compileVulkanShaders") {
                 .start()
                 .waitFor()
 
-            if (exitCode == 0) {
-                println("Compiled ${shader.name} -> ${outputFile.name}")
-            } else {
+            if (exitCode != 0) {
                 throw GradleException("Failed to compile ${shader.name} with $glslcExec (exit code: $exitCode)")
             }
         }
     }
 }
 
-// ==============================================================================
-// Metal Shader Precompilation (.metal -> .metallib)
-// ==============================================================================
-// MetalPipeline always ships the .metal sources and compiles them at runtime when no matching .metallib is present,
-// so skipping this task (Windows/Linux, or macOS without the Metal toolchain) never breaks the build or the engine.
 val metalShaderDir = file("src/main/resources/shaders/metal")
 val metalLibOutputDir = layout.buildDirectory.dir("generated/metal")
 
 fun metalToolchainAvailable(): Boolean = try {
-    // `xcrun -f metal` succeeds even when the toolchain component is missing, so actually run the compiler
     val proc = ProcessBuilder("xcrun", "-sdk", "macosx", "metal", "--version").redirectErrorStream(true).start()
     proc.inputStream.readAllBytes()
     proc.waitFor() == 0
@@ -188,14 +174,7 @@ val compileMetalShaders = tasks.register("compileMetalShaders") {
     outputs.dir(metalLibOutputDir)
 
     onlyIf("host OS is macOS") { OperatingSystem.current().isMacOsX }
-    onlyIf("Metal toolchain is installed") {
-        metalToolchainAvailable().also { available ->
-            if (!available) {
-                println("[WARNING] Metal toolchain unavailable (install with: xcodebuild -downloadComponent MetalToolchain).")
-                println("          Skipping .metallib precompilation; Metal shaders will compile from source at runtime.")
-            }
-        }
-    }
+    onlyIf("Metal toolchain is installed") { metalToolchainAvailable() }
 
     val shaderDir = metalShaderDir
     val outputRoot = metalLibOutputDir
@@ -216,13 +195,11 @@ val compileMetalShaders = tasks.register("compileMetalShaders") {
             for (cmd in steps) {
                 val exitCode = ProcessBuilder(cmd).inheritIO().start().waitFor()
                 if (exitCode != 0) {
-                    throw GradleException("Failed to compile ${shader.name} (exit code $exitCode): ${cmd.joinToString(" ")}")
+                    throw GradleException("Failed to compile ${shader.name}")
                 }
             }
-            // MetalPipeline only trusts a .metallib whose recorded source hash matches the shipped .metal source
             val sha = MessageDigest.getInstance("SHA-256").digest(shader.readBytes()).joinToString("") { "%02x".format(it) }
             File(outDir, "${metallib.name}.sha256").writeText(sha)
-            println("Compiled ${shader.name} -> ${metallib.name}")
         }
     }
 }
@@ -233,7 +210,7 @@ sourceSets.named("main") {
 
 tasks.register("compileShaders") {
     group = "build"
-    description = "Compiles all shader backends: GLSL -> SPIR-V (Vulkan) and, on macOS, MSL -> metallib (Metal)."
+    description = "Compiles all shader backends."
     dependsOn("compileVulkanShaders", compileMetalShaders)
 }
 
@@ -241,9 +218,6 @@ tasks.named("processResources") {
     dependsOn("compileShaders")
 }
 
-// ==============================================================================
-// Automatic VRAM Asset Cooking Task (.rpack)
-// ==============================================================================
 tasks.register<JavaExec>("cookAssets") {
     group = "build"
     description = "Automatically bakes raw Assets/ into binary .rpack packages using RpackCookerCli."
@@ -254,7 +228,6 @@ tasks.register<JavaExec>("cookAssets") {
     args = listOf("--dir", "Assets", "--out", "Cooked")
 }
 
-// Automatically execute asset cooking whenever you run the engine
 tasks.named("run") {
     dependsOn("cookAssets")
 }

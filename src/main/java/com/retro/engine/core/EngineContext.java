@@ -61,6 +61,8 @@ public class EngineContext {
             return false;
         }
 
+        com.retro.engine.scripting.Input.bindWindow(window);
+
         editorManager = new EditorWorkspace();
         editorManager.setWindowHandle(window.getWindowHandle());
         editorManager.setWindowDimensions(width, height);
@@ -160,6 +162,7 @@ public class EngineContext {
     }
 
     public void shutdown() {
+        com.retro.engine.scripting.Input.unbindWindow();
         unbindWindowListeners();
         if (editorManager != null) {
             editorManager.dispose();
