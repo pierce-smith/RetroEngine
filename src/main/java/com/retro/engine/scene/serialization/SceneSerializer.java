@@ -27,7 +27,8 @@ import java.util.UUID;
 
 /**
  * Pure binary scene serializer (.rscene) enforcing fast memory stream I/O,
- * 128-bit UUID asset indirection, and clean zero-JSON runtime scene graph persistence.
+ * 128-bit UUID asset indirection, multi-channel material serialization,
+ * and clean zero-JSON runtime scene graph persistence.
  */
 public class SceneSerializer {
 
@@ -110,9 +111,10 @@ public class SceneSerializer {
 
                 Material mat = e.getComponent(Material.class);
                 if (mat != null) {
-                    String texPath = sanitizeAssetPath(mat.textureAssetPath);
-                    if (!texPath.isEmpty() && !stringTable.contains(texPath)) stringTable.add(texPath);
-
+                    for (int c = 0; c < Material.CHANNEL_COUNT; c++) {
+                        String path = sanitizeAssetPath(mat.getChannelPath(c));
+                        if (!path.isEmpty() && !stringTable.contains(path)) stringTable.add(path);
+                    }
                     if (mat.textureName != null && !stringTable.contains(mat.textureName)) stringTable.add(mat.textureName);
                     if (mat.shaderName != null && !stringTable.contains(mat.shaderName)) stringTable.add(mat.shaderName);
                 }
@@ -160,12 +162,20 @@ public class SceneSerializer {
                         dos.writeInt(stringTable.indexOf(cleanPath));
                         dos.writeBoolean(mc.isVisible);
                     } else if (comp instanceof Material mat) {
-                        String uuid = (assetDb != null && mat.textureAssetPath != null) ? assetDb.resolveUuidByPath(mat.textureAssetPath) : null;
-                        writeUuidBinary(dos, uuid);
-                        String cleanPath = sanitizeAssetPath(mat.textureAssetPath);
-                        dos.writeInt(stringTable.indexOf(cleanPath));
+                        for (int c = 0; c < Material.CHANNEL_COUNT; c++) {
+                            String path = mat.getChannelPath(c);
+                            String uuid = (assetDb != null && path != null) ? assetDb.resolveUuidByPath(path) : null;
+                            writeUuidBinary(dos, uuid);
+                            String cleanPath = sanitizeAssetPath(path);
+                            dos.writeInt(stringTable.indexOf(cleanPath));
+                        }
                         dos.writeInt(stringTable.indexOf(mat.textureName != null ? mat.textureName : ""));
                         dos.writeInt(stringTable.indexOf(mat.shaderName != null ? mat.shaderName : ""));
+                        dos.writeFloat(mat.reflect);
+                        dos.writeFloat(mat.specularStrength);
+                        dos.writeFloat(mat.roughness);
+                        dos.writeFloat(mat.normalStrength);
+                        dos.writeFloat(mat.emissiveIntensity);
                     } else if (comp instanceof Light lc) {
                         dos.writeUTF(lc.type.name());
                         dos.writeFloat(lc.intensity);
@@ -335,26 +345,30 @@ public class SceneSerializer {
                         MeshFilter mc = entity.getComponent(MeshFilter.class);
                         if (mc != null) mc.isVisible = isVisible;
                     } else if ("Material".equalsIgnoreCase(typeName) || "MaterialComponent".equalsIgnoreCase(typeName)) {
-                        String uuid = readUuidBinary(dis);
-                        int pathIdx = dis.readInt();
+                        Material mat = entity.getComponent(Material.class);
+                        if (mat == null) {
+                            mat = new Material();
+                            entity.addComponent(mat);
+                        }
+
+                        // Read 5 Channels Directly
+                        mat.textureAssetPath = readChannelPath(dis, assetDb, stringTable);
+                        mat.normalMapAssetPath = readChannelPath(dis, assetDb, stringTable);
+                        mat.specularMapAssetPath = readChannelPath(dis, assetDb, stringTable);
+                        mat.lightmapAssetPath = readChannelPath(dis, assetDb, stringTable);
+                        mat.emissiveMapAssetPath = readChannelPath(dis, assetDb, stringTable);
+
                         int nameIdxMat = dis.readInt();
                         int shaderIdx = dis.readInt();
 
-                        String fallbackPath = (pathIdx >= 0 && pathIdx < stringCount) ? stringTable[pathIdx] : "";
-                        String texName = (nameIdxMat >= 0 && nameIdxMat < stringCount) ? stringTable[nameIdxMat] : "";
-                        String shaderName = (shaderIdx >= 0 && shaderIdx < stringCount) ? stringTable[shaderIdx] : "";
+                        mat.textureName = (nameIdxMat >= 0 && nameIdxMat < stringCount) ? stringTable[nameIdxMat] : "DEFAULT_CHECKER";
+                        mat.shaderName = (shaderIdx >= 0 && shaderIdx < stringCount) ? stringTable[shaderIdx] : "RETRO_MSL_3D";
 
-                        String resolvedPath = (assetDb != null && uuid != null) ? assetDb.resolvePathByUuid(uuid) : null;
-                        if (resolvedPath == null || resolvedPath.isEmpty()) resolvedPath = fallbackPath;
-
-                        File texFile = TextureImporter.resolveTextureFile(resolvedPath);
-                        if (texFile != null && texFile.exists()) {
-                            resolvedPath = texFile.getAbsolutePath();
-                        }
-
-                        entity.setTextureAsset(resolvedPath, texName);
-                        Material mat = entity.getComponent(Material.class);
-                        if (mat != null && !shaderName.isEmpty()) mat.shaderName = shaderName;
+                        mat.reflect = dis.readFloat();
+                        mat.specularStrength = dis.readFloat();
+                        mat.roughness = dis.readFloat();
+                        mat.normalStrength = dis.readFloat();
+                        mat.emissiveIntensity = dis.readFloat();
                     } else if ("Light".equalsIgnoreCase(typeName) || "LightComponent".equalsIgnoreCase(typeName)) {
                         String lightTypeStr = dis.readUTF();
                         Light.LightType lt = Light.LightType.DIRECTIONAL;
@@ -429,6 +443,28 @@ public class SceneSerializer {
                         capsule.offsetX = dis.readFloat(); capsule.offsetY = dis.readFloat(); capsule.offsetZ = dis.readFloat();
                         capsule.isTrigger = dis.readBoolean();
                         entity.addComponent(capsule);
+                    } else if ("CharacterControllerComponent".equalsIgnoreCase(typeName) || "CharacterController".equalsIgnoreCase(typeName)) {
+                        CharacterControllerComponent cc = new CharacterControllerComponent();
+                        cc.moveSpeed = dis.readFloat();
+                        cc.jumpForce = dis.readFloat();
+                        cc.stepOffset = dis.readFloat();
+                        cc.slopeLimit = dis.readFloat();
+                        cc.gravityMultiplier = dis.readFloat();
+                        cc.isGrounded = dis.readBoolean();
+                        entity.addComponent(cc);
+                    } else if ("VehicleControllerComponent".equalsIgnoreCase(typeName) || "VehicleController".equalsIgnoreCase(typeName)) {
+                        VehicleControllerComponent vc = new VehicleControllerComponent();
+                        vc.engineTorque = dis.readFloat();
+                        vc.maxSpeed = dis.readFloat();
+                        vc.steeringAngle = dis.readFloat();
+                        vc.brakeForce = dis.readFloat();
+                        vc.suspensionStiffness = dis.readFloat();
+                        vc.suspensionDamping = dis.readFloat();
+                        vc.suspensionRestLength = dis.readFloat();
+                        vc.wheelRadius = dis.readFloat();
+                        vc.wheelTrackWidth = dis.readFloat();
+                        vc.wheelBase = dis.readFloat();
+                        entity.addComponent(vc);
                     }
                 }
                 entities.add(entity);
@@ -465,6 +501,19 @@ public class SceneSerializer {
             e.printStackTrace();
             return new SceneLoadData(new ArrayList<>(), new ArrayList<>());
         }
+    }
+
+    private static String readChannelPath(DataInputStream dis, AssetDatabase assetDb, String[] stringTable) throws IOException {
+        String uuid = readUuidBinary(dis);
+        int pathIdx = dis.readInt();
+        String fallbackPath = (pathIdx >= 0 && pathIdx < stringTable.length) ? stringTable[pathIdx] : "";
+        String resolvedPath = (assetDb != null && uuid != null) ? assetDb.resolvePathByUuid(uuid) : null;
+        if (resolvedPath == null || resolvedPath.isEmpty()) resolvedPath = fallbackPath;
+        File texFile = TextureImporter.resolveTextureFile(resolvedPath);
+        if (texFile != null && texFile.exists()) {
+            resolvedPath = texFile.getAbsolutePath();
+        }
+        return resolvedPath;
     }
 
     private static boolean isInternalEditorResource(String path) {
