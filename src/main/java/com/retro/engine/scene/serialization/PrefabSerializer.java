@@ -46,19 +46,15 @@ public class PrefabSerializer {
 
     public static boolean savePrefab(String filePath, Entity rootEntity, List<Entity> sceneEntities, AssetDatabase assetDb) {
         if (filePath == null || rootEntity == null) return false;
-        String sanitizedPath = sanitizePrefabPath(filePath);
-        File file = new File(sanitizedPath);
-        if (file.getParentFile() != null) {
-            file.getParentFile().mkdirs();
-        }
+        File file = new File(sanitizePrefabPath(filePath));
+        if (file.getParentFile() != null) file.getParentFile().mkdirs();
 
-        // Gather root entity and all descendants
         List<Entity> prefabEntities = new ArrayList<>();
         prefabEntities.add(rootEntity);
 
         if (sceneEntities != null) {
             for (Entity e : sceneEntities) {
-                if (e != rootEntity && e.isDescendantOf(rootEntity, sceneEntities)) {
+                if (e != rootEntity && isDescendantOf(e, rootEntity, sceneEntities)) {
                     prefabEntities.add(e);
                 }
             }
@@ -67,32 +63,25 @@ public class PrefabSerializer {
         try (FileOutputStream fos = new FileOutputStream(file);
              DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(fos))) {
 
-            // 1. Header (16 Bytes)
-            dos.writeInt(PREFAB_MAGIC); // 'PREF'
-            dos.writeInt(1);            // Version
+            dos.writeInt(PREFAB_MAGIC);
+            dos.writeInt(2);
             dos.writeInt(prefabEntities.size());
-            dos.writeInt(0);            // Padding
+            dos.writeInt(0);
 
-            // 2. Build String Dictionary
             List<String> stringTable = new ArrayList<>();
             for (Entity e : prefabEntities) {
                 if (e.name != null && !stringTable.contains(e.name)) stringTable.add(e.name);
-
                 String meshPath = SceneSerializer.sanitizeAssetPath(e.getMeshAssetPath());
                 if (!meshPath.isEmpty() && !stringTable.contains(meshPath)) stringTable.add(meshPath);
 
                 Material mat = e.getComponent(Material.class);
                 if (mat != null) {
-                    String texPath = SceneSerializer.sanitizeAssetPath(mat.textureAssetPath);
-                    if (!texPath.isEmpty() && !stringTable.contains(texPath)) stringTable.add(texPath);
+                    for (int c = 0; c < Material.CHANNEL_COUNT; c++) {
+                        String path = SceneSerializer.sanitizeAssetPath(mat.getChannelPath(c));
+                        if (!path.isEmpty() && !stringTable.contains(path)) stringTable.add(path);
+                    }
                     if (mat.textureName != null && !stringTable.contains(mat.textureName)) stringTable.add(mat.textureName);
                     if (mat.shaderName != null && !stringTable.contains(mat.shaderName)) stringTable.add(mat.shaderName);
-                }
-
-                AudioSource ac = e.getComponent(AudioSource.class);
-                if (ac != null) {
-                    String audioPath = SceneSerializer.sanitizeAssetPath(ac.audioAssetPath);
-                    if (!audioPath.isEmpty() && !stringTable.contains(audioPath)) stringTable.add(audioPath);
                 }
 
                 ScriptComponent sc = e.getComponent(ScriptComponent.class);
@@ -108,10 +97,8 @@ public class PrefabSerializer {
                 dos.writeUTF(s != null ? s : "");
             }
 
-            // Write Root Entity ID
             dos.writeUTF(rootEntity.id != null ? rootEntity.id : "");
 
-            // 3. Write Entity Records
             for (Entity entity : prefabEntities) {
                 dos.writeUTF(entity.id != null ? entity.id : "");
                 dos.writeUTF(entity.parentId != null ? entity.parentId : "");
@@ -161,6 +148,13 @@ public class PrefabSerializer {
                         dos.writeInt(stringTable.indexOf(cleanPath));
                         dos.writeInt(stringTable.indexOf(sc.scriptName != null ? sc.scriptName : ""));
                         dos.writeBoolean(sc.enabled);
+
+                        Map<String, String> overrides = (sc.propertyOverrides != null) ? sc.propertyOverrides : Map.of();
+                        dos.writeInt(overrides.size());
+                        for (Map.Entry<String, String> entry : overrides.entrySet()) {
+                            dos.writeUTF(entry.getKey() != null ? entry.getKey() : "");
+                            dos.writeUTF(entry.getValue() != null ? entry.getValue() : "");
+                        }
                     } else if (comp instanceof RigidBodyComponent rb) {
                         dos.writeUTF(rb.motionType.name());
                         dos.writeFloat(rb.mass);
@@ -214,27 +208,17 @@ public class PrefabSerializer {
     public static List<Entity> instantiatePrefab(String filePath, SceneWorld world, AssetDatabase assetDb) {
         if (filePath == null || world == null) return new ArrayList<>();
         File file = new File(filePath);
-        if (!file.exists()) {
-            file = new File("Assets/" + filePath);
-            if (!file.exists()) {
-                file = new File("Assets/Prefabs/" + filePath);
-            }
-        }
-        if (!file.exists()) {
-            System.err.println("[PrefabSerializer] Error: Prefab file not found at " + filePath);
-            return new ArrayList<>();
-        }
+        if (!file.exists()) file = new File("Assets/" + filePath);
+        if (!file.exists()) file = new File("Assets/Prefabs/" + filePath);
+        if (!file.exists()) return new ArrayList<>();
 
         try (DataInputStream dis = new DataInputStream(new BufferedInputStream(new FileInputStream(file)))) {
             int magic = dis.readInt();
-            if (magic != PREFAB_MAGIC) {
-                System.err.println("[PrefabSerializer] Invalid prefab binary magic in " + file.getName());
-                return new ArrayList<>();
-            }
+            if (magic != PREFAB_MAGIC) return new ArrayList<>();
 
             int version = dis.readInt();
             int entityCount = dis.readInt();
-            dis.readInt(); // Padding
+            dis.readInt();
 
             int stringCount = dis.readInt();
             String[] stringTable = new String[stringCount];
@@ -243,7 +227,6 @@ public class PrefabSerializer {
             }
 
             String rootIdInFile = dis.readUTF();
-
             List<Entity> templateEntities = new ArrayList<>();
             Map<String, String> idRemap = new HashMap<>();
 
@@ -316,6 +299,15 @@ public class PrefabSerializer {
                         String scriptName = (nameIdxSc >= 0 && nameIdxSc < stringCount) ? stringTable[nameIdxSc] : "";
                         ScriptComponent sc = new ScriptComponent(scriptPath, scriptName);
                         sc.enabled = enabled;
+
+                        if (version >= 2) {
+                            int overrideCount = dis.readInt();
+                            for (int k = 0; k < overrideCount; k++) {
+                                String kStr = dis.readUTF();
+                                String vStr = dis.readUTF();
+                                sc.propertyOverrides.put(kStr, vStr);
+                            }
+                        }
                         entity.addComponent(sc);
                     } else if ("RigidBodyComponent".equalsIgnoreCase(typeName) || "RigidBody".equalsIgnoreCase(typeName)) {
                         RigidBodyComponent rb = new RigidBodyComponent();
@@ -350,31 +342,40 @@ public class PrefabSerializer {
                 templateEntities.add(entity);
             }
 
-            // Remap parent IDs
             Entity rootInstantiated = null;
             for (Entity e : templateEntities) {
                 if (e.parentId != null && idRemap.containsKey(e.parentId)) {
                     e.parentId = idRemap.get(e.parentId);
                 } else {
-                    e.parentId = null; // Sub-tree root
+                    e.parentId = null;
                 }
-
                 world.addEntity(e, -1);
-                if (rootInstantiated == null) {
-                    rootInstantiated = e;
-                }
+                if (rootInstantiated == null) rootInstantiated = e;
             }
 
-            if (rootInstantiated != null) {
-                world.selectEntity(rootInstantiated);
-            }
+            if (rootInstantiated != null) world.selectEntity(rootInstantiated);
 
-            System.out.println("[PrefabSerializer] Instantiated binary prefab blueprint (" + templateEntities.size() + " entities) from: " + file.getAbsolutePath());
             return templateEntities;
-
         } catch (Exception e) {
             e.printStackTrace();
             return new ArrayList<>();
         }
+    }
+
+    private static boolean isDescendantOf(Entity child, Entity ancestor, List<Entity> allEntities) {
+        if (child == null || ancestor == null || child.parentId == null) return false;
+        String curParentId = child.parentId;
+        while (curParentId != null && !curParentId.isEmpty()) {
+            if (curParentId.equalsIgnoreCase(ancestor.id)) return true;
+            String nextParentId = null;
+            for (Entity e : allEntities) {
+                if (e.id.equalsIgnoreCase(curParentId)) {
+                    nextParentId = e.parentId;
+                    break;
+                }
+            }
+            curParentId = nextParentId;
+        }
+        return false;
     }
 }

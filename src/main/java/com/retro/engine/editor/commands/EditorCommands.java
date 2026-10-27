@@ -5,22 +5,73 @@ import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.components.*;
 import com.retro.engine.scene.components.gameplay.ScriptComponent;
 import com.retro.engine.scene.components.transform.Transform;
+import com.retro.engine.scripting.ScriptEngine;
 
 import java.lang.reflect.Field;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * Unified container for all editor transactional undo/redo commands.
- * Consolidates individual single-method command implementations into
- * static inner modules for zero-allocation transaction dispatching and
- * clean project source layout.
  */
 public class EditorCommands {
 
-    /**
-     * Encapsulates Entity renaming edits for Undo/Redo.
-     */
+    public static class EntitySpawnCommand implements ICommand {
+        private final EditorWorkspace workspace;
+        private final Entity entity;
+
+        public EntitySpawnCommand(EditorWorkspace workspace, Entity entity) {
+            this.workspace = workspace;
+            this.entity = entity;
+        }
+
+        @Override
+        public void execute() {
+            if (workspace != null && entity != null) {
+                workspace.getSceneManager().addEntity(entity, -1);
+            }
+        }
+
+        @Override
+        public void undo() {
+            if (workspace != null && entity != null) {
+                workspace.getSceneManager().deleteEntity(entity);
+            }
+        }
+
+        @Override
+        public String getName() {
+            return "Spawn Entity '" + (entity != null ? entity.name : "null") + "'";
+        }
+    }
+
+    public static class EntityDeleteCommand implements ICommand {
+        private final EditorWorkspace workspace;
+        private final Entity entity;
+
+        public EntityDeleteCommand(EditorWorkspace workspace, Entity entity) {
+            this.workspace = workspace;
+            this.entity = entity;
+        }
+
+        @Override
+        public void execute() {
+            if (workspace != null && entity != null) {
+                workspace.getSceneManager().deleteEntity(entity);
+            }
+        }
+
+        @Override
+        public void undo() {
+            if (workspace != null && entity != null) {
+                workspace.getSceneManager().addEntity(entity, -1);
+            }
+        }
+
+        @Override
+        public String getName() {
+            return "Delete Entity '" + (entity != null ? entity.name : "null") + "'";
+        }
+    }
+
     public static class EntityRenameCommand implements ICommand {
         private final Entity entity;
         private final String oldName;
@@ -34,113 +85,32 @@ public class EditorCommands {
 
         @Override
         public void execute() {
-            if (entity == null) return;
-            entity.name = newName;
-        }
-
-        @Override
-        public void undo() {
-            if (entity == null) return;
-            entity.name = oldName;
-        }
-
-        @Override
-        public String getName() {
-            return "Rename Entity '" + oldName + "' to '" + newName + "'";
-        }
-    }
-
-    /**
-     * Encapsulates Entity deletion edits for Undo/Redo.
-     * Preserves child-parent relationships across deletion and restoration cycles.
-     */
-    public static class EntityDeleteCommand implements ICommand {
-        private final EditorWorkspace manager;
-        private final Entity entity;
-        private final int originalIndex;
-        private final List<Entity> childEntities = new ArrayList<>();
-
-        public EntityDeleteCommand(EditorWorkspace manager, Entity entity) {
-            this.manager = manager;
-            this.entity = entity;
-            this.originalIndex = (manager != null && entity != null && manager.getSceneEntities() != null)
-                    ? manager.getSceneEntities().indexOf(entity) : -1;
-
-            if (manager != null && entity != null && manager.getSceneEntities() != null) {
-                for (Entity e : manager.getSceneEntities()) {
-                    if (e != null && entity.id != null && entity.id.equalsIgnoreCase(e.parentId)) {
-                        childEntities.add(e);
-                    }
-                }
+            if (entity != null) {
+                entity.name = newName;
             }
         }
 
         @Override
-        public void execute() {
-            if (manager == null || entity == null) return;
-            manager.getSceneManager().deleteEntity(entity);
-        }
-
-        @Override
         public void undo() {
-            if (manager == null || entity == null) return;
-            manager.getSceneManager().addEntity(entity, originalIndex);
-
-            for (Entity child : childEntities) {
-                if (child != null) {
-                    child.parentId = entity.id;
-                    entity.addChildId(child.id);
-                }
+            if (entity != null) {
+                entity.name = oldName;
             }
         }
 
         @Override
         public String getName() {
-            return "Delete Entity '" + (entity != null ? entity.name : "null") + "'";
+            return "Rename Entity to '" + newName + "'";
         }
     }
 
-    /**
-     * Encapsulates Entity spawning edits for Undo/Redo.
-     */
-    public static class EntitySpawnCommand implements ICommand {
-        private final EditorWorkspace manager;
-        private final Entity entity;
-
-        public EntitySpawnCommand(EditorWorkspace manager, Entity entity) {
-            this.manager = manager;
-            this.entity = entity;
-        }
-
-        @Override
-        public void execute() {
-            if (manager == null || entity == null) return;
-            manager.getSceneManager().addEntity(entity, -1);
-        }
-
-        @Override
-        public void undo() {
-            if (manager == null || entity == null) return;
-            manager.getSceneManager().deleteEntity(entity);
-        }
-
-        @Override
-        public String getName() {
-            return "Spawn Entity '" + (entity != null ? entity.name : "null") + "'";
-        }
-    }
-
-    /**
-     * Encapsulates Entity hierarchy re-parenting edits for Undo/Redo.
-     */
     public static class ParentChangeCommand implements ICommand {
-        private final EditorWorkspace manager;
+        private final EditorWorkspace workspace;
         private final Entity child;
         private final Entity oldParent;
         private final Entity newParent;
 
-        public ParentChangeCommand(EditorWorkspace manager, Entity child, Entity oldParent, Entity newParent) {
-            this.manager = manager;
+        public ParentChangeCommand(EditorWorkspace workspace, Entity child, Entity oldParent, Entity newParent) {
+            this.workspace = workspace;
             this.child = child;
             this.oldParent = oldParent;
             this.newParent = newParent;
@@ -148,14 +118,16 @@ public class EditorCommands {
 
         @Override
         public void execute() {
-            if (manager == null || child == null || manager.getSceneManager() == null) return;
-            manager.getSceneManager().setParent(child, newParent);
+            if (workspace != null && child != null) {
+                workspace.getSceneManager().setParent(child, newParent);
+            }
         }
 
         @Override
         public void undo() {
-            if (manager == null || child == null || manager.getSceneManager() == null) return;
-            manager.getSceneManager().setParent(child, oldParent);
+            if (workspace != null && child != null) {
+                workspace.getSceneManager().setParent(child, oldParent);
+            }
         }
 
         @Override
@@ -164,9 +136,47 @@ public class EditorCommands {
         }
     }
 
-    /**
-     * Universal reflection-driven ICommand for undo/redo property mutations across all ECS components.
-     */
+    public static class TransformCommand implements ICommand {
+        private final Transform transform;
+        private final float oldPx, oldPy, oldPz, oldRx, oldRy, oldRz, oldSx, oldSy, oldSz;
+        private final float newPx, newPy, newPz, newRx, newRy, newRz, newSx, newSy, newSz;
+
+        public TransformCommand(Transform transform,
+                                float oldPx, float oldPy, float oldPz, float oldRx, float oldRy, float oldRz, float oldSx, float oldSy, float oldSz,
+                                float newPx, float newPy, float newPz, float newRx, float newRy, float newRz, float newSx, float newSy, float newSz) {
+            this.transform = transform;
+            this.oldPx = oldPx; this.oldPy = oldPy; this.oldPz = oldPz;
+            this.oldRx = oldRx; this.oldRy = oldRy; this.oldRz = oldRz;
+            this.oldSx = oldSx; this.oldSy = oldSy; this.oldSz = oldSz;
+            this.newPx = newPx; this.newPy = newPy; this.newPz = newPz;
+            this.newRx = newRx; this.newRy = newRy; this.newRz = newRz;
+            this.newSx = newSx; this.newSy = newSy; this.newSz = newSz;
+        }
+
+        @Override
+        public void execute() {
+            if (transform == null) return;
+            transform.posX = newPx; transform.posY = newPy; transform.posZ = newPz;
+            transform.rotX = newRx; transform.rotY = newRy; transform.rotZ = newRz;
+            transform.scaleX = newSx; transform.scaleY = newSy; transform.scaleZ = newSz;
+            transform.markDirty();
+        }
+
+        @Override
+        public void undo() {
+            if (transform == null) return;
+            transform.posX = oldPx; transform.posY = oldPy; transform.posZ = oldPz;
+            transform.rotX = oldRx; transform.rotY = oldRy; transform.rotZ = oldRz;
+            transform.scaleX = oldSx; transform.scaleY = oldSy; transform.scaleZ = oldSz;
+            transform.markDirty();
+        }
+
+        @Override
+        public String getName() {
+            return "Transform Entity";
+        }
+    }
+
     public static class ModifyPropertyCommand implements ICommand {
         private final Component component;
         private final Field field;
@@ -186,14 +196,10 @@ public class EditorCommands {
         }
 
         @Override
-        public void execute() {
-            setValue(newValue);
-        }
+        public void execute() { setValue(newValue); }
 
         @Override
-        public void undo() {
-            setValue(oldValue);
-        }
+        public void undo() { setValue(oldValue); }
 
         private void setValue(Object val) {
             if (component == null || field == null) return;
@@ -211,9 +217,6 @@ public class EditorCommands {
         }
     }
 
-    /**
-     * Encapsulates attaching or changing a ScriptComponent on an Entity for Undo/Redo.
-     */
     public static class ScriptAssignCommand implements ICommand {
         private final Entity entity;
         private final String oldPath;
@@ -264,125 +267,32 @@ public class EditorCommands {
         }
     }
 
-    /**
-     * Encapsulates Material texture assignment edits for Undo/Redo.
-     */
-    public static class TextureAssignCommand implements ICommand {
-        private final Entity entity;
-        private final String oldPath;
-        private final String oldName;
-        private final String newPath;
-        private final String newName;
+    public static class ScriptPropertyOverrideCommand implements ICommand {
+        private final ScriptComponent scriptComponent;
+        private final String fieldName;
+        private final String oldValue;
+        private final String newValue;
 
-        public TextureAssignCommand(Entity entity, String oldPath, String oldName, String newPath, String newName) {
-            this.entity = entity;
-            this.oldPath = oldPath;
-            this.oldName = oldName;
-            this.newPath = newPath;
-            this.newName = newName;
+        public ScriptPropertyOverrideCommand(ScriptComponent sc, String fieldName, String oldValue, String newValue) {
+            this.scriptComponent = sc;
+            this.fieldName = fieldName;
+            this.oldValue = oldValue;
+            this.newValue = newValue;
         }
 
         @Override
         public void execute() {
-            if (entity == null) return;
-            entity.setTextureAsset(newPath, newName);
+            ScriptEngine.applyPropertyOverride(scriptComponent, fieldName, newValue);
         }
 
         @Override
         public void undo() {
-            if (entity == null) return;
-            entity.setTextureAsset(oldPath, oldName);
+            ScriptEngine.applyPropertyOverride(scriptComponent, fieldName, oldValue);
         }
 
         @Override
         public String getName() {
-            return "Assign Texture to '" + (entity != null ? entity.name : "null") + "'";
-        }
-    }
-
-    /**
-     * Encapsulates MeshFilter mesh asset assignment edits for Undo/Redo.
-     */
-    public static class MeshAssignCommand implements ICommand {
-        private final Entity entity;
-        private final String oldPath;
-        private final String newPath;
-
-        public MeshAssignCommand(Entity entity, String oldPath, String newPath) {
-            this.entity = entity;
-            this.oldPath = oldPath;
-            this.newPath = newPath;
-        }
-
-        @Override
-        public void execute() {
-            if (entity == null) return;
-            entity.setMeshAssetPath(newPath);
-        }
-
-        @Override
-        public void undo() {
-            if (entity == null) return;
-            entity.setMeshAssetPath(oldPath);
-        }
-
-        @Override
-        public String getName() {
-            return "Assign Mesh to '" + (entity != null ? entity.name : "null") + "'";
-        }
-    }
-
-    /**
-     * Atomic TransformCommand bundling 9-axis (position, rotation, scale)
-     * transform mutations into a single undo/redo transaction.
-     */
-    public static class TransformCommand implements ICommand {
-        private final Transform transform;
-
-        private final float startPx, startPy, startPz;
-        private final float startRx, startRy, startRz;
-        private final float startSx, startSy, startSz;
-
-        private final float endPx, endPy, endPz;
-        private final float endRx, endRy, endRz;
-        private final float endSx, endSy, endSz;
-
-        public TransformCommand(Transform transform,
-                                float startPx, float startPy, float startPz,
-                                float startRx, float startRy, float startRz,
-                                float startSx, float startSy, float startSz,
-                                float endPx, float endPy, float endPz,
-                                float endRx, float endRy, float endRz,
-                                float endSx, float endSy, float endSz) {
-            this.transform = transform;
-            this.startPx = startPx; this.startPy = startPy; this.startPz = startPz;
-            this.startRx = startRx; this.startRy = startRy; this.startRz = startRz;
-            this.startSx = startSx; this.startSy = startSy; this.startSz = startSz;
-
-            this.endPx = endPx; this.endPy = endPy; this.endPz = endPz;
-            this.endRx = endRx; this.endRy = endRy; this.endRz = endRz;
-            this.endSx = endSx; this.endSy = endSy; this.endSz = endSz;
-        }
-
-        @Override
-        public void execute() {
-            if (transform == null) return;
-            transform.setPosition(endPx, endPy, endPz);
-            transform.setRotation(endRx, endRy, endRz);
-            transform.setScale(endSx, endSy, endSz);
-        }
-
-        @Override
-        public void undo() {
-            if (transform == null) return;
-            transform.setPosition(startPx, startPy, startPz);
-            transform.setRotation(startRx, startRy, startRz);
-            transform.setScale(startSx, startSy, startSz);
-        }
-
-        @Override
-        public String getName() {
-            return "Transform Delta";
+            return "Modify Script Property [" + fieldName + "]";
         }
     }
 }
