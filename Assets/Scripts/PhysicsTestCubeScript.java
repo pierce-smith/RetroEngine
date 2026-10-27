@@ -36,8 +36,8 @@ public class PhysicsTestCubeScript extends EntityScript {
         float dx = 0.0f;
         float dz = 0.0f;
 
-        if (Input.isKeyDown(87)) dz += 1.0f; // W (Forward)
-        if (Input.isKeyDown(83)) dz -= 1.0f; // S (Backward)
+        if (Input.isKeyDown(87)) dz -= 1.0f; // W (Forward)
+        if (Input.isKeyDown(83)) dz += 1.0f; // S (Backward)
         if (Input.isKeyDown(65)) dx -= 1.0f; // A (Left)
         if (Input.isKeyDown(68)) dx += 1.0f; // D (Right)
 
