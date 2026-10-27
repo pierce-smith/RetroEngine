@@ -1,5 +1,7 @@
 package com.retro.engine.scene.world;
 
+import com.retro.engine.physics.PhysicsSystem;
+
 import com.retro.engine.animation.AnimationSystem;
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
@@ -33,6 +35,11 @@ import java.util.Map;
  * and per-frame skeletal AnimationSystem updates.
  */
 public class SceneWorld {
+
+    public PhysicsSystem getPhysicsWorld() {
+        return simulationEngine.getPhysicsWorld();
+    }
+
 
     public enum PlayState { EDITING, SIMULATING, PAUSED }
 
