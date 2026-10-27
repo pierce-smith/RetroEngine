@@ -13,9 +13,9 @@ import com.retro.engine.scripting.Input;
  */
 public class PhysicsTestCubeScript extends EntityScript {
 
-    private float moveSpeed = 8.0f;
-    private float rotationSpeed = 45.0f; // degrees per second
-    private float jumpForce = 4.0f;
+    public float moveSpeed = 8.0f;
+    public float rotationSpeed = 45.0f; // degrees per second
+    public float jumpForce = 4.0f;
 
     private boolean spaceWasDown = false;
     private boolean resetWasDown = false;

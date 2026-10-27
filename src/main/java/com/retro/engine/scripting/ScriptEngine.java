@@ -10,6 +10,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.net.URLClassLoader;
 import java.util.List;
 import java.util.Map;
@@ -21,7 +22,8 @@ import java.util.regex.Pattern;
 /**
  * Hardened ScriptEngine managing script instantiation, lifecycle ticks,
  * physics update dispatches, collision/trigger events, reflection lookups,
- * ClassLoader caching, Janino in-memory compilation, and hot-loop exception suppression.
+ * property overrides injection, ClassLoader caching, Janino in-memory compilation,
+ * and hot-loop exception suppression.
  */
 public class ScriptEngine {
 
@@ -189,10 +191,8 @@ public class ScriptEngine {
         }
     }
 
-    private static void instantiateAndStartScript(Entity entity, ScriptComponent sc, SceneWorld sceneWorld) {
-        if (sc == null) return;
-        String rawName = (sc.scriptName != null && !sc.scriptName.trim().isEmpty()) ? sc.scriptName : sc.scriptAssetPath;
-        if (rawName == null || rawName.trim().isEmpty()) return;
+    public static Class<?> resolveScriptClass(String rawName) {
+        if (rawName == null || rawName.trim().isEmpty()) return null;
 
         File sourceFile = new File(rawName);
         String fileName = sourceFile.getName().trim();
@@ -204,22 +204,17 @@ public class ScriptEngine {
             cleanClassName = cleanClassName.substring(0, cleanClassName.length() - 6);
         }
 
-        // 1. Check negative cache
         if (failedScriptCache.contains(cleanClassName)) {
-            return;
+            return null;
         }
 
-        // 2. Check positive cache
         Class<?> clazz = compiledClassCache.get(cleanClassName);
+        if (clazz != null) return clazz;
 
         File diskScriptFile = null;
-        if (sc.scriptAssetPath != null && !sc.scriptAssetPath.trim().isEmpty()) {
-            File f = new File(sc.scriptAssetPath);
-            if (f.exists()) diskScriptFile = f;
-        }
-        if (diskScriptFile == null && sourceFile.exists()) {
-            diskScriptFile = sourceFile;
-        }
+        File f = new File(rawName);
+        if (f.exists()) diskScriptFile = f;
+        if (diskScriptFile == null && sourceFile.exists()) diskScriptFile = sourceFile;
         if (diskScriptFile == null) {
             File alt = new File("Assets/Scripts/" + fileName);
             if (alt.exists()) diskScriptFile = alt;
@@ -227,47 +222,130 @@ public class ScriptEngine {
 
         String declaredPackage = parsePackageDeclaration(diskScriptFile);
 
-        if (clazz == null) {
-            String[] candidateClassNames;
-            if (declaredPackage != null && !declaredPackage.isEmpty()) {
-                candidateClassNames = new String[]{
-                    declaredPackage + "." + cleanClassName,
-                    "com.retro.engine.scripting.user." + cleanClassName,
-                    "com.retro.engine.scripting." + cleanClassName,
-                    "com.retro.engine.scene.components.gameplay." + cleanClassName,
-                    cleanClassName
-                };
-            } else {
-                candidateClassNames = new String[]{
-                    "com.retro.engine.scripting.user." + cleanClassName,
-                    "com.retro.engine.scripting." + cleanClassName,
-                    "com.retro.engine.scene.components.gameplay." + cleanClassName,
-                    cleanClassName
-                };
-            }
-
-            for (String candidate : candidateClassNames) {
-                try {
-                    clazz = Class.forName(candidate);
-                    if (clazz != null) {
-                        compiledClassCache.put(cleanClassName, clazz);
-                        break;
-                    }
-                } catch (ClassNotFoundException ignored) {}
-            }
+        String[] candidateClassNames;
+        if (declaredPackage != null && !declaredPackage.isEmpty()) {
+            candidateClassNames = new String[]{
+                declaredPackage + "." + cleanClassName,
+                "com.retro.engine.scripting.user." + cleanClassName,
+                "com.retro.engine.scripting." + cleanClassName,
+                "com.retro.engine.scene.components.gameplay." + cleanClassName,
+                cleanClassName
+            };
+        } else {
+            candidateClassNames = new String[]{
+                "com.retro.engine.scripting.user." + cleanClassName,
+                "com.retro.engine.scripting." + cleanClassName,
+                "com.retro.engine.scene.components.gameplay." + cleanClassName,
+                cleanClassName
+            };
         }
 
-        // 3. Dynamic runtime compilation
-        if (clazz == null && diskScriptFile != null && diskScriptFile.exists()) {
+        for (String candidate : candidateClassNames) {
+            try {
+                clazz = Class.forName(candidate);
+                if (clazz != null) {
+                    compiledClassCache.put(cleanClassName, clazz);
+                    return clazz;
+                }
+            } catch (ClassNotFoundException ignored) {}
+        }
+
+        if (diskScriptFile != null && diskScriptFile.exists()) {
             clazz = compileAndLoadJavaFile(diskScriptFile, cleanClassName, declaredPackage);
             if (clazz != null) {
                 compiledClassCache.put(cleanClassName, clazz);
+                return clazz;
             }
         }
 
+        failedScriptCache.add(cleanClassName);
+        return null;
+    }
+
+    public static void injectPropertyOverrides(EntityScript script, Map<String, String> overrides) {
+        if (script == null || overrides == null || overrides.isEmpty()) return;
+        Class<?> clazz = script.getClass();
+        while (clazz != null && clazz != EntityScript.class && clazz != Object.class) {
+            for (Field f : clazz.getDeclaredFields()) {
+                if (java.lang.reflect.Modifier.isStatic(f.getModifiers()) || java.lang.reflect.Modifier.isTransient(f.getModifiers())) {
+                    continue;
+                }
+                String fieldName = f.getName();
+                if (overrides.containsKey(fieldName)) {
+                    String strVal = overrides.get(fieldName);
+                    try {
+                        f.setAccessible(true);
+                        setFieldValue(script, f, strVal);
+                    } catch (Exception e) {
+                        System.err.println("[ScriptEngine] Failed to inject property override '" + fieldName + "' = '" + strVal + "': " + e.getMessage());
+                    }
+                }
+            }
+            clazz = clazz.getSuperclass();
+        }
+    }
+
+    public static void applyPropertyOverride(ScriptComponent sc, String fieldName, String valueString) {
+        if (sc == null || fieldName == null) return;
+        if (sc.propertyOverrides == null) {
+            sc.propertyOverrides = new java.util.HashMap<>();
+        }
+        if (valueString == null) {
+            sc.propertyOverrides.remove(fieldName);
+        } else {
+            sc.propertyOverrides.put(fieldName, valueString);
+        }
+
+        if (sc.activeScriptInstance != null) {
+            try {
+                Class<?> clazz = sc.activeScriptInstance.getClass();
+                while (clazz != null && clazz != EntityScript.class && clazz != Object.class) {
+                    try {
+                        Field f = clazz.getDeclaredField(fieldName);
+                        f.setAccessible(true);
+                        setFieldValue(sc.activeScriptInstance, f, valueString);
+                        break;
+                    } catch (NoSuchFieldException e) {
+                        clazz = clazz.getSuperclass();
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("[ScriptEngine] Error applying live script property '" + fieldName + "' = '" + valueString + "': " + e.getMessage());
+            }
+        }
+    }
+
+    private static void setFieldValue(Object target, Field f, String strVal) throws IllegalAccessException {
+        if (target == null || f == null || strVal == null) return;
+        Class<?> t = f.getType();
+        if (t == float.class || t == Float.class) {
+            f.setFloat(target, Float.parseFloat(strVal));
+        } else if (t == int.class || t == Integer.class) {
+            f.setInt(target, Integer.parseInt(strVal));
+        } else if (t == boolean.class || t == Boolean.class) {
+            f.setBoolean(target, Boolean.parseBoolean(strVal));
+        } else if (t == double.class || t == Double.class) {
+            f.setDouble(target, Double.parseDouble(strVal));
+        } else if (t == long.class || t == Long.class) {
+            f.setLong(target, Long.parseLong(strVal));
+        } else if (t == String.class) {
+            f.set(target, strVal);
+        } else if (t.isEnum()) {
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            Object enumVal = Enum.valueOf((Class<Enum>) t, strVal);
+            f.set(target, enumVal);
+        }
+    }
+
+    private static void instantiateAndStartScript(Entity entity, ScriptComponent sc, SceneWorld sceneWorld) {
+        if (sc == null) return;
+        String rawName = (sc.scriptName != null && !sc.scriptName.trim().isEmpty()) ? sc.scriptName : sc.scriptAssetPath;
+        if (rawName == null || rawName.trim().isEmpty()) return;
+
+        Class<?> clazz = resolveScriptClass(rawName);
+
         if (clazz == null) {
-            failedScriptCache.add(cleanClassName);
-            System.err.println("[ScriptEngine] Could not resolve or compile script class for '" + fileName + "'. Skipping further attempts.");
+            System.err.println("[ScriptEngine] Could not resolve or compile script class for '" + rawName + "'. Skipping further attempts.");
             return;
         }
 
@@ -276,14 +354,18 @@ public class ScriptEngine {
                 EntityScript script = (EntityScript) clazz.getDeclaredConstructor().newInstance();
                 script.init(entity, sceneWorld);
                 sc.activeScriptInstance = script;
+
+                // Pillar 3: Inject reflected property overrides before calling onStart()
+                injectPropertyOverrides(script, sc.propertyOverrides);
+
                 script.onStart();
                 System.out.println("[ScriptEngine] Successfully initialized script '" + clazz.getSimpleName() + "' on Entity '" + entity.name + "'");
             } else {
-                failedScriptCache.add(cleanClassName);
+                failedScriptCache.add(clazz.getSimpleName());
                 System.err.println("[ScriptEngine] Class '" + clazz.getName() + "' does not extend EntityScript!");
             }
         } catch (Exception e) {
-            failedScriptCache.add(cleanClassName);
+            failedScriptCache.add(clazz.getSimpleName());
             System.err.println("[ScriptEngine] Failed to instantiate script '" + clazz.getName() + "' on Entity '" + entity.name + "': " + e.getMessage());
         }
     }

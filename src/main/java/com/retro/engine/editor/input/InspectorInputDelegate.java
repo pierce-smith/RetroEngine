@@ -23,6 +23,7 @@ import com.retro.engine.scene.components.physics.SphereCollider;
 import com.retro.engine.scene.components.rendering.Light;
 import com.retro.engine.scene.components.rendering.Material;
 import com.retro.engine.scene.components.rendering.MeshFilter;
+import com.retro.engine.scripting.ScriptEngine;
 
 import java.io.File;
 import java.lang.reflect.Field;
@@ -33,12 +34,9 @@ import java.util.Map;
 
 /**
  * Dynamic reflection-driven input delegate for InspectorPanel UI controls.
- * Calculates exact element Y positions matching InspectorPanel layout math,
- * accounting for scrollOffset, and dispatches transactional Undo/Redo commands.
  */
 public class InspectorInputDelegate {
 
-    // Reflection Caches matching InspectorPanel
     private static final Map<Class<?>, Field[]> CACHED_FIELDS = new HashMap<>();
     private static final Map<Field, InspectorProperty> CACHED_ANNOTATIONS = new HashMap<>();
 
@@ -86,15 +84,12 @@ public class InspectorInputDelegate {
 
                     if (prop.type() == InspectorProperty.PropertyType.ASSET_PICKER) {
                         if (inRow) {
-                            // [PICK] Button
                             if (ndcX >= InspectorPanel.PICK_X0 && ndcX <= InspectorPanel.PICK_X1) {
                                 UISoundPlayer.play(UISound.OPEN_MODAL);
                                 AssetType assetType = parseAssetType(prop.assetType());
-                                // Material channels each have their own picker row, so route the pick to this field
                                 manager.getOverlayManager().openAssetPicker(assetType, (comp instanceof Material) ? field.getName() : null);
                                 return;
                             }
-                            // [IMPORT] Button
                             if (ndcX >= InspectorPanel.IMPORT_X0 && ndcX <= InspectorPanel.IMPORT_X1) {
                                 UISoundPlayer.play(UISound.OPEN_MODAL);
                                 if (comp instanceof Material && "TEXTURE".equalsIgnoreCase(prop.assetType())) {
@@ -109,7 +104,6 @@ public class InspectorInputDelegate {
 
                     } else if (prop.type() == InspectorProperty.PropertyType.TOGGLE || field.getType() == boolean.class) {
                         if (inRow) {
-                            // Whole row toggles (label or switch), like a macOS checkbox label
                             if (ndcX >= InspectorPanel.LABEL_X && ndcX <= InspectorPanel.VALUE_X1) {
                                 UISoundPlayer.play(UISound.CLICK);
                                 boolean currentBool = (val != null) && (Boolean) val;
@@ -148,7 +142,6 @@ public class InspectorInputDelegate {
                             float currentVal = (val != null) ? (Float) val : 0.0f;
                             float step = prop.step() > 0.0f ? prop.step() : 0.1f;
 
-                            // [-] Stepper segment
                             if (ndcX >= InspectorPanel.DEC_X0 && ndcX < InspectorPanel.DEC_X1) {
                                 UISoundPlayer.play(UISound.CLICK);
                                 float newVal = Math.max(prop.min(), Math.min(prop.max(), currentVal - step));
@@ -156,7 +149,6 @@ public class InspectorInputDelegate {
                                 manager.getCommandHistory().executeCommand(cmd);
                                 return;
                             }
-                            // [+] Stepper segment
                             if (ndcX >= InspectorPanel.INC_X0 && ndcX <= InspectorPanel.INC_X1) {
                                 UISoundPlayer.play(UISound.CLICK);
                                 float newVal = Math.max(prop.min(), Math.min(prop.max(), currentVal + step));
@@ -174,6 +166,103 @@ public class InspectorInputDelegate {
                     e.printStackTrace();
                 }
             }
+
+            // Pillar 3: User Script Reflected Custom Field Interactions
+            if (comp instanceof ScriptComponent sc) {
+                String scriptRawName = (sc.scriptName != null && !sc.scriptName.isEmpty()) ? sc.scriptName : sc.scriptAssetPath;
+                Class<?> scriptClass = ScriptEngine.resolveScriptClass(scriptRawName);
+                if (scriptClass != null) {
+                    List<Field> userFields = InspectorPanel.getUserScriptFields(scriptClass);
+                    for (Field f : userFields) {
+                        f.setAccessible(true);
+                        String fName = f.getName();
+                        InspectorProperty prop = f.getAnnotation(InspectorProperty.class);
+                        String label = (prop != null && !prop.label().isEmpty()) ? prop.label() : fName.toUpperCase();
+
+                        float drawY = curY + scrollOffset;
+                        boolean isVisible = InspectorPanel.isRowVisible(drawY);
+                        boolean inRow = isVisible && ndcY >= drawY - InspectorPanel.CTRL_BELOW && ndcY <= drawY + InspectorPanel.CTRL_ABOVE;
+
+                        String valStr = null;
+                        if (sc.propertyOverrides != null && sc.propertyOverrides.containsKey(fName)) {
+                            valStr = sc.propertyOverrides.get(fName);
+                        } else if (sc.activeScriptInstance != null) {
+                            try {
+                                Object o = f.get(sc.activeScriptInstance);
+                                valStr = (o != null) ? o.toString() : "";
+                            } catch (Exception ignored) {}
+                        }
+                        if (valStr == null) {
+                            try {
+                                Object dummy = f.get(scriptClass.getDeclaredConstructor().newInstance());
+                                valStr = (dummy != null) ? dummy.toString() : "0";
+                            } catch (Exception e) {
+                                valStr = "0";
+                            }
+                        }
+
+                        Class<?> fieldType = f.getType();
+
+                        if (fieldType == boolean.class || fieldType == Boolean.class) {
+                            if (inRow && ndcX >= InspectorPanel.LABEL_X && ndcX <= InspectorPanel.VALUE_X1) {
+                                UISoundPlayer.play(UISound.CLICK);
+                                boolean currentBool = Boolean.parseBoolean(valStr);
+                                boolean newBool = !currentBool;
+                                EditorCommands.ScriptPropertyOverrideCommand cmd = new EditorCommands.ScriptPropertyOverrideCommand(sc, fName, valStr, String.valueOf(newBool));
+                                manager.getCommandHistory().executeCommand(cmd);
+                                return;
+                            }
+                            curY -= InspectorPanel.ROW_ADVANCE;
+                        } else if (fieldType == float.class || fieldType == Float.class || fieldType == double.class || fieldType == Double.class || fieldType == int.class || fieldType == Integer.class) {
+                            if (inRow) {
+                                float currentVal = 0.0f;
+                                try { currentVal = Float.parseFloat(valStr); } catch (Exception ignored) {}
+                                float step = (prop != null && prop.step() > 0.0f) ? prop.step() : 0.1f;
+
+                                if (ndcX >= InspectorPanel.DEC_X0 && ndcX < InspectorPanel.DEC_X1) {
+                                    UISoundPlayer.play(UISound.CLICK);
+                                    float newVal = currentVal - step;
+                                    String newStr = (fieldType == int.class || fieldType == Integer.class) ? String.valueOf((int) newVal) : String.valueOf(newVal);
+                                    EditorCommands.ScriptPropertyOverrideCommand cmd = new EditorCommands.ScriptPropertyOverrideCommand(sc, fName, valStr, newStr);
+                                    manager.getCommandHistory().executeCommand(cmd);
+                                    return;
+                                }
+                                if (ndcX >= InspectorPanel.INC_X0 && ndcX <= InspectorPanel.INC_X1) {
+                                    UISoundPlayer.play(UISound.CLICK);
+                                    float newVal = currentVal + step;
+                                    String newStr = (fieldType == int.class || fieldType == Integer.class) ? String.valueOf((int) newVal) : String.valueOf(newVal);
+                                    EditorCommands.ScriptPropertyOverrideCommand cmd = new EditorCommands.ScriptPropertyOverrideCommand(sc, fName, valStr, newStr);
+                                    manager.getCommandHistory().executeCommand(cmd);
+                                    return;
+                                }
+                            }
+                            curY -= InspectorPanel.ROW_ADVANCE;
+                        } else if (fieldType.isEnum()) {
+                            if (inRow && ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.VALUE_X1) {
+                                UISoundPlayer.play(UISound.CLICK);
+                                Object[] enumConstants = fieldType.getEnumConstants();
+                                if (enumConstants != null && enumConstants.length > 0) {
+                                    int currentIdx = 0;
+                                    for (int i = 0; i < enumConstants.length; i++) {
+                                        if (enumConstants[i].toString().equalsIgnoreCase(valStr)) {
+                                            currentIdx = i;
+                                            break;
+                                        }
+                                    }
+                                    Object nextEnum = enumConstants[(currentIdx + 1) % enumConstants.length];
+                                    EditorCommands.ScriptPropertyOverrideCommand cmd = new EditorCommands.ScriptPropertyOverrideCommand(sc, fName, valStr, nextEnum.toString());
+                                    manager.getCommandHistory().executeCommand(cmd);
+                                    return;
+                                }
+                            }
+                            curY -= InspectorPanel.ROW_ADVANCE;
+                        } else {
+                            curY -= InspectorPanel.TEXT_ROW_ADVANCE;
+                        }
+                    }
+                }
+            }
+
             curY -= InspectorPanel.COMPONENT_GAP;
         }
 
@@ -298,7 +387,6 @@ public class InspectorInputDelegate {
         promptImportTexture(manager, "textureAssetPath");
     }
 
-    /** Imports texture file(s) and assigns the first one to the given Material channel field of the selection. */
     public static void promptImportTexture(EditorWorkspace manager, String materialFieldName) {
         if (manager == null) return;
         List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(

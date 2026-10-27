@@ -5,8 +5,12 @@ import com.retro.engine.editor.ui.panels.InspectorProperty.PropertyType;
 import com.retro.engine.scene.components.Component;
 import com.retro.engine.scripting.EntityScript;
 
+import java.util.HashMap;
+import java.util.Map;
+
 /**
- * Component holding script class path, script asset metadata, and active EntityScript instance.
+ * Component holding script class path, script asset metadata,
+ * active EntityScript instance, and reflected property overrides.
  */
 public class ScriptComponent implements Component {
 
@@ -18,6 +22,9 @@ public class ScriptComponent implements Component {
 
     @InspectorProperty(label = "ENABLED", type = PropertyType.TOGGLE)
     public boolean enabled = true;
+
+    // Reflected field overrides for user script properties (key = fieldName, value = stringValue)
+    public Map<String, String> propertyOverrides = new HashMap<>();
 
     public transient EntityScript activeScriptInstance;
 

@@ -4,21 +4,22 @@ import com.retro.engine.editor.ui.panels.InspectorProperty.PropertyType;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.theme.EditorTheme;
 import com.retro.engine.scene.components.Component;
+import com.retro.engine.scene.components.gameplay.ScriptComponent;
 import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.scripting.EntityScript;
+import com.retro.engine.scripting.ScriptEngine;
 import com.retro.engine.assets.AssetMeta;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * InspectorPanel handles dynamic component rendering using @InspectorProperty reflection.
- * Properties are laid out as a two-column form (left-justified labels | value controls), with
- * XYZ vector rows grouped under one label and tagged by colored axis badges.
- *
- * The layout constants below are shared with {@code InspectorInputDelegate}, which replays the same
- * row walk to hit-test clicks; change them here and both stay in sync.
+ * InspectorPanel handles dynamic component rendering using @InspectorProperty reflection
+ * and Pillar 3 User Script Property Overrides reflection.
  */
 public class InspectorPanel {
 
@@ -71,32 +72,16 @@ public class InspectorPanel {
     private static float scrollOffset = 0.0f;
     private static float maxScroll = 0.0f;
 
-    public static float getScrollOffset() {
-        return scrollOffset;
-    }
+    public static float getScrollOffset() { return scrollOffset; }
+    public static float getMaxScroll() { return maxScroll; }
+    public static void setScrollOffset(float offset) { scrollOffset = Math.max(0.0f, Math.min(maxScroll, offset)); }
+    public static void scroll(float delta) { scrollOffset = Math.max(0.0f, Math.min(maxScroll, scrollOffset + delta)); }
+    public static void resetScroll() { scrollOffset = 0.0f; }
 
-    public static float getMaxScroll() {
-        return maxScroll;
-    }
-
-    public static void setScrollOffset(float offset) {
-        scrollOffset = Math.max(0.0f, Math.min(maxScroll, offset));
-    }
-
-    public static void scroll(float delta) {
-        scrollOffset = Math.max(0.0f, Math.min(maxScroll, scrollOffset + delta));
-    }
-
-    public static void resetScroll() {
-        scrollOffset = 0.0f;
-    }
-
-    /** True when a row whose top sits at drawY is fully inside the scrollable viewport. */
     public static boolean isRowVisible(float drawY) {
         return drawY + CTRL_ABOVE <= VIEW_TOP && drawY - CTRL_BELOW >= VIEW_BOTTOM;
     }
 
-    /** 0/1/2 for labels ending in " X" / " Y" / " Z" (vector components), else -1. */
     public static int axisOf(String label) {
         int n = (label != null) ? label.length() : 0;
         if (n < 3 || label.charAt(n - 2) != ' ') return -1;
@@ -116,6 +101,23 @@ public class InspectorPanel {
             case "SCL" -> "SCALE";
             default -> prefix;
         };
+    }
+
+    public static List<Field> getUserScriptFields(Class<?> scriptClass) {
+        List<Field> fields = new ArrayList<>();
+        if (scriptClass == null || !EntityScript.class.isAssignableFrom(scriptClass)) return fields;
+        Class<?> curr = scriptClass;
+        while (curr != null && curr != EntityScript.class && curr != Object.class) {
+            for (Field f : curr.getDeclaredFields()) {
+                int mods = f.getModifiers();
+                if (Modifier.isStatic(mods) || Modifier.isTransient(mods)) continue;
+                if (Modifier.isPublic(mods) || f.isAnnotationPresent(InspectorProperty.class)) {
+                    fields.add(f);
+                }
+            }
+            curr = curr.getSuperclass();
+        }
+        return fields;
     }
 
     public static void render(UIGeometryBatch.Buffer buffer, Entity selectedEntity) {
@@ -138,7 +140,7 @@ public class InspectorPanel {
             return;
         }
 
-        // Entity header: name + "+ PREFAB" push button, hairline divider beneath
+        // Entity header
         UIGeometryBatch.addTruncatedText(buffer, selectedEntity.name, LABEL_X, 0.833f, PREFAB_X0 - 0.012f, 1.1f, EditorTheme.TEXT, 1.0f);
         UIGeometryBatch.addRoundedCard(buffer, PREFAB_X0, PREFAB_Y0, PREFAB_X1, PREFAB_Y1, EditorTheme.RADIUS, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
         centeredTextIn(buffer, "+ PREFAB", PREFAB_X0, PREFAB_X1, (PREFAB_Y0 + PREFAB_Y1) * 0.5f, 0.8f, EditorTheme.TEXT);
@@ -249,6 +251,81 @@ public class InspectorPanel {
                     e.printStackTrace();
                 }
             }
+
+            // Pillar 3: Reflected User Script Custom Field Overrides
+            if (comp instanceof ScriptComponent sc) {
+                String scriptRawName = (sc.scriptName != null && !sc.scriptName.isEmpty()) ? sc.scriptName : sc.scriptAssetPath;
+                Class<?> scriptClass = ScriptEngine.resolveScriptClass(scriptRawName);
+                if (scriptClass != null) {
+                    List<Field> userFields = getUserScriptFields(scriptClass);
+                    for (Field f : userFields) {
+                        f.setAccessible(true);
+                        String fName = f.getName();
+                        InspectorProperty prop = f.getAnnotation(InspectorProperty.class);
+                        String label = (prop != null && !prop.label().isEmpty()) ? prop.label() : fName.toUpperCase();
+
+                        float drawY = curY + scrollOffset;
+                        boolean isVisible = isRowVisible(drawY);
+                        float midY = drawY - (CTRL_BELOW - CTRL_ABOVE) * 0.5f;
+
+                        String valStr = null;
+                        if (sc.propertyOverrides != null && sc.propertyOverrides.containsKey(fName)) {
+                            valStr = sc.propertyOverrides.get(fName);
+                        } else if (sc.activeScriptInstance != null) {
+                            try {
+                                Object o = f.get(sc.activeScriptInstance);
+                                valStr = (o != null) ? o.toString() : "";
+                            } catch (Exception ignored) {}
+                        }
+
+                        if (valStr == null) {
+                            try {
+                                Object dummy = f.get(scriptClass.getDeclaredConstructor().newInstance());
+                                valStr = (dummy != null) ? dummy.toString() : "0";
+                            } catch (Exception e) {
+                                valStr = "0";
+                            }
+                        }
+
+                        Class<?> fieldType = f.getType();
+
+                        if (fieldType == boolean.class || fieldType == Boolean.class) {
+                            if (isVisible) {
+                                boolean boolVal = Boolean.parseBoolean(valStr);
+                                rowLabel(buffer, label, midY);
+                                renderSwitch(buffer, boolVal, midY);
+                            }
+                            curY -= ROW_ADVANCE;
+                        } else if (fieldType == float.class || fieldType == Float.class || fieldType == double.class || fieldType == Double.class || fieldType == int.class || fieldType == Integer.class) {
+                            if (isVisible) {
+                                float floatVal = 0.0f;
+                                try { floatVal = Float.parseFloat(valStr); } catch (Exception ignored) {}
+                                rowLabel(buffer, label, midY);
+                                well(buffer, VALUE_X0, FIELD_X1, drawY);
+                                strBuilder.setLength(0);
+                                appendFloat(strBuilder, floatVal, 1);
+                                UIGeometryBatch.addTruncatedText(buffer, strBuilder, VALUE_X0 + 0.008f, textTop(midY, VALUE_TEXT), FIELD_X1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+                                renderStepper(buffer, drawY, midY);
+                            }
+                            curY -= ROW_ADVANCE;
+                        } else if (fieldType.isEnum()) {
+                            if (isVisible) {
+                                rowLabel(buffer, label, midY);
+                                renderPopupButton(buffer, valStr, drawY, midY);
+                            }
+                            curY -= ROW_ADVANCE;
+                        } else {
+                            if (isVisible) {
+                                rowLabel(buffer, label, midY);
+                                UIGeometryBatch.addTruncatedText(buffer, valStr.isEmpty() ? "-" : valStr, VALUE_X0 + 0.008f, textTop(midY, VALUE_TEXT),
+                                        VALUE_X1, VALUE_TEXT, EditorTheme.TEXT_MUTED, 1.0f);
+                            }
+                            curY -= TEXT_ROW_ADVANCE;
+                        }
+                    }
+                }
+            }
+
             curY -= COMPONENT_GAP;
         }
 
@@ -267,7 +344,6 @@ public class InspectorPanel {
         maxScroll = Math.max(0.0f, totalContentHeight - viewH);
         scrollOffset = Math.max(0.0f, Math.min(maxScroll, scrollOffset));
 
-        // macOS overlay-style scroller: slim graphite thumb, no track
         if (maxScroll > 0.001f) {
             float trackH = VIEW_TOP - VIEW_BOTTOM;
             float thumbHeight = Math.max(0.12f, (viewH / totalContentHeight) * trackH);
@@ -282,10 +358,6 @@ public class InspectorPanel {
         for (int idx = 0; idx < tempBuf.getSize(); idx++) verts.add(tempBuf.getArray()[idx]);
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Controls
-    // ------------------------------------------------------------------------------------------
-
     private static float textTop(float midY, float size) {
         return midY + size * 0.009f;
     }
@@ -299,7 +371,6 @@ public class InspectorPanel {
         float y0 = drawY - CTRL_BELOW, y1 = drawY + CTRL_ABOVE + 0.002f;
         UIGeometryBatch.addRoundedQuad(buffer, 0.565f, y0, VALUE_X1, y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, 1.0f);
 
-        // Disclosure triangle (expanded)
         float mid = (y0 + y1) * 0.5f;
         float tw = UIGeometryBatch.squareWidth(buffer, 0.012f);
         float tx = LABEL_X;
@@ -310,7 +381,6 @@ public class InspectorPanel {
         UIGeometryBatch.addTruncatedText(buffer, strBuilder, tx + tw + 0.012f, textTop(mid, 0.9f), VALUE_X1 - 0.008f, 0.9f, EditorTheme.TEXT, 1.0f);
     }
 
-    /** Sunken rounded value well spanning [x0, x1] on a row. */
     private static void well(UIGeometryBatch.Buffer buffer, float x0, float x1, float drawY) {
         UIGeometryBatch.addRoundedCard(buffer, x0, drawY - CTRL_BELOW, x1, drawY + CTRL_ABOVE, EditorTheme.RADIUS_SMALL,
                 EditorTheme.SURFACE_SUNKEN, EditorTheme.BORDER, 1.0f);
@@ -326,7 +396,6 @@ public class InspectorPanel {
         centeredTextIn(buffer, text, x0, x1, (y0 + y1) * 0.5f, 0.72f, EditorTheme.TEXT);
     }
 
-    /** Colored XYZ badge; returns its right edge. */
     private static float axisBadge(UIGeometryBatch.Buffer buffer, int axis, float x0, float drawY) {
         float h = 0.022f;
         float mid = drawY - (CTRL_BELOW - CTRL_ABOVE) * 0.5f;
@@ -337,7 +406,6 @@ public class InspectorPanel {
         return x0 + w;
     }
 
-    /** Segmented [- | +] stepper matching InspectorInputDelegate's DEC/INC hit rects. */
     private static void renderStepper(UIGeometryBatch.Buffer buffer, float drawY, float midY) {
         float y0 = drawY - CTRL_BELOW, y1 = drawY + CTRL_ABOVE;
         UIGeometryBatch.addRoundedCard(buffer, DEC_X0, y0, INC_X1, y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
@@ -346,7 +414,6 @@ public class InspectorPanel {
         centeredTextIn(buffer, "+", INC_X0, INC_X1, midY, 0.9f, EditorTheme.TEXT);
     }
 
-    /** macOS-style switch: accent track when on, graphite when off, white knob. */
     private static void renderSwitch(UIGeometryBatch.Buffer buffer, boolean on, float midY) {
         float h = 0.024f;
         float knobW = UIGeometryBatch.squareWidth(buffer, h - 0.006f);
@@ -359,7 +426,6 @@ public class InspectorPanel {
         UIGeometryBatch.addBoundedText(buffer, on ? "ON" : "OFF", x1 + 0.01f, textTop(midY, 0.75f), VALUE_X1, 0.75f, EditorTheme.TEXT_MUTED, 1.0f);
     }
 
-    /** Pop-up button: current value with stacked up/down chevrons; click cycles the enum. */
     private static void renderPopupButton(UIGeometryBatch.Buffer buffer, String value, float drawY, float midY) {
         float y0 = drawY - CTRL_BELOW, y1 = drawY + CTRL_ABOVE;
         UIGeometryBatch.addRoundedCard(buffer, VALUE_X0, y0, VALUE_X1, y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
@@ -399,7 +465,6 @@ public class InspectorPanel {
         return (lastSlash >= 0 && lastSlash < path.length() - 1) ? path.substring(lastSlash + 1) : path;
     }
 
-    /** Fixed-point float formatting (1 or 2 decimals) without String.format allocation. */
     private static void appendFloat(StringBuilder sb, float val, int decimals) {
         if (Float.isNaN(val) || Float.isInfinite(val)) {
             sb.append(val);

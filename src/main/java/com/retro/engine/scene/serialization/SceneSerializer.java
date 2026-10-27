@@ -93,7 +93,7 @@ public class SceneSerializer {
 
             // 1. Header (16 Bytes)
             dos.writeInt(BINARY_MAGIC); // Magic 'RETR'
-            dos.writeInt(1);            // Version
+            dos.writeInt(2);            // Version 2 (Phase 4 Overrides)
             dos.writeInt(entities != null ? entities.size() : 0);
             dos.writeInt(0);            // Reserved Padding
 
@@ -204,6 +204,12 @@ public class SceneSerializer {
                         dos.writeInt(stringTable.indexOf(cleanPath));
                         dos.writeInt(stringTable.indexOf(sc.scriptName != null ? sc.scriptName : ""));
                         dos.writeBoolean(sc.enabled);
+                        java.util.Map<String, String> overrides = (sc.propertyOverrides != null) ? sc.propertyOverrides : java.util.Map.of();
+                        dos.writeInt(overrides.size());
+                        for (java.util.Map.Entry<String, String> entry : overrides.entrySet()) {
+                            dos.writeUTF(entry.getKey() != null ? entry.getKey() : "");
+                            dos.writeUTF(entry.getValue() != null ? entry.getValue() : "");
+                        }
                     } else if (comp instanceof RigidBodyComponent rb) {
                         dos.writeUTF(rb.motionType.name());
                         dos.writeFloat(rb.mass);
@@ -414,6 +420,15 @@ public class SceneSerializer {
 
                         ScriptComponent sc = new ScriptComponent(resolvedPath, scriptName);
                         sc.enabled = enabled;
+
+                        if (version >= 2) {
+                            int overrideCount = dis.readInt();
+                            for (int k = 0; k < overrideCount; k++) {
+                                String kStr = dis.readUTF();
+                                String vStr = dis.readUTF();
+                                sc.propertyOverrides.put(kStr, vStr);
+                            }
+                        }
                         entity.addComponent(sc);
                     } else if ("RigidBodyComponent".equalsIgnoreCase(typeName) || "RigidBody".equalsIgnoreCase(typeName)) {
                         RigidBodyComponent rb = new RigidBodyComponent();
