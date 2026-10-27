@@ -3,6 +3,7 @@ package com.retro.engine.scripting;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.world.SceneWorld;
 import com.retro.engine.scene.components.gameplay.ScriptComponent;
+import org.codehaus.janino.SimpleCompiler;
 
 import javax.tools.JavaCompiler;
 import javax.tools.ToolProvider;
@@ -21,7 +22,7 @@ import java.util.regex.Pattern;
 
 /**
  * Hardened ScriptEngine managing script instantiation, lifecycle ticks,
- * reflection lookups, ClassLoader caching, dynamic runtime compilation,
+ * reflection lookups, ClassLoader caching, Janino in-memory compilation,
  * and hot-loop exception suppression.
  */
 public class ScriptEngine {
@@ -219,63 +220,48 @@ public class ScriptEngine {
     }
 
     private static Class<?> compileAndLoadJavaFile(File scriptFile, String className, String declaredPackage) {
+        System.out.println("[ScriptEngine] Dynamic in-memory Janino compilation triggered for script: " + scriptFile.getAbsolutePath());
+
+        // 1. Janino In-Memory Compiler (Zero JDK dependency, fast sub-millisecond compile)
         try {
-            JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-            if (compiler == null) {
-                System.err.println("[ScriptEngine] JDK JavaCompiler unavailable in current JRE execution environment.");
-                return null;
+            SimpleCompiler compiler = new SimpleCompiler();
+            compiler.setParentClassLoader(EntityScript.class.getClassLoader());
+
+            try (FileReader reader = new FileReader(scriptFile)) {
+                compiler.cook(scriptFile.getAbsolutePath(), reader);
             }
 
-            File outputDir = new File(System.getProperty("java.io.tmpdir"), "retro_compiled_scripts");
-            if (!outputDir.exists()) outputDir.mkdirs();
-
-            String currentClasspath = System.getProperty("java.class.path");
-
-            System.out.println("[ScriptEngine] Dynamic compilation triggered for script: " + scriptFile.getAbsolutePath());
-
-            // Bind explicit system application classpath so engine types resolve cleanly
-            int exitCode = compiler.run(null, null, null,
-                "-classpath", currentClasspath,
-                "-d", outputDir.getAbsolutePath(),
-                scriptFile.getAbsolutePath()
-            );
-
-            if (exitCode == 0) {
-                URL outputUrl = outputDir.toURI().toURL();
-                if (scriptClassLoader == null) {
-                    scriptClassLoader = new URLClassLoader(
-                        new URL[]{ outputUrl },
-                        EntityScript.class.getClassLoader()
-                    );
-                }
-
-                String[] candidates;
-                if (declaredPackage != null && !declaredPackage.isEmpty()) {
-                    candidates = new String[]{
-                        declaredPackage + "." + className,
-                        "com.retro.engine.scripting.user." + className,
-                        "com.retro.engine.scripting." + className,
-                        className
-                    };
-                } else {
-                    candidates = new String[]{
-                        "com.retro.engine.scripting.user." + className,
-                        "com.retro.engine.scripting." + className,
-                        className
-                    };
-                }
-
-                for (String c : candidates) {
-                    try {
-                        return scriptClassLoader.loadClass(c);
-                    } catch (ClassNotFoundException ignored) {}
-                }
+            ClassLoader cl = compiler.getClassLoader();
+            String[] candidates;
+            if (declaredPackage != null && !declaredPackage.isEmpty()) {
+                candidates = new String[]{
+                    declaredPackage + "." + className,
+                    "com.retro.engine.scripting.user." + className,
+                    "com.retro.engine.scripting." + className,
+                    className
+                };
             } else {
-                System.err.println("[ScriptEngine] Compilation failed for script: " + scriptFile.getName());
+                candidates = new String[]{
+                    "com.retro.engine.scripting.user." + className,
+                    "com.retro.engine.scripting." + className,
+                    className
+                };
             }
-        } catch (Exception e) {
-            System.err.println("[ScriptEngine] Exception during dynamic script compilation: " + e.getMessage());
+
+            for (String c : candidates) {
+                try {
+                    Class<?> compiledClass = cl.loadClass(c);
+                    if (compiledClass != null) {
+                        System.out.println("[ScriptEngine] Janino successfully compiled script in-memory: " + compiledClass.getName());
+                        return compiledClass;
+                    }
+                } catch (ClassNotFoundException ignored) {}
+            }
+        } catch (Throwable janinoError) {
+            System.err.println("[ScriptEngine] Janino in-memory compilation error in '" + scriptFile.getName() + "': " + janinoError.getMessage());
+            janinoError.printStackTrace();
         }
+
         return null;
     }
 }
