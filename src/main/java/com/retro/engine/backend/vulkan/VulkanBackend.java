@@ -32,6 +32,15 @@ public class VulkanBackend implements IRenderBackend {
     private final VulkanPipeline pipelineManager = new VulkanPipeline();
     private final VulkanGpuCache gpuCache = new VulkanGpuCache();
     private final VulkanTargetPass targetPass = new VulkanTargetPass();
+    // Picture-in-picture render target for the selected Camera entity, sampled by the UI pass from the bindless table.
+    // The editor sets the projection aspect, so a fixed 16:9 resolution is only stretched, never distorted.
+    private final VulkanTargetPass cameraPreviewTarget = new VulkanTargetPass();
+    private static final int CAMERA_PREVIEW_WIDTH = 640;
+    private static final int CAMERA_PREVIEW_HEIGHT = 360;
+    private int cameraPreviewSlot = VulkanGpuCache.NO_TEXTURE;
+    private boolean cameraPreviewActive = false;
+    private final float[] cameraPreviewViewProj = new float[16];
+    private float cameraPreviewX, cameraPreviewY, cameraPreviewZ;
     private final VulkanQueueSubmitter queueSubmitter = new VulkanQueueSubmitter();
 
     private int activeImageIndex = 0;
@@ -79,6 +88,9 @@ public class VulkanBackend implements IRenderBackend {
         targetPass.initFramebuffer(deviceManager, 712, 488);
         if (!pipelineManager.initialize(deviceManager, swapchainManager)) return false;
         if (!gpuCache.initialize(deviceManager, pipelineManager.getDescriptorSetLayout3D(), pipelineManager.getBindlessTextureCapacity())) return false;
+
+        cameraPreviewTarget.initFramebuffer(deviceManager, CAMERA_PREVIEW_WIDTH, CAMERA_PREVIEW_HEIGHT);
+        cameraPreviewSlot = gpuCache.registerRenderTargetView(cameraPreviewTarget.getOffscreenImageView());
 
         System.out.println("[VulkanBackend] Vulkan 1.3 Multi-Pass Architecture Active on Apple Silicon / MoltenVK.");
         return true;
@@ -130,7 +142,9 @@ public class VulkanBackend implements IRenderBackend {
                 0.0f,
                 viewMatrix,
                 projMatrix,
-                lightSpaceMatrix
+                lightSpaceMatrix,
+                cameraPreviewActive ? cameraPreviewViewProj : null,
+                cameraPreviewX, cameraPreviewY, cameraPreviewZ
         );
 
         // Material slots and bone palettes are resolved here; recording only pushes constants
@@ -157,7 +171,10 @@ public class VulkanBackend implements IRenderBackend {
                     viewMatrix,
                     projMatrix,
                     sceneQueuePool,
-                    activeSceneQueueCount
+                    activeSceneQueueCount,
+                    cameraPreviewTarget,
+                    cameraPreviewActive && cameraPreviewSlot != VulkanGpuCache.NO_TEXTURE,
+                    cameraPreviewSlot
             );
 
             vkEndCommandBuffer(cmd);
@@ -266,6 +283,7 @@ public class VulkanBackend implements IRenderBackend {
 
         queueSubmitter.cleanup(deviceManager);
         targetPass.cleanup(deviceManager);
+        cameraPreviewTarget.cleanup(deviceManager);
         pipelineManager.cleanup(deviceManager);
         gpuCache.cleanup(deviceManager);
         swapchainManager.cleanup(deviceManager);
@@ -276,6 +294,19 @@ public class VulkanBackend implements IRenderBackend {
     }
 
     @Override public long getOffscreenViewportTexture() { return targetPass.getOffscreenColorTexture(); }
+
+    @Override
+    public long getCameraPreviewTexture() {
+        return cameraPreviewSlot != VulkanGpuCache.NO_TEXTURE ? cameraPreviewTarget.getOffscreenColorTexture() : 0L;
+    }
+
+    @Override
+    public void setCameraPreview(boolean active, float[] viewProj, float camX, float camY, float camZ) {
+        cameraPreviewActive = active && viewProj != null && viewProj.length == 16;
+        if (!cameraPreviewActive) return;
+        System.arraycopy(viewProj, 0, cameraPreviewViewProj, 0, 16);
+        cameraPreviewX = camX; cameraPreviewY = camY; cameraPreviewZ = camZ;
+    }
     @Override public void resizeViewport(int width, int height) { targetPass.resizeViewport(deviceManager, width, height); }
 
     @Override public void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw) {

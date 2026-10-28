@@ -44,9 +44,12 @@ public class VulkanGpuCache {
     public static final int SHADOW_MAP_SIZE = DirectionalShadowFrustum.SHADOW_MAP_SIZE;
     public static final int SHADOW_MAP_FORMAT = VK_FORMAT_D32_SFLOAT;
 
-    // LightBuffer (binding 0) std140 layout: lightSpaceMatrix at byte 304, 368 bytes total
+    // LightBuffer (binding 0) std140 layout: lightSpaceMatrix at byte 304, camera preview view-projection at 368 and
+    // its world position at 432, 448 bytes total
     public static final int LIGHT_UBO_LIGHT_SPACE_FLOAT_INDEX = 76;
-    public static final long LIGHT_UBO_SIZE = 368L;
+    public static final int LIGHT_UBO_PREVIEW_VIEW_PROJ_FLOAT_INDEX = 92;
+    public static final int LIGHT_UBO_PREVIEW_VIEW_POS_FLOAT_INDEX = 108;
+    public static final long LIGHT_UBO_SIZE = 448L;
 
     // Set 0 bindings shared by every 3D pipeline (see blinn_phong.vert/.frag, blinn_phong_skinned.vert, shadow_depth.frag)
     public static final int BINDING_LIGHT_UBO = 0;
@@ -459,6 +462,18 @@ public class VulkanGpuCache {
                 batch[i] = null;
             }
         }
+    }
+
+    /**
+     * Publishes a backend-owned image view (a render target) in the bindless texture table and returns its slot, or
+     * NO_TEXTURE when the table is unavailable or full. The write lands at the next beginFrame; the owner must keep the
+     * image in SHADER_READ_ONLY_OPTIMAL whenever a draw samples the slot.
+     */
+    public int registerRenderTargetView(long imageView) {
+        if (imageView == 0L || bindlessSet == 0L) return NO_TEXTURE;
+        int slot = allocateTableSlot();
+        if (slot != NO_TEXTURE) queueTableWrite(new PendingTableWrite(slot, imageView, null, false));
+        return slot;
     }
 
     /** The persistent bindless set 0 shared by every 3D pipeline; 0L if initialization failed. */
@@ -925,7 +940,8 @@ public class VulkanGpuCache {
                                         float dirX, float dirY, float dirZ,
                                         float r, float g, float b, float intensity,
                                         float camX, float camY, float camZ, float groundY,
-                                        float[] viewMatrix, float[] projMatrix, float[] lightSpaceMatrix) {
+                                        float[] viewMatrix, float[] projMatrix, float[] lightSpaceMatrix,
+                                        float[] previewViewProj, float previewX, float previewY, float previewZ) {
         VulkanBuffer buf = getOrCreateLightUniformBuffer(device);
         if (buf == null || device == null || device.getLogicalDevice() == null) return;
 
@@ -960,6 +976,9 @@ public class VulkanGpuCache {
                 putMatrixOrIdentity(floatBuf, 44, viewMatrix);
                 putMatrixOrIdentity(floatBuf, 60, projMatrix);
                 putMatrixOrIdentity(floatBuf, LIGHT_UBO_LIGHT_SPACE_FLOAT_INDEX, lightSpaceMatrix);
+                putMatrixOrIdentity(floatBuf, LIGHT_UBO_PREVIEW_VIEW_PROJ_FLOAT_INDEX, previewViewProj);
+                int pos = LIGHT_UBO_PREVIEW_VIEW_POS_FLOAT_INDEX;
+                floatBuf.put(pos, previewX); floatBuf.put(pos + 1, previewY); floatBuf.put(pos + 2, previewZ); floatBuf.put(pos + 3, 0.0f);
 
                 vkUnmapMemory(vkDevice, buf.memoryHandle);
             }

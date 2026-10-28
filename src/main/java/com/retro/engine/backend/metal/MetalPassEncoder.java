@@ -93,6 +93,14 @@ public class MetalPassEncoder {
 
     private float sceneAspect = 0.0f; // 0 = fall back to framebuffer aspect
 
+    // Per-frame light and editor camera state shared by the editor and camera preview scene passes
+    private int lightType;
+    private float lightPosX, lightPosY, lightPosZ;
+    private float lightDirX, lightDirY, lightDirZ;
+    private float lightR, lightG, lightB, lightIntensity;
+    private final float[] editorViewProj = new float[16];
+    private final float[] editorCamPos = new float[3];
+
     // Resolved lazily: the Metal framework is not loaded until MetalDevice initializes, after this object is built
     private long renderPassDescClass = 0L;
 
@@ -122,10 +130,16 @@ public class MetalPassEncoder {
         this.sceneAspect = aspect;
     }
 
+    /**
+     * Encodes the shadow map pass, the editor viewport pass and, when {@code previewViewProj} is non-null, the selected
+     * Camera entity's picture-in-picture pass into {@code previewTarget}. Both scene passes share the sorted queue, skinning
+     * slots, residency list and shadow map; each writes its own uniform slot range.
+     */
     public void encodeOffscreen3DPass(
             long commandBuffer, MetalDevice device, MetalPipeline pipeline, MetalTexture texture,
-            MetalTargetPass framebuffer, MetalGpuCache resourceCache, MetalUniformStream streamer,
+            MetalTargetPass framebuffer, MetalTargetPass previewTarget, MetalGpuCache resourceCache, MetalUniformStream streamer,
             List<RenderEntity> sceneQueue, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw,
+            float[] previewViewProj, float[] previewCamPos,
             int lightType, float lightPosX, float lightPosY, float lightPosZ,
             float lightDirX, float lightDirY, float lightDirZ,
             float lightR, float lightG, float lightB, float lightIntensity) {
@@ -166,18 +180,54 @@ public class MetalPassEncoder {
         encodeShadowMapPass(commandBuffer, pipeline, texture, resourceCache, streamer, sceneQueue, entityCount,
                 pBufferContents, currentSlotOffset, defaultResourceId);
 
+        this.lightType = lightType;
+        this.lightPosX = lightPosX; this.lightPosY = lightPosY; this.lightPosZ = lightPosZ;
+        this.lightDirX = lightDirX; this.lightDirY = lightDirY; this.lightDirZ = lightDirZ;
+        this.lightR = lightR; this.lightG = lightG; this.lightB = lightB;
+        this.lightIntensity = lightIntensity;
+
+        // The offscreen image is stretched over the docked Scene tile, so project with that tile's aspect
+        float aspect = sceneAspect > 0.0f ? sceneAspect
+                : (framebuffer.getWidth() > 0 && framebuffer.getHeight() > 0) ? ((float) framebuffer.getWidth() / (float) framebuffer.getHeight()) : (712.0f / 488.0f);
+        System.arraycopy(streamer.createGridMVPMatrix(aspect, camPanX, camPanY, camZoom, camPitch, camYaw), 0, editorViewProj, 0, 16);
+        System.arraycopy(streamer.computeCameraPosition(camPanX, camPanY, camZoom, camPitch, camYaw), 0, editorCamPos, 0, 3);
+
+        // PASS 1: Editor viewport (grid, lit models, ground shadow blobs)
+        encodeScenePass(commandBuffer, framebuffer.getOffscreenColorTexture(), framebuffer.getOffscreenDepthTexture(),
+                pipeline, texture, resourceCache, streamer, sceneQueue, entityCount, pBufferContents, currentSlotOffset,
+                defaultResourceId, editorViewProj, editorCamPos, drawGrid ? gridBuffer : 0L, groundQuadBuf,
+                MetalUniformStream.SLOT_BASE_ENTITIES, MetalUniformStream.SLOT_BASE_SHADOW_BLOBS);
+
+        // PASS 2: Selected Camera entity's view for the picture-in-picture preview (game view: no editor grid)
+        if (previewViewProj != null && previewCamPos != null && previewTarget != null && previewTarget.getOffscreenColorTexture() != 0L) {
+            encodeScenePass(commandBuffer, previewTarget.getOffscreenColorTexture(), previewTarget.getOffscreenDepthTexture(),
+                    pipeline, texture, resourceCache, streamer, sceneQueue, entityCount, pBufferContents, currentSlotOffset,
+                    defaultResourceId, previewViewProj, previewCamPos, 0L, groundQuadBuf,
+                    MetalUniformStream.SLOT_BASE_PREVIEW_ENTITIES, MetalUniformStream.SLOT_BASE_PREVIEW_SHADOW_BLOBS);
+        }
+    }
+
+    /**
+     * One lit scene render into {@code colorTarget} from {@code viewProj}: the grid (only when {@code gridBuffer} is
+     * non-zero, always uniform slot 0), the queued models and their ground shadow blobs.
+     */
+    private void encodeScenePass(long commandBuffer, long colorTarget, long depthTarget,
+                                 MetalPipeline pipeline, MetalTexture texture, MetalGpuCache resourceCache, MetalUniformStream streamer,
+                                 List<RenderEntity> sceneQueue, int entityCount, long pBufferContents, long currentSlotOffset,
+                                 long defaultResourceId, float[] viewProj, float[] camPos, long gridBuffer, long groundQuadBuf,
+                                 int entitySlotBase, int blobSlotBase) {
         long offscreenPassDesc = invokePPP(renderPassDescClass(), SEL_RENDER_PASS_DESCRIPTOR, send);
 
         long colorAttachOff = invokePPP(offscreenPassDesc, SEL_COLOR_ATTACHMENTS, send);
         long colorAttachOff0 = invokePPPP(colorAttachOff, SEL_OBJECT_AT_INDEXED_SUBSCRIPT, 0L, send);
 
-        invokePPPP(colorAttachOff0, SEL_SET_TEXTURE, framebuffer.getOffscreenColorTexture(), send);
+        invokePPPP(colorAttachOff0, SEL_SET_TEXTURE, colorTarget, send);
         invokePPPP(colorAttachOff0, SEL_SET_LOAD_ACTION, 2L, send);
         invokePPPP(colorAttachOff0, SEL_SET_STORE_ACTION, 1L, send);
 
-        if (framebuffer.getOffscreenDepthTexture() != 0L) {
+        if (depthTarget != 0L) {
             long depthAttachOff = invokePPP(offscreenPassDesc, SEL_DEPTH_ATTACHMENT, send);
-            invokePPPP(depthAttachOff, SEL_SET_TEXTURE, framebuffer.getOffscreenDepthTexture(), send);
+            invokePPPP(depthAttachOff, SEL_SET_TEXTURE, depthTarget, send);
             invokePPPP(depthAttachOff, SEL_SET_LOAD_ACTION, 2L, send);
             invokePPPP(depthAttachOff, SEL_SET_STORE_ACTION, 0L, send);
         }
@@ -187,22 +237,16 @@ public class MetalPassEncoder {
         beginEncoder(encoder3D);
         invokePPPP(encoder3D, SEL_SET_TRIANGLE_FILL_MODE, 0L, send); // MTLTriangleFillModeFill
 
-        // The offscreen image is stretched over the docked Scene tile, so project with that tile's aspect
-        float aspect = sceneAspect > 0.0f ? sceneAspect
-                : (framebuffer.getWidth() > 0 && framebuffer.getHeight() > 0) ? ((float) framebuffer.getWidth() / (float) framebuffer.getHeight()) : (712.0f / 488.0f);
-        float[] camPos = streamer.computeCameraPosition(camPanX, camPanY, camZoom, camPitch, camYaw);
-
         // Per-encoder setup: argument table, material sampler, shadow map at texture(1) / sampler(1), and residency
         bindArgumentTable(texture);
         bindShadowMap(resourceCache);
         useResidentResources();
 
         // 1A. Procedural Ray-Plane Infinite Grid Encoding
-        if (drawGrid) {
+        if (gridBuffer != 0L) {
             int slot = 0;
-            float[] mvpGrid = streamer.createGridMVPMatrix(aspect, camPanX, camPanY, camZoom, camPitch, camYaw);
             long gridAddr = pBufferContents + currentSlotOffset;
-            MemoryUtil.memFloatBuffer(gridAddr + MetalUniformStream.OFFSET_MVP, 16).put(mvpGrid);
+            MemoryUtil.memFloatBuffer(gridAddr + MetalUniformStream.OFFSET_MVP, 16).put(viewProj);
             float[] identityModel = streamer.createModelMatrix(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f);
             MemoryUtil.memFloatBuffer(gridAddr + MetalUniformStream.OFFSET_MODEL, 16).put(identityModel);
 
@@ -234,9 +278,9 @@ public class MetalPassEncoder {
             for (int i = 0; i < entityCount; i++) {
                 RenderEntity item = sceneQueue.get(i);
                 boolean skinned = item.skinnedSlot >= 0;
-                int slot = MetalUniformStream.SLOT_BASE_ENTITIES + i;
+                int slot = entitySlotBase + i;
 
-                float[] mvpModel = streamer.create3DMVPMatrix(aspect, camPanX, camPanY, camZoom, camPitch, camYaw, item.px, item.py, item.pz, item.rx, item.ry, item.rz, item.sx, item.sy, item.sz);
+                float[] mvpModel = streamer.createMVPFromViewProj(viewProj, item.px, item.py, item.pz, item.rx, item.ry, item.rz, item.sx, item.sy, item.sz);
                 float[] modelMat = streamer.getModelMatrix();
 
                 long baseAddr = pBufferContents + currentSlotOffset + MetalUniformStream.UNIFORM_STRIDE * slot;
@@ -315,9 +359,9 @@ public class MetalPassEncoder {
                 if (heightFade < 0.05f) continue;
 
                 float shadowScale = Math.max(item.sx, item.sz) * 1.25f;
-                int slot = MetalUniformStream.SLOT_BASE_SHADOW_BLOBS + shadowIndex;
+                int slot = blobSlotBase + shadowIndex;
                 float shadowY = item.groundY + 0.005f;
-                float[] mvpShadow = streamer.create3DMVPMatrix(aspect, camPanX, camPanY, camZoom, camPitch, camYaw, item.px, shadowY, item.pz, 0.0f, 0.0f, 0.0f, shadowScale, 1.0f, shadowScale);
+                float[] mvpShadow = streamer.createMVPFromViewProj(viewProj, item.px, shadowY, item.pz, 0.0f, 0.0f, 0.0f, shadowScale, 1.0f, shadowScale);
                 float[] modelMat = streamer.getModelMatrix();
 
                 long baseAddr = pBufferContents + currentSlotOffset + MetalUniformStream.UNIFORM_STRIDE * slot;
@@ -348,7 +392,7 @@ public class MetalPassEncoder {
 
     public void encodeWindowCompositionPass(
             long commandBuffer, long drawableTexture, MetalDevice device, MetalPipeline pipeline, MetalTexture texture,
-            MetalTargetPass framebuffer, MetalGpuCache resourceCache, MetalUniformStream streamer) {
+            MetalTargetPass framebuffer, MetalGpuCache resourceCache, MetalUniformStream streamer, long cameraPreviewTexture) {
 
         send = device.getObjcMsgSend();
         long windowPassDesc = invokePPP(renderPassDescClass(), SEL_RENDER_PASS_DESCRIPTOR, send);
@@ -391,6 +435,9 @@ public class MetalPassEncoder {
             if (texture.getSamplerStateHandle() != 0L) {
                 bindFragmentSampler(texture.getSamplerStateHandle());
             }
+            // Camera preview target for picture-in-picture quads (uv offset by UIGeometryBatch.PREVIEW_UV_OFFSET)
+            invokePPPPP(encoderWin, SEL_SET_FRAGMENT_TEXTURE,
+                    cameraPreviewTexture != 0L ? cameraPreviewTexture : texture.getBindableTexture(), 1L, send);
 
             bindVertexBuffer(resourceCache.getUiVertexBuffer(), 0L, 0);
             invokePPPPPP(encoderWin, SEL_DRAW_PRIMITIVES, MTL_PRIMITIVE_TRIANGLE, 0L, (long) resourceCache.getUiVertexCount(), send);

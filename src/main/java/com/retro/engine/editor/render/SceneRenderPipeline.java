@@ -9,17 +9,20 @@ import com.retro.engine.editor.ui.batch.UIFont;
 import com.retro.engine.editor.ui.dock.DockPanel;
 import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.panels.EngineConsolePanel;
+import com.retro.engine.editor.ui.panels.ViewportPanel;
 import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.rhi.MaterialBinding;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.world.SceneWorld.WorldTransform;
 import com.retro.engine.scene.components.media.AnimatorComponent;
+import com.retro.engine.scene.components.rendering.Camera;
 import com.retro.engine.scene.components.rendering.Light;
 import com.retro.engine.scene.components.rendering.Material;
 import com.retro.engine.scene.components.rendering.MeshFilter;
 import com.retro.engine.scene.components.transform.Transform;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -121,6 +124,10 @@ public class SceneRenderPipeline {
         // Docked Scene tile (screen NDC) the offscreen 3D image is composited into; empty when hidden
         public float sceneMinX = -0.55f, sceneMinY = -0.50f, sceneMaxX = 0.55f, sceneMaxY = 0.88f;
         public float sceneAspect = 712.0f / 488.0f;
+        // Selected Camera entity's view-projection for the picture-in-picture preview pass
+        public boolean cameraPreviewActive = false;
+        public final float[] cameraPreviewViewProj = new float[16];
+        public float cameraPreviewPosX, cameraPreviewPosY, cameraPreviewPosZ;
 
         public RenderSceneSnapshot() {
             for (int i = 0; i < 1024; i++) {
@@ -147,6 +154,7 @@ public class SceneRenderPipeline {
             uiVertexCount = 0;
             totalDrawCalls = 0;
             totalActiveVertices = 0;
+            cameraPreviewActive = false;
         }
     }
 
@@ -159,6 +167,13 @@ public class SceneRenderPipeline {
     private static final String FALLBACK_CUBE_KEY = "[FALLBACK_CUBE]";
     private final MeshBufferData fallbackCube = MeshImporter.createDefaultCube();
     private final FrustumCuller frustumCuller = new FrustumCuller();
+    private final FrustumCuller previewCuller = new FrustumCuller();
+
+    // Backend camera preview target (0L = unsupported); refreshed every submitFrame
+    private long cameraPreviewTexture = 0L;
+    // Camera preview matrix scratch (3x3 row-major rotations, 4x4 column-major view / projection)
+    private final float[] rotX = new float[9], rotY = new float[9], rotZ = new float[9], rotYX = new float[9], rot = new float[9];
+    private final float[] previewView = new float[16], previewProj = new float[16];
 
     /**
      * Extracts a decoupled, thread-safe RenderSceneSnapshot from the editor scene graph with zero heap allocations.
@@ -180,6 +195,10 @@ public class SceneRenderPipeline {
                     50.0f, DockSpace.getSceneAspect(), 0.1f, 100.0f
             );
         }
+
+        // Selected Camera entity's preview; its frustum also keeps entities only that camera can see in the queue
+        boolean previewActive = cameraPreviewTexture != 0L && DockSpace.isSceneViewportVisible()
+                && buildCameraPreview(editorManager, snapshot);
 
         List<Entity> entities = editorManager.getSceneEntities();
         int handleEpoch = streamingService.getHandleEpoch();
@@ -235,7 +254,8 @@ public class SceneRenderPipeline {
                 // View-Frustum Culling Test (Bounding Sphere check)
                 float scaleRadius = Math.max(Math.abs(wt.sx()), Math.max(Math.abs(wt.sy()), Math.abs(wt.sz())));
                 float sphereRadius = Math.max(scaleRadius * 1.5f, 1.0f);
-                if (!frustumCuller.isSphereVisible(wt.px(), wt.py(), wt.pz(), sphereRadius)) {
+                if (!frustumCuller.isSphereVisible(wt.px(), wt.py(), wt.pz(), sphereRadius)
+                        && !(previewActive && previewCuller.isSphereVisible(wt.px(), wt.py(), wt.pz(), sphereRadius))) {
                     continue;
                 }
 
@@ -319,6 +339,7 @@ public class SceneRenderPipeline {
         snapshot.gridVisible = editorManager.getGizmoStateController().is3DGridVisible();
         snapshot.gridVertices = editorManager.getGizmoStateController().get3DGridVertices();
         snapshot.gridVertexCount = editorManager.getGizmoStateController().get3DGridVertexCount();
+        editorManager.setCameraPreviewTexture(previewActive ? cameraPreviewTexture : 0L);
         snapshot.uiVertices = editorManager.getUiVertices();
         snapshot.uiVertexCount = editorManager.getUiVertexCount();
 
@@ -336,7 +357,7 @@ public class SceneRenderPipeline {
             totalActiveVertices += snapshot.gridVertexCount;
         }
 
-        snapshot.totalDrawCalls = entityDrawCalls + (snapshot.gridVisible ? 1 : 0) + 2;
+        snapshot.totalDrawCalls = entityDrawCalls * (previewActive ? 2 : 1) + (snapshot.gridVisible ? 1 : 0) + 2;
         snapshot.totalActiveVertices = totalActiveVertices;
 
         return snapshot;
@@ -384,6 +405,9 @@ public class SceneRenderPipeline {
         }
 
         rhi.setSceneViewport(snapshot.sceneMinX, snapshot.sceneMinY, snapshot.sceneMaxX, snapshot.sceneMaxY, snapshot.sceneAspect);
+        rhi.setCameraPreview(snapshot.cameraPreviewActive, snapshot.cameraPreviewViewProj,
+                snapshot.cameraPreviewPosX, snapshot.cameraPreviewPosY, snapshot.cameraPreviewPosZ);
+        cameraPreviewTexture = rhi.getCameraPreviewTexture();
         rhi.updateGridMesh(snapshot.gridVertices, snapshot.gridVertexCount);
         rhi.updateUiMesh(snapshot.uiVertices, snapshot.uiVertexCount);
         if (!uiFontResolved) resolveUiFont(rhi);
@@ -416,6 +440,86 @@ public class SceneRenderPipeline {
     public void submitFrame(EditorWorkspace editorManager, AssetStreamer streamingService, IRenderBackend rhi) {
         RenderSceneSnapshot snapshot = extractSnapshot(editorManager, streamingService);
         submitFrame(snapshot, rhi);
+    }
+
+    /**
+     * Fills the snapshot's camera preview from the selected entity's Camera component and world transform, and aims the
+     * preview culler at it. Returns false when nothing with a Camera is selected.
+     */
+    private boolean buildCameraPreview(EditorWorkspace editorManager, RenderSceneSnapshot snapshot) {
+        Entity selected = editorManager.getSelectedEntity();
+        Camera camera = (selected != null) ? selected.getComponent(Camera.class) : null;
+        if (camera == null) return false;
+
+        WorldTransform wt = editorManager.getSceneManager().getComputedWorldTransform(selected);
+        computeCameraView(wt, previewView);
+
+        float fov = Math.max(1.0f, Math.min(179.0f, camera.fov));
+        float near = Math.max(0.01f, camera.nearPlane);
+        float far = Math.max(near + 0.01f, camera.farPlane);
+        float f = (float) (1.0 / Math.tan(Math.toRadians(fov) / 2.0));
+        float aspect = ViewportPanel.getCameraPreviewAspect();
+        // Same 0..1 depth, right-handed projection the backends build for the editor camera
+        Arrays.fill(previewProj, 0.0f);
+        previewProj[0] = f / aspect;
+        previewProj[5] = f;
+        previewProj[10] = far / (near - far);
+        previewProj[11] = -1.0f;
+        previewProj[14] = (near * far) / (near - far);
+
+        float[] vp = snapshot.cameraPreviewViewProj;
+        for (int col = 0; col < 4; col++) {
+            for (int row = 0; row < 4; row++) {
+                float sum = 0.0f;
+                for (int k = 0; k < 4; k++) sum += previewProj[k * 4 + row] * previewView[col * 4 + k];
+                vp[col * 4 + row] = sum;
+            }
+        }
+        previewCuller.updateFrustumPlanes(vp);
+
+        snapshot.cameraPreviewPosX = wt.px();
+        snapshot.cameraPreviewPosY = wt.py();
+        snapshot.cameraPreviewPosZ = wt.pz();
+        snapshot.cameraPreviewActive = true;
+        return true;
+    }
+
+    /**
+     * Column-major view matrix R^T * T(-p) for an entity transform. R = Rz * Ry * Rx matches the backends' model matrix,
+     * so a camera with zero rotation looks down -Z, rotY yaws and positive rotX pitches down (the Light convention).
+     */
+    private void computeCameraView(WorldTransform wt, float[] out) {
+        float ax = (float) Math.toRadians(wt.rx()), ay = (float) Math.toRadians(wt.ry()), az = (float) Math.toRadians(wt.rz());
+        float cx = (float) Math.cos(ax), sx = (float) Math.sin(ax);
+        float cy = (float) Math.cos(ay), sy = (float) Math.sin(ay);
+        float cz = (float) Math.cos(az), sz = (float) Math.sin(az);
+        setRows(rotX, 1, 0, 0, 0, cx, sx, 0, -sx, cx);
+        setRows(rotY, cy, 0, -sy, 0, 1, 0, sy, 0, cy);
+        setRows(rotZ, cz, sz, 0, -sz, cz, 0, 0, 0, 1);
+        mul3(rotY, rotX, rotYX);
+        mul3(rotZ, rotYX, rot);
+
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) out[j * 4 + i] = rot[j * 3 + i]; // R^T
+            out[i * 4 + 3] = 0.0f;
+            out[12 + i] = -(rot[i] * wt.px() + rot[3 + i] * wt.py() + rot[6 + i] * wt.pz());
+        }
+        out[15] = 1.0f;
+    }
+
+    private static void setRows(float[] m, float m00, float m01, float m02, float m10, float m11, float m12, float m20, float m21, float m22) {
+        m[0] = m00; m[1] = m01; m[2] = m02;
+        m[3] = m10; m[4] = m11; m[5] = m12;
+        m[6] = m20; m[7] = m21; m[8] = m22;
+    }
+
+    /** out = a * b for row-major 3x3 matrices. */
+    private static void mul3(float[] a, float[] b, float[] out) {
+        for (int r = 0; r < 3; r++) {
+            for (int c = 0; c < 3; c++) {
+                out[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c];
+            }
+        }
     }
 
     /** GPU handle for one material channel, cached on the Material per handle epoch; 0L when empty or not yet streamed. */

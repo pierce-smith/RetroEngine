@@ -45,7 +45,9 @@ layout(std140, set = 0, binding = 0) uniform LightBuffer {
     vec4 viewPos;     // xyz = camera position, w = groundY
     mat4 view;        // byte offset 176
     mat4 proj;        // byte offset 240
-    mat4 lightSpaceMatrix; // byte offset 304: directional shadow map view-projection (368 bytes total)
+    mat4 lightSpaceMatrix; // byte offset 304: directional shadow map view-projection
+    mat4 previewViewProj;  // byte offset 368: selected Camera entity's view-projection (picture-in-picture pass)
+    vec4 previewViewPos;   // byte offset 432: xyz = that camera's world position (448 bytes total)
 } u_Lights;
 
 // 128 bytes: exactly the maxPushConstantsSize every Vulkan implementation guarantees.
@@ -55,7 +57,7 @@ layout(push_constant) uniform MeshPushConstants {
     vec4 params;       // x = passFlags (1.0 = shadow blob, 2.0 = shadow map depth), y = heightFade, z = reflection, w = emissiveIntensity
     vec4 surface;      // x = specularStrength, y = roughness, z = normalStrength, w = unused
     ivec4 texIndices;  // bindless slots: x = albedo, y = normal, z = specular/roughness, w = lightmap/AO (-1 = channel absent)
-    ivec4 texIndices2; // x = emissive slot, y = bone palette slot, zw = unused
+    ivec4 texIndices2; // x = emissive slot, y = bone palette slot, z = camera view (0 = editor, 1 = camera preview), w = unused
 } u_PushConstants;
 
 void main() {
@@ -77,7 +79,9 @@ void main() {
     vLightSpacePos = u_Lights.lightSpaceMatrix * worldPos;
 
     // Shadow map depth pass renders the same geometry from the directional light
-    vec4 clipPos = (u_PushConstants.params.x > 1.5) ? vLightSpacePos : u_Lights.proj * u_Lights.view * worldPos;
+    vec4 cameraClip = (u_PushConstants.texIndices2.z == 1) ? u_Lights.previewViewProj * worldPos
+                                                           : u_Lights.proj * u_Lights.view * worldPos;
+    vec4 clipPos = (u_PushConstants.params.x > 1.5) ? vLightSpacePos : cameraClip;
     vViewDist = clipPos.w;
     gl_Position = clipPos;
 }

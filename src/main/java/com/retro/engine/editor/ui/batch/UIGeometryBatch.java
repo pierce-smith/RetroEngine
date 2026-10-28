@@ -13,6 +13,8 @@ public class UIGeometryBatch {
     public static final int VERTEX_STRIDE = 8;
     /** UV sentinel marking untextured geometry; the UI shaders skip the atlas below -1. */
     public static final float NO_UV = -2.0f;
+    /** UV offset marking camera preview geometry; the UI shaders sample the preview target at uv - offset above 1.5. */
+    public static final float PREVIEW_UV_OFFSET = 2.0f;
 
     public static class Buffer {
         private float[] data;
@@ -448,6 +450,12 @@ public class UIGeometryBatch {
                                      float r, float g, float b, float a) {
         addVert(buffer, x1, y1, r, g, b, a, u0, v1); addVert(buffer, x2, y1, r, g, b, a, u1, v1); addVert(buffer, x1, y2, r, g, b, a, u0, v0);
         addVert(buffer, x2, y1, r, g, b, a, u1, v1); addVert(buffer, x2, y2, r, g, b, a, u1, v0); addVert(buffer, x1, y2, r, g, b, a, u0, v0);
+    }
+
+    /** Quad showing the backend's camera preview render target; the top edge (y2) maps to the image's top row. */
+    public static void addCameraPreviewQuad(Buffer buffer, float x1, float y1, float x2, float y2, float a) {
+        float u0 = PREVIEW_UV_OFFSET, u1 = PREVIEW_UV_OFFSET + 1.0f;
+        addGlyphQuad(buffer, x1, y1, x2, y2, u0, u0, u1, u1, 1.0f, 1.0f, 1.0f, a);
     }
 
     public static void addQuad(Buffer buffer, float x1, float y1, float x2, float y2, float r, float g, float b, float a) {

@@ -39,7 +39,9 @@ layout(std140, set = 0, binding = 0) uniform LightBuffer {
     vec4 viewPos;     // xyz = camera position, w = groundY
     mat4 view;        // byte offset 176
     mat4 proj;        // byte offset 240
-    mat4 lightSpaceMatrix; // byte offset 304: directional shadow map view-projection (368 bytes total)
+    mat4 lightSpaceMatrix; // byte offset 304: directional shadow map view-projection
+    mat4 previewViewProj;  // byte offset 368: selected Camera entity's view-projection (picture-in-picture pass)
+    vec4 previewViewPos;   // byte offset 432: xyz = that camera's world position (448 bytes total)
 } u_Lights;
 
 // Shared linear/repeat sampler for every material channel
@@ -56,7 +58,7 @@ layout(push_constant) uniform MeshPushConstants {
     vec4 params;       // x = passFlags (1.0 = shadow blob, 2.0 = shadow map depth), y = heightFade, z = reflection, w = emissiveIntensity
     vec4 surface;      // x = specularStrength, y = roughness, z = normalStrength, w = unused
     ivec4 texIndices;  // bindless slots: x = albedo, y = normal, z = specular/roughness, w = lightmap/AO (-1 = channel absent)
-    ivec4 texIndices2; // x = emissive slot, y = bone palette slot, zw = unused
+    ivec4 texIndices2; // x = emissive slot, y = bone palette slot, z = camera view (0 = editor, 1 = camera preview), w = unused
 } u_PushConstants;
 
 // Returns the fallback for absent channels; the branch is uniform across the draw, so implicit LOD stays valid
@@ -143,7 +145,8 @@ void main() {
     // Lightmap / AO on the second UV set modulates the ambient (indirect) term
     vec3 lightmap = sampleChannel(u_PushConstants.texIndices.w, vLightmapUV, vec4(1.0)).rgb;
 
-    vec3 V = normalize(u_Lights.viewPos.xyz - vFragPos);
+    vec3 eyePos = (u_PushConstants.texIndices2.z == 1) ? u_Lights.previewViewPos.xyz : u_Lights.viewPos.xyz;
+    vec3 V = normalize(eyePos - vFragPos);
 
     vec3 L = vec3(0.0, 1.0, 0.0);
     float attenuation = 1.0;

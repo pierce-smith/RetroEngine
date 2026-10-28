@@ -53,6 +53,11 @@ public class MetalBackend implements IRenderBackend {
     private final MetalPipeline metalPipeline = new MetalPipeline();
 
     private final MetalTargetPass framebuffer = new MetalTargetPass();
+    // Picture-in-picture render target for the selected Camera entity; projection aspect is set by the editor, so a
+    // fixed 16:9 resolution is only stretched, never distorted
+    private final MetalTargetPass cameraPreviewTarget = new MetalTargetPass();
+    private static final int CAMERA_PREVIEW_WIDTH = 640;
+    private static final int CAMERA_PREVIEW_HEIGHT = 360;
     private final MetalGpuCache resourceCache = new MetalGpuCache();
     private final MetalUniformStream uniformStreamer = new MetalUniformStream();
     private final MetalPassEncoder passEncoder = new MetalPassEncoder();
@@ -88,6 +93,10 @@ public class MetalBackend implements IRenderBackend {
     private float activeLightB = 0.85f;
     private float activeLightIntensity = 1.2f;
 
+    private boolean cameraPreviewActive = false;
+    private final float[] cameraPreviewViewProj = new float[16];
+    private final float[] cameraPreviewPos = new float[3];
+
     private final List<MetalPassEncoder.RenderEntity> sceneQueuePool = new ArrayList<>();
     private final List<MetalPassEncoder.RenderEntity> activeSceneQueueView = new ArrayList<>();
     private int activeSceneQueueCount = 0;
@@ -110,6 +119,7 @@ public class MetalBackend implements IRenderBackend {
         }
 
         framebuffer.initFramebuffer(metalDevice, windowInfo.width() > 0 ? windowInfo.width() : 712, windowInfo.height() > 0 ? windowInfo.height() : 488);
+        cameraPreviewTarget.initFramebuffer(metalDevice, CAMERA_PREVIEW_WIDTH, CAMERA_PREVIEW_HEIGHT);
         resourceCache.initViewportQuad(metalDevice);
         resourceCache.initShadowMap(metalDevice);
         metalTexture.initDefaultTextureAndSampler(metalDevice.getDevice(), metalDevice.getObjcMsgSend());
@@ -163,6 +173,16 @@ public class MetalBackend implements IRenderBackend {
     }
 
     @Override public long getOffscreenViewportTexture() { return framebuffer.getOffscreenColorTexture(); }
+    @Override public long getCameraPreviewTexture() { return cameraPreviewTarget.getOffscreenColorTexture(); }
+
+    @Override
+    public void setCameraPreview(boolean active, float[] viewProj, float camX, float camY, float camZ) {
+        cameraPreviewActive = active && viewProj != null && viewProj.length == 16;
+        if (!cameraPreviewActive) return;
+        System.arraycopy(viewProj, 0, cameraPreviewViewProj, 0, 16);
+        cameraPreviewPos[0] = camX; cameraPreviewPos[1] = camY; cameraPreviewPos[2] = camZ;
+    }
+
     @Override public void resizeViewport(int width, int height) { framebuffer.resizeViewport(metalDevice, width, height, resourceCache); }
     @Override public void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw) {
         this.camPanX = panX; this.camPanY = panY; this.camZoom = zoom; this.camPitch = pitch; this.camYaw = yaw;
@@ -361,8 +381,9 @@ public class MetalBackend implements IRenderBackend {
 
         passEncoder.encodeOffscreen3DPass(
             currentCommandBuffer, metalDevice, metalPipeline, metalTexture,
-            framebuffer, resourceCache, uniformStreamer,
+            framebuffer, cameraPreviewTarget, resourceCache, uniformStreamer,
             getActiveSceneQueue(), camPanX, camPanY, camZoom, camPitch, camYaw,
+            cameraPreviewActive ? cameraPreviewViewProj : null, cameraPreviewPos,
             activeLightType, activeLightPosX, activeLightPosY, activeLightPosZ,
             activeLightDirX, activeLightDirY, activeLightDirZ,
             activeLightR, activeLightG, activeLightB, activeLightIntensity
@@ -371,7 +392,8 @@ public class MetalBackend implements IRenderBackend {
         long drawableTexture = invokePPP(currentDrawable, SEL_TEXTURE, send);
         passEncoder.encodeWindowCompositionPass(
             currentCommandBuffer, drawableTexture, metalDevice, metalPipeline, metalTexture,
-            framebuffer, resourceCache, uniformStreamer
+            framebuffer, resourceCache, uniformStreamer,
+            cameraPreviewActive ? cameraPreviewTarget.getOffscreenColorTexture() : 0L
         );
     }
 

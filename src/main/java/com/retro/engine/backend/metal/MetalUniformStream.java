@@ -21,10 +21,14 @@ public class MetalUniformStream {
     public static final int MAX_ENTITIES_PER_FRAME = 256;
 
     // Per-frame slot layout: [grid] [64 shadow blobs] [MAX_ENTITIES lit entities] [MAX_ENTITIES shadow map casters]
+    // [64 camera preview shadow blobs] [MAX_ENTITIES camera preview lit entities]. The camera preview pass gets its own
+    // slots because both passes are encoded before the GPU reads any of them.
     public static final int SLOT_BASE_SHADOW_BLOBS = 1;
     public static final int SLOT_BASE_ENTITIES = 1 + 64;
     public static final int SLOT_BASE_SHADOW_CASTERS = 1 + 64 + MAX_ENTITIES_PER_FRAME;
-    public static final int SLOTS_PER_FRAME = 1 + 64 + 2 * MAX_ENTITIES_PER_FRAME;
+    public static final int SLOT_BASE_PREVIEW_SHADOW_BLOBS = 1 + 64 + 2 * MAX_ENTITIES_PER_FRAME;
+    public static final int SLOT_BASE_PREVIEW_ENTITIES = SLOT_BASE_PREVIEW_SHADOW_BLOBS + 64;
+    public static final int SLOTS_PER_FRAME = SLOT_BASE_PREVIEW_ENTITIES + MAX_ENTITIES_PER_FRAME;
     private static final long FRAME_SLOT_SIZE = UNIFORM_STRIDE * SLOTS_PER_FRAME;
     private static final long TOTAL_RING_BUFFER_SIZE = FRAME_SLOT_SIZE * RING_SLOTS;
 
@@ -276,6 +280,13 @@ public class MetalUniformStream {
 
         multiplyMat4(matV, matM, matVM);
         multiplyMat4(matP, matVM, matMVP);
+        return matMVP;
+    }
+
+    /** viewProj * model for a precomputed view-projection; also leaves the model matrix in getModelMatrix(). */
+    public float[] createMVPFromViewProj(float[] viewProj, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
+        createModelMatrix(px, py, pz, rx, ry, rz, sx, sy, sz);
+        multiplyMat4(viewProj, matM, matMVP);
         return matMVP;
     }
 

@@ -57,6 +57,7 @@ public class EditorWorkspace {
     private int windowWidth = 1280;
     private int windowHeight = 720;
     private float lastDeltaTime = 0.016f;
+    private long cameraPreviewTexture = 0L;
 
     private float lastNdcX = 0.0f;
     private float lastNdcY = 0.0f;
@@ -179,6 +180,9 @@ public class EditorWorkspace {
     // --- High-Level Convenience Accessors ---
     public List<Entity> getSceneEntities() { return sceneManager.getSceneEntities(); }
     public Entity getSelectedEntity() { return sceneManager.getSelectedEntity(); }
+
+    /** Backend camera preview target shown in the Scene panel's picture-in-picture card; 0L shows an empty viewfinder. */
+    public void setCameraPreviewTexture(long textureHandle) { this.cameraPreviewTexture = textureHandle; }
     public void selectEntity(Entity entity) {
         sceneManager.selectEntity(entity);
         InspectorPanel.resetScroll();
@@ -274,6 +278,8 @@ public class EditorWorkspace {
                         gizmoStateController.getCamPitch(), gizmoStateController.getCamYaw()
                     );
                 }
+
+                ViewportPanel.renderCameraPreviewHUD(uiGeometryBuffer, selected, cameraPreviewTexture);
 
                 EngineConsolePanel.renderProfilerHUD(uiGeometryBuffer, lastDeltaTime);
             }

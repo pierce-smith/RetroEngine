@@ -48,6 +48,10 @@ public class VulkanPassEncoder {
     private static final float PASS_SHADOW_BLOB = 1.0f;
     private static final float PASS_SHADOW_DEPTH = 2.0f;
 
+    // Camera view selector pushed in texIndices2.z: the editor camera or the selected Camera entity's preview
+    private static final int CAMERA_VIEW_EDITOR = 0;
+    private static final int CAMERA_VIEW_PREVIEW = 1;
+
     // Reusable scratchpad arrays for zero-allocation frame loops
     private final float[] modelMatrixScratch = new float[16];
     private final float[] identityLightSpace = new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
@@ -73,7 +77,10 @@ public class VulkanPassEncoder {
                                      float[] viewMatrix,
                                      float[] projMatrix,
                                      List<RenderEntity> sceneQueue,
-                                     int sceneQueueCount) {
+                                     int sceneQueueCount,
+                                     VulkanTargetPass previewTarget,
+                                     boolean previewActive,
+                                     int previewSlot) {
         try (MemoryStack stack = stackPush()) {
             // Reused for every 3D/shadow draw: vkCmdPushConstants copies the data at record time
             ByteBuffer meshPush = stack.malloc(VulkanPipeline.MESH_PUSH_CONSTANT_SIZE);
@@ -94,49 +101,8 @@ public class VulkanPassEncoder {
                     VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                     VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 
-            // Dynamic Viewport & Scissor Setup for Offscreen Viewport (Negative height for Vulkan Y-Inversion)
-            VkViewport.Buffer offscreenViewport = VkViewport.calloc(1, stack);
-            offscreenViewport.get(0)
-                    .x(0.0f).y((float) targetPass.getHeight())
-                    .width((float) targetPass.getWidth()).height(-(float) targetPass.getHeight())
-                    .minDepth(0.0f).maxDepth(1.0f);
-
-            VkRect2D.Buffer offscreenScissor = VkRect2D.calloc(1, stack);
-            offscreenScissor.get(0).offset().set(0, 0);
-            offscreenScissor.get(0).extent().set(targetPass.getWidth(), targetPass.getHeight());
-
             // PASS 1, 2, 3: OFFSCREEN VIEWPORT RENDERING
-            VkRenderingAttachmentInfo.Buffer offscreenColorAttachment = VkRenderingAttachmentInfo.calloc(1, stack);
-            offscreenColorAttachment.get(0)
-                    .sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO)
-                    .imageView(targetPass.getOffscreenImageView())
-                    .imageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-                    .loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR)
-                    .storeOp(VK_ATTACHMENT_STORE_OP_STORE);
-
-            offscreenColorAttachment.get(0).clearValue().color().float32(0, 0.0f).float32(1, 0.0f).float32(2, 0.0f).float32(3, 1.0f);
-
-            VkRenderingAttachmentInfo offscreenDepthAttachment = VkRenderingAttachmentInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO)
-                    .imageView(targetPass.getDepthImageView())
-                    .imageLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-                    .loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR)
-                    .storeOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
-
-            offscreenDepthAttachment.clearValue().depthStencil().set(1.0f, 0);
-
-            VkRenderingInfo offscreenRenderingInfo = VkRenderingInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_RENDERING_INFO)
-                    .layerCount(1)
-                    .pColorAttachments(offscreenColorAttachment)
-                    .pDepthAttachment(offscreenDepthAttachment);
-
-            offscreenRenderingInfo.renderArea().extent().set(targetPass.getWidth(), targetPass.getHeight());
-
-            vkCmdBeginRendering(cmd, offscreenRenderingInfo);
-
-            vkCmdSetViewport(cmd, 0, offscreenViewport);
-            vkCmdSetScissor(cmd, 0, offscreenScissor);
+            beginOffscreenRendering(cmd, stack, targetPass);
 
             // ---------------------------------------------------------------------------------
             // STEP 1: Infinite 3D Grid Pass & Vertical Green Y-Axis Pillar Line (Background Floor)
@@ -174,88 +140,16 @@ public class VulkanPassEncoder {
                 }
             }
 
-            // ---------------------------------------------------------------------------------
-            // STEP 2: 3D Scene Mesh Pass
-            // ---------------------------------------------------------------------------------
-            if (pipelineManager.getGraphicsPipeline3D() != 0L && bindlessSet != 0L && sceneQueue != null && sceneQueueCount > 0) {
-                VulkanGpuCache.VulkanBuffer bonePaletteBuf = gpuCache.getOrCreateBonePaletteBuffer(deviceManager);
-                long skinnedPipeline = pipelineManager.getGraphicsPipelineSkinned();
-
-                // Set 0 is bound once for the whole pass; every draw selects its textures and palette via push constants
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, stack.longs(bindlessSet), null);
-                LongBuffer pBuffers = stack.mallocLong(1);
-                LongBuffer pOffsets = stack.longs(0L);
-                long boundPipeline = 0L;
-
-                for (int i = 0; i < sceneQueueCount; i++) {
-                    RenderEntity entity = sceneQueue.get(i);
-                    VulkanGpuCache.VulkanBuffer mesh = gpuCache.getMesh(entity.meshHandle);
-                    if (mesh == null || mesh.bufferHandle == 0L || mesh.vertexCount <= 0) continue;
-                    long vboHandle = mesh.bufferHandle;
-
-                    // 30-float buffers must go through the 120-byte skinned pipeline; without a palette or a free
-                    // slot they still draw there against an identity-seeded slot rather than misreading the stride.
-                    boolean skinnedLayout = mesh.floatStride >= 30;
-                    if (skinnedLayout && (skinnedPipeline == 0L || bonePaletteBuf == null)) continue;
-
-                    long wantedPipeline = skinnedLayout ? skinnedPipeline : pipelineManager.getGraphicsPipeline3D();
-                    if (wantedPipeline != boundPipeline) {
-                        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, wantedPipeline);
-                        boundPipeline = wantedPipeline;
-                    }
-
-                    computeModelMatrixInPlace(entity.px, entity.py, entity.pz, entity.rx, entity.ry, entity.rz, entity.sx, entity.sy, entity.sz, modelMatrixScratch);
-                    writeEntityPush(meshPush, modelMatrixScratch, PASS_SCENE, entity, gpuCache, i);
-                    vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, meshPush);
-
-                    vkCmdBindVertexBuffers(cmd, 0, pBuffers.put(0, vboHandle), pOffsets);
-                    if (mesh.indexBufferHandle != 0L && mesh.indexCount > 0) {
-                        vkCmdBindIndexBuffer(cmd, mesh.indexBufferHandle, 0, mesh.indexType);
-                        vkCmdDrawIndexed(cmd, mesh.indexCount, 1, 0, 0, 0);
-                    } else {
-                        vkCmdDraw(cmd, mesh.vertexCount, 1, 0, 0);
-                    }
-                }
-            }
-
-            // ---------------------------------------------------------------------------------
-            // STEP 3: Dynamic Ground Entity Shadow Blobs Pass
-            // ---------------------------------------------------------------------------------
-            long groundQuadBuf = gpuCache.getGroundQuadBuffer(deviceManager);
-            long shadowPipeline = pipelineManager.getGraphicsPipelineShadow();
-            if (shadowPipeline == 0L) shadowPipeline = pipelineManager.getGraphicsPipeline3D();
-
-            if (shadowPipeline != 0L && bindlessSet != 0L && sceneQueue != null && sceneQueueCount > 0 && groundQuadBuf != 0L) {
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline);
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, stack.longs(bindlessSet), null);
-
-                // Every blob draws the same quad, so it is bound once for the pass
-                vkCmdBindVertexBuffers(cmd, 0, stack.longs(groundQuadBuf), stack.longs(0L));
-
-                int shadowIndex = 0;
-                for (int i = 0; i < sceneQueueCount; i++) {
-                    if (shadowIndex >= 64) break;
-                    RenderEntity entity = sceneQueue.get(i);
-                    float clearance = entity.py - entity.groundY;
-                    if (clearance < -0.01f) continue;
-
-                    float heightFade = Math.max(0.0f, 1.0f - (clearance / 10.0f));
-                    if (heightFade < 0.05f) continue;
-
-                    float shadowScale = Math.max(entity.sx, entity.sz) * 1.25f;
-                    float shadowY = entity.groundY + 0.005f;
-
-                    computeModelMatrixInPlace(entity.px, shadowY, entity.pz, 0.0f, 0.0f, 0.0f, shadowScale, 1.0f, shadowScale, modelMatrixScratch);
-
-                    writeBlobPush(meshPush, modelMatrixScratch, heightFade);
-                    vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, meshPush);
-                    vkCmdDraw(cmd, 6, 1, 0, 0);
-
-                    shadowIndex++;
-                }
-            }
+            recordSceneDraws(cmd, stack, meshPush, bindlessSet, pipelineManager, gpuCache, deviceManager,
+                    sceneQueue, sceneQueueCount, CAMERA_VIEW_EDITOR);
 
             vkCmdEndRendering(cmd);
+
+            // PASS 3B: Selected Camera entity's view into the picture-in-picture target (game view: no editor grid)
+            if (previewActive && previewTarget != null && previewTarget.getOffscreenImageView() != 0L) {
+                recordCameraPreviewPass(cmd, stack, meshPush, bindlessSet, previewTarget, pipelineManager, gpuCache,
+                        deviceManager, sceneQueue, sceneQueueCount);
+            }
 
             // ---------------------------------------------------------------------------------
             // PHASE 4: FINAL SWAPCHAIN COMPOSITION PASS (3D Viewport Blit + 2D UI Overlay Pass)
@@ -366,6 +260,9 @@ public class VulkanPassEncoder {
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayoutUI(), 0, stack.longs(uiBindlessSet), null);
                 ByteBuffer uiPush = stack.calloc(VulkanPipeline.UI_PUSH_CONSTANT_SIZE);
                 uiPush.putInt(0, gpuCache.resolveTextureSlot(gpuCache.getUiFontTexture()));
+                // Camera preview target: sampled only when it was rendered (and left in SHADER_READ_ONLY) this frame
+                boolean previewRendered = previewActive && previewTarget != null && previewTarget.getOffscreenImageView() != 0L;
+                uiPush.putInt(4, previewRendered ? previewSlot : VulkanGpuCache.NO_TEXTURE);
                 vkCmdPushConstants(cmd, pipelineManager.getPipelineLayoutUI(), VK_SHADER_STAGE_FRAGMENT_BIT, 0, uiPush);
 
                 LongBuffer pBuffers = stack.longs(uiVbo);
@@ -386,8 +283,173 @@ public class VulkanPassEncoder {
         }
     }
 
+    /**
+     * Records the lit mesh draws and ground shadow blobs for one camera; {@code cameraView} selects the view-projection
+     * the vertex stage reads from the light UBO (texIndices2.z).
+     */
+    private void recordSceneDraws(VkCommandBuffer cmd, MemoryStack stack, ByteBuffer meshPush, long bindlessSet,
+                                  VulkanPipeline pipelineManager, VulkanGpuCache gpuCache, VulkanDevice deviceManager,
+                                  List<RenderEntity> sceneQueue, int sceneQueueCount, int cameraView) {
+        // ---------------------------------------------------------------------------------
+        // STEP 2: 3D Scene Mesh Pass
+        // ---------------------------------------------------------------------------------
+        if (pipelineManager.getGraphicsPipeline3D() != 0L && bindlessSet != 0L && sceneQueue != null && sceneQueueCount > 0) {
+            VulkanGpuCache.VulkanBuffer bonePaletteBuf = gpuCache.getOrCreateBonePaletteBuffer(deviceManager);
+            long skinnedPipeline = pipelineManager.getGraphicsPipelineSkinned();
+
+            // Set 0 is bound once for the whole pass; every draw selects its textures and palette via push constants
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, stack.longs(bindlessSet), null);
+            LongBuffer pBuffers = stack.mallocLong(1);
+            LongBuffer pOffsets = stack.longs(0L);
+            long boundPipeline = 0L;
+
+            for (int i = 0; i < sceneQueueCount; i++) {
+                RenderEntity entity = sceneQueue.get(i);
+                VulkanGpuCache.VulkanBuffer mesh = gpuCache.getMesh(entity.meshHandle);
+                if (mesh == null || mesh.bufferHandle == 0L || mesh.vertexCount <= 0) continue;
+                long vboHandle = mesh.bufferHandle;
+
+                // 30-float buffers must go through the 120-byte skinned pipeline; without a palette or a free
+                // slot they still draw there against an identity-seeded slot rather than misreading the stride.
+                boolean skinnedLayout = mesh.floatStride >= 30;
+                if (skinnedLayout && (skinnedPipeline == 0L || bonePaletteBuf == null)) continue;
+
+                long wantedPipeline = skinnedLayout ? skinnedPipeline : pipelineManager.getGraphicsPipeline3D();
+                if (wantedPipeline != boundPipeline) {
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, wantedPipeline);
+                    boundPipeline = wantedPipeline;
+                }
+
+                computeModelMatrixInPlace(entity.px, entity.py, entity.pz, entity.rx, entity.ry, entity.rz, entity.sx, entity.sy, entity.sz, modelMatrixScratch);
+                writeEntityPush(meshPush, modelMatrixScratch, PASS_SCENE, entity, gpuCache, i, cameraView);
+                vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, meshPush);
+
+                vkCmdBindVertexBuffers(cmd, 0, pBuffers.put(0, vboHandle), pOffsets);
+                if (mesh.indexBufferHandle != 0L && mesh.indexCount > 0) {
+                    vkCmdBindIndexBuffer(cmd, mesh.indexBufferHandle, 0, mesh.indexType);
+                    vkCmdDrawIndexed(cmd, mesh.indexCount, 1, 0, 0, 0);
+                } else {
+                    vkCmdDraw(cmd, mesh.vertexCount, 1, 0, 0);
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------------------
+        // STEP 3: Dynamic Ground Entity Shadow Blobs Pass
+        // ---------------------------------------------------------------------------------
+        long groundQuadBuf = gpuCache.getGroundQuadBuffer(deviceManager);
+        long shadowPipeline = pipelineManager.getGraphicsPipelineShadow();
+        if (shadowPipeline == 0L) shadowPipeline = pipelineManager.getGraphicsPipeline3D();
+
+        if (shadowPipeline != 0L && bindlessSet != 0L && sceneQueue != null && sceneQueueCount > 0 && groundQuadBuf != 0L) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, stack.longs(bindlessSet), null);
+
+            // Every blob draws the same quad, so it is bound once for the pass
+            vkCmdBindVertexBuffers(cmd, 0, stack.longs(groundQuadBuf), stack.longs(0L));
+
+            int shadowIndex = 0;
+            for (int i = 0; i < sceneQueueCount; i++) {
+                if (shadowIndex >= 64) break;
+                RenderEntity entity = sceneQueue.get(i);
+                float clearance = entity.py - entity.groundY;
+                if (clearance < -0.01f) continue;
+
+                float heightFade = Math.max(0.0f, 1.0f - (clearance / 10.0f));
+                if (heightFade < 0.05f) continue;
+
+                float shadowScale = Math.max(entity.sx, entity.sz) * 1.25f;
+                float shadowY = entity.groundY + 0.005f;
+
+                computeModelMatrixInPlace(entity.px, shadowY, entity.pz, 0.0f, 0.0f, 0.0f, shadowScale, 1.0f, shadowScale, modelMatrixScratch);
+
+                writeBlobPush(meshPush, modelMatrixScratch, heightFade, cameraView);
+                vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, meshPush);
+                vkCmdDraw(cmd, 6, 1, 0, 0);
+
+                shadowIndex++;
+            }
+        }
+    }
+
+    /** Begins dynamic rendering into {@code target}'s color + depth (both cleared) with its viewport and scissor bound. */
+    private static void beginOffscreenRendering(VkCommandBuffer cmd, MemoryStack stack, VulkanTargetPass target) {
+        // Dynamic Viewport & Scissor Setup for Offscreen Viewport (Negative height for Vulkan Y-Inversion)
+        VkViewport.Buffer offscreenViewport = VkViewport.calloc(1, stack);
+        offscreenViewport.get(0)
+                .x(0.0f).y((float) target.getHeight())
+                .width((float) target.getWidth()).height(-(float) target.getHeight())
+                .minDepth(0.0f).maxDepth(1.0f);
+
+        VkRect2D.Buffer offscreenScissor = VkRect2D.calloc(1, stack);
+        offscreenScissor.get(0).offset().set(0, 0);
+        offscreenScissor.get(0).extent().set(target.getWidth(), target.getHeight());
+
+        VkRenderingAttachmentInfo.Buffer offscreenColorAttachment = VkRenderingAttachmentInfo.calloc(1, stack);
+        offscreenColorAttachment.get(0)
+                .sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO)
+                .imageView(target.getOffscreenImageView())
+                .imageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                .loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR)
+                .storeOp(VK_ATTACHMENT_STORE_OP_STORE);
+
+        offscreenColorAttachment.get(0).clearValue().color().float32(0, 0.0f).float32(1, 0.0f).float32(2, 0.0f).float32(3, 1.0f);
+
+        VkRenderingAttachmentInfo offscreenDepthAttachment = VkRenderingAttachmentInfo.calloc(stack)
+                .sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO)
+                .imageView(target.getDepthImageView())
+                .imageLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                .loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR)
+                .storeOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
+
+        offscreenDepthAttachment.clearValue().depthStencil().set(1.0f, 0);
+
+        VkRenderingInfo offscreenRenderingInfo = VkRenderingInfo.calloc(stack)
+                .sType(VK_STRUCTURE_TYPE_RENDERING_INFO)
+                .layerCount(1)
+                .pColorAttachments(offscreenColorAttachment)
+                .pDepthAttachment(offscreenDepthAttachment);
+
+        offscreenRenderingInfo.renderArea().extent().set(target.getWidth(), target.getHeight());
+
+        vkCmdBeginRendering(cmd, offscreenRenderingInfo);
+
+        vkCmdSetViewport(cmd, 0, offscreenViewport);
+        vkCmdSetScissor(cmd, 0, offscreenScissor);
+    }
+
+    /**
+     * Renders the queue from the selected Camera entity into the picture-in-picture target, then leaves it in
+     * SHADER_READ_ONLY_OPTIMAL for the UI pass. The shadow map is already read-only from PASS 0.
+     */
+    private void recordCameraPreviewPass(VkCommandBuffer cmd, MemoryStack stack, ByteBuffer meshPush, long bindlessSet,
+                                         VulkanTargetPass previewTarget, VulkanPipeline pipelineManager, VulkanGpuCache gpuCache,
+                                         VulkanDevice deviceManager, List<RenderEntity> sceneQueue, int sceneQueueCount) {
+        // Fully cleared each frame, so previous contents are discarded; the source scope orders this frame's writes
+        // after last frame's UI sampling
+        imageBarrier(cmd, stack, previewTarget.getOffscreenImage(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_NONE,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+        imageBarrier(cmd, stack, previewTarget.getDepthImage(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+
+        beginOffscreenRendering(cmd, stack, previewTarget);
+        recordSceneDraws(cmd, stack, meshPush, bindlessSet, pipelineManager, gpuCache, deviceManager,
+                sceneQueue, sceneQueueCount, CAMERA_VIEW_PREVIEW);
+        vkCmdEndRendering(cmd);
+
+        imageBarrier(cmd, stack, previewTarget.getOffscreenImage(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    }
+
     /** Writes the 128-byte push block for a scene or shadow-depth draw of queued entity {@code index}. */
-    private static void writeEntityPush(ByteBuffer push, float[] model, float passFlag, RenderEntity entity, VulkanGpuCache gpuCache, int index) {
+    private static void writeEntityPush(ByteBuffer push, float[] model, float passFlag, RenderEntity entity, VulkanGpuCache gpuCache, int index, int cameraView) {
         push.clear();
         for (int m = 0; m < 16; m++) push.putFloat(model[m]);
         // params: passFlags, heightFade, reflection, emissiveIntensity
@@ -399,21 +461,21 @@ public class VulkanPassEncoder {
             .putInt(gpuCache.getEntityTextureSlot(index, VulkanGpuCache.CHANNEL_NORMAL))
             .putInt(gpuCache.getEntityTextureSlot(index, VulkanGpuCache.CHANNEL_SPECULAR))
             .putInt(gpuCache.getEntityTextureSlot(index, VulkanGpuCache.CHANNEL_LIGHTMAP));
-        // texIndices2: emissive, bone palette slot, unused, unused
+        // texIndices2: emissive, bone palette slot, camera view, unused
         push.putInt(gpuCache.getEntityTextureSlot(index, VulkanGpuCache.CHANNEL_EMISSIVE))
             .putInt(gpuCache.getEntityPaletteSlot(index))
-            .putInt(0).putInt(0);
+            .putInt(cameraView).putInt(0);
         push.flip();
     }
 
     /** Push block for a ground shadow blob: procedural alpha in the fragment stage, so every channel is absent. */
-    private static void writeBlobPush(ByteBuffer push, float[] model, float heightFade) {
+    private static void writeBlobPush(ByteBuffer push, float[] model, float heightFade, int cameraView) {
         push.clear();
         for (int m = 0; m < 16; m++) push.putFloat(model[m]);
         push.putFloat(PASS_SHADOW_BLOB).putFloat(heightFade).putFloat(0.0f).putFloat(0.0f);
         push.putFloat(0.0f).putFloat(1.0f).putFloat(1.0f).putFloat(0.0f);
         push.putInt(VulkanGpuCache.NO_TEXTURE).putInt(VulkanGpuCache.NO_TEXTURE).putInt(VulkanGpuCache.NO_TEXTURE).putInt(VulkanGpuCache.NO_TEXTURE);
-        push.putInt(VulkanGpuCache.NO_TEXTURE).putInt(0).putInt(0).putInt(0);
+        push.putInt(VulkanGpuCache.NO_TEXTURE).putInt(0).putInt(cameraView).putInt(0);
         push.flip();
     }
 
@@ -521,7 +583,7 @@ public class VulkanPassEncoder {
                 }
 
                 computeModelMatrixInPlace(entity.px, entity.py, entity.pz, entity.rx, entity.ry, entity.rz, entity.sx, entity.sy, entity.sz, modelMatrixScratch);
-                writeEntityPush(meshPush, modelMatrixScratch, PASS_SHADOW_DEPTH, entity, gpuCache, i);
+                writeEntityPush(meshPush, modelMatrixScratch, PASS_SHADOW_DEPTH, entity, gpuCache, i, CAMERA_VIEW_EDITOR);
                 vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, meshPush);
 
                 vkCmdBindVertexBuffers(cmd, 0, pBuffers.put(0, mesh.bufferHandle), pOffsets);

@@ -21,6 +21,16 @@ public interface IRenderBackend {
      */
     default void setSceneViewport(float minX, float minY, float maxX, float maxY, float aspect) {}
 
+    /**
+     * Picture-in-picture camera preview: while active, the queued scene is rendered a second time from {@code viewProj}
+     * (column-major, same clip conventions as the editor camera, camera world position for lighting) into the target
+     * returned by {@link #getCameraPreviewTexture}, before the UI samples it. viewProj is copied, never retained.
+     */
+    default void setCameraPreview(boolean active, float[] viewProj, float camX, float camY, float camZ) {}
+
+    /** Opaque handle of the camera preview color target, or 0L when the backend has no preview pass. */
+    default long getCameraPreviewTexture() { return 0L; }
+
     void updateGridMesh(float[] vertices, int count);
     void updateUiMesh(float[] vertices, int count);
 
