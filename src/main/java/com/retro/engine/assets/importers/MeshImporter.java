@@ -26,6 +26,10 @@ public class MeshImporter {
 
     public static final int FLOATS_PER_VERTEX = MeshBufferData.STATIC_FLOATS_PER_VERTEX;
     public static final int RW35_TARGET_MAX_VERTICES = 4500; // RenderWare 3.5 target prop budget
+    // UV bins per axis for decimation clustering. Vertices whose UVs fall in different bins are never merged, which
+    // keeps texture seams and atlas boundaries intact. Finer bins catch narrower seams but split more cells inside
+    // a continuous UV island.
+    private static final int UV_SEAM_BINS = 16;
 
     public static MeshBufferData loadModel(String filePath) {
         if (filePath == null || filePath.trim().isEmpty()) return createDefaultCube();
@@ -200,8 +204,8 @@ public class MeshImporter {
 
     /**
      * True Voxel Grid Vertex Collapse Decimation (Rossignac-Borrel Algorithm):
-     * Maps vertices to 3D spatial voxel centroids and rebuilds non-degenerate faces,
-     * maintaining contiguous 3D surface geometry, volume, normals, UVs, and Tangents/Bitangents.
+     * Maps vertices to 3D spatial voxel centroids, split by quantized UV bin so seams never blend, rebuilds
+     * non-degenerate faces, and recomputes normals from the decimated face geometry.
      */
     public static MeshBufferData decimateToRW35Target(float[] rawVerts, int rawCount, int maxTargetVerts) {
         if (rawCount <= maxTargetVerts) return new MeshBufferData(rawVerts, rawCount);
@@ -234,108 +238,171 @@ public class MeshImporter {
         float voxelSizeY = extentY / gridRes;
         float voxelSizeZ = extentZ / gridRes;
 
-        // Map raw vertices to voxel cell hashes
-        long[] vertCellHashes = new long[rawCount];
-        Map<Long, List<float[]>> cellVertMap = new LinkedHashMap<>();
+        // Map raw vertices to voxel cells. Each vertex gets two keys:
+        //  - spatialHash: the 3D voxel cell, which decides the collapsed position and whether a face survives
+        //  - clusterKey: the voxel cell plus the quantized UV bin, which decides which vertices share attributes.
+        // Vertices on opposite sides of a UV seam or atlas boundary share a position but land in different UV bins,
+        // so they become separate clusters at the same point. The surface stays watertight and the UVs never blend.
+        long[] vertSpatialHashes = new long[rawCount];
+        int[] vertClusters = new int[rawCount];
+        Map<Long, Integer> spatialIndex = new HashMap<>();
+        Map<Long, Integer> clusterIndex = new LinkedHashMap<>();
+        List<float[]> spatialSums = new ArrayList<>();   // [sumX, sumY, sumZ, count]
+        List<float[]> clusterSums = new ArrayList<>();   // summed static attributes
+        List<float[]> clusterFirst = new ArrayList<>();  // first vertex, for non-averageable bone data
+        List<Integer> clusterCounts = new ArrayList<>();
+        List<Integer> clusterSpatial = new ArrayList<>();
+
+        // Bone indices are int bit patterns and cannot be averaged; skinned clusters average only the
+        // static attributes and inherit bone indices/weights from the cluster's first vertex.
+        final int averagedFloats = skinned ? MeshBufferData.BONE_INDEX_OFFSET : FLOATS_PER_VERTEX;
 
         for (int i = 0; i < rawCount; i++) {
             int base = i * FLOATS_PER_VERTEX;
             int vx = Math.max(0, Math.min(gridRes - 1, (int) ((rawVerts[base] - minX) / voxelSizeX)));
             int vy = Math.max(0, Math.min(gridRes - 1, (int) ((rawVerts[base + 1] - minY) / voxelSizeY)));
             int vz = Math.max(0, Math.min(gridRes - 1, (int) ((rawVerts[base + 2] - minZ) / voxelSizeZ)));
+            long spatialHash = ((long) vx & 0xFFL) | (((long) vy & 0xFFL) << 8) | (((long) vz & 0xFFL) << 16);
 
-            long hash = ((long) vx & 0xFFFFL) | (((long) vy & 0xFFFFL) << 16) | (((long) vz & 0xFFFFL) << 32);
-            vertCellHashes[i] = hash;
+            // floor() keeps tiled UVs outside [0, 1] in distinct bins; 20 bits per axis wraps only after ~65k tiles
+            long ub = (long) Math.floor(rawVerts[base + 10] * UV_SEAM_BINS) & 0xFFFFFL;
+            long vb = (long) Math.floor(rawVerts[base + 11] * UV_SEAM_BINS) & 0xFFFFFL;
+            long clusterKey = spatialHash | (ub << 24) | (vb << 44);
 
-            float[] vert = new float[FLOATS_PER_VERTEX];
-            System.arraycopy(rawVerts, base, vert, 0, FLOATS_PER_VERTEX);
-
-            List<float[]> list = cellVertMap.get(hash);
-            if (list == null) {
-                list = new ArrayList<>();
-                cellVertMap.put(hash, list);
+            Integer s = spatialIndex.get(spatialHash);
+            if (s == null) {
+                s = spatialSums.size();
+                spatialIndex.put(spatialHash, s);
+                spatialSums.add(new float[4]);
             }
-            list.add(vert);
+            float[] ss = spatialSums.get(s);
+            ss[0] += rawVerts[base]; ss[1] += rawVerts[base + 1]; ss[2] += rawVerts[base + 2]; ss[3] += 1.0f;
+
+            Integer c = clusterIndex.get(clusterKey);
+            if (c == null) {
+                c = clusterSums.size();
+                clusterIndex.put(clusterKey, c);
+                clusterSums.add(new float[FLOATS_PER_VERTEX]);
+                float[] first = new float[FLOATS_PER_VERTEX];
+                System.arraycopy(rawVerts, base, first, 0, FLOATS_PER_VERTEX);
+                clusterFirst.add(first);
+                clusterCounts.add(0);
+                clusterSpatial.add(s);
+            }
+            float[] cs = clusterSums.get(c);
+            for (int k = 0; k < averagedFloats; k++) {
+                cs[k] += rawVerts[base + k];
+            }
+            clusterCounts.set(c, clusterCounts.get(c) + 1);
+
+            vertSpatialHashes[i] = spatialHash;
+            vertClusters[i] = c;
         }
 
-        // Compute centroid for each cell
-        Map<Long, float[]> cellCentroids = new LinkedHashMap<>();
-        for (Map.Entry<Long, List<float[]>> entry : cellVertMap.entrySet()) {
-            List<float[]> list = entry.getValue();
-            // Bone indices are int bit patterns and cannot be averaged; skinned cells average only the
-            // static attributes and inherit bone indices/weights from the cell's first vertex.
-            int averagedFloats = skinned ? MeshBufferData.BONE_INDEX_OFFSET : FLOATS_PER_VERTEX;
-            float[] avg = new float[FLOATS_PER_VERTEX];
-            for (float[] v : list) {
-                for (int k = 0; k < averagedFloats; k++) {
-                    avg[k] += v[k];
-                }
-            }
-            float invCount = 1.0f / list.size();
+        // Build each cluster's representative vertex: the shared spatial centroid as its position plus the
+        // cluster's own averaged UVs, colors, and tangent frame
+        int clusterCount = clusterSums.size();
+        float[][] clusterVerts = new float[clusterCount][];
+        for (int c = 0; c < clusterCount; c++) {
+            float[] avg = clusterSums.get(c);
+            float invCount = 1.0f / clusterCounts.get(c);
             for (int k = 0; k < averagedFloats; k++) {
                 avg[k] *= invCount;
             }
             if (skinned) {
-                float[] rep = list.get(0);
-                System.arraycopy(rep, averagedFloats, avg, averagedFloats, FLOATS_PER_VERTEX - averagedFloats);
+                System.arraycopy(clusterFirst.get(c), averagedFloats, avg, averagedFloats, FLOATS_PER_VERTEX - averagedFloats);
             }
 
-            // Normalize average surface normal (nx, ny, nz)
-            float nLen = (float) Math.sqrt(avg[3] * avg[3] + avg[4] * avg[4] + avg[5] * avg[5]);
-            if (nLen > 0.0001f) {
-                avg[3] /= nLen; avg[4] /= nLen; avg[5] /= nLen;
-            }
-            // Normalize tangent (tx, ty, tz)
-            float tLen = (float) Math.sqrt(avg[14] * avg[14] + avg[15] * avg[15] + avg[16] * avg[16]);
-            if (tLen > 0.0001f) {
-                avg[14] /= tLen; avg[15] /= tLen; avg[16] /= tLen;
-            }
-            // Normalize bitangent (bx, by, bz)
-            float bLen = (float) Math.sqrt(avg[17] * avg[17] + avg[18] * avg[18] + avg[19] * avg[19]);
-            if (bLen > 0.0001f) {
-                avg[17] /= bLen; avg[18] /= bLen; avg[19] /= bLen;
-            }
+            float[] ss = spatialSums.get(clusterSpatial.get(c));
+            avg[0] = ss[0] / ss[3]; avg[1] = ss[1] / ss[3]; avg[2] = ss[2] / ss[3];
 
-            cellCentroids.put(entry.getKey(), avg);
+            // Normals are rebuilt from the decimated faces below; the averaged source normal is kept only as a
+            // fallback for clusters whose faces all collapsed
+            normalize3(avg, 3);
+            normalize3(avg, 14); // tangent (tx, ty, tz)
+            normalize3(avg, 17); // bitangent (bx, by, bz)
+
+            clusterVerts[c] = avg;
         }
 
-        // Reconstruct faces using cell centroids
-        List<Float> decimatedVerts = new ArrayList<>();
+        // Reconstruct faces. A face survives only if its 3 corners fall in distinct spatial cells. Two UV clusters
+        // from the same cell share one position, so letting them form a face would give a zero-area triangle.
+        List<int[]> faces = new ArrayList<>();
+        float[] faceNormalSums = new float[clusterCount * 3];
         for (int f = 0; f < totalFaces; f++) {
             int i0 = f * 3;
             int i1 = f * 3 + 1;
             int i2 = f * 3 + 2;
 
-            long h0 = vertCellHashes[i0];
-            long h1 = vertCellHashes[i1];
-            long h2 = vertCellHashes[i2];
+            long h0 = vertSpatialHashes[i0];
+            long h1 = vertSpatialHashes[i1];
+            long h2 = vertSpatialHashes[i2];
+            if (h0 == h1 || h1 == h2 || h2 == h0) continue;
 
-            // Only emit non-degenerate faces (where all 3 corners map to unique voxel cells)
-            if (h0 != h1 && h1 != h2 && h2 != h0) {
-                float[] c0 = cellCentroids.get(h0);
-                float[] c1 = cellCentroids.get(h1);
-                float[] c2 = cellCentroids.get(h2);
+            int c0 = vertClusters[i0], c1 = vertClusters[i1], c2 = vertClusters[i2];
+            float[] p0 = clusterVerts[c0], p1 = clusterVerts[c1], p2 = clusterVerts[c2];
 
-                if (c0 != null && c1 != null && c2 != null) {
-                    for (float val : c0) decimatedVerts.add(val);
-                    for (float val : c1) decimatedVerts.add(val);
-                    for (float val : c2) decimatedVerts.add(val);
-                }
+            // Face normal from the new triangle's edges; its length is twice the area, which gives area weighting
+            float e1x = p1[0] - p0[0], e1y = p1[1] - p0[1], e1z = p1[2] - p0[2];
+            float e2x = p2[0] - p0[0], e2y = p2[1] - p0[1], e2z = p2[2] - p0[2];
+            float fnx = e1y * e2z - e1z * e2y;
+            float fny = e1z * e2x - e1x * e2z;
+            float fnz = e1x * e2y - e1y * e2x;
+
+            // A face that folded over during the collapse points against the source triangle. Orient its
+            // contribution to match the source so a fold doesn't cancel out its neighbours' normals.
+            int b0 = i0 * FLOATS_PER_VERTEX, b1 = i1 * FLOATS_PER_VERTEX, b2 = i2 * FLOATS_PER_VERTEX;
+            float o1x = rawVerts[b1] - rawVerts[b0], o1y = rawVerts[b1 + 1] - rawVerts[b0 + 1], o1z = rawVerts[b1 + 2] - rawVerts[b0 + 2];
+            float o2x = rawVerts[b2] - rawVerts[b0], o2y = rawVerts[b2 + 1] - rawVerts[b0 + 1], o2z = rawVerts[b2 + 2] - rawVerts[b0 + 2];
+            float onx = o1y * o2z - o1z * o2y;
+            float ony = o1z * o2x - o1x * o2z;
+            float onz = o1x * o2y - o1y * o2x;
+            if (fnx * onx + fny * ony + fnz * onz < 0.0f) {
+                fnx = -fnx; fny = -fny; fnz = -fnz;
+            }
+
+            for (int c : new int[] {c0, c1, c2}) {
+                faceNormalSums[c * 3] += fnx;
+                faceNormalSums[c * 3 + 1] += fny;
+                faceNormalSums[c * 3 + 2] += fnz;
+            }
+            faces.add(new int[] {c0, c1, c2});
+        }
+
+        // Replace cluster normals with the area-weighted sum of their decimated face normals. Clusters on opposite
+        // sides of a UV seam accumulate separately, so seams keep their hard shading edge.
+        for (int c = 0; c < clusterCount; c++) {
+            float nx = faceNormalSums[c * 3], ny = faceNormalSums[c * 3 + 1], nz = faceNormalSums[c * 3 + 2];
+            float len = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
+            if (len > 1e-12f) {
+                float[] v = clusterVerts[c];
+                v[3] = nx / len; v[4] = ny / len; v[5] = nz / len;
             }
         }
 
-        if (decimatedVerts.isEmpty()) {
+        if (faces.isEmpty()) {
             return new MeshBufferData(rawVerts, rawCount);
         }
 
-        float[] finalVerts = new float[decimatedVerts.size()];
-        for (int i = 0; i < decimatedVerts.size(); i++) {
-            finalVerts[i] = decimatedVerts.get(i);
+        float[] finalVerts = new float[faces.size() * 3 * FLOATS_PER_VERTEX];
+        int dst = 0;
+        for (int[] face : faces) {
+            for (int c : face) {
+                System.arraycopy(clusterVerts[c], 0, finalVerts, dst, FLOATS_PER_VERTEX);
+                dst += FLOATS_PER_VERTEX;
+            }
         }
 
         int finalCount = finalVerts.length / FLOATS_PER_VERTEX;
         System.out.println("[MeshImporter] Successfully decimated high-poly mesh from " + rawCount + " to " + finalCount + " vertices (RW 3.5 Target: " + maxTargetVerts + ").");
         return new MeshBufferData(finalVerts, finalCount);
+    }
+
+    private static void normalize3(float[] v, int offset) {
+        float len = (float) Math.sqrt(v[offset] * v[offset] + v[offset + 1] * v[offset + 1] + v[offset + 2] * v[offset + 2]);
+        if (len > 0.0001f) {
+            v[offset] /= len; v[offset + 1] /= len; v[offset + 2] /= len;
+        }
     }
 
     /**

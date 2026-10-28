@@ -57,14 +57,24 @@ struct VertexOut {
     float3 tangent;
     float3 bitangent;
     float viewDist;
-    float4 lightSpacePos;
     uint drawIndex [[flat]];
 };
 
 // 3x3 PCF over the directional shadow map: 1.0 = fully lit, 0.0 = fully shadowed.
 // Metal NDC y points up while texture v points down, hence the flipped v.
-float computeDirectionalShadow(float4 lightSpacePos, float NdotL, float baseBias,
+// The receiver is pushed along the geometric normal before projection (normal-offset bias). That moves it clear of
+// its own depth texels on large, coarse faces like decimated meshes, where a depth-only bias either leaves acne or
+// detaches the shadow. The offset is about one shadow texel in world units, scaled up at grazing angles.
+float computeDirectionalShadow(float3 worldPos, float3 geomN, float4x4 lightSpace, float NdotL, float baseBias,
                                depth2d<float> shadowMap, sampler shadowSmp) {
+    float2 mapSize = float2(shadowMap.get_width(), shadowMap.get_height());
+    // The orthographic light matrix scales x by 1/radius, so its first row length gives the world-space texel size
+    float invRadius = length(float3(lightSpace[0][0], lightSpace[1][0], lightSpace[2][0]));
+    float texelWorld = 2.0 / (max(invRadius, 1e-6) * mapSize.x);
+    float sinTheta = sqrt(max(1.0 - NdotL * NdotL, 0.0));
+    float3 offsetPos = worldPos + geomN * (texelWorld * (0.5 + 1.5 * sinTheta));
+
+    float4 lightSpacePos = lightSpace * float4(offsetPos, 1.0);
     float3 proj = lightSpacePos.xyz / lightSpacePos.w;
     if (proj.z > 1.0) return 1.0;
 
@@ -72,7 +82,7 @@ float computeDirectionalShadow(float4 lightSpacePos, float NdotL, float baseBias
     float bias = max(baseBias * (1.0 - NdotL), baseBias * 0.2);
     float refDepth = proj.z - bias;
 
-    float2 texel = 1.0 / float2(shadowMap.get_width(), shadowMap.get_height());
+    float2 texel = 1.0 / mapSize;
     float lit = 0.0;
     for (int x = -1; x <= 1; x++) {
         for (int y = -1; y <= 1; y++) {
@@ -165,7 +175,6 @@ vertex VertexOut vertexMain(uint vertexID [[vertex_id]],
     out.position = uniforms.mvp * localPos;
     out.worldPos = (uniforms.model * localPos).xyz;
     out.viewDist = out.position.w;
-    out.lightSpacePos = uniforms.lightSpace * float4(out.worldPos, 1.0);
     out.drawIndex = drawIndex;
 
     return out;
@@ -268,9 +277,9 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
     float shadow = 1.0;
 
     if (lightType == 0) {
-        // The bias uses the geometric normal so normal-map detail never causes acne
+        // Both biases use the geometric normal so normal-map detail never causes acne
         L = normalize(-uniforms.lightDirIntensity.xyz);
-        shadow = computeDirectionalShadow(in.lightSpacePos, clamp(dot(geomN, L), 0.0, 1.0),
+        shadow = computeDirectionalShadow(in.worldPos, geomN, uniforms.lightSpace, clamp(dot(geomN, L), 0.0, 1.0),
                                           uniforms.matParams.z, shadowMap, shadowSmp);
     } else {
         float3 lightPos = uniforms.lightPosType.xyz;

@@ -67,9 +67,21 @@ vec4 sampleChannel(int slot, vec2 uv, vec4 fallback) {
     return texture(sampler2D(u_Textures[slot], u_MaterialSampler), uv);
 }
 
-// 3x3 PCF over the directional shadow map: 1.0 = fully lit, 0.0 = fully shadowed
-float computeDirectionalShadow(float NdotL) {
-    vec3 proj = vLightSpacePos.xyz / vLightSpacePos.w;
+// 3x3 PCF over the directional shadow map: 1.0 = fully lit, 0.0 = fully shadowed.
+// The receiver is pushed along the geometric normal before projection (normal-offset bias). That moves it clear of
+// its own depth texels on large, coarse faces like decimated meshes, where a depth-only bias either leaves acne or
+// detaches the shadow. The offset is about one shadow texel in world units, scaled up at grazing angles.
+float computeDirectionalShadow(vec3 worldPos, vec3 geomN, float NdotL) {
+    vec2 mapSize = vec2(textureSize(u_ShadowMap, 0));
+    mat4 lightSpace = u_Lights.lightSpaceMatrix;
+    // The orthographic light matrix scales x by 1/radius, so its first row length gives the world-space texel size
+    float invRadius = length(vec3(lightSpace[0][0], lightSpace[1][0], lightSpace[2][0]));
+    float texelWorld = 2.0 / (max(invRadius, 1e-6) * mapSize.x);
+    float sinTheta = sqrt(max(1.0 - NdotL * NdotL, 0.0));
+    vec3 offsetPos = worldPos + geomN * (texelWorld * (0.5 + 1.5 * sinTheta));
+
+    vec4 lightSpacePos = lightSpace * vec4(offsetPos, 1.0);
+    vec3 proj = lightSpacePos.xyz / lightSpacePos.w;
     if (proj.z > 1.0) return 1.0;
 
     // The shadow pass uses a positive-height viewport, so NDC maps straight to texture space
@@ -78,7 +90,7 @@ float computeDirectionalShadow(float NdotL) {
     float bias = max(baseBias * (1.0 - NdotL), baseBias * 0.2);
     float refDepth = proj.z - bias;
 
-    vec2 texel = 1.0 / vec2(textureSize(u_ShadowMap, 0));
+    vec2 texel = 1.0 / mapSize;
     float lit = 0.0;
     for (int x = -1; x <= 1; x++) {
         for (int y = -1; y <= 1; y++) {
@@ -183,9 +195,9 @@ void main() {
         intensity = u_Lights.pointLights.color.a;
         hasLight = true;
     } else if (u_Lights.numLights.x > 0.5) {
-        // Directional Light: the bias uses the geometric normal so normal-map detail never causes acne
+        // Directional Light: both biases use the geometric normal so normal-map detail never causes acne
         L = normalize(-u_Lights.dirLight.direction.xyz);
-        shadow = computeDirectionalShadow(clamp(dot(geomN, L), 0.0, 1.0));
+        shadow = computeDirectionalShadow(vFragPos, geomN, clamp(dot(geomN, L), 0.0, 1.0));
         lightColor = u_Lights.dirLight.color.rgb;
         intensity = u_Lights.dirLight.color.a;
         hasLight = true;
