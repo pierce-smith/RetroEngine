@@ -93,7 +93,10 @@ public class EditorWorkspace {
     public int getWindowWidth() { return windowWidth; }
     public int getWindowHeight() { return windowHeight; }
 
-    public void setCameraController(ViewportCamera cameraController) { this.cameraController = cameraController; }
+    public void setCameraController(ViewportCamera cameraController) {
+        this.cameraController = cameraController;
+        overlayManager.setCameraController(cameraController);
+    }
     public ViewportCamera getCameraController() { return cameraController; }
     public void resetViewportCamera() { if (cameraController != null) cameraController.reset(); }
 

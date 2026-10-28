@@ -64,6 +64,16 @@ public class InspectorInputDelegate {
 
         for (Component comp : selected.getAllComponents()) {
             if (comp == null) continue;
+
+            // Section header: "REMOVE" button
+            float drawHeaderY = curY + scrollOffset;
+            if (InspectorPanel.isRemovable(comp) && InspectorPanel.isRowVisible(drawHeaderY)
+                    && InspectorPanel.isOverRemoveButton(ndcX, ndcY, drawHeaderY)) {
+                UISoundPlayer.play(UISound.DELETE);
+                EditorCommands.RemoveComponentCommand cmd = new EditorCommands.RemoveComponentCommand(manager, selected, comp);
+                manager.getCommandHistory().executeCommand(cmd);
+                return;
+            }
             curY -= InspectorPanel.HEADER_ADVANCE;
 
             Class<?> compClass = comp.getClass();

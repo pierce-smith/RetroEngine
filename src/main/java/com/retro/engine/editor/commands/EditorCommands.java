@@ -4,10 +4,12 @@ import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.components.*;
 import com.retro.engine.scene.components.gameplay.ScriptComponent;
+import com.retro.engine.scene.components.media.AudioSource;
 import com.retro.engine.scene.components.transform.Transform;
 import com.retro.engine.scripting.ScriptEngine;
 
 import java.lang.reflect.Field;
+import java.util.List;
 
 /**
  * Unified container for all editor transactional undo/redo commands.
@@ -214,6 +216,52 @@ public class EditorCommands {
         public String getName() {
             String compName = (component != null) ? component.getComponentName() : "Component";
             return "Modify " + compName + " [" + propertyLabel + "]";
+        }
+    }
+
+    public static class RemoveComponentCommand implements ICommand {
+        private final EditorWorkspace workspace;
+        private final Entity entity;
+        private final Component component;
+        private int removedIndex = -1;
+
+        public RemoveComponentCommand(EditorWorkspace workspace, Entity entity, Component component) {
+            this.workspace = workspace;
+            this.entity = entity;
+            this.component = component;
+        }
+
+        @Override
+        public void execute() {
+            if (entity == null || component == null || component instanceof Transform) return;
+            List<Component> components = entity.getAllComponents();
+            removedIndex = components.indexOf(component);
+            if (removedIndex < 0) return;
+            components.remove(removedIndex);
+            if (component instanceof AudioSource audio) {
+                audio.stop();
+            }
+            if (workspace != null) {
+                workspace.getSceneManager().removeComponentFromPool(entity, component);
+            }
+        }
+
+        @Override
+        public void undo() {
+            if (entity == null || component == null || removedIndex < 0) return;
+            List<Component> components = entity.getAllComponents();
+            if (!components.contains(component)) {
+                components.add(Math.min(removedIndex, components.size()), component);
+            }
+            if (workspace != null) {
+                workspace.getSceneManager().syncEntityToPools(entity);
+            }
+        }
+
+        @Override
+        public String getName() {
+            String compName = (component != null) ? component.getComponentName() : "Component";
+            return "Remove " + compName + " from Entity '" + (entity != null ? entity.name : "null") + "'";
         }
     }
 

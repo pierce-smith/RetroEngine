@@ -64,6 +64,11 @@ public class ViewportCamera {
         }
     }
 
+    /** Ends any RMB orbit/fly capture, e.g. when the RMB release was swallowed by a UI overlay. */
+    public void releaseRightMouse() {
+        isDraggingRmb = false;
+    }
+
     public void onCursorPos(double x, double y, boolean isShiftDown, boolean isAltDown) {
         double dx = x - lastMouseX;
         double dy = y - lastMouseY;

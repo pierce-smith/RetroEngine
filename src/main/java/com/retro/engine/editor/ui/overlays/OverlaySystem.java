@@ -54,6 +54,9 @@ public class OverlaySystem {
     private float rightClickPressNdcY = 0.0f;
     private double rightClickDragDistance = 0.0;
     private float pressCamPitch = 0.0f, pressCamYaw = 0.0f, pressCamPanX = 0.0f, pressCamPanY = 0.0f, pressCamZoom = 0.0f;
+    private ViewportCamera cameraController;
+
+    public void setCameraController(ViewportCamera cameraController) { this.cameraController = cameraController; }
 
     public DropdownMenu getActiveDropdownMenu() { return activeDropdownMenu; }
     public DropdownMenu getActiveDropdown() { return activeDropdownMenu; }
@@ -107,6 +110,10 @@ public class OverlaySystem {
     public void closeContextMenu() {
         this.contextMenuVisible = false;
         this.contextMenuItems.clear();
+        // The RMB release that opened the menu can be swallowed by the overlay, so make sure
+        // neither the right-click tracker nor the viewport camera is left in a drag state
+        this.isRightMouseDown = false;
+        if (cameraController != null) cameraController.releaseRightMouse();
     }
     public void hideContextMenu() { closeContextMenu(); }
 

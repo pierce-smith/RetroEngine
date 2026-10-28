@@ -108,8 +108,10 @@ public class EngineContext {
                 boolean handled = selectionController.handleMouseClick(mouseX, mouseY, button, action);
                 boolean inViewport = selectionController.isCursorInViewport(mouseX, mouseY);
                 
-                // Forward to camera controller if not handled by UI, OR if right-clicking inside the 3D viewport
-                if (!handled || (button == 1 && inViewport)) {
+                // Forward to camera controller if not handled by UI, OR if right-clicking inside the 3D viewport.
+                // Releases always go through: a release that opens a context menu turns the region into
+                // OVERLAY_MODAL, and dropping it would leave the camera stuck in RMB orbit/fly mode
+                if (!handled || action == 0 || (button == 1 && inViewport)) {
                     cameraController.onMouseButton(button, action, mouseX, mouseY);
                 }
             });

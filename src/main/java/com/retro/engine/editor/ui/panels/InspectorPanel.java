@@ -5,6 +5,7 @@ import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.theme.EditorTheme;
 import com.retro.engine.scene.components.Component;
 import com.retro.engine.scene.components.gameplay.ScriptComponent;
+import com.retro.engine.scene.components.transform.Transform;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scripting.EntityScript;
 import com.retro.engine.scripting.ScriptEngine;
@@ -54,6 +55,9 @@ public class InspectorPanel {
     // Header "+ PREFAB" button and footer "+ ADD COMPONENT" button
     public static final float PREFAB_X0 = 0.82f, PREFAB_X1 = 0.98f, PREFAB_Y0 = 0.800f, PREFAB_Y1 = 0.845f;
     public static final float ADD_X0 = 0.58f, ADD_X1 = 0.975f, ADD_ABOVE = 0.01f, ADD_BELOW = 0.04f;
+
+    // Section header "REMOVE" button (every component except Transform)
+    public static final float REMOVE_X0 = 0.885f, REMOVE_X1 = 0.969f, REMOVE_INSET = 0.004f;
 
     private static final float LABEL_TEXT = 0.82f;
     private static final float VALUE_TEXT = 0.85f;
@@ -152,7 +156,7 @@ public class InspectorPanel {
             float drawHeaderY = curY + scrollOffset;
 
             if (isRowVisible(drawHeaderY)) {
-                renderSectionHeader(buffer, comp.getComponentName(), drawHeaderY);
+                renderSectionHeader(buffer, comp.getComponentName(), drawHeaderY, isRemovable(comp));
             }
             curY -= HEADER_ADVANCE;
 
@@ -367,7 +371,17 @@ public class InspectorPanel {
         UIGeometryBatch.addTruncatedText(buffer, label, LABEL_X, textTop(midY, LABEL_TEXT), VALUE_X0 - 0.01f, LABEL_TEXT, EditorTheme.TEXT_MUTED, 1.0f);
     }
 
-    private static void renderSectionHeader(UIGeometryBatch.Buffer buffer, String name, float drawY) {
+    public static boolean isRemovable(Component comp) {
+        return comp != null && !(comp instanceof Transform);
+    }
+
+    /** True when (ndcX, ndcY) lies on the REMOVE button of a section header drawn at drawY. */
+    public static boolean isOverRemoveButton(float ndcX, float ndcY, float drawY) {
+        return ndcX >= REMOVE_X0 && ndcX <= REMOVE_X1
+                && ndcY >= drawY - CTRL_BELOW + REMOVE_INSET && ndcY <= drawY + CTRL_ABOVE + 0.002f - REMOVE_INSET;
+    }
+
+    private static void renderSectionHeader(UIGeometryBatch.Buffer buffer, String name, float drawY, boolean removable) {
         float y0 = drawY - CTRL_BELOW, y1 = drawY + CTRL_ABOVE + 0.002f;
         UIGeometryBatch.addRoundedQuad(buffer, 0.565f, y0, VALUE_X1, y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, 1.0f);
 
@@ -378,7 +392,13 @@ public class InspectorPanel {
 
         strBuilder.setLength(0);
         strBuilder.append(name);
-        UIGeometryBatch.addTruncatedText(buffer, strBuilder, tx + tw + 0.012f, textTop(mid, 0.9f), VALUE_X1 - 0.008f, 0.9f, EditorTheme.TEXT, 1.0f);
+        float textX1 = removable ? REMOVE_X0 - 0.008f : VALUE_X1 - 0.008f;
+        UIGeometryBatch.addTruncatedText(buffer, strBuilder, tx + tw + 0.012f, textTop(mid, 0.9f), textX1, 0.9f, EditorTheme.TEXT, 1.0f);
+
+        if (removable) {
+            UIGeometryBatch.addRoundedQuad(buffer, REMOVE_X0, y0 + REMOVE_INSET, REMOVE_X1, y1 - REMOVE_INSET, EditorTheme.RADIUS_SMALL, EditorTheme.RED, 1.0f);
+            centeredTextIn(buffer, "REMOVE", REMOVE_X0, REMOVE_X1, mid, 0.68f, EditorTheme.TEXT);
+        }
     }
 
     private static void well(UIGeometryBatch.Buffer buffer, float x0, float x1, float drawY) {

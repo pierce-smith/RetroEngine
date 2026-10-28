@@ -94,6 +94,14 @@ public class SceneWorld {
         }
     }
 
+    public void removeComponentFromPool(Entity entity, Component component) {
+        if (entity == null || entity.id == null || component == null) return;
+        ComponentPool<?> pool = componentPools.get(component.getClass());
+        if (pool != null && pool.get(entity.id) == component) {
+            pool.remove(entity.id);
+        }
+    }
+
     public void removeEntityFromPools(Entity entity) {
         if (entity == null || entity.id == null) return;
         for (ComponentPool<?> pool : componentPools.values()) {
