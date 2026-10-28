@@ -107,6 +107,38 @@ public interface IRenderBackend {
         submitEntity(meshHandle, albedo, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, reflect, bonePalette);
     }
 
+    /** Color-ID value of the cleared pick target background and of draws that carry no pick ID. */
+    int PICK_ID_NONE = 0;
+    /** {@link #queryPick} result when no completed readback sampled the requested texel. */
+    int PICK_UNAVAILABLE = -1;
+
+    /**
+     * Pickable variant of the material {@link #submitEntity}: {@code pickId} is an opaque 32-bit value written to the
+     * Color-ID target for every covered pixel ({@link #PICK_ID_NONE} = not pickable). Backends without an ID pass ignore it.
+     */
+    default void submitEntity(long meshHandle, MaterialBinding material, int pickId,
+                              float px, float py, float pz,
+                              float rx, float ry, float rz,
+                              float sx, float sy, float sz,
+                              float groundY, float[][] bonePalette) {
+        submitEntity(meshHandle, material, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, bonePalette);
+    }
+
+    /**
+     * Arms the Color-ID probe. While armed, each frame renders the queued entities' pick IDs (editor camera) into an
+     * offscreen R8G8B8A8_UINT target the size of the scene target, packed little-endian (r = bits 0-7 ... a = bits
+     * 24-31), and copies back the single texel at scene-tile UV (u, v), origin top-left. Texel = (int) (u * width),
+     * (int) (v * height). Coordinates outside [0, 1) disarm the probe and skip the pass.
+     */
+    default void setPickProbe(float u, float v) {}
+
+    /**
+     * Pick ID at scene-tile UV (u, v) from the newest completed readback, or {@link #PICK_UNAVAILABLE} when the backend
+     * has no ID pass or that readback sampled a different texel (the probe has not caught up with the cursor yet).
+     * Never blocks on the GPU.
+     */
+    default int queryPick(float u, float v) { return PICK_UNAVAILABLE; }
+
     void beginFrame();
     void endFrame();
     void present();
@@ -114,6 +146,13 @@ public interface IRenderBackend {
 
     long getOffscreenViewportTexture();
     void resizeViewport(int width, int height);
+
+    /**
+     * GLFW framebuffer-size hook: the window's backing store is now width x height pixels (resize, maximize,
+     * fullscreen toggle, or a move to a display with a different scale). Backends with an explicit swapchain rebuild
+     * it before the next acquire; backends whose drawable tracks the window automatically ignore it.
+     */
+    default void onFramebufferResized(int width, int height) {}
 
     long createBuffer(BufferDesc createInfo);
     void destroyBuffer(long handle);

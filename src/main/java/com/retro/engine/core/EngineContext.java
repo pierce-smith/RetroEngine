@@ -95,6 +95,13 @@ public class EngineContext {
             }
         });
 
+        // Swapchain-backed RHIs rebuild their presentation images at the new pixel size before the next frame
+        window.setOnFramebufferSizeListener((w, h) -> {
+            if (rhi != null) {
+                rhi.onFramebufferResized(w, h);
+            }
+        });
+
         window.setOnFileDropListener(filePaths -> {
             if (editorManager != null && editorManager.getAssetDatabase() != null) {
                 editorManager.getAssetDatabase().onFilesDropped(filePaths);

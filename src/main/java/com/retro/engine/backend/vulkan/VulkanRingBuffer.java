@@ -48,12 +48,6 @@ public class VulkanRingBuffer {
 
         try (MemoryStack stack = stackPush()) {
             if (currentBuffer == 0L || neededCap > currentCap) {
-                if (currentBuffer != 0L && disposalQueue != null) {
-                    synchronized (disposalQueue) {
-                        disposalQueue.add(new VulkanGpuCache.DeferredVulkanResource(currentBuffer, currentMemory, currentFrame));
-                    }
-                }
-
                 int newCap = Math.max(neededCap * 2, 16384);
                 long newSize = (long) newCap * Float.BYTES;
 
@@ -63,12 +57,17 @@ public class VulkanRingBuffer {
                         .usage(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)
                         .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
 
+                // Build the replacement before retiring the old buffer: on failure the slot keeps a live buffer
+                // instead of naming one already queued for destruction (which a later grow would queue again)
                 LongBuffer pBuffer = stack.mallocLong(1);
-                if (vkCreateBuffer(vkDevice, bufferInfo, null, pBuffer) != VK_SUCCESS) return;
-                currentBuffer = pBuffer.get(0);
+                if (vkCreateBuffer(vkDevice, bufferInfo, null, pBuffer) != VK_SUCCESS) {
+                    this.vertexCount = 0;
+                    return;
+                }
+                long newBuffer = pBuffer.get(0);
 
                 VkMemoryRequirements memReqs = VkMemoryRequirements.calloc(stack);
-                vkGetBufferMemoryRequirements(vkDevice, currentBuffer, memReqs);
+                vkGetBufferMemoryRequirements(vkDevice, newBuffer, memReqs);
 
                 int memTypeIndex = VulkanGpuCache.findMemoryType(device.getPhysicalDevice(), memReqs.memoryTypeBits(),
                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
@@ -79,11 +78,22 @@ public class VulkanRingBuffer {
                         .memoryTypeIndex(memTypeIndex);
 
                 LongBuffer pMemory = stack.mallocLong(1);
-                if (vkAllocateMemory(vkDevice, allocInfo, null, pMemory) != VK_SUCCESS) return;
-                currentMemory = pMemory.get(0);
+                if (vkAllocateMemory(vkDevice, allocInfo, null, pMemory) != VK_SUCCESS) {
+                    vkDestroyBuffer(vkDevice, newBuffer, null);
+                    this.vertexCount = 0;
+                    return;
+                }
+                long newMemory = pMemory.get(0);
+                vkBindBufferMemory(vkDevice, newBuffer, newMemory, 0);
 
-                vkBindBufferMemory(vkDevice, currentBuffer, currentMemory, 0);
+                if (currentBuffer != 0L && disposalQueue != null) {
+                    synchronized (disposalQueue) {
+                        disposalQueue.add(new VulkanGpuCache.DeferredVulkanResource(currentBuffer, currentMemory, currentFrame));
+                    }
+                }
 
+                currentBuffer = newBuffer;
+                currentMemory = newMemory;
                 bufferRing[ringIndex] = currentBuffer;
                 memoryRing[ringIndex] = currentMemory;
                 capacityRing[ringIndex] = newCap;
@@ -95,6 +105,8 @@ public class VulkanRingBuffer {
                 floatBuf.put(vertices, 0, neededCap);
                 vkUnmapMemory(vkDevice, currentMemory);
                 this.vertexCount = count;
+            } else {
+                this.vertexCount = 0;
             }
         }
     }

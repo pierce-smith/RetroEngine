@@ -28,6 +28,11 @@ public class WindowHost {
     }
 
     @FunctionalInterface
+    public interface FramebufferSizeListener {
+        void onFramebufferResize(int pixelWidth, int pixelHeight);
+    }
+
+    @FunctionalInterface
     public interface MouseClickListener {
         void onClick(double mouseX, double mouseY, int button, int action);
     }
@@ -79,6 +84,7 @@ public class WindowHost {
     private int windowedHeight;
 
     private WindowSizeListener windowSizeListener;
+    private FramebufferSizeListener framebufferSizeListener;
     private Consumer<List<String>> fileDropListener;
     private MouseClickListener mouseClickListener;
     private MouseClick3ArgListener mouseClick3ArgListener;
@@ -103,6 +109,10 @@ public class WindowHost {
 
     public void setOnWindowSizeListener(WindowSizeListener listener) {
         this.windowSizeListener = listener;
+    }
+
+    public void setOnFramebufferSizeListener(FramebufferSizeListener listener) {
+        this.framebufferSizeListener = listener;
     }
 
     public void setOnFileDropListener(Consumer<List<String>> listener) {
@@ -203,6 +213,13 @@ public class WindowHost {
             this.height = h;
             if (windowSizeListener != null) {
                 windowSizeListener.onResize(w, h);
+            }
+        });
+
+        // Framebuffer Size Callback (backing pixels; differs from the window size on Retina/HiDPI displays)
+        glfwSetFramebufferSizeCallback(windowHandle, (window, w, h) -> {
+            if (framebufferSizeListener != null) {
+                framebufferSizeListener.onFramebufferResize(w, h);
             }
         });
 
@@ -320,6 +337,7 @@ public class WindowHost {
 
     public void unbindAllListeners() {
         this.windowSizeListener = null;
+        this.framebufferSizeListener = null;
         this.fileDropListener = null;
         this.mouseClickListener = null;
         this.mouseClick3ArgListener = null;
@@ -337,6 +355,7 @@ public class WindowHost {
         if (windowHandle != NULL) {
             glfwSetKeyCallback(windowHandle, null);
             glfwSetWindowSizeCallback(windowHandle, null);
+            glfwSetFramebufferSizeCallback(windowHandle, null);
             glfwSetDropCallback(windowHandle, null);
             glfwSetMouseButtonCallback(windowHandle, null);
             glfwSetCursorPosCallback(windowHandle, null);

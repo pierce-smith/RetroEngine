@@ -24,6 +24,10 @@ public class VulkanUploadRing {
 
     public static final int SLOT_COUNT = 2;
     private static final long WAIT_TIMEOUT_NS = 5_000_000_000L;
+    private static final long STAGING_FLOOR_BYTES = 1L << 20; // 1 MiB floor so small textures never thrash reallocation
+    // A slot grown past this by one huge texture is shrunk back once uploads are 4x smaller, instead of pinning
+    // hundreds of MiB of host-visible memory for the rest of the session
+    private static final long STAGING_SHRINK_THRESHOLD_BYTES = 16L << 20;
 
     private static final class Slot {
         long commandPool;
@@ -192,13 +196,17 @@ public class VulkanUploadRing {
         }
     }
 
-    /** Grows the slot's staging buffer to at least {@code size}; only called once the slot's GPU work has retired. */
+    /**
+     * Grows the slot's staging buffer to at least {@code size}, or shrinks an oversized one; only called once the slot's
+     * GPU work has retired.
+     */
     private boolean ensureCapacity(Slot slot, long size) {
-        if (slot.capacity >= size) return true;
+        boolean oversized = slot.capacity > STAGING_SHRINK_THRESHOLD_BYTES && slot.capacity > size * 4L;
+        if (slot.capacity >= size && !oversized) return true;
         VkDevice vkDevice = device.getLogicalDevice();
         destroyStaging(vkDevice, slot);
 
-        long capacity = Math.max(size, 1L << 20); // 1 MiB floor so small textures never thrash reallocation
+        long capacity = Math.max(size, STAGING_FLOOR_BYTES);
         try (MemoryStack stack = stackPush()) {
             VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack)
                     .sType$Default()

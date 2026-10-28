@@ -7,9 +7,11 @@ import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.rhi.MaterialBinding;
 import com.retro.engine.rhi.TextureDesc;
 import com.retro.engine.rhi.ViewportSpec;
+import org.lwjgl.glfw.GLFW;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
 
+import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -45,6 +47,8 @@ public class VulkanBackend implements IRenderBackend {
 
     private int activeImageIndex = 0;
     private long minUniformAlignment = 16L;
+    // GLFW window the surface belongs to; queried for its framebuffer (pixel) size when the surface extent is undefined
+    private long windowHandle = 0L;
 
     private float camPanX = 0.0f;
     private float camPanY = 0.25f;
@@ -73,8 +77,19 @@ public class VulkanBackend implements IRenderBackend {
         System.out.println("[VulkanBackend] Modular Vulkan 1.3 Driver Initializing...");
 
         long nativeHandle = windowInfo.nativeWindowHandle();
+        this.windowHandle = nativeHandle;
+        // ViewportSpec carries the window size in screen points; the swapchain must match backing pixels (Retina/HiDPI)
         int width = windowInfo.width();
         int height = windowInfo.height();
+        try (MemoryStack stack = stackPush()) {
+            IntBuffer pW = stack.mallocInt(1);
+            IntBuffer pH = stack.mallocInt(1);
+            GLFW.glfwGetFramebufferSize(nativeHandle, pW, pH);
+            if (pW.get(0) > 0 && pH.get(0) > 0) {
+                width = pW.get(0);
+                height = pH.get(0);
+            }
+        }
 
         if (!deviceManager.initialize(nativeHandle)) return false;
         if (!surfaceManager.createSurface(deviceManager.getInstance(), nativeHandle)) return false;
@@ -114,9 +129,20 @@ public class VulkanBackend implements IRenderBackend {
         // once its fence signals.
         vkWaitForFences(device, queueSubmitter.getInFlightFence(), true, Long.MAX_VALUE);
 
+        // A resize/maximize event, or OUT_OF_DATE/SUBOPTIMAL from the previous acquire or present, invalidated the
+        // swapchain: rebuild it at the new surface extent before acquiring. A minimized (zero-area) window skips the frame.
+        if (swapchainManager.needsRecreate() && !recreateSwapchain()) {
+            activeImageIndex = -1;
+            return;
+        }
+
         // Acquire before resetting the fence: if acquisition fails no submit follows, and a reset fence would
         // never be signaled again, deadlocking the next frame's wait.
         activeImageIndex = swapchainManager.acquireNextImage(deviceManager, queueSubmitter.getImageAvailableSemaphore());
+        if (activeImageIndex < 0 && swapchainManager.needsRecreate() && recreateSwapchain()) {
+            // OUT_OF_DATE leaves the semaphore unsignaled, so one retry against the fresh swapchain is safe
+            activeImageIndex = swapchainManager.acquireNextImage(deviceManager, queueSubmitter.getImageAvailableSemaphore());
+        }
         if (activeImageIndex < 0) return;
 
         vkResetFences(device, queueSubmitter.getInFlightFence());
@@ -179,6 +205,37 @@ public class VulkanBackend implements IRenderBackend {
 
             vkEndCommandBuffer(cmd);
         }
+    }
+
+    /**
+     * Rebuilds swapchain images and views at the surface's current pixel extent. Recording uses dynamic rendering, so
+     * there are no VkFramebuffer objects to rebuild; the composition pass reads the new extent and views every frame.
+     * Returns false while the window has zero area, leaving the request pending.
+     */
+    private boolean recreateSwapchain() {
+        VkDevice device = deviceManager.getDevice();
+        if (device == null) return false;
+
+        int fbWidth = 0, fbHeight = 0;
+        try (MemoryStack stack = stackPush()) {
+            IntBuffer pW = stack.mallocInt(1);
+            IntBuffer pH = stack.mallocInt(1);
+            GLFW.glfwGetFramebufferSize(windowHandle, pW, pH);
+            fbWidth = pW.get(0);
+            fbHeight = pH.get(0);
+        }
+        if (fbWidth <= 0 || fbHeight <= 0) return false;
+
+        // The old images may still be read by an in-flight present; the upload thread shares the queue lock
+        synchronized (deviceManager.getQueueLock()) {
+            vkDeviceWaitIdle(device);
+        }
+        return swapchainManager.recreateSwapchain(deviceManager, surfaceManager.getSurfaceHandle(), fbWidth, fbHeight);
+    }
+
+    @Override
+    public void onFramebufferResized(int width, int height) {
+        swapchainManager.markOutOfDate();
     }
 
     private void computeViewMatrix() {

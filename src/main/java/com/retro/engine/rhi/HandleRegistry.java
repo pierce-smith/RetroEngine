@@ -46,11 +46,21 @@ public final class HandleRegistry<T> {
                 if (existing != null) return existing;
             }
 
-            T resource = factory.get();
-            if (resource == null) return NULL_HANDLE;
-
+            // Reserve the slot first: a resource built for a full table would be dropped without being released
             int slot = acquireSlot();
             if (slot < 0) return NULL_HANDLE;
+
+            T resource;
+            try {
+                resource = factory.get();
+            } catch (RuntimeException e) {
+                freeSlots.push(slot);
+                throw e;
+            }
+            if (resource == null) {
+                freeSlots.push(slot);
+                return NULL_HANDLE;
+            }
 
             long handle = (handleSequence.incrementAndGet() << SLOT_BITS) | slot;
             slots.set(slot, new Entry<>(handle, assetKey, resource));

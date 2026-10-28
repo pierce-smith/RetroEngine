@@ -368,6 +368,8 @@ public class MetalGpuCache {
             if (shadowSamplerState != 0L) { invokePPP(shadowSamplerState, selRelease, send); shadowSamplerState = 0L; }
             gridRingBuffer.cleanup(metalDevice);
             uiRingBuffer.cleanup(metalDevice);
+            if (viewportQuadBuffer != 0L) { invokePPP(viewportQuadBuffer, selRelease, send); viewportQuadBuffer = 0L; }
+            if (groundQuadBuffer != 0L) { invokePPP(groundQuadBuffer, selRelease, send); groundQuadBuffer = 0L; groundQuadAddress = 0L; }
 
             // Callers drain in-flight frames first, so every retired handle is safe to release now
             for (DeferredHandle item; (item = deferredDisposalQueue.poll()) != null; ) {

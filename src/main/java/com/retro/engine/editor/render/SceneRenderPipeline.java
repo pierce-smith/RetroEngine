@@ -207,8 +207,12 @@ public class SceneRenderPipeline {
 
         if (entities != null && !entities.isEmpty()) {
 
+            // Indexed loops: the entity list is random-access, and for-each would allocate an iterator per pass
+            int entityCount = entities.size();
+
             // 1. Scan and pass active Light component state to snapshot using pooled light descriptor
-            for (Entity entity : entities) {
+            for (int ei = 0; ei < entityCount; ei++) {
+                Entity entity = entities.get(ei);
                 Light light = entity.getComponent(Light.class);
                 Transform lightTransform = entity.getTransform();
 
@@ -240,13 +244,23 @@ public class SceneRenderPipeline {
             }
 
             // 2. Traversal loop across active 3D entities with View-Frustum Culling & Skeletal Palette Extraction
-            for (Entity entity : entities) {
+            for (int ei = 0; ei < entityCount; ei++) {
+                Entity entity = entities.get(ei);
                 Transform tc = entity.getComponent(Transform.class);
                 MeshFilter mc = entity.getComponent(MeshFilter.class);
                 Material mat = entity.getComponent(Material.class);
                 AnimatorComponent anim = entity.getComponent(AnimatorComponent.class);
 
                 if (tc == null || mc == null) continue;
+
+                // Residency marks precede visibility and culling: hidden or off-screen entities still own their assets
+                streamingService.markMeshReferenced(mc.meshAssetPath);
+                if (mat != null) {
+                    for (int channel = 0; channel < Material.CHANNEL_COUNT; channel++) {
+                        streamingService.markTextureReferenced(mat.getChannelPath(channel));
+                    }
+                }
+
                 if (!mc.isVisible) continue;
 
                 WorldTransform wt = editorManager.getSceneManager().getComputedWorldTransform(entity);
@@ -335,6 +349,9 @@ public class SceneRenderPipeline {
                 }
             }
         }
+
+        // Every live entity has marked its assets; evict what deleted entities or an unloaded scene left behind
+        streamingService.sweepUnreferenced();
 
         snapshot.gridVisible = editorManager.getGizmoStateController().is3DGridVisible();
         snapshot.gridVertices = editorManager.getGizmoStateController().get3DGridVertices();
@@ -541,7 +558,8 @@ public class SceneRenderPipeline {
         float bestGroundY = 0.0f;
 
         if (allEntities != null) {
-            for (Entity other : allEntities) {
+            for (int i = 0, n = allEntities.size(); i < n; i++) {
+                Entity other = allEntities.get(i);
                 if (other == currentEntity) continue;
                 MeshFilter otherMc = other.getComponent(MeshFilter.class);
                 if (otherMc == null || !otherMc.isVisible) continue;

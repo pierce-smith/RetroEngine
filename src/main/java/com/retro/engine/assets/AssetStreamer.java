@@ -9,6 +9,7 @@ import com.retro.engine.rhi.IRenderBackend;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.*;
@@ -26,6 +27,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Once a render backend is bound, streamed assets are uploaded to the GPU on the same virtual thread
  * that decoded them, and the resulting opaque handles are published before the asset reports as loaded.
  * The render thread then submits by handle only, never by raw vertex or pixel arrays.
+ *
+ * Streamed assets are reference-tracked by frame stamps: the render thread {@link #markMeshReferenced marks} every
+ * asset a live entity uses each frame, and {@link #sweepUnreferenced} evicts assets nothing has marked for a grace
+ * period, releasing both the CPU copy and the GPU handle. Scene unloads and entity deletions therefore return their
+ * VRAM and host RAM without explicit hooks, and an undo within the grace period finds the asset still resident.
  */
 public class AssetStreamer {
 
@@ -45,6 +51,30 @@ public class AssetStreamer {
     private final AtomicInteger handleEpoch = new AtomicInteger();
     private volatile IRenderBackend renderBackend;
 
+    // ~10 s at 60 FPS before an unreferenced asset is evicted; the sweep itself runs every ~2 s
+    private static final int EVICTION_GRACE_FRAMES = 600;
+    private static final int SWEEP_INTERVAL_FRAMES = 120;
+
+    /** Last render frame that referenced a streamed asset; created once per load, then stamped allocation-free. */
+    private static final class Residency {
+        final String key;
+        final boolean texture;
+        long lastReferencedFrame;
+
+        Residency(String key, boolean texture, long frame) {
+            this.key = key;
+            this.texture = texture;
+            this.lastReferencedFrame = frame;
+        }
+    }
+
+    private final Map<String, Residency> meshResidency = new ConcurrentHashMap<>();
+    private final Map<String, Residency> textureResidency = new ConcurrentHashMap<>();
+    // Streaming threads publish new entries here; the render thread drains them into its own indexable list
+    private final ConcurrentLinkedQueue<Residency> newResidency = new ConcurrentLinkedQueue<>();
+    private final ArrayList<Residency> trackedResidency = new ArrayList<>();
+    private volatile long residencyFrame = 0L;
+
     /**
      * Binds the GPU backend that streamed assets are registered with. Assets already resident in the
      * CPU caches are registered immediately. Pass null to detach (handles then resolve to 0L).
@@ -60,14 +90,78 @@ public class AssetStreamer {
         IRenderBackend backend = renderBackend;
         if (backend == null || data == null) return;
         long handle = backend.registerMesh(key, data.vertices, data.vertexCount, data.indices, data.indexCount);
-        if (handle != 0L) meshHandles.put(key, handle);
+        if (handle == 0L) return;
+        // A different live handle under the same key would otherwise be dropped without ever being unregistered
+        Long previous = meshHandles.put(key, handle);
+        if (previous != null && previous != handle) {
+            handleEpoch.incrementAndGet();
+            backend.unregisterMesh(previous);
+        }
     }
 
     private void registerTextureHandle(String key, PixelBufferData data) {
         IRenderBackend backend = renderBackend;
         if (backend == null || data == null) return;
         long handle = backend.registerTexture(key, data.pixels, data.width, data.height);
-        if (handle != 0L) textureHandles.put(key, handle);
+        if (handle == 0L) return;
+        Long previous = textureHandles.put(key, handle);
+        if (previous != null && previous != handle) {
+            handleEpoch.incrementAndGet();
+            backend.unregisterTexture(previous);
+        }
+    }
+
+    private void trackResidency(Map<String, Residency> table, String key, boolean texture) {
+        // A fresh load counts as referenced now, so it survives until the requesting entity marks it
+        if (table.get(key) != null) return;
+        Residency entry = new Residency(key, texture, residencyFrame);
+        if (table.putIfAbsent(key, entry) == null) newResidency.add(entry);
+    }
+
+    /** Render thread: a live entity uses this mesh this frame. Allocation-free; unknown paths are ignored. */
+    public void markMeshReferenced(String filePath) {
+        if (filePath == null) return;
+        Residency entry = meshResidency.get(filePath);
+        if (entry != null) entry.lastReferencedFrame = residencyFrame;
+    }
+
+    /** Render thread: a live entity's material uses this texture this frame. Allocation-free; unknown paths are ignored. */
+    public void markTextureReferenced(String filePath) {
+        if (filePath == null) return;
+        Residency entry = textureResidency.get(filePath);
+        if (entry != null) entry.lastReferencedFrame = residencyFrame;
+    }
+
+    /**
+     * Render thread, once per frame after every live entity has been marked: advances the residency clock and, every
+     * {@value #SWEEP_INTERVAL_FRAMES} frames, unregisters and evicts streamed assets unreferenced for
+     * {@value #EVICTION_GRACE_FRAMES} frames. Backends defer the GPU release until in-flight frames retire.
+     */
+    public void sweepUnreferenced() {
+        long frame = ++residencyFrame;
+        for (Residency entry; (entry = newResidency.poll()) != null; ) {
+            trackedResidency.add(entry);
+        }
+        if (frame % SWEEP_INTERVAL_FRAMES != 0) return;
+
+        for (int i = trackedResidency.size() - 1; i >= 0; i--) {
+            Residency entry = trackedResidency.get(i);
+            if (frame - entry.lastReferencedFrame < EVICTION_GRACE_FRAMES) continue;
+
+            if (entry.texture) {
+                if (!textureResidency.remove(entry.key, entry)) continue;
+                textureCache.remove(entry.key);
+                unregisterTextureHandle(entry.key);
+            } else {
+                if (!meshResidency.remove(entry.key, entry)) continue;
+                modelCache.remove(entry.key);
+                unregisterMeshHandle(entry.key);
+            }
+            // Swap-remove keeps the sweep allocation-free and O(1) per eviction
+            int last = trackedResidency.size() - 1;
+            trackedResidency.set(i, trackedResidency.get(last));
+            trackedResidency.remove(last);
+        }
     }
 
     private void unregisterMeshHandle(String key) {
@@ -144,6 +238,7 @@ public class AssetStreamer {
                     // Upload before publishing so isMeshLoaded() never reports true without a GPU handle
                     registerMeshHandle(filePath, data);
                     modelCache.put(filePath, data);
+                    trackResidency(meshResidency, filePath, false);
                     completedUploadsQueue.add("[Mesh] " + new File(filePath).getName());
                 }
             } catch (Exception e) {
@@ -199,6 +294,7 @@ public class AssetStreamer {
                 if (data != null && data.pixels != null && data.pixels.length > 0) {
                     registerTextureHandle(filePath, data);
                     textureCache.put(filePath, data);
+                    trackResidency(textureResidency, filePath, true);
                     completedUploadsQueue.add("[Texture] " + new File(filePath).getName());
                 }
             } catch (Exception e) {
@@ -258,6 +354,10 @@ public class AssetStreamer {
         textureHandles.keySet().forEach(this::unregisterTextureHandle);
         modelCache.clear();
         textureCache.clear();
+        meshResidency.clear();
+        textureResidency.clear();
+        newResidency.clear();
+        trackedResidency.clear();
         activeModelRequests.clear();
         activeTextureRequests.clear();
         completedUploadsQueue.clear();

@@ -71,9 +71,8 @@ public class MetalTexture {
         if (texture == 0L) return;
 
         ByteBuffer buf = MemoryUtil.memAlloc(pixels.length);
-        buf.put(pixels).flip();
-
         try (MemoryStack stack = MemoryStack.stackPush()) {
+            buf.put(pixels).flip();
             ByteBuffer region = stack.malloc(8 * 6);
             region.putLong(0).putLong(0).putLong(0);
             region.putLong(width).putLong(height).putLong(1);
@@ -81,9 +80,9 @@ public class MetalTexture {
 
             long sel_replaceRegion = sel_registerName("replaceRegion:mipmapLevel:withBytes:bytesPerRow:");
             invokePPPPPPP(texture, sel_replaceRegion, MemoryUtil.memAddress(region), 0L, MemoryUtil.memAddress(buf), (long) width * 4L, objc_msgSend);
+        } finally {
+            MemoryUtil.memFree(buf);
         }
-
-        MemoryUtil.memFree(buf);
         this.activeTextureHandle = texture;
         this.activeResourceId = invokePPP(texture, SEL_GPU_RESOURCE_ID, objc_msgSend);
         this.hasActiveTexture = 1;

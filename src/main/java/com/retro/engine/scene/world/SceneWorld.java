@@ -50,6 +50,8 @@ public class SceneWorld {
     ) {}
 
     private final List<Entity> sceneEntities = new ArrayList<>();
+    // Live read-only view, created once so per-frame scene traversal does not allocate a wrapper
+    private final List<Entity> sceneEntitiesView = Collections.unmodifiableList(sceneEntities);
     
     // --- 64-Bit Generational Handle Registry ---
     private final List<Entity> entitySlots = new ArrayList<>();
@@ -68,7 +70,7 @@ public class SceneWorld {
 
     public SceneWorld() {}
 
-    public List<Entity> getSceneEntities() { return Collections.unmodifiableList(sceneEntities); }
+    public List<Entity> getSceneEntities() { return sceneEntitiesView; }
 
     @SuppressWarnings("unchecked")
     public <T extends Component> ComponentPool<T> getComponentPool(Class<T> clazz) {

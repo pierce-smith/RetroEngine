@@ -305,7 +305,11 @@ public class VulkanGpuCache {
         VkDevice vkDevice = device.getLogicalDevice();
         try (MemoryStack stack = stackPush()) {
             PointerBuffer pData = stack.mallocPointer(1);
-            vkMapMemory(vkDevice, handles[1], 0, bufferSize, 0, pData);
+            if (vkMapMemory(vkDevice, handles[1], 0, bufferSize, 0, pData) != VK_SUCCESS) {
+                vkDestroyBuffer(vkDevice, handles[0], null);
+                vkFreeMemory(vkDevice, handles[1], null);
+                return false;
+            }
             long dst = pData.get(0);
             if (use16) {
                 for (int i = 0; i < indexCount; i++) MemoryUtil.memPutShort(dst + (long) i * Short.BYTES, (short) indices[i]);
@@ -492,7 +496,11 @@ public class VulkanGpuCache {
 
         try (MemoryStack stack = stackPush()) {
             PointerBuffer pData = stack.mallocPointer(1);
-            vkMapMemory(vkDevice, bufferMemory, 0, bufferSize, 0, pData);
+            if (vkMapMemory(vkDevice, bufferMemory, 0, bufferSize, 0, pData) != VK_SUCCESS) {
+                vkDestroyBuffer(vkDevice, buffer, null);
+                vkFreeMemory(vkDevice, bufferMemory, null);
+                return null;
+            }
             FloatBuffer floatBuf = pData.getFloatBuffer(0, vertices.length);
             floatBuf.put(vertices);
             vkUnmapMemory(vkDevice, bufferMemory);
@@ -522,8 +530,15 @@ public class VulkanGpuCache {
             VkMemoryRequirements memReqs = VkMemoryRequirements.calloc(stack);
             vkGetBufferMemoryRequirements(vkDevice, buffer, memReqs);
 
-            int memTypeIndex = findMemoryType(device.getPhysicalDevice(), memReqs.memoryTypeBits(),
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            // Streamed meshes land here at runtime, so a missing memory type must not orphan the buffer
+            int memTypeIndex;
+            try {
+                memTypeIndex = findMemoryType(device.getPhysicalDevice(), memReqs.memoryTypeBits(),
+                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            } catch (IllegalStateException e) {
+                vkDestroyBuffer(vkDevice, buffer, null);
+                throw e;
+            }
 
             VkMemoryAllocateInfo allocInfo = VkMemoryAllocateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
@@ -926,7 +941,11 @@ public class VulkanGpuCache {
             vkBindBufferMemory(vkDevice, buffer, memory, 0);
 
             PointerBuffer pData = stack.mallocPointer(1);
-            vkMapMemory(vkDevice, memory, 0, bufferSize, 0, pData);
+            if (vkMapMemory(vkDevice, memory, 0, bufferSize, 0, pData) != VK_SUCCESS) {
+                vkDestroyBuffer(vkDevice, buffer, null);
+                vkFreeMemory(vkDevice, memory, null);
+                return null;
+            }
             FloatBuffer floatBuf = pData.getFloatBuffer(0, 128);
             floatBuf.put(new float[]{-0.5f, -1.0f, -0.5f, 0.0f, 1.0f, 0.95f, 0.85f, 1.2f});
             vkUnmapMemory(vkDevice, memory);

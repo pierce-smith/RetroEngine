@@ -28,12 +28,14 @@ public class MetalBuffer {
         if (device == 0L || data == null || data.length == 0) return new MetalBuffer(0L, 0);
 
         FloatBuffer fb = MemoryUtil.memAllocFloat(data.length);
-        fb.put(data).flip();
-
-        long sel_newBufferWithBytes = sel_registerName("newBufferWithBytes:length:options:");
-        long handle = invokePPPPPP(device, sel_newBufferWithBytes, MemoryUtil.memAddress(fb), (long) data.length * 4L, 0L, objc_msgSend);
-
-        MemoryUtil.memFree(fb);
+        long handle;
+        try {
+            fb.put(data).flip();
+            long sel_newBufferWithBytes = sel_registerName("newBufferWithBytes:length:options:");
+            handle = invokePPPPPP(device, sel_newBufferWithBytes, MemoryUtil.memAddress(fb), (long) data.length * 4L, 0L, objc_msgSend);
+        } finally {
+            MemoryUtil.memFree(fb);
+        }
         return new MetalBuffer(handle, data.length / floatStride, floatStride);
     }
 
