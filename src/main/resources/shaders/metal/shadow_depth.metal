@@ -22,6 +22,7 @@ struct Uniforms {
     float4x4 lightSpace;
     float4 surface;
     float4 viewPos;
+    uint pickId;
 };
 
 // Must stay byte-identical to the struct in blinn_phong.metal

@@ -17,6 +17,12 @@ public class MetalTargetPass {
     private long windowDepthTexture = 0L;
     private int width = 712;
     private int height = 488;
+    private final long colorPixelFormat;
+
+    public MetalTargetPass() { this(80L); } // 80L = BGRA8Unorm
+
+    /** Target with a non-default color format (e.g. the RGBA8Uint Color-ID picking target). */
+    public MetalTargetPass(long colorPixelFormat) { this.colorPixelFormat = colorPixelFormat; }
 
     public int getWidth() { return width; }
     public int getHeight() { return height; }
@@ -64,7 +70,7 @@ public class MetalTargetPass {
             // 1. Offscreen Color Texture (RenderTarget + ShaderRead)
             long desc = invokePPP(descClass, selNew, send);
             invokePPPP(desc, sel_registerName("setTextureType:"), 2L, send); // 2L = MTLTextureType2D
-            invokePPPP(desc, sel_registerName("setPixelFormat:"), 80L, send); // 80L = BGRA8Unorm
+            invokePPPP(desc, sel_registerName("setPixelFormat:"), colorPixelFormat, send);
             invokePPPP(desc, sel_registerName("setWidth:"), (long) width, send);
             invokePPPP(desc, sel_registerName("setHeight:"), (long) height, send);
             invokePPPP(desc, sel_registerName("setUsage:"), 5L, send); // RenderTarget (4) | ShaderRead (1)

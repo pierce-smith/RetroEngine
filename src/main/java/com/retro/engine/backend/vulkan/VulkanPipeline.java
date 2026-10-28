@@ -38,6 +38,8 @@ public class VulkanPipeline {
     public static final int MESH_PUSH_CONSTANT_SIZE = 128;
     /** UI fragment push constants: int font atlas bindless slot, padded to 16 bytes. */
     public static final int UI_PUSH_CONSTANT_SIZE = 16;
+    /** Color-ID picking target format: entity_id.frag writes the 32-bit pick ID little-endian across RGBA. */
+    public static final int PICK_ID_FORMAT = VK_FORMAT_R8G8B8A8_UINT;
 
     // Upper bound for the bindless texture table; clamped further to the device's descriptor limits
     private static final int MAX_BINDLESS_TEXTURES = 4096;
@@ -60,6 +62,9 @@ public class VulkanPipeline {
     // Depth-only directional shadow map pipelines (static 88 B and skinned 120 B strides)
     private long graphicsPipelineShadowDepth = 0L;
     private long graphicsPipelineShadowDepthSkinned = 0L;
+    // Color-ID picking pipelines (static 88 B and skinned 120 B strides) writing into PICK_ID_FORMAT
+    private long graphicsPipelinePick = 0L;
+    private long graphicsPipelinePickSkinned = 0L;
 
     private long descriptorSetLayoutGrid = 0L;
     private long pipelineLayoutGrid = 0L;
@@ -464,6 +469,7 @@ public class VulkanPipeline {
                     }
 
                     graphicsPipelineShadowDepthSkinned = createShadowDepthPipeline(vkDevice, cacheHandle, vertSkinnedModule, vertexInputSkinned, inputAssembly, viewportState, rasterizer, multisampling, dynamicState3D);
+                    graphicsPipelinePickSkinned = createPickPipeline(vkDevice, cacheHandle, vertSkinnedModule, vertexInputSkinned, inputAssembly, viewportState, rasterizer, multisampling, dynamicState3D);
                     VulkanShaderLoader.destroyShaderModule(vkDevice, vertSkinnedModule);
                 }
 
@@ -471,6 +477,12 @@ public class VulkanPipeline {
                 graphicsPipelineShadowDepth = createShadowDepthPipeline(vkDevice, cacheHandle, vert3DModule, vertexInputInfo3D, inputAssembly, viewportState, rasterizer, multisampling, dynamicState3D);
                 if (graphicsPipelineShadowDepth != 0L) {
                     System.out.println("[VulkanPipeline] Created Directional Shadow Map Depth VkPipeline [0x" + Long.toHexString(graphicsPipelineShadowDepth) + "].");
+                }
+
+                // 2E. Color-ID Picking Pipeline (88-Byte Stride, R8G8B8A8_UINT + D32)
+                graphicsPipelinePick = createPickPipeline(vkDevice, cacheHandle, vert3DModule, vertexInputInfo3D, inputAssembly, viewportState, rasterizer, multisampling, dynamicState3D);
+                if (graphicsPipelinePick != 0L) {
+                    System.out.println("[VulkanPipeline] Created Color-ID Picking VkPipeline [0x" + Long.toHexString(graphicsPipelinePick) + "].");
                 }
 
                 VulkanShaderLoader.destroyShaderModule(vkDevice, vert3DModule);
@@ -576,6 +588,57 @@ public class VulkanPipeline {
         }
     }
 
+    /**
+     * Color-ID pipeline: the blinn_phong vertex stage (scene pass flag, editor camera) with entity_id.frag writing the
+     * pushed pick ID into an unblended PICK_ID_FORMAT attachment, depth-tested so only the nearest surface survives.
+     */
+    private long createPickPipeline(VkDevice vkDevice, long cacheHandle, long vertModule,
+                                    VkPipelineVertexInputStateCreateInfo vertexInput,
+                                    VkPipelineInputAssemblyStateCreateInfo inputAssembly,
+                                    VkPipelineViewportStateCreateInfo viewportState,
+                                    VkPipelineRasterizationStateCreateInfo rasterizer,
+                                    VkPipelineMultisampleStateCreateInfo multisampling,
+                                    VkPipelineDynamicStateCreateInfo dynamicState) {
+        long fragModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/entity_id.frag.spv");
+        if (vertModule == 0L || fragModule == 0L) {
+            VulkanShaderLoader.destroyShaderModule(vkDevice, fragModule);
+            return 0L;
+        }
+
+        try (MemoryStack stack = stackPush()) {
+            VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(2, stack);
+            stages.get(0).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_VERTEX_BIT).module(vertModule).pName(stack.UTF8("main"));
+            stages.get(1).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_FRAGMENT_BIT).module(fragModule).pName(stack.UTF8("main"));
+
+            VkPipelineDepthStencilStateCreateInfo depthStencil = VkPipelineDepthStencilStateCreateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO)
+                    .depthTestEnable(true)
+                    .depthWriteEnable(true)
+                    .depthCompareOp(VK_COMPARE_OP_LESS_OR_EQUAL);
+
+            // Integer attachments cannot blend
+            VkPipelineColorBlendAttachmentState.Buffer colorBlendAttachment = VkPipelineColorBlendAttachmentState.calloc(1, stack)
+                    .colorWriteMask(VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT)
+                    .blendEnable(false);
+            VkPipelineColorBlendStateCreateInfo colorBlending = VkPipelineColorBlendStateCreateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO)
+                    .pAttachments(colorBlendAttachment);
+
+            VkPipelineRenderingCreateInfo renderingCreateInfo = VkPipelineRenderingCreateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO)
+                    .pColorAttachmentFormats(stack.ints(PICK_ID_FORMAT))
+                    .depthAttachmentFormat(VK_FORMAT_D32_SFLOAT);
+
+            VkGraphicsPipelineCreateInfo.Buffer pipelineInfo = VkGraphicsPipelineCreateInfo.calloc(1, stack)
+                    .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO).pNext(renderingCreateInfo.address()).pStages(stages).pVertexInputState(vertexInput).pInputAssemblyState(inputAssembly).pViewportState(viewportState).pRasterizationState(rasterizer).pMultisampleState(multisampling).pDepthStencilState(depthStencil).pColorBlendState(colorBlending).pDynamicState(dynamicState).layout(pipelineLayout3D).renderPass(VK_NULL_HANDLE).subpass(0);
+
+            LongBuffer pPipeline = stack.mallocLong(1);
+            long pipeline = vkCreateGraphicsPipelines(vkDevice, cacheHandle, pipelineInfo, null, pPipeline) == VK_SUCCESS ? pPipeline.get(0) : 0L;
+            VulkanShaderLoader.destroyShaderModule(vkDevice, fragModule);
+            return pipeline;
+        }
+    }
+
     public long getMinUniformBufferOffsetAlignment() { return minUniformBufferOffsetAlignment; }
     /** Number of slots in the bindless texture table (binding 4 descriptorCount). */
     public int getBindlessTextureCapacity() { return bindlessTextureCapacity; }
@@ -586,6 +649,8 @@ public class VulkanPipeline {
     public long getGraphicsPipelineSkinned() { return graphicsPipelineSkinned; }
     public long getGraphicsPipelineShadowDepth() { return graphicsPipelineShadowDepth; }
     public long getGraphicsPipelineShadowDepthSkinned() { return graphicsPipelineShadowDepthSkinned; }
+    public long getGraphicsPipelinePick() { return graphicsPipelinePick; }
+    public long getGraphicsPipelinePickSkinned() { return graphicsPipelinePickSkinned; }
 
     public long getDescriptorSetLayoutGrid() { return descriptorSetLayoutGrid; }
     public long getPipelineLayoutGrid() { return pipelineLayoutGrid; }
@@ -611,6 +676,8 @@ public class VulkanPipeline {
         if (graphicsPipelineSkinned != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineSkinned, null); graphicsPipelineSkinned = 0L; }
         if (graphicsPipelineShadowDepth != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineShadowDepth, null); graphicsPipelineShadowDepth = 0L; }
         if (graphicsPipelineShadowDepthSkinned != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineShadowDepthSkinned, null); graphicsPipelineShadowDepthSkinned = 0L; }
+        if (graphicsPipelinePick != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelinePick, null); graphicsPipelinePick = 0L; }
+        if (graphicsPipelinePickSkinned != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelinePickSkinned, null); graphicsPipelinePickSkinned = 0L; }
         if (pipelineLayout3D != 0L) { vkDestroyPipelineLayout(vkDevice, pipelineLayout3D, null); pipelineLayout3D = 0L; }
         if (descriptorSetLayout3D != 0L) { vkDestroyDescriptorSetLayout(vkDevice, descriptorSetLayout3D, null); descriptorSetLayout3D = 0L; }
 

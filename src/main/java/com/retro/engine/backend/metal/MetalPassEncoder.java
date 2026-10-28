@@ -1,14 +1,22 @@
 package com.retro.engine.backend.metal;
 
 import com.retro.engine.rhi.DirectionalShadowFrustum;
+import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.system.libffi.FFICIF;
+import org.lwjgl.system.libffi.FFIType;
 
 import java.nio.FloatBuffer;
 import java.nio.LongBuffer;
 import java.util.Arrays;
 import java.util.List;
 
+import static org.lwjgl.system.APIUtil.apiCreateCIF;
 import static org.lwjgl.system.JNI.*;
+import static org.lwjgl.system.libffi.LibFFI.FFI_DEFAULT_ABI;
+import static org.lwjgl.system.libffi.LibFFI.ffi_type_pointer;
+import static org.lwjgl.system.libffi.LibFFI.ffi_type_void;
+import static org.lwjgl.system.libffi.LibFFI.nffi_call;
 import static org.lwjgl.system.macosx.ObjCRuntime.*;
 
 /**
@@ -52,6 +60,7 @@ public class MetalPassEncoder {
         public float[][] bonePalette = null;
         public float boundsRadius = 1.0f; // local bounding sphere radius, fits the shadow frustum
         int skinnedSlot = -1;             // bone palette slot assigned for this frame, -1 = not skinned
+        public int pickId = 0;            // Color-ID value (IRenderBackend.PICK_ID_NONE = not pickable)
     }
 
     // Selectors are interned once at class load; nothing on the encoding path performs a string lookup
@@ -79,6 +88,9 @@ public class MetalPassEncoder {
             "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:");
     private static final long SEL_USE_RESOURCES = sel_registerName("useResources:count:usage:stages:");
     private static final long SEL_END_ENCODING = sel_registerName("endEncoding");
+    private static final long SEL_BLIT_COMMAND_ENCODER = sel_registerName("blitCommandEncoder");
+    private static final long SEL_COPY_TEXTURE_TO_BUFFER = sel_registerName(
+            "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:");
 
     private static final long MTL_PRIMITIVE_LINE = 1L;
     private static final long MTL_PRIMITIVE_TRIANGLE = 3L;
@@ -125,6 +137,29 @@ public class MetalPassEncoder {
     private long drawArgsBuffer;
     private long drawArgsOffset;
     private long pDrawArgs;
+
+    // Color-ID pick pass for the frame being encoded: rendered only when armed, then the probed texel is blitted to the readback buffer
+    private MetalTargetPass pickTarget = null;
+    private long pickReadbackBuffer = 0L;
+    private long pickReadbackOffset = 0L;
+    private int pickTexelX, pickTexelY;
+    // MTLOrigin + MTLSize (3 NSUInteger each), passed by pointer like the MTLRegion uploads in MetalTexture
+    private LongBuffer pickCopyRegion = null;
+    // The texture-to-buffer copy takes 11 pointer-sized arguments, more than LWJGL's JNI invokers cover, so objc_msgSend
+    // is called through libffi with a prepared call interface and argument slots
+    private static final int PICK_COPY_ARG_COUNT = 11;
+    private FFICIF pickCopyCif = null;
+    private LongBuffer pickCopyArgs = null;
+    private PointerBuffer pickCopyArgPointers = null;
+
+    /** Arms the pick pass for the next encoded frame; a null target or 0L buffer disarms it. */
+    public void setPickPass(MetalTargetPass target, long readbackBuffer, long readbackOffset, int texelX, int texelY) {
+        this.pickTarget = target;
+        this.pickReadbackBuffer = readbackBuffer;
+        this.pickReadbackOffset = readbackOffset;
+        this.pickTexelX = texelX;
+        this.pickTexelY = texelY;
+    }
 
     public void setSceneAspect(float aspect) {
         this.sceneAspect = aspect;
@@ -197,6 +232,11 @@ public class MetalPassEncoder {
                 pipeline, texture, resourceCache, streamer, sceneQueue, entityCount, pBufferContents, currentSlotOffset,
                 defaultResourceId, editorViewProj, editorCamPos, drawGrid ? gridBuffer : 0L, groundQuadBuf,
                 MetalUniformStream.SLOT_BASE_ENTITIES, MetalUniformStream.SLOT_BASE_SHADOW_BLOBS);
+
+        // PASS 1B: Color-ID picking from the editor camera, with the probed texel blitted back for the host
+        if (pickTarget != null && pickTarget.getOffscreenColorTexture() != 0L && pickReadbackBuffer != 0L && pipeline.getPipelineStatePick() != 0L) {
+            encodePickPass(commandBuffer, pipeline, texture, streamer, sceneQueue, entityCount, pBufferContents, currentSlotOffset, defaultResourceId);
+        }
 
         // PASS 2: Selected Camera entity's view for the picture-in-picture preview (game view: no editor grid)
         if (previewViewProj != null && previewCamPos != null && previewTarget != null && previewTarget.getOffscreenColorTexture() != 0L) {
@@ -390,6 +430,84 @@ public class MetalPassEncoder {
         encoder = 0L;
     }
 
+    /**
+     * Renders every pickable queued mesh's ID into the pick target with the editor view-projection, then blits the
+     * single probed texel into the shared readback buffer. The cleared background decodes to PICK_ID_NONE (see entity_id.metal).
+     */
+    private void encodePickPass(long commandBuffer, MetalPipeline pipeline, MetalTexture texture, MetalUniformStream streamer,
+                                List<RenderEntity> sceneQueue, int entityCount, long pBufferContents, long currentSlotOffset,
+                                long defaultResourceId) {
+        long pickPassDesc = invokePPP(renderPassDescClass(), SEL_RENDER_PASS_DESCRIPTOR, send);
+        long colorAttach = invokePPPP(invokePPP(pickPassDesc, SEL_COLOR_ATTACHMENTS, send), SEL_OBJECT_AT_INDEXED_SUBSCRIPT, 0L, send);
+        invokePPPP(colorAttach, SEL_SET_TEXTURE, pickTarget.getOffscreenColorTexture(), send);
+        invokePPPP(colorAttach, SEL_SET_LOAD_ACTION, 2L, send);  // Clear
+        invokePPPP(colorAttach, SEL_SET_STORE_ACTION, 1L, send); // Store for the texel blit
+        long depthAttach = invokePPP(pickPassDesc, SEL_DEPTH_ATTACHMENT, send);
+        invokePPPP(depthAttach, SEL_SET_TEXTURE, pickTarget.getOffscreenDepthTexture(), send);
+        invokePPPP(depthAttach, SEL_SET_LOAD_ACTION, 2L, send);
+        invokePPPP(depthAttach, SEL_SET_STORE_ACTION, 0L, send);
+
+        long encoderPick = invokePPPP(commandBuffer, SEL_RENDER_COMMAND_ENCODER, pickPassDesc, send);
+        if (encoderPick == 0L) return;
+        beginEncoder(encoderPick);
+
+        if (entityCount > 0) {
+            bindPipeline(pipeline.getPipelineStatePick());
+            bindDepthStencil(pipeline.getDepthStencilState3D());
+            bindArgumentTable(texture);
+            useResidentResources();
+
+            for (int i = 0; i < entityCount; i++) {
+                RenderEntity item = sceneQueue.get(i);
+                if (item.pickId == 0) continue;
+                int slot = MetalUniformStream.SLOT_BASE_PICK_ENTITIES + i;
+
+                long baseAddr = pBufferContents + currentSlotOffset + MetalUniformStream.UNIFORM_STRIDE * slot;
+                float[] mvp = streamer.createMVPFromViewProj(editorViewProj, item.px, item.py, item.pz, item.rx, item.ry, item.rz, item.sx, item.sy, item.sz);
+                MemoryUtil.memFloatBuffer(baseAddr + MetalUniformStream.OFFSET_MVP, 16).put(mvp);
+                MemoryUtil.memFloatBuffer(baseAddr + MetalUniformStream.OFFSET_MODEL, 16).put(streamer.getModelMatrix());
+                // Only the albedo alpha cutout runs in the pick pass
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_MATERIAL_MASK, item.materialMask & MetalUniformStream.MATERIAL_ALBEDO);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_IS_UNLIT, 0);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_STRIDE, item.stride);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PASS_FLAGS, item.skinnedSlot >= 0 ? MetalUniformStream.PASS_FLAG_SKINNED : 0);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PICK_ID, item.pickId);
+
+                writeDrawArgs(slot, item.vertexBufferAddress, streamer.getUniformSlotAddress(slot),
+                        streamer.getBonePaletteAddress(item.skinnedSlot), item.materialResourceIds, defaultResourceId);
+                drawEntity(item, slot);
+            }
+        }
+
+        invokePPP(encoderPick, SEL_END_ENCODING, send);
+        encoder = 0L;
+
+        long blit = invokePPP(commandBuffer, SEL_BLIT_COMMAND_ENCODER, send);
+        if (blit == 0L) return;
+        if (pickCopyRegion == null) pickCopyRegion = MemoryUtil.memAllocLong(6);
+        pickCopyRegion.put(0, pickTexelX).put(1, pickTexelY).put(2, 0L)  // sourceOrigin
+                      .put(3, 1L).put(4, 1L).put(5, 1L);                  // sourceSize
+        long region = MemoryUtil.memAddress(pickCopyRegion);
+        msgSendPickCopy(blit, SEL_COPY_TEXTURE_TO_BUFFER, pickTarget.getOffscreenColorTexture(), 0L, 0L,
+                region, region + 24L, pickReadbackBuffer, pickReadbackOffset, 4L, 4L);
+        invokePPP(blit, SEL_END_ENCODING, send);
+    }
+
+    /** objc_msgSend with 11 pointer-sized arguments (void return) through libffi. */
+    private void msgSendPickCopy(long... args) {
+        if (pickCopyCif == null) {
+            FFIType[] argTypes = new FFIType[PICK_COPY_ARG_COUNT];
+            java.util.Arrays.fill(argTypes, ffi_type_pointer);
+            pickCopyCif = apiCreateCIF(FFI_DEFAULT_ABI, ffi_type_void, argTypes);
+            pickCopyArgs = MemoryUtil.memAllocLong(PICK_COPY_ARG_COUNT);
+            pickCopyArgPointers = MemoryUtil.memAllocPointer(PICK_COPY_ARG_COUNT);
+            long base = MemoryUtil.memAddress(pickCopyArgs);
+            for (int i = 0; i < PICK_COPY_ARG_COUNT; i++) pickCopyArgPointers.put(i, base + 8L * i);
+        }
+        for (int i = 0; i < PICK_COPY_ARG_COUNT; i++) pickCopyArgs.put(i, args[i]);
+        nffi_call(pickCopyCif.address(), send, 0L, MemoryUtil.memAddress(pickCopyArgPointers));
+    }
+
     public void encodeWindowCompositionPass(
             long commandBuffer, long drawableTexture, MetalDevice device, MetalPipeline pipeline, MetalTexture texture,
             MetalTargetPass framebuffer, MetalGpuCache resourceCache, MetalUniformStream streamer, long cameraPreviewTexture) {
@@ -452,6 +570,16 @@ public class MetalPassEncoder {
         if (residencyList != null) {
             MemoryUtil.memFree(residencyList);
             residencyList = null;
+        }
+        if (pickCopyRegion != null) {
+            MemoryUtil.memFree(pickCopyRegion);
+            pickCopyRegion = null;
+        }
+        if (pickCopyArgs != null) {
+            MemoryUtil.memFree(pickCopyArgs);
+            MemoryUtil.memFree(pickCopyArgPointers);
+            pickCopyArgs = null;
+            pickCopyArgPointers = null;
         }
     }
 

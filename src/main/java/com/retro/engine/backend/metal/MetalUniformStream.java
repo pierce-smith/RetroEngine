@@ -16,19 +16,20 @@ import static org.lwjgl.system.macosx.ObjCRuntime.*;
 public class MetalUniformStream {
 
     private static final int RING_SLOTS = 3;
-    // 336-byte Uniforms struct rounded up to keep every slot 256-byte aligned for constant buffer binding
+    // 352-byte Uniforms struct rounded up to keep every slot 256-byte aligned for constant buffer binding
     public static final long UNIFORM_STRIDE = 512L;
     public static final int MAX_ENTITIES_PER_FRAME = 256;
 
     // Per-frame slot layout: [grid] [64 shadow blobs] [MAX_ENTITIES lit entities] [MAX_ENTITIES shadow map casters]
     // [64 camera preview shadow blobs] [MAX_ENTITIES camera preview lit entities]. The camera preview pass gets its own
-    // slots because both passes are encoded before the GPU reads any of them.
+    // slots because both passes are encoded before the GPU reads any of them. [MAX_ENTITIES Color-ID pick entities] follow.
     public static final int SLOT_BASE_SHADOW_BLOBS = 1;
     public static final int SLOT_BASE_ENTITIES = 1 + 64;
     public static final int SLOT_BASE_SHADOW_CASTERS = 1 + 64 + MAX_ENTITIES_PER_FRAME;
     public static final int SLOT_BASE_PREVIEW_SHADOW_BLOBS = 1 + 64 + 2 * MAX_ENTITIES_PER_FRAME;
     public static final int SLOT_BASE_PREVIEW_ENTITIES = SLOT_BASE_PREVIEW_SHADOW_BLOBS + 64;
-    public static final int SLOTS_PER_FRAME = SLOT_BASE_PREVIEW_ENTITIES + MAX_ENTITIES_PER_FRAME;
+    public static final int SLOT_BASE_PICK_ENTITIES = SLOT_BASE_PREVIEW_ENTITIES + MAX_ENTITIES_PER_FRAME;
+    public static final int SLOTS_PER_FRAME = SLOT_BASE_PICK_ENTITIES + MAX_ENTITIES_PER_FRAME;
     private static final long FRAME_SLOT_SIZE = UNIFORM_STRIDE * SLOTS_PER_FRAME;
     private static final long TOTAL_RING_BUFFER_SIZE = FRAME_SLOT_SIZE * RING_SLOTS;
 
@@ -48,6 +49,7 @@ public class MetalUniformStream {
     public static final long OFFSET_LIGHT_SPACE = 240L;
     public static final long OFFSET_SURFACE = 304L;
     public static final long OFFSET_VIEW_POS = 320L;
+    public static final long OFFSET_PICK_ID = 336L;
 
     // materialMask bits: which DrawArgs texture channels the fragment stage samples
     public static final int MATERIAL_ALBEDO = 1;

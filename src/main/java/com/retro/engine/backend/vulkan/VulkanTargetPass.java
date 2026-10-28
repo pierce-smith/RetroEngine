@@ -25,7 +25,12 @@ public class VulkanTargetPass {
 
     private int width = 712;
     private int height = 488;
-    private int colorFormat = VK_FORMAT_B8G8R8A8_UNORM;
+    private final int colorFormat;
+
+    public VulkanTargetPass() { this(VK_FORMAT_B8G8R8A8_UNORM); }
+
+    /** Target with a non-default color format (e.g. the R8G8B8A8_UINT Color-ID picking target). */
+    public VulkanTargetPass(int colorFormat) { this.colorFormat = colorFormat; }
 
     public void initFramebuffer(VulkanDevice device, int width, int height) {
         if (device == null || device.getLogicalDevice() == null) return;

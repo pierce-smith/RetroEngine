@@ -93,6 +93,12 @@ public class MetalGpuCache {
         framesSubmitted++;
     }
 
+    /** Command buffers committed so far; the frame being encoded is number {@code getFramesSubmitted() + 1}. */
+    public long getFramesSubmitted() { return framesSubmitted; }
+
+    /** Command buffers the GPU has finished, in commit order. */
+    public long getFramesCompleted() { return framesCompleted.get(); }
+
     /** Metal completion handler thread: the oldest in-flight command buffer finished on the GPU. */
     public void onFrameCompleted() {
         framesCompleted.incrementAndGet();

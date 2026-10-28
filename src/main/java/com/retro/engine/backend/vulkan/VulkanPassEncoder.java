@@ -41,6 +41,7 @@ public class VulkanPassEncoder {
         public float normalStrength = 1.0f;
         public float emissiveIntensity = 1.0f;
         public float[][] bonePalette = null;
+        public int pickId = 0; // Color-ID value (IRenderBackend.PICK_ID_NONE = not pickable)
     }
 
     // Pass flags read by blinn_phong.frag (params.x)
@@ -59,6 +60,19 @@ public class VulkanPassEncoder {
 
     // Screen NDC rect of the docked Scene tile the offscreen image is blitted into
     private float sceneMinX = -0.55f, sceneMinY = -0.50f, sceneMaxX = 0.55f, sceneMaxY = 0.88f;
+
+    // Color-ID pick pass for the current frame: rendered only when armed, then the probed texel is copied to the readback buffer
+    private VulkanTargetPass pickTarget = null;
+    private long pickReadbackBuffer = 0L;
+    private int pickTexelX, pickTexelY;
+
+    /** Arms the pick pass for the next recorded frame; a null target or 0L buffer disarms it. */
+    public void setPickPass(VulkanTargetPass target, long readbackBuffer, int texelX, int texelY) {
+        this.pickTarget = target;
+        this.pickReadbackBuffer = readbackBuffer;
+        this.pickTexelX = texelX;
+        this.pickTexelY = texelY;
+    }
 
     public void setSceneRect(float minX, float minY, float maxX, float maxY) {
         this.sceneMinX = minX;
@@ -144,6 +158,11 @@ public class VulkanPassEncoder {
                     sceneQueue, sceneQueueCount, CAMERA_VIEW_EDITOR);
 
             vkCmdEndRendering(cmd);
+
+            // PASS 3A: Color-ID picking pass from the editor camera, with the probed texel copied back for the host
+            if (pickTarget != null && pickTarget.getOffscreenImageView() != 0L && pickReadbackBuffer != 0L) {
+                recordPickPass(cmd, stack, meshPush, bindlessSet, pipelineManager, gpuCache, deviceManager, sceneQueue, sceneQueueCount);
+            }
 
             // PASS 3B: Selected Camera entity's view into the picture-in-picture target (game view: no editor grid)
             if (previewActive && previewTarget != null && previewTarget.getOffscreenImageView() != 0L) {
@@ -372,8 +391,101 @@ public class VulkanPassEncoder {
         }
     }
 
-    /** Begins dynamic rendering into {@code target}'s color + depth (both cleared) with its viewport and scissor bound. */
+    /**
+     * Renders every pickable queued mesh's ID into the pick target (cleared to PICK_ID_NONE) with the same viewport and
+     * editor view-projection as the scene pass, then copies the single probed texel into the host-visible readback buffer.
+     */
+    private void recordPickPass(VkCommandBuffer cmd, MemoryStack stack, ByteBuffer meshPush, long bindlessSet,
+                                VulkanPipeline pipelineManager, VulkanGpuCache gpuCache, VulkanDevice deviceManager,
+                                List<RenderEntity> sceneQueue, int sceneQueueCount) {
+        VulkanTargetPass target = pickTarget;
+
+        // Fully cleared each frame; the source scope orders this frame's writes after last frame's texel copy
+        imageBarrier(cmd, stack, target.getOffscreenImage(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_NONE,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+        imageBarrier(cmd, stack, target.getDepthImage(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+
+        beginOffscreenRendering(cmd, stack, target, true);
+
+        long staticPipeline = pipelineManager.getGraphicsPipelinePick();
+        long skinnedPipeline = pipelineManager.getGraphicsPipelinePickSkinned();
+        VulkanGpuCache.VulkanBuffer bonePaletteBuf = gpuCache.getOrCreateBonePaletteBuffer(deviceManager);
+
+        if (staticPipeline != 0L && bindlessSet != 0L && sceneQueue != null && sceneQueueCount > 0) {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, stack.longs(bindlessSet), null);
+            LongBuffer pBuffers = stack.mallocLong(1);
+            LongBuffer pOffsets = stack.longs(0L);
+            long boundPipeline = 0L;
+
+            for (int i = 0; i < sceneQueueCount; i++) {
+                RenderEntity entity = sceneQueue.get(i);
+                if (entity.pickId == 0) continue;
+                VulkanGpuCache.VulkanBuffer mesh = gpuCache.getMesh(entity.meshHandle);
+                if (mesh == null || mesh.bufferHandle == 0L || mesh.vertexCount <= 0) continue;
+
+                // Same pipeline-selection rules as the scene pass so picks match what is drawn
+                boolean skinnedLayout = mesh.floatStride >= 30;
+                if (skinnedLayout && (skinnedPipeline == 0L || bonePaletteBuf == null)) continue;
+
+                long wantedPipeline = skinnedLayout ? skinnedPipeline : staticPipeline;
+                if (wantedPipeline != boundPipeline) {
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, wantedPipeline);
+                    boundPipeline = wantedPipeline;
+                }
+
+                computeModelMatrixInPlace(entity.px, entity.py, entity.pz, entity.rx, entity.ry, entity.rz, entity.sx, entity.sy, entity.sz, modelMatrixScratch);
+                writeEntityPush(meshPush, modelMatrixScratch, PASS_SCENE, entity, gpuCache, i, CAMERA_VIEW_EDITOR);
+                vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, meshPush);
+
+                vkCmdBindVertexBuffers(cmd, 0, pBuffers.put(0, mesh.bufferHandle), pOffsets);
+                if (mesh.indexBufferHandle != 0L && mesh.indexCount > 0) {
+                    vkCmdBindIndexBuffer(cmd, mesh.indexBufferHandle, 0, mesh.indexType);
+                    vkCmdDrawIndexed(cmd, mesh.indexCount, 1, 0, 0, 0);
+                } else {
+                    vkCmdDraw(cmd, mesh.vertexCount, 1, 0, 0);
+                }
+            }
+        }
+
+        vkCmdEndRendering(cmd);
+
+        imageBarrier(cmd, stack, target.getOffscreenImage(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+
+        VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, stack);
+        region.get(0).bufferOffset(0L).bufferRowLength(0).bufferImageHeight(0);
+        region.get(0).imageSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
+        region.get(0).imageOffset().set(pickTexelX, pickTexelY, 0);
+        region.get(0).imageExtent().set(1, 1, 1);
+        vkCmdCopyImageToBuffer(cmd, target.getOffscreenImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, pickReadbackBuffer, region);
+
+        // Make the copied texel visible to the host read that follows the frame fence
+        VkBufferMemoryBarrier2.Buffer hostBarrier = VkBufferMemoryBarrier2.calloc(1, stack);
+        hostBarrier.get(0).sType$Default()
+                .srcStageMask(VK_PIPELINE_STAGE_2_COPY_BIT).srcAccessMask(VK_ACCESS_2_TRANSFER_WRITE_BIT)
+                .dstStageMask(VK_PIPELINE_STAGE_2_HOST_BIT).dstAccessMask(VK_ACCESS_2_HOST_READ_BIT)
+                .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .buffer(pickReadbackBuffer).offset(0L).size(VK_WHOLE_SIZE);
+        vkCmdPipelineBarrier2(cmd, VkDependencyInfo.calloc(stack).sType$Default().pBufferMemoryBarriers(hostBarrier));
+    }
+
     private static void beginOffscreenRendering(VkCommandBuffer cmd, MemoryStack stack, VulkanTargetPass target) {
+        beginOffscreenRendering(cmd, stack, target, false);
+    }
+
+    /**
+     * Begins dynamic rendering into {@code target}'s color + depth (both cleared) with its viewport and scissor bound.
+     * Integer targets clear to all-zero (PICK_ID_NONE) instead of opaque black.
+     */
+    private static void beginOffscreenRendering(VkCommandBuffer cmd, MemoryStack stack, VulkanTargetPass target, boolean integerColor) {
         // Dynamic Viewport & Scissor Setup for Offscreen Viewport (Negative height for Vulkan Y-Inversion)
         VkViewport.Buffer offscreenViewport = VkViewport.calloc(1, stack);
         offscreenViewport.get(0)
@@ -393,7 +505,11 @@ public class VulkanPassEncoder {
                 .loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR)
                 .storeOp(VK_ATTACHMENT_STORE_OP_STORE);
 
-        offscreenColorAttachment.get(0).clearValue().color().float32(0, 0.0f).float32(1, 0.0f).float32(2, 0.0f).float32(3, 1.0f);
+        if (integerColor) {
+            offscreenColorAttachment.get(0).clearValue().color().uint32(0, 0).uint32(1, 0).uint32(2, 0).uint32(3, 0);
+        } else {
+            offscreenColorAttachment.get(0).clearValue().color().float32(0, 0.0f).float32(1, 0.0f).float32(2, 0.0f).float32(3, 1.0f);
+        }
 
         VkRenderingAttachmentInfo offscreenDepthAttachment = VkRenderingAttachmentInfo.calloc(stack)
                 .sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO)
@@ -461,10 +577,10 @@ public class VulkanPassEncoder {
             .putInt(gpuCache.getEntityTextureSlot(index, VulkanGpuCache.CHANNEL_NORMAL))
             .putInt(gpuCache.getEntityTextureSlot(index, VulkanGpuCache.CHANNEL_SPECULAR))
             .putInt(gpuCache.getEntityTextureSlot(index, VulkanGpuCache.CHANNEL_LIGHTMAP));
-        // texIndices2: emissive, bone palette slot, camera view, unused
+        // texIndices2: emissive, bone palette slot, camera view, pick ID (read only by entity_id.frag)
         push.putInt(gpuCache.getEntityTextureSlot(index, VulkanGpuCache.CHANNEL_EMISSIVE))
             .putInt(gpuCache.getEntityPaletteSlot(index))
-            .putInt(cameraView).putInt(0);
+            .putInt(cameraView).putInt(entity.pickId);
         push.flip();
     }
 

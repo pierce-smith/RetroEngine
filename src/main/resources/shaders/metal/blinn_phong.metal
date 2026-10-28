@@ -25,6 +25,7 @@ struct Uniforms {
     float4x4 lightSpace;      // 240: directional shadow map view-projection
     float4 surface;           // 304: x = specularStrength, y = roughness, z = normalStrength, w = emissiveIntensity
     float4 viewPos;           // 320: xyz = camera world position
+    uint pickId;              // 336: Color-ID pick value (read only by entity_id.metal)
 };
 
 // 64-byte argument buffer entry written by MetalPassEncoder (MetalUniformStream.DRAW_ARGS_*).

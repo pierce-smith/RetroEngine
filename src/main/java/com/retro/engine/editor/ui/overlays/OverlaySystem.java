@@ -8,8 +8,9 @@ import com.retro.engine.editor.ui.panels.EngineConsolePanel;
 import com.retro.engine.editor.ui.panels.HierarchyPanel;
 import com.retro.engine.editor.ui.panels.InspectorPanel;
 import com.retro.engine.editor.ui.panels.MenuItem;
+import com.retro.engine.editor.ui.panels.ViewportPanel;
+import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.scene.entity.Entity;
-import com.retro.engine.scene.world.SceneWorld;
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
 import com.retro.engine.editor.EditorWorkspace;
@@ -18,7 +19,6 @@ import com.retro.engine.editor.EditorWorkspace.ModalState;
 import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
-import com.retro.engine.editor.gizmos.GizmoSystem;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.editor.commands.EditorCommands;
 import com.retro.engine.scene.components.gameplay.ScriptComponent;
@@ -271,26 +271,11 @@ public class OverlaySystem {
             // Animator graph canvas owns this region; its menu is opened on press by AnimatorCanvasDelegate
             return;
         } else if (region == PanelRegion.VIEWPORT) {
-            Entity bestEntity = null;
-            float bestDistSq = Float.MAX_VALUE;
-
-            List<Entity> sceneEntities = manager.getSceneEntities();
-            if (sceneEntities != null) {
-                for (Entity entity : sceneEntities) {
-                    if (entity == null) continue;
-                    SceneWorld.WorldTransform wt = manager.getSceneManager().getComputedWorldTransform(entity);
-                    float[] p0 = GizmoSystem.projectWorldToNdc(wt.px(), wt.py(), wt.pz(), manager.getCameraController(), 0.0f, 0.25f, -5.0f, 0.0f, 0.0f);
-                    if (p0 != null) {
-                        float dx = ndcX - p0[0];
-                        float dy = ndcY - p0[1];
-                        float distSq = dx * dx + dy * dy;
-                        if (distSq < 0.04f && distSq < bestDistSq) {
-                            bestDistSq = distSq;
-                            bestEntity = entity;
-                        }
-                    }
-                }
-            }
+            // Pixel-exact GPU Color-ID pick at the press point; the release lands within a few pixels of it, so fall
+            // back to the hover probe's texel when the press texel has no completed readback
+            int pickId = ViewportPanel.queryPickAtScreen(screenX, screenY);
+            if (pickId == IRenderBackend.PICK_UNAVAILABLE) pickId = ViewportPanel.queryPickAtHover();
+            Entity bestEntity = ViewportPanel.resolvePick(pickId, manager.getSceneEntities());
 
             if (bestEntity != null) {
                 manager.selectEntity(bestEntity);

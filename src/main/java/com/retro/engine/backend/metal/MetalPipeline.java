@@ -33,6 +33,8 @@ public class MetalPipeline {
     private static final String SHADER_DIR = "/shaders/metal/";
 
     private static final long MTL_PIXEL_FORMAT_BGRA8_UNORM = 80L;
+    /** Color-ID picking target format (MTLPixelFormatRGBA8Uint). */
+    public static final long MTL_PIXEL_FORMAT_RGBA8_UINT = 73L;
     private static final long MTL_PIXEL_FORMAT_DEPTH32_FLOAT = 252L;
     private static final long MTL_COMPARE_LESS = 1L;
     private static final long MTL_COMPARE_LESS_EQUAL = 3L;
@@ -46,6 +48,7 @@ public class MetalPipeline {
     private long depthStencilStateShadow = 0L;
     private long pipelineStateShadowMap = 0L;
     private long depthStencilStateShadowMap = 0L;
+    private long pipelineStatePick = 0L;
 
     private long pipelineStateUI = 0L;
     private long depthStencilStateUI = 0L;
@@ -64,10 +67,12 @@ public class MetalPipeline {
         long libLit = loadLibrary(device, "blinn_phong");
         long libShadow = loadLibrary(device, "shadow_depth");
         long libUI = loadLibrary(device, "ui");
+        long libPick = loadLibrary(device, "entity_id");
         if (libLit == 0L || libShadow == 0L || libUI == 0L) {
             device.release(libLit);
             device.release(libShadow);
             device.release(libUI);
+            device.release(libPick);
             return false;
         }
 
@@ -79,10 +84,14 @@ public class MetalPipeline {
         long fragUI = newFunction(device, libUI, "uiFragmentMain");
         long vertComp = newFunction(device, libUI, "compositeVertexMain");
         long fragComp = newFunction(device, libUI, "compositeFragmentMain");
+        // Picking is optional: a missing entity_id library only disables GPU picks
+        long vertPick = libPick != 0L ? newFunction(device, libPick, "pickVertexMain") : 0L;
+        long fragPick = libPick != 0L ? newFunction(device, libPick, "pickFragmentMain") : 0L;
         // Functions retain their library; pipeline states retain what they need from the functions
         device.release(libLit);
         device.release(libShadow);
         device.release(libUI);
+        device.release(libPick);
 
         // 1. Offscreen 3D pipeline: alpha-blended BGRA8 color + Depth32Float
         pipelineState3D = createPipeline(device, "offscreen 3D", vertLit, fragLit, Blend.ALPHA, MTL_PIXEL_FORMAT_DEPTH32_FLOAT);
@@ -92,8 +101,10 @@ public class MetalPipeline {
         pipelineStateShadowMap = createPipeline(device, "directional shadow map", vertShadow, fragShadow, null, MTL_PIXEL_FORMAT_DEPTH32_FLOAT);
         // 4. 2D UI overlay: alpha-blended color, no depth attachment
         pipelineStateUI = createPipeline(device, "2D UI", vertUI, fragUI, Blend.UI, 0L);
+        // 5. Color-ID picking: unblended RGBA8Uint + Depth32Float
+        pipelineStatePick = createPipeline(device, "color-ID picking", vertPick, fragPick, Blend.NONE, MTL_PIXEL_FORMAT_RGBA8_UINT, MTL_PIXEL_FORMAT_DEPTH32_FLOAT);
 
-        for (long fn : new long[] { vertLit, fragLit, vertShadow, fragShadow, vertUI, fragUI, vertComp, fragComp }) {
+        for (long fn : new long[] { vertLit, fragLit, vertShadow, fragShadow, vertUI, fragUI, vertComp, fragComp, vertPick, fragPick }) {
             device.release(fn);
         }
 
@@ -109,6 +120,10 @@ public class MetalPipeline {
     }
 
     private long createPipeline(MetalDevice device, String label, long vertexFn, long fragmentFn, Blend blend, long depthFormat) {
+        return createPipeline(device, label, vertexFn, fragmentFn, blend, MTL_PIXEL_FORMAT_BGRA8_UNORM, depthFormat);
+    }
+
+    private long createPipeline(MetalDevice device, String label, long vertexFn, long fragmentFn, Blend blend, long colorFormat, long depthFormat) {
         if (vertexFn == 0L || fragmentFn == 0L) return 0L;
         long send = device.getObjcMsgSend();
 
@@ -119,7 +134,7 @@ public class MetalPipeline {
         if (blend != null) {
             long colorAttachments = invokePPP(desc, sel_registerName("colorAttachments"), send);
             long color0 = invokePPPP(colorAttachments, sel_registerName("objectAtIndexedSubscript:"), 0L, send);
-            invokePPPP(color0, sel_registerName("setPixelFormat:"), MTL_PIXEL_FORMAT_BGRA8_UNORM, send);
+            invokePPPP(color0, sel_registerName("setPixelFormat:"), colorFormat, send);
             if (blend != Blend.NONE) {
                 invokePPPP(color0, sel_registerName("setBlendingEnabled:"), 1L, send);
                 invokePPPP(color0, sel_registerName("setSourceRGBBlendFactor:"), 4L, send);       // SourceAlpha
@@ -257,6 +272,7 @@ public class MetalPipeline {
     public long getDepthStencilStateShadow() { return depthStencilStateShadow; }
     public long getPipelineStateShadowMap() { return pipelineStateShadowMap; }
     public long getDepthStencilStateShadowMap() { return depthStencilStateShadowMap; }
+    public long getPipelineStatePick() { return pipelineStatePick; }
     public long getPipelineStateUI() { return pipelineStateUI; }
     public long getDepthStencilStateUI() { return depthStencilStateUI; }
 }

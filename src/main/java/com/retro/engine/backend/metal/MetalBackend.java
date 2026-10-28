@@ -47,6 +47,7 @@ public class MetalBackend implements IRenderBackend {
     private static final long SEL_PRESENT_DRAWABLE = sel_registerName("presentDrawable:");
     private static final long SEL_ADD_COMPLETED_HANDLER = sel_registerName("addCompletedHandler:");
     private static final long SEL_COMMIT = sel_registerName("commit");
+    private static final long SEL_CONTENTS = sel_registerName("contents");
 
     private final MetalDevice metalDevice = new MetalDevice();
     private final MetalTexture metalTexture = new MetalTexture();
@@ -61,6 +62,18 @@ public class MetalBackend implements IRenderBackend {
     private final MetalGpuCache resourceCache = new MetalGpuCache();
     private final MetalUniformStream uniformStreamer = new MetalUniformStream();
     private final MetalPassEncoder passEncoder = new MetalPassEncoder();
+
+    // Color-ID picking: RGBA8Uint target matching the scene target, plus one shared readback slot per frame in flight.
+    // Each slot records the frame serial and texel it was written for; slots are harvested once that frame completes.
+    private final MetalTargetPass pickTarget = new MetalTargetPass(MetalPipeline.MTL_PIXEL_FORMAT_RGBA8_UINT);
+    private static final long PICK_READBACK_STRIDE = 256L;
+    private long pickReadbackBuffer = 0L;
+    private float pickProbeU = -1.0f, pickProbeV = -1.0f;
+    private final long[] pickSlotSerial = new long[3];
+    private final int[] pickSlotX = new int[3], pickSlotY = new int[3], pickSlotW = new int[3], pickSlotH = new int[3];
+    private long lastPickSerial = 0L;
+    private int lastPickX = -1, lastPickY = -1, lastPickW, lastPickH;
+    private int lastPickId = PICK_UNAVAILABLE;
 
     private long currentDrawable = 0L;
     private long currentCommandBuffer = 0L;
@@ -125,6 +138,7 @@ public class MetalBackend implements IRenderBackend {
         metalTexture.initDefaultTextureAndSampler(metalDevice.getDevice(), metalDevice.getObjcMsgSend());
 
         uniformStreamer.initialize(metalDevice);
+        pickReadbackBuffer = MetalBuffer.createUniformBuffer(metalDevice.getDevice(), metalDevice.getObjcMsgSend(), PICK_READBACK_STRIDE * MAX_FRAMES_IN_FLIGHT);
         if (!initCompletedHandlerBlock()) {
             shutdown();
             return false;
@@ -262,6 +276,7 @@ public class MetalBackend implements IRenderBackend {
         item.roughness = 0.6f;
         item.normalStrength = 1.0f;
         item.emissiveIntensity = 1.0f;
+        item.pickId = PICK_ID_NONE;
     }
 
     @Override
@@ -282,6 +297,14 @@ public class MetalBackend implements IRenderBackend {
         item.roughness = material.roughness;
         item.normalStrength = material.normalStrength;
         item.emissiveIntensity = material.emissiveIntensity;
+        item.pickId = PICK_ID_NONE;
+    }
+
+    @Override
+    public void submitEntity(long meshHandle, MaterialBinding material, int pickId, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float[][] bonePalette) {
+        int before = activeSceneQueueCount;
+        submitEntity(meshHandle, material, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, bonePalette);
+        if (activeSceneQueueCount != before) sceneQueuePool.get(activeSceneQueueCount - 1).pickId = pickId;
     }
 
     /**
@@ -361,6 +384,7 @@ public class MetalBackend implements IRenderBackend {
 
         // Release deferred resources whose last referencing frame has signalled completion
         resourceCache.beginFrame(metalDevice);
+        harvestPickReadbacks();
 
         uniformStreamer.advanceFrameIndex();
 
@@ -378,6 +402,7 @@ public class MetalBackend implements IRenderBackend {
         currentCommandBuffer = invokePPP(commandQueue, SEL_COMMAND_BUFFER, send);
 
         computeLightSpaceMatrix();
+        armPickPass();
 
         passEncoder.encodeOffscreen3DPass(
             currentCommandBuffer, metalDevice, metalPipeline, metalTexture,
@@ -395,6 +420,63 @@ public class MetalBackend implements IRenderBackend {
             framebuffer, resourceCache, uniformStreamer,
             cameraPreviewActive ? cameraPreviewTarget.getOffscreenColorTexture() : 0L
         );
+    }
+
+    /** Arms (or disarms) the pick pass for the frame about to be encoded into its frame-in-flight readback slot. */
+    private void armPickPass() {
+        boolean armed = pickReadbackBuffer != 0L && metalPipeline.getPipelineStatePick() != 0L
+                && pickProbeU >= 0.0f && pickProbeU < 1.0f && pickProbeV >= 0.0f && pickProbeV < 1.0f;
+        if (!armed) {
+            passEncoder.setPickPass(null, 0L, 0L, 0, 0);
+            return;
+        }
+        int w = framebuffer.getWidth(), h = framebuffer.getHeight();
+        pickTarget.resizeViewport(metalDevice, w, h, resourceCache);
+        long serial = resourceCache.getFramesSubmitted() + 1;
+        int slot = (int) (serial % MAX_FRAMES_IN_FLIGHT);
+        int x = pickTexel(pickProbeU, w), y = pickTexel(pickProbeV, h);
+        pickSlotSerial[slot] = serial;
+        pickSlotX[slot] = x; pickSlotY[slot] = y; pickSlotW[slot] = w; pickSlotH[slot] = h;
+        passEncoder.setPickPass(pickTarget, pickReadbackBuffer, slot * PICK_READBACK_STRIDE, x, y);
+    }
+
+    /** Publishes the newest readback whose frame the GPU has completed; shared storage is coherent after completion. */
+    private void harvestPickReadbacks() {
+        if (pickReadbackBuffer == 0L) return;
+        long completed = resourceCache.getFramesCompleted();
+        int newest = -1;
+        for (int slot = 0; slot < pickSlotSerial.length; slot++) {
+            long serial = pickSlotSerial[slot];
+            if (serial > lastPickSerial && serial <= completed && (newest < 0 || serial > pickSlotSerial[newest])) newest = slot;
+        }
+        if (newest < 0) return;
+        long contents = invokePPP(pickReadbackBuffer, SEL_CONTENTS, metalDevice.getObjcMsgSend());
+        if (contents == 0L) return;
+        // entity_id.metal stores the alpha byte XOR 1 so the default (0, 0, 0, 1) clear reads back as PICK_ID_NONE
+        lastPickId = MemoryUtil.memGetInt(contents + newest * PICK_READBACK_STRIDE) ^ 0x01000000;
+        lastPickSerial = pickSlotSerial[newest];
+        lastPickX = pickSlotX[newest]; lastPickY = pickSlotY[newest];
+        lastPickW = pickSlotW[newest]; lastPickH = pickSlotH[newest];
+    }
+
+    private static int pickTexel(float uv, int size) {
+        return Math.max(0, Math.min(size - 1, (int) (uv * size)));
+    }
+
+    @Override
+    public void setPickProbe(float u, float v) {
+        boolean inside = u >= 0.0f && u < 1.0f && v >= 0.0f && v < 1.0f;
+        pickProbeU = inside ? u : -1.0f;
+        pickProbeV = inside ? v : -1.0f;
+    }
+
+    @Override
+    public int queryPick(float u, float v) {
+        harvestPickReadbacks();
+        if (lastPickX < 0 || u < 0.0f || u >= 1.0f || v < 0.0f || v >= 1.0f) return PICK_UNAVAILABLE;
+        int w = framebuffer.getWidth(), h = framebuffer.getHeight();
+        if (w != lastPickW || h != lastPickH || pickTexel(u, w) != lastPickX || pickTexel(v, h) != lastPickY) return PICK_UNAVAILABLE;
+        return lastPickId;
     }
 
     /** Orthographic directional light view-projection fitted around the bounding spheres of every queued entity. */
@@ -467,6 +549,9 @@ public class MetalBackend implements IRenderBackend {
             completedHandlerCallback = 0L;
         }
         passEncoder.dispose();
+        pickTarget.dispose(metalDevice);
+        metalDevice.release(pickReadbackBuffer);
+        pickReadbackBuffer = 0L;
         inFlightFrames.release(MAX_FRAMES_IN_FLIGHT);
     }
     @Override public long createBuffer(BufferDesc createInfo) { return 102L; }

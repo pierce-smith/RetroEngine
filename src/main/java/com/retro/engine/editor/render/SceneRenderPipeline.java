@@ -88,6 +88,7 @@ public class SceneRenderPipeline {
         public float groundY;
         public float reflectVal;
         public float[][] bonePalette;
+        public int pickId; // Color-ID value from ViewportPanel.pickIdFor (PICK_ID_NONE = not pickable)
         // Full multi-channel material; albedo and reflection mirror textureHandle and reflectVal
         public final MaterialBinding material = new MaterialBinding();
 
@@ -102,6 +103,7 @@ public class SceneRenderPipeline {
             this.groundY = groundY;
             this.reflectVal = reflectVal;
             this.bonePalette = bonePalette;
+            this.pickId = IRenderBackend.PICK_ID_NONE;
             this.material.reset();
             this.material.albedoTexture = textureHandle;
             this.material.reflect = reflectVal;
@@ -334,6 +336,7 @@ public class SceneRenderPipeline {
                             wt.sx(), wt.sy(), wt.sz(),
                             groundY, reflectVal, bonePalette
                     );
+                    desc.pickId = ViewportPanel.pickIdFor(entity);
                     if (mat != null) {
                         MaterialBinding binding = desc.material;
                         binding.normalTexture = resolveChannelHandle(mat, Material.CHANNEL_NORMAL, streamingService, handleEpoch);
@@ -407,7 +410,7 @@ public class SceneRenderPipeline {
         for (int i = 0; i < snapshot.activeEntityCount; i++) {
             MutableRenderEntityDescriptor e = snapshot.pooledEntities.get(i);
             rhi.submitEntity(
-                    e.meshHandle, e.material,
+                    e.meshHandle, e.material, e.pickId,
                     e.px, e.py, e.pz, e.rx, e.ry, e.rz, e.sx, e.sy, e.sz,
                     e.groundY, e.bonePalette
             );
@@ -421,6 +424,7 @@ public class SceneRenderPipeline {
             );
         }
 
+        ViewportPanel.updatePicking(rhi);
         rhi.setSceneViewport(snapshot.sceneMinX, snapshot.sceneMinY, snapshot.sceneMaxX, snapshot.sceneMaxY, snapshot.sceneAspect);
         rhi.setCameraPreview(snapshot.cameraPreviewActive, snapshot.cameraPreviewViewProj,
                 snapshot.cameraPreviewPosX, snapshot.cameraPreviewPosY, snapshot.cameraPreviewPosZ);

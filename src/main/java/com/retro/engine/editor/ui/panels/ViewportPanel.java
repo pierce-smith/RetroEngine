@@ -3,16 +3,39 @@ package com.retro.engine.editor.ui.panels;
 import com.retro.engine.editor.EditorWorkspace.WorkspaceTab;
 import com.retro.engine.editor.EditorWorkspace.GizmoMode;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
+import com.retro.engine.editor.ui.dock.DockPanel;
+import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.theme.EditorTheme;
 import com.retro.engine.scene.components.rendering.Camera;
+import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.scene.entity.Entity;
 
+import java.lang.ref.WeakReference;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.WeakHashMap;
+import java.util.function.IntConsumer;
 
 /**
  * ViewportPanel handles rendering the central Viewport framing, canvas tab switcher buttons, and Toolbar controls.
+ * It also owns pixel-exact GPU Color-ID picking: entities carry stable pick IDs, the cursor drives the backend's pick
+ * probe, and viewport clicks resolve through {@link IRenderBackend#queryPick} once the readback catches up.
  */
 public class ViewportPanel {
+
+    // Frames a click waits for the asynchronous pick readback before it is dropped (selection left unchanged)
+    private static final int PICK_TIMEOUT_FRAMES = 15;
+
+    private static IRenderBackend pickBackend = null;
+    private static float hoverU = -1.0f, hoverV = -1.0f;
+    // Stable per-entity pick IDs: async readbacks may describe a frame whose submission order differs from the current one
+    private static final Map<Entity, Integer> pickIds = new WeakHashMap<>();
+    private static final Map<Integer, WeakReference<Entity>> pickEntities = new HashMap<>();
+    private static int nextPickId = 1;
+    private static float pendingU = -1.0f, pendingV = -1.0f;
+    private static IntConsumer pendingCallback = null;
+    private static int pendingFrames = 0;
 
     private static String rhiCanvasTitle = "3D VIEWPORT [RHI CANVAS]";
 
@@ -34,6 +57,98 @@ public class ViewportPanel {
         if (title != null && !title.trim().isEmpty()) {
             rhiCanvasTitle = title;
         }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // GPU Color-ID picking
+    // ------------------------------------------------------------------------------------------
+
+    /** Stable non-zero pick ID for {@code entity}; IDs are never reused within a session. */
+    public static int pickIdFor(Entity entity) {
+        if (entity == null) return IRenderBackend.PICK_ID_NONE;
+        Integer id = pickIds.get(entity);
+        if (id == null) {
+            id = nextPickId++;
+            if (nextPickId <= 0) nextPickId = 1; // 2^31 spawns: wrap, skipping NONE and the negative UNAVAILABLE
+            pickIds.put(entity, id);
+            pickEntities.put(id, new WeakReference<>(entity));
+        }
+        return id;
+    }
+
+    /** Entity drawn with {@code pickId}, or null for the background, unknown IDs, or entities no longer in the scene. */
+    public static Entity resolvePick(int pickId, List<Entity> sceneEntities) {
+        if (pickId == IRenderBackend.PICK_ID_NONE || pickId == IRenderBackend.PICK_UNAVAILABLE) return null;
+        WeakReference<Entity> ref = pickEntities.get(pickId);
+        Entity entity = (ref != null) ? ref.get() : null;
+        if (ref != null && entity == null) pickEntities.remove(pickId);
+        return (entity != null && sceneEntities != null && sceneEntities.contains(entity)) ? entity : null;
+    }
+
+    /** Scene-tile UV (origin top-left) of a screen-space NDC point, or {-1, -1} when the Scene tile is hidden. */
+    private static float[] screenToSceneUv(float screenX, float screenY) {
+        if (!DockSpace.isSceneViewportVisible()) return new float[] { -1.0f, -1.0f };
+        float x0 = DockSpace.getContentX0(DockPanel.SCENE), x1 = DockSpace.getContentX1(DockPanel.SCENE);
+        float y0 = DockSpace.getContentY0(DockPanel.SCENE), y1 = DockSpace.getContentY1(DockPanel.SCENE);
+        return new float[] { (screenX - x0) / (x1 - x0), (y1 - screenY) / (y1 - y0) };
+    }
+
+    /** Points the pick probe at the cursor (screen-space NDC); points off the Scene tile disarm it. */
+    public static void setPickProbeScreen(float screenX, float screenY) {
+        float[] uv = screenToSceneUv(screenX, screenY);
+        hoverU = uv[0];
+        hoverV = uv[1];
+    }
+
+    /** Pick ID under a screen-space NDC point from the newest readback, or PICK_UNAVAILABLE. Never blocks. */
+    public static int queryPickAtScreen(float screenX, float screenY) {
+        if (pickBackend == null) return IRenderBackend.PICK_UNAVAILABLE;
+        float[] uv = screenToSceneUv(screenX, screenY);
+        return pickBackend.queryPick(uv[0], uv[1]);
+    }
+
+    /** Pick ID under the hover probe from the newest readback, or PICK_UNAVAILABLE. */
+    public static int queryPickAtHover() {
+        return pickBackend != null ? pickBackend.queryPick(hoverU, hoverV) : IRenderBackend.PICK_UNAVAILABLE;
+    }
+
+    /**
+     * Resolves a viewport click given in Scene design space. Answers at once when the readback already covers the texel;
+     * otherwise the probe is moved there and {@code onResolved} runs from {@link #updatePicking} once it catches up.
+     * A newer request replaces a pending one.
+     */
+    public static void requestPickAtDesign(float designX, float designY, IntConsumer onResolved) {
+        float screenX = DockSpace.toScreenX(DockPanel.SCENE, designX);
+        float screenY = DockSpace.toScreenY(DockPanel.SCENE, designY);
+        float[] uv = screenToSceneUv(screenX, screenY);
+        if (uv[0] < 0.0f || uv[0] >= 1.0f || uv[1] < 0.0f || uv[1] >= 1.0f) return;
+
+        int id = (pickBackend != null) ? pickBackend.queryPick(uv[0], uv[1]) : IRenderBackend.PICK_UNAVAILABLE;
+        if (id != IRenderBackend.PICK_UNAVAILABLE) {
+            pendingCallback = null;
+            onResolved.accept(id);
+            return;
+        }
+        pendingU = uv[0];
+        pendingV = uv[1];
+        pendingCallback = onResolved;
+        pendingFrames = 0;
+    }
+
+    /** Once per submitted frame: resolves a pending click, then aims the probe (pending click first, else the cursor). */
+    public static void updatePicking(IRenderBackend rhi) {
+        pickBackend = rhi;
+        if (rhi == null) return;
+        if (pendingCallback != null) {
+            int id = rhi.queryPick(pendingU, pendingV);
+            if (id != IRenderBackend.PICK_UNAVAILABLE || ++pendingFrames > PICK_TIMEOUT_FRAMES) {
+                IntConsumer callback = pendingCallback;
+                pendingCallback = null;
+                if (id != IRenderBackend.PICK_UNAVAILABLE) callback.accept(id);
+            }
+        }
+        if (pendingCallback != null) rhi.setPickProbe(pendingU, pendingV);
+        else rhi.setPickProbe(hoverU, hoverV);
     }
 
     public static void renderFraming(UIGeometryBatch.Buffer buffer, WorkspaceTab activeTab, Entity selectedEntity, long cameraPreviewTexture) {

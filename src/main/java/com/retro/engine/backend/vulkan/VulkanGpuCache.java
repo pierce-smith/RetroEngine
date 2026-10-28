@@ -512,7 +512,7 @@ public class VulkanGpuCache {
     }
 
     /** Creates a host-visible, coherent buffer with bound memory; returns {buffer, memory} or null on failure. */
-    private static long[] allocateHostVisibleBuffer(VulkanDevice device, long bufferSize, int usage) {
+    static long[] allocateHostVisibleBuffer(VulkanDevice device, long bufferSize, int usage) {
         if (device == null || device.getLogicalDevice() == null || bufferSize <= 0) return null;
         VkDevice vkDevice = device.getLogicalDevice();
 

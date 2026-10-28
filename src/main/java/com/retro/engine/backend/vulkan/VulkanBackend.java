@@ -7,8 +7,10 @@ import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.rhi.MaterialBinding;
 import com.retro.engine.rhi.TextureDesc;
 import com.retro.engine.rhi.ViewportSpec;
+import org.lwjgl.PointerBuffer;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
 
 import java.nio.IntBuffer;
@@ -44,6 +46,18 @@ public class VulkanBackend implements IRenderBackend {
     private final float[] cameraPreviewViewProj = new float[16];
     private float cameraPreviewX, cameraPreviewY, cameraPreviewZ;
     private final VulkanQueueSubmitter queueSubmitter = new VulkanQueueSubmitter();
+
+    // Color-ID picking: R8G8B8A8_UINT target matching the scene target, plus a persistently mapped 4-byte readback buffer.
+    // One frame is in flight, so the texel copied by frame N is read right after beginFrame N+1 waits on its fence.
+    private final VulkanTargetPass pickTarget = new VulkanTargetPass(VulkanPipeline.PICK_ID_FORMAT);
+    private long pickReadbackBuffer = 0L;
+    private long pickReadbackMemory = 0L;
+    private long pickReadbackMapped = 0L;
+    private float pickProbeU = -1.0f, pickProbeV = -1.0f;
+    // Texel the in-flight frame copies (-1 = no pick pass recorded) and the newest completed readback
+    private int pendingPickX = -1, pendingPickY = -1, pendingPickW, pendingPickH;
+    private int lastPickX = -1, lastPickY = -1, lastPickW, lastPickH;
+    private int lastPickId = PICK_UNAVAILABLE;
 
     private int activeImageIndex = 0;
     private long minUniformAlignment = 16L;
@@ -106,6 +120,7 @@ public class VulkanBackend implements IRenderBackend {
 
         cameraPreviewTarget.initFramebuffer(deviceManager, CAMERA_PREVIEW_WIDTH, CAMERA_PREVIEW_HEIGHT);
         cameraPreviewSlot = gpuCache.registerRenderTargetView(cameraPreviewTarget.getOffscreenImageView());
+        initPickReadback();
 
         System.out.println("[VulkanBackend] Vulkan 1.3 Multi-Pass Architecture Active on Apple Silicon / MoltenVK.");
         return true;
@@ -128,6 +143,7 @@ public class VulkanBackend implements IRenderBackend {
         // The previous frame's command buffer, descriptor sets, light UBO and bone palettes are only safe to touch
         // once its fence signals.
         vkWaitForFences(device, queueSubmitter.getInFlightFence(), true, Long.MAX_VALUE);
+        harvestPickReadback();
 
         // A resize/maximize event, or OUT_OF_DATE/SUBOPTIMAL from the previous acquire or present, invalidated the
         // swapchain: rebuild it at the new surface extent before acquiring. A minimized (zero-area) window skips the frame.
@@ -176,6 +192,8 @@ public class VulkanBackend implements IRenderBackend {
         // Material slots and bone palettes are resolved here; recording only pushes constants
         gpuCache.prepareScene(deviceManager, sceneQueuePool, activeSceneQueueCount);
 
+        armPickPass();
+
         VkCommandBuffer cmd = queueSubmitter.getCommandBuffer();
         vkResetCommandBuffer(cmd, 0);
 
@@ -205,6 +223,70 @@ public class VulkanBackend implements IRenderBackend {
 
             vkEndCommandBuffer(cmd);
         }
+    }
+
+    private void initPickReadback() {
+        long[] handles = VulkanGpuCache.allocateHostVisibleBuffer(deviceManager, Integer.BYTES, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        if (handles == null) {
+            System.err.println("[VulkanBackend] WARNING: Color-ID pick readback buffer unavailable; GPU picking disabled.");
+            return;
+        }
+        try (MemoryStack stack = stackPush()) {
+            PointerBuffer pData = stack.mallocPointer(1);
+            if (vkMapMemory(deviceManager.getLogicalDevice(), handles[1], 0, VK_WHOLE_SIZE, 0, pData) != VK_SUCCESS) {
+                vkDestroyBuffer(deviceManager.getLogicalDevice(), handles[0], null);
+                vkFreeMemory(deviceManager.getLogicalDevice(), handles[1], null);
+                return;
+            }
+            pickReadbackMapped = pData.get(0);
+        }
+        pickReadbackBuffer = handles[0];
+        pickReadbackMemory = handles[1];
+    }
+
+    /** The previous frame's fence has signaled: publish the texel its pick pass copied (host-coherent memory). */
+    private void harvestPickReadback() {
+        if (pendingPickX < 0 || pickReadbackMapped == 0L) return;
+        lastPickId = MemoryUtil.memGetInt(pickReadbackMapped); // little-endian RGBA bytes = the packed ID
+        lastPickX = pendingPickX; lastPickY = pendingPickY;
+        lastPickW = pendingPickW; lastPickH = pendingPickH;
+        pendingPickX = -1;
+    }
+
+    /** Arms (or disarms) the pick pass for the frame about to be recorded; the GPU is idle, so resizing is safe here. */
+    private void armPickPass() {
+        boolean armed = pickReadbackBuffer != 0L && pickProbeU >= 0.0f && pickProbeU < 1.0f && pickProbeV >= 0.0f && pickProbeV < 1.0f
+                && pipelineManager.getGraphicsPipelinePick() != 0L;
+        if (!armed) {
+            passEncoder.setPickPass(null, 0L, 0, 0);
+            return;
+        }
+        int w = targetPass.getWidth(), h = targetPass.getHeight();
+        if (pickTarget.getOffscreenImage() == 0L || pickTarget.getWidth() != w || pickTarget.getHeight() != h) {
+            pickTarget.initFramebuffer(deviceManager, w, h);
+        }
+        int x = pickTexel(pickProbeU, w), y = pickTexel(pickProbeV, h);
+        passEncoder.setPickPass(pickTarget, pickReadbackBuffer, x, y);
+        pendingPickX = x; pendingPickY = y; pendingPickW = w; pendingPickH = h;
+    }
+
+    private static int pickTexel(float uv, int size) {
+        return Math.max(0, Math.min(size - 1, (int) (uv * size)));
+    }
+
+    @Override
+    public void setPickProbe(float u, float v) {
+        boolean inside = u >= 0.0f && u < 1.0f && v >= 0.0f && v < 1.0f;
+        pickProbeU = inside ? u : -1.0f;
+        pickProbeV = inside ? v : -1.0f;
+    }
+
+    @Override
+    public int queryPick(float u, float v) {
+        if (lastPickX < 0 || u < 0.0f || u >= 1.0f || v < 0.0f || v >= 1.0f) return PICK_UNAVAILABLE;
+        int w = targetPass.getWidth(), h = targetPass.getHeight();
+        if (w != lastPickW || h != lastPickH || pickTexel(u, w) != lastPickX || pickTexel(v, h) != lastPickY) return PICK_UNAVAILABLE;
+        return lastPickId;
     }
 
     /**
@@ -341,6 +423,13 @@ public class VulkanBackend implements IRenderBackend {
         queueSubmitter.cleanup(deviceManager);
         targetPass.cleanup(deviceManager);
         cameraPreviewTarget.cleanup(deviceManager);
+        pickTarget.cleanup(deviceManager);
+        if (device != null && pickReadbackBuffer != 0L) {
+            vkUnmapMemory(device, pickReadbackMemory);
+            vkDestroyBuffer(device, pickReadbackBuffer, null);
+            vkFreeMemory(device, pickReadbackMemory, null);
+            pickReadbackBuffer = pickReadbackMemory = pickReadbackMapped = 0L;
+        }
         pipelineManager.cleanup(deviceManager);
         gpuCache.cleanup(deviceManager);
         swapchainManager.cleanup(deviceManager);
@@ -441,6 +530,7 @@ public class VulkanBackend implements IRenderBackend {
         item.roughness = 0.6f;
         item.normalStrength = 1.0f;
         item.emissiveIntensity = 1.0f;
+        item.pickId = PICK_ID_NONE;
     }
 
     @Override
@@ -462,6 +552,13 @@ public class VulkanBackend implements IRenderBackend {
         item.roughness = material.roughness;
         item.normalStrength = material.normalStrength;
         item.emissiveIntensity = material.emissiveIntensity;
+    }
+
+    @Override
+    public void submitEntity(long meshHandle, MaterialBinding material, int pickId, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float[][] bonePalette) {
+        int before = activeSceneQueueCount;
+        submitEntity(meshHandle, material, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, bonePalette);
+        if (activeSceneQueueCount != before) sceneQueuePool.get(activeSceneQueueCount - 1).pickId = pickId;
     }
 
     @Override public long createBuffer(BufferDesc createInfo) { return 101L; }

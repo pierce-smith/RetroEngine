@@ -7,6 +7,7 @@ import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.ui.dock.DockPanel;
 import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.overlays.OverlaySystem;
+import com.retro.engine.editor.ui.panels.ViewportPanel;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.world.SceneWorld;
 import com.retro.engine.scene.components.transform.Transform;
@@ -130,30 +131,9 @@ public class GizmoState {
             }
         }
 
-        Entity bestEntity = null;
-        double minDistance = 60.0;
-
-        for (Entity entity : manager.getSceneEntities()) {
-            Transform tc = entity.getTransform();
-            if (tc == null) continue;
-
-            SceneWorld.WorldTransform wt = manager.getSceneManager().getComputedWorldTransform(entity);
-            float[] p0 = GizmoSystem.projectWorldToNdc(wt.px(), wt.py(), wt.pz(), cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
-            double cx = ((p0[0] + 1.0) / 2.0) * 1280.0;
-            double cy = ((1.0 - p0[1]) / 2.0) * 720.0;
-
-            double dist = Math.hypot(refX - cx, refY - cy);
-            if (dist < minDistance) {
-                minDistance = dist;
-                bestEntity = entity;
-            }
-        }
-
-        if (bestEntity != null) {
-            manager.selectEntity(bestEntity);
-        } else {
-            manager.selectEntity(null);
-        }
+        // Pixel-exact GPU Color-ID pick: the background (PICK_ID_NONE) deselects
+        ViewportPanel.requestPickAtDesign((float) (refX / 640.0 - 1.0), (float) (1.0 - refY / 360.0),
+                pickId -> manager.selectEntity(ViewportPanel.resolvePick(pickId, manager.getSceneEntities())));
     }
 
     public boolean onCursorPos(double rawX, double rawY, EditorWorkspace manager, OverlaySystem overlayManager) {
@@ -162,6 +142,8 @@ public class GizmoState {
         // Gizmo math is authored against the Scene panel's design rect; map the docked tile back into it
         float screenX = (float) ((rawX / (double) manager.getWindowWidth()) * 2.0 - 1.0);
         float screenY = (float) (1.0 - (rawY / (double) manager.getWindowHeight()) * 2.0);
+        // Keep the GPU pick probe on the cursor so a click usually finds its texel already read back
+        ViewportPanel.setPickProbeScreen(screenX, screenY);
         if (DockSpace.isVisible(DockPanel.SCENE)) {
             screenX = DockSpace.toDesignX(DockPanel.SCENE, screenX);
             screenY = DockSpace.toDesignY(DockPanel.SCENE, screenY);
