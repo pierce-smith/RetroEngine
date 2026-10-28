@@ -1,5 +1,6 @@
 package com.retro.engine.editor.input;
 
+import com.retro.engine.editor.ui.overlays.ProjectLauncherOverlay;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.audio.UISoundPlayer;
@@ -76,7 +77,7 @@ public class EditorInputRouter {
         if (workspace == null) return false;
         PointerCoordinates coords = calculateCoordinates(rawX, rawY);
         if (coords == null) return false;
-        if (DockSpace.isDragging()) return false;
+        if (DockSpace.isDragging() || !workspace.hasActiveProject()) return false;
         return PanelRegion.getRegionAt(coords.ndcX, coords.ndcY, workspace.getOverlayManager()) == PanelRegion.VIEWPORT;
     }
 
@@ -88,6 +89,13 @@ public class EditorInputRouter {
 
         float ndcX = coords.ndcX;
         float ndcY = coords.ndcY;
+
+        // Project launcher is modal over the whole window until a project is bound
+        if (!workspace.hasActiveProject()) {
+            if (button == 0 && action == 1) ProjectLauncherOverlay.handleClick(ndcX, ndcY, workspace);
+            return true;
+        }
+
         double refX = coords.refX;
         double refY = coords.refY;
 
@@ -274,6 +282,7 @@ public class EditorInputRouter {
         PointerCoordinates coords = calculateCoordinates(rawX, rawY);
         if (coords != null) {
             workspace.setLastNdcPos(coords.ndcX, coords.ndcY);
+            if (!workspace.hasActiveProject()) return true;
 
             if (DockSpace.onCursor(coords.ndcX, coords.ndcY)) {
                 return true;
@@ -294,6 +303,7 @@ public class EditorInputRouter {
 
     public boolean handleScroll(double yOffset) {
         if (workspace == null) return false;
+        if (!workspace.hasActiveProject()) return true;
         DockPanel panel = DockSpace.panelAt(workspace.getLastNdcX(), workspace.getLastNdcY());
 
         if (panel == DockPanel.INSPECTOR) {

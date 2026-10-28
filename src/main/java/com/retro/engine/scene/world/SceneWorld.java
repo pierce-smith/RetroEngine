@@ -456,7 +456,7 @@ public class SceneWorld {
     public void promptSaveSelectedAsPrefab(List<AssetMeta> assetDirectory, AssetDatabase assetDb) {
         Entity selected = getSelectedEntity();
         if (selected == null) return;
-        String defaultDir = new File("Assets/Prefabs").getAbsolutePath();
+        String defaultDir = projectSubDir(assetDb, "Prefabs");
         String targetPath = NativeFileDialog.saveFileDialog("Save Entity Prefab Blueprint", defaultDir, "Prefab Blueprint (*.prefab.bin)", "prefab.bin", "prefab");
         if (targetPath != null && !targetPath.trim().isEmpty()) {
             UISoundPlayer.play(UISound.SPAWN);
@@ -475,6 +475,13 @@ public class SceneWorld {
             UISoundPlayer.play(UISound.SPAWN);
         }
         return spawned;
+    }
+
+    /** Dialog start directory inside the active project's Assets/ folder, falling back to the working directory. */
+    private static String projectSubDir(AssetDatabase assetDb, String sub) {
+        String assetsRoot = (assetDb != null && assetDb.hasActiveProject()) ? assetDb.getProjectAssetsPath() : "Assets";
+        File dir = new File(assetsRoot, sub);
+        return (dir.isDirectory() ? dir : new File(assetsRoot)).getAbsolutePath() + File.separator;
     }
 
     // --- SCENE SERIALIZATION & DIALOGS ---
@@ -496,7 +503,7 @@ public class SceneWorld {
     }
 
     public void promptSaveSceneWithNativeDialog(List<AssetMeta> assetDirectory, AssetDatabase assetDb) {
-        String defaultDir = new File("Assets/Scenes").getAbsolutePath();
+        String defaultDir = projectSubDir(assetDb, "Scenes");
         String targetPath = NativeFileDialog.saveFileDialog("Save Scene File", defaultDir, "Retro Scene (*.rscene)", "rscene");
         if (targetPath != null && !targetPath.trim().isEmpty()) {
             UISoundPlayer.play(UISound.SPAWN);

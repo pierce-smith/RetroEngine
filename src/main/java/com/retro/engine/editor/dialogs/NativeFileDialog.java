@@ -85,4 +85,25 @@ public class NativeFileDialog {
             return null;
         }
     }
+
+    public static String selectFolderDialog(String title, String defaultPath) {
+        String result = TinyFileDialogs.tinyfd_selectFolderDialog(
+            title != null ? title : "Select Folder",
+            defaultPath != null ? defaultPath : ""
+        );
+        return (result != null && !result.trim().isEmpty()) ? result.trim() : null;
+    }
+
+    /** Yes/No question box; returns true for Yes. */
+    public static boolean confirm(String title, String message, boolean defaultYes) {
+        return TinyFileDialogs.tinyfd_messageBox(
+            title != null ? title : "Confirm",
+            message != null ? message : "",
+            "yesno", "question", defaultYes
+        );
+    }
+
+    public static void showError(String title, String message) {
+        TinyFileDialogs.tinyfd_messageBox(title != null ? title : "Error", message != null ? message : "", "ok", "error", true);
+    }
 }

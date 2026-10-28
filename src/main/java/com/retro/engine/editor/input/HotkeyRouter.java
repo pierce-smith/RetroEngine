@@ -11,7 +11,6 @@ import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.editor.commands.EditorCommands;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 
-import java.io.File;
 
 import static org.lwjgl.glfw.GLFW.*;
 
@@ -30,6 +29,7 @@ public class HotkeyRouter {
 
     public void processInput(WindowHost window, EditorWorkspace editorManager, ViewportCamera cameraController, float deltaTime) {
         if (window == null || editorManager == null) return;
+        if (!editorManager.hasActiveProject()) return; // Project launcher owns input until a project is bound
 
         boolean isCtrlDown = window.isKeyDown(GLFW_KEY_LEFT_CONTROL) || window.isKeyDown(GLFW_KEY_RIGHT_CONTROL) || window.isKeyDown(GLFW_KEY_LEFT_SUPER) || window.isKeyDown(GLFW_KEY_RIGHT_SUPER);
         boolean isShiftDown = window.isKeyDown(GLFW_KEY_LEFT_SHIFT) || window.isKeyDown(GLFW_KEY_RIGHT_SHIFT);
@@ -98,12 +98,10 @@ public class HotkeyRouter {
         if (isCtrlDown && isO) {
             if (!loadKeyPressedLastFrame) {
                 UISoundPlayer.play(UISound.OPEN_MODAL);
-                String defaultDir = new File("Assets/Scenes").getAbsolutePath();
+                String defaultDir = editorManager.getProjectScenesDir();
                 String importedPath = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.rscene)", "rscene");
                 if (importedPath != null && !importedPath.trim().isEmpty()) {
                     UISoundPlayer.play(UISound.SPAWN);
-                    editorManager.getAssetDatabase().clear();
-                    editorManager.getAssetDatabase().scanWorkspaceDirectory("Assets");
                     editorManager.getSceneManager().loadSceneFromFile(importedPath, editorManager.getAssetDatabase());
                 } else {
                     UISoundPlayer.play(UISound.CLOSE_MODAL);

@@ -36,6 +36,9 @@ public class ScriptEngine {
     // Reusable URLClassLoader to prevent Metaspace and classloader leaks across re-compilations
     private static URLClassLoader scriptClassLoader;
 
+    // Active project's Assets/ folder; script sources are searched here before the working directory
+    private static volatile String projectAssetsRoot = null;
+
     private static final Pattern PACKAGE_PATTERN = Pattern.compile("^\\s*package\\s+([a-zA-Z0-9_.]+)\\s*;");
 
     /**
@@ -50,6 +53,19 @@ public class ScriptEngine {
             } catch (IOException ignored) {}
             scriptClassLoader = null;
         }
+    }
+
+    /** Binds script source lookup to a project's Assets/ folder (null to unbind) and drops all cached classes. */
+    public static void setProjectAssetsRoot(String assetsRoot) {
+        projectAssetsRoot = (assetsRoot != null && !assetsRoot.trim().isEmpty()) ? assetsRoot.trim() : null;
+        clearCache();
+    }
+
+    /** Resolves a component's script: class name from scriptName, source file from scriptAssetPath. */
+    public static Class<?> resolveScriptClass(ScriptComponent sc) {
+        if (sc == null) return null;
+        String rawName = (sc.scriptName != null && !sc.scriptName.trim().isEmpty()) ? sc.scriptName : sc.scriptAssetPath;
+        return resolveScriptClass(rawName, sc.scriptAssetPath);
     }
 
     public static void initializeScripts(List<Entity> entities, SceneWorld sceneWorld) {
@@ -192,6 +208,10 @@ public class ScriptEngine {
     }
 
     public static Class<?> resolveScriptClass(String rawName) {
+        return resolveScriptClass(rawName, null);
+    }
+
+    public static Class<?> resolveScriptClass(String rawName, String sourcePathHint) {
         if (rawName == null || rawName.trim().isEmpty()) return null;
 
         File sourceFile = new File(rawName);
@@ -211,14 +231,7 @@ public class ScriptEngine {
         Class<?> clazz = compiledClassCache.get(cleanClassName);
         if (clazz != null) return clazz;
 
-        File diskScriptFile = null;
-        File f = new File(rawName);
-        if (f.exists()) diskScriptFile = f;
-        if (diskScriptFile == null && sourceFile.exists()) diskScriptFile = sourceFile;
-        if (diskScriptFile == null) {
-            File alt = new File("Assets/Scripts/" + fileName);
-            if (alt.exists()) diskScriptFile = alt;
-        }
+        File diskScriptFile = locateScriptSource(rawName, sourcePathHint, cleanClassName + ".java");
 
         String declaredPackage = parsePackageDeclaration(diskScriptFile);
 
@@ -342,7 +355,7 @@ public class ScriptEngine {
         String rawName = (sc.scriptName != null && !sc.scriptName.trim().isEmpty()) ? sc.scriptName : sc.scriptAssetPath;
         if (rawName == null || rawName.trim().isEmpty()) return;
 
-        Class<?> clazz = resolveScriptClass(rawName);
+        Class<?> clazz = resolveScriptClass(sc);
 
         if (clazz == null) {
             System.err.println("[ScriptEngine] Could not resolve or compile script class for '" + rawName + "'. Skipping further attempts.");
@@ -368,6 +381,32 @@ public class ScriptEngine {
             failedScriptCache.add(clazz.getSimpleName());
             System.err.println("[ScriptEngine] Failed to instantiate script '" + clazz.getName() + "' on Entity '" + entity.name + "': " + e.getMessage());
         }
+    }
+
+    /** Source lookup order: explicit asset path, raw name, project Assets/Scripts, project Assets/ tree, working-dir Assets/Scripts. */
+    private static File locateScriptSource(String rawName, String sourcePathHint, String javaFileName) {
+        if (sourcePathHint != null && !sourcePathHint.trim().isEmpty()) {
+            File hint = new File(sourcePathHint.trim());
+            if (hint.isFile()) return hint;
+        }
+        File raw = new File(rawName);
+        if (raw.isFile()) return raw;
+
+        String root = projectAssetsRoot;
+        if (root != null) {
+            File direct = new File(root, "Scripts/" + javaFileName);
+            if (direct.isFile()) return direct;
+            try (var stream = java.nio.file.Files.walk(new File(root).toPath())) {
+                File found = stream.filter(java.nio.file.Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().equalsIgnoreCase(javaFileName))
+                    .map(java.nio.file.Path::toFile)
+                    .findFirst().orElse(null);
+                if (found != null) return found;
+            } catch (IOException ignored) {}
+        }
+
+        File alt = new File("Assets/Scripts/" + javaFileName);
+        return alt.isFile() ? alt : null;
     }
 
     private static String parsePackageDeclaration(File file) {

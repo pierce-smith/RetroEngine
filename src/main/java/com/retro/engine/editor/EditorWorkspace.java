@@ -16,6 +16,7 @@ import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.overlays.ContextMenuOverlay;
 import com.retro.engine.editor.ui.overlays.ModalDialogOverlay;
 import com.retro.engine.editor.ui.overlays.OverlaySystem;
+import com.retro.engine.editor.ui.overlays.ProjectLauncherOverlay;
 import com.retro.engine.editor.ui.panels.*;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.entity.EntitySpawner;
@@ -188,6 +189,29 @@ public class EditorWorkspace {
         InspectorPanel.resetScroll();
     }
 
+    // --- Active Project ---
+    public boolean hasActiveProject() { return assetDirectoryManager.hasActiveProject(); }
+    public String getActiveProjectPath() { return assetDirectoryManager.getActiveProjectPath(); }
+
+    /** Unbinds the active project (flushing its manifest) and resets the scene; the launcher takes over the UI. */
+    public void closeProject() {
+        sceneManager.newScene();
+        commandHistory.clear();
+        overlayManager.closeModal();
+        overlayManager.closeContextMenu();
+        overlayManager.closeDropdownMenu();
+        assetDirectoryManager.saveManifest();
+        assetDirectoryManager.clear();
+        ProjectLauncherOverlay.setStatus("", false);
+    }
+
+    /** Default directory for scene open dialogs: the active project's Assets/Scenes (or Assets/) folder. */
+    public String getProjectScenesDir() {
+        String assetsRoot = hasActiveProject() ? assetDirectoryManager.getProjectAssetsPath() : "Assets";
+        java.io.File scenes = new java.io.File(assetsRoot, "Scenes");
+        return (scenes.isDirectory() ? scenes : new java.io.File(assetsRoot)).getAbsolutePath() + java.io.File.separator;
+    }
+
     public List<AssetMeta> getAssetDirectory() { return assetDirectoryManager.getAssetDirectory(); }
     public String getCurrentFolderPath() { return assetDirectoryManager.getCurrentFolderPath(); }
     public String getActiveScenePath() { return sceneManager.getActiveScenePath(); }
@@ -200,6 +224,7 @@ public class EditorWorkspace {
 
     public void update(float deltaTime) {
         this.lastDeltaTime = deltaTime;
+        assetDirectoryManager.pollFileChanges();
         sceneManager.update(deltaTime);
     }
 
@@ -211,6 +236,12 @@ public class EditorWorkspace {
 
     public float[] generateUiVertices() {
         uiGeometryBuffer.reset();
+
+        // No bound project: the launcher replaces the entire editor UI
+        if (!hasActiveProject()) {
+            ProjectLauncherOverlay.render(uiGeometryBuffer, lastNdcX, lastNdcY);
+            return commitUiVertices();
+        }
 
         // Master dock layout: every panel below the menu bar is a docked, tabbed tile
         DockSpace.layout(windowWidth, windowHeight);
@@ -246,6 +277,10 @@ public class EditorWorkspace {
             ContextMenuOverlay.render(uiGeometryBuffer, overlayManager.getContextMenuNdcX(), overlayManager.getContextMenuNdcY(), overlayManager.getContextMenuItems());
         }
 
+        return commitUiVertices();
+    }
+
+    private float[] commitUiVertices() {
         int size = uiGeometryBuffer.getSize();
         if (cachedUiVertices.length < size) {
             cachedUiVertices = new float[size * 2];
@@ -288,7 +323,7 @@ public class EditorWorkspace {
             case ANIMATOR -> AnimatorGraphPanel.renderCanvas(uiGeometryBuffer, getActiveAnimatorController(), selectedStateName);
             case ANIMATOR_PARAMETERS -> AnimatorGraphPanel.renderParameters(uiGeometryBuffer, getActiveAnimatorController());
             case ANIMATOR_INSPECTOR -> AnimatorGraphPanel.renderInspector(uiGeometryBuffer, getActiveAnimatorController(), selectedStateName, selectedTransition);
-            case ASSETS -> AssetBrowserPanel.render(uiGeometryBuffer, assetDirectoryManager.getAssetDirectory(), assetDirectoryManager.getCurrentFolderPath());
+            case ASSETS -> AssetBrowserPanel.render(uiGeometryBuffer, assetDirectoryManager.getAssetDirectory(), assetDirectoryManager.getCurrentFolderPath(), assetDirectoryManager.getActiveProjectPath());
             case CONSOLE -> EngineConsolePanel.renderConsole(uiGeometryBuffer);
         }
     }
@@ -301,6 +336,7 @@ public class EditorWorkspace {
         overlayManager.closeModal();
         overlayManager.closeContextMenu();
         overlayManager.closeDropdownMenu();
+        assetDirectoryManager.saveManifest();
         assetDirectoryManager.clear();
         if (commandHistory != null) {
             commandHistory.clear();

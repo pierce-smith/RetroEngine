@@ -47,8 +47,9 @@ public class AssetBrowserPanel {
         MESH(EditorTheme.ORANGE, "MESH", "3D MESH", "SPAWN"),
         TEXTURE(EditorTheme.GREEN, "TEX", "TEXTURE", "LINK"),
         AUDIO(EditorTheme.PINK, "AUDIO", "AUDIO CLIP", null),
-        SCENE(EditorTheme.ACCENT, "SCENE", "SCENE", null),
+        SCENE(EditorTheme.ACCENT, "SCENE", "SCENE", "OPEN"),
         SCRIPT(EditorTheme.YELLOW, "JAVA", "SCRIPT", "LINK"),
+        MATERIAL(EditorTheme.RED, "MAT", "MATERIAL", null),
         OTHER(EditorTheme.GRAPHITE, "FILE", "FILE", null);
 
         final int color;
@@ -73,6 +74,7 @@ public class AssetBrowserPanel {
                 case AUDIO -> AUDIO;
                 case SCENE -> SCENE;
                 case SCRIPT -> SCRIPT;
+                case MATERIAL -> MATERIAL;
                 default -> OTHER;
             };
         }
@@ -88,10 +90,18 @@ public class AssetBrowserPanel {
     }
 
     public static void render(UIGeometryBatch.Buffer buffer, List<AssetMeta> assetDirectory, String currentFolderPath) {
+        render(buffer, assetDirectory, currentFolderPath, "");
+    }
+
+    /**
+     * Renders the browser for the active project. The breadcrumb root is the project's Assets/ folder, and
+     * only entries mirrored from that folder on disk are ever passed in.
+     */
+    public static void render(UIGeometryBatch.Buffer buffer, List<AssetMeta> assetDirectory, String currentFolderPath, String projectRootPath) {
         String activePath = (currentFolderPath != null) ? currentFolderPath : "";
 
         UIGeometryBatch.addQuad(buffer, -1.0f, -1.0f, 1.0f, HEADER_Y0, EditorTheme.SURFACE, 1.0f);
-        renderHeader(buffer, activePath);
+        renderHeader(buffer, activePath, projectRootLabel(projectRootPath));
 
         // Zero-allocation loop replacing stream().filter().toList()
         visibleAssetsScratch.clear();
@@ -140,7 +150,12 @@ public class AssetBrowserPanel {
     // Header
     // ------------------------------------------------------------------------------------------
 
-    private static void renderHeader(UIGeometryBatch.Buffer buffer, String activePath) {
+    /** The browser is rooted at the project's Assets/ folder; nothing above it is ever shown. */
+    private static String projectRootLabel(String projectRootPath) {
+        return "ASSETS";
+    }
+
+    private static void renderHeader(UIGeometryBatch.Buffer buffer, String activePath, String rootLabel) {
         UIGeometryBatch.addQuad(buffer, -1.0f, HEADER_Y0, 1.0f, HEADER_Y1, EditorTheme.BACKGROUND, 1.0f);
         UIGeometryBatch.addQuad(buffer, -1.0f, HEADER_Y0, 1.0f, HEADER_Y0 + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
 
@@ -151,7 +166,7 @@ public class AssetBrowserPanel {
         float maxX = NEW_FOLDER_X0 - 0.03f;
 
         crumbSb.setLength(0);
-        crumbSb.append("ASSETS");
+        crumbSb.append(rootLabel);
         int lastSep = activePath.lastIndexOf('/');
         int currentStart = 0;
         if (!activePath.isEmpty()) {

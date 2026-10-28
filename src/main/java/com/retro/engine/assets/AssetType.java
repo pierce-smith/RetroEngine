@@ -7,6 +7,7 @@ public enum AssetType {
     SCENE,
     SCRIPT,
     PREFAB,
+    MATERIAL,
     FOLDER,
     UNKNOWN
 }

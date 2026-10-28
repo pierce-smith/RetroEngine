@@ -15,7 +15,6 @@ import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.panels.MainMenuBar;
 import com.retro.engine.editor.ui.panels.InspectorPanel;
 
-import java.io.File;
 import java.lang.reflect.Field;
 import java.util.List;
 
@@ -58,20 +57,13 @@ public class MainMenuBarInputDelegate {
                 if (itemIndex == 0) {
                     UISoundPlayer.play(UISound.CLICK);
                     manager.getSceneManager().newScene();
-                    manager.getAssetDatabase().clear();
-                    manager.getAssetDatabase().scanWorkspaceDirectory("Assets");
                 } else if (itemIndex == 1) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
-                    String defaultDir = new File("Assets/Scenes").getAbsolutePath();
+                    String defaultDir = manager.getProjectScenesDir();
                     String importedPath = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.rscene)", "rscene");
                     if (importedPath != null && !importedPath.trim().isEmpty()) {
                         UISoundPlayer.play(UISound.SPAWN);
-                        manager.getAssetDatabase().clear();
-                        manager.getAssetDatabase().scanWorkspaceDirectory("Assets");
-                        var data = manager.getSceneManager().loadSceneFromFile(importedPath, manager.getAssetDatabase());
-                        if (data != null && data.assetDirectory() != null && !data.assetDirectory().isEmpty()) {
-                            manager.getAssetDatabase().restoreAssetDirectory(data.assetDirectory());
-                        }
+                        manager.getSceneManager().loadSceneFromFile(importedPath, manager.getAssetDatabase());
                     } else {
                         UISoundPlayer.play(UISound.CLOSE_MODAL);
                     }
@@ -79,6 +71,11 @@ public class MainMenuBarInputDelegate {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     manager.getSceneManager().promptSaveSceneWithNativeDialog(manager.getAssetDatabase().getMutableAssetDirectory(), manager.getAssetDatabase());
                 } else if (itemIndex == 3) {
+                    // Unbind the project and return to the launcher, which clears and re-scans on the next open
+                    UISoundPlayer.play(UISound.CLOSE_MODAL);
+                    manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
+                    manager.closeProject();
+                } else if (itemIndex == 4) {
                     // Quit: same path as the OS-level ⌘Q / Alt + F4 (window close request)
                     UISoundPlayer.play(UISound.CLICK);
                     if (manager.getWindowHandle() != 0L) glfwSetWindowShouldClose(manager.getWindowHandle(), true);

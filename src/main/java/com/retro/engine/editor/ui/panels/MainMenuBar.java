@@ -69,7 +69,7 @@ public class MainMenuBar {
 
     public static int dropdownItemCount(DropdownMenu menu) {
         return switch (menu) {
-            case FILE -> 4;
+            case FILE -> 5;
             case EDIT -> 3;
             case ENTITY -> 4;
             case VIEW -> 3;
@@ -203,7 +203,9 @@ public class MainMenuBar {
                 renderDropdownItem(buffer, menu, 1, hover, "Open Scene...", PlatformShortcuts.OPEN.label(), true);
                 renderDropdownItem(buffer, menu, 2, hover, "Save Scene...", PlatformShortcuts.SAVE.label(), true);
                 renderSeparator(buffer, menu, 3);
-                renderDropdownItem(buffer, menu, 3, hover, PlatformShortcuts.IS_MAC ? "Quit Retro Engine" : "Exit", PlatformShortcuts.QUIT.label(), true);
+                renderDropdownItem(buffer, menu, 3, hover, "Switch Project...", null, true);
+                renderSeparator(buffer, menu, 4);
+                renderDropdownItem(buffer, menu, 4, hover, PlatformShortcuts.IS_MAC ? "Quit Retro Engine" : "Exit", PlatformShortcuts.QUIT.label(), true);
             }
             case EDIT -> {
                 renderDropdownItem(buffer, menu, 0, hover, "Undo", PlatformShortcuts.UNDO.label(), commandHistory.canUndo());

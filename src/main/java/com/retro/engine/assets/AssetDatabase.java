@@ -5,32 +5,64 @@ import com.retro.engine.assets.importers.MeshImporter;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.scene.serialization.SceneSerializer;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * Registry managing decoupled virtual asset directory entries, 128-bit UUID indirection mappings,
- * and .rmeta sidecar file synchronization without modifying physical disk directories.
+ * Disk-mirrored asset registry for the active project's Assets/ folder.
  *
- * Hardened with CopyOnWriteArrayList and ConcurrentHashMap for high-performance multi-threaded
- * asset queries and Virtual Thread streaming lookups.
+ * The Assets/ directory on disk is the single source of truth: every entry (folders included) is a real
+ * file or directory beneath it, and every browser operation (new folder, rename, delete, import) acts on
+ * disk first, then re-syncs. Assets/ is the browser root; nothing outside it is ever registered or reachable.
+ *
+ * 128-bit UUIDs persist in {@code <project>/.retro/asset_registry.bin}, keyed by project-relative path, so
+ * scene references survive restarts. Only {@link #openProject(String)} clears and re-scans the registry;
+ * scene loads never touch it. A background watcher picks up changes made outside the editor.
+ *
+ * Hardened with CopyOnWriteArrayList and ConcurrentHashMap for multi-threaded asset queries and
+ * Virtual Thread streaming lookups.
  */
 public class AssetDatabase {
 
-    private final List<AssetMeta> assetDirectory = new CopyOnWriteArrayList<>();
+    public static final String ASSETS_DIR = "Assets";
+    public static final String COOKED_DIR = "Cooked";
+    public static final String INTERNAL_DIR = ".retro";
+    public static final String MANIFEST_FILE = "asset_registry.bin";
+
+    private static final int MANIFEST_MAGIC = 0x52524547; // 'RREG'
+    private static final int MANIFEST_VERSION = 3;        // v3: disk-mirrored, every path project-relative
+    private static final long WATCH_INTERVAL_MS = 1000L;
+
+    // Swapped wholesale on each re-sync so readers never observe a half-built directory
+    private volatile List<AssetMeta> assetDirectory = new CopyOnWriteArrayList<>();
     private final Map<String, AssetMeta> uuidToAssetMap = new ConcurrentHashMap<>();
     private final Map<String, String> pathToUuidMap = new ConcurrentHashMap<>();
 
+    // Manifest UUIDs (lowercase project-relative path -> uuid) applied to files as the scan discovers them
+    private final Map<String, String> manifestUuidSeed = new HashMap<>();
+
     private String currentFolderPath = "";
     private String activeProjectPath = "";
+
+    private volatile boolean filesChangedOnDisk = false;
+    private Thread watcherThread;
 
     public List<AssetMeta> getAssetDirectory() {
         return Collections.unmodifiableList(assetDirectory);
@@ -40,6 +72,7 @@ public class AssetDatabase {
         return assetDirectory;
     }
 
+    /** Current browser folder, relative to Assets/ ("" is the Assets/ root). */
     public String getCurrentFolderPath() {
         return currentFolderPath;
     }
@@ -48,11 +81,32 @@ public class AssetDatabase {
         return activeProjectPath;
     }
 
+    public boolean hasActiveProject() {
+        return activeProjectPath != null && !activeProjectPath.isEmpty();
+    }
+
+    /** Absolute path of the active project's Assets/ folder, or "" when no project is open. */
+    public String getProjectAssetsPath() {
+        return hasActiveProject() ? activeProjectPath + "/" + ASSETS_DIR : "";
+    }
+
+    /** Navigates the browser; only "" (Assets/ root) or an existing folder beneath it is accepted. */
     public void setCurrentFolderPath(String path) {
-        final String cleanPath = (path != null) ? path.trim() : "";
-        assert (cleanPath.isEmpty() || assetDirectory.stream().anyMatch(a -> a.type == AssetType.FOLDER && a.absolutePath.equalsIgnoreCase(cleanPath)))
-            : "[FATAL] AssetDatabase currentFolderPath set to non-existent virtual folder: " + cleanPath;
+        String cleanPath = (path != null) ? normalizePath(path) : "";
+        while (cleanPath.endsWith("/")) cleanPath = cleanPath.substring(0, cleanPath.length() - 1);
+        if (!cleanPath.isEmpty() && findFolder(cleanPath) == null) {
+            System.err.println("[AssetDatabase] Ignoring navigation outside Assets/ or to a missing folder: " + cleanPath);
+            return;
+        }
         this.currentFolderPath = cleanPath;
+        saveManifest();
+    }
+
+    public void navigateUpFolder() {
+        if (currentFolderPath == null || currentFolderPath.isEmpty()) return; // Assets/ is the hard root
+        int lastSlash = currentFolderPath.lastIndexOf('/');
+        currentFolderPath = (lastSlash != -1) ? currentFolderPath.substring(0, lastSlash) : "";
+        saveManifest();
     }
 
     // --- 128-BIT UUID REGISTRY LOOKUPS ---
@@ -87,39 +141,7 @@ public class AssetDatabase {
         if (resolvedMesh != null && resolvedMesh.exists()) {
             return resolvedMesh.getAbsolutePath();
         }
-        if (meta.type == AssetType.SCRIPT) {
-            File resolvedScript = resolveScriptFile(meta.absolutePath != null ? meta.absolutePath : meta.name);
-            if (resolvedScript != null && resolvedScript.exists()) {
-                return resolvedScript.getAbsolutePath();
-            }
-        }
         return meta.absolutePath;
-    }
-
-    private File resolveScriptFile(String rawPathOrName) {
-        if (rawPathOrName == null || rawPathOrName.trim().isEmpty()) return null;
-        File direct = new File(rawPathOrName);
-        if (direct.exists()) return direct;
-
-        String baseName = direct.getName();
-        final String targetFileName = baseName.toLowerCase().endsWith(".java") ? baseName : baseName + ".java";
-
-        String searchRoot = (activeProjectPath != null && !activeProjectPath.isEmpty()) ? activeProjectPath : "Assets";
-        File rootDir = new File(searchRoot);
-        if (rootDir.exists() && rootDir.isDirectory()) {
-            try {
-                final Path rootPath = rootDir.toPath();
-                Path found = Files.walk(rootPath)
-                    .filter(Files::isRegularFile)
-                    .filter(p -> p.getFileName().toString().equalsIgnoreCase(targetFileName))
-                    .findFirst()
-                    .orElse(null);
-                if (found != null) {
-                    return found.toFile();
-                }
-            } catch (IOException ignored) {}
-        }
-        return null;
     }
 
     public String resolveUuidByPath(String path) {
@@ -143,218 +165,206 @@ public class AssetDatabase {
         return null;
     }
 
-    public void registerAssetUuid(AssetMeta asset) {
-        if (asset == null) return;
-
-        asset.ensureMetaSidecar();
-
-        if (asset.uuid == null || asset.uuid.trim().isEmpty()) return;
-
-        uuidToAssetMap.put(asset.uuid, asset);
-        if (asset.absolutePath != null && !asset.absolutePath.trim().isEmpty()) {
-            String norm = normalizePath(asset.absolutePath).toLowerCase();
-            pathToUuidMap.put(norm, asset.uuid);
-
-            String sanitized = SceneSerializer.sanitizeAssetPath(asset.absolutePath).toLowerCase();
-            if (!sanitized.isEmpty()) {
-                pathToUuidMap.put(sanitized, asset.uuid);
-            }
-
-            String fileName = new File(norm).getName().toLowerCase();
-            if (!fileName.isEmpty()) {
-                pathToUuidMap.put(fileName, asset.uuid);
-            }
-        }
+    private static void indexAsset(AssetMeta asset, Map<String, AssetMeta> byUuid, Map<String, String> byPath) {
+        byUuid.put(asset.uuid, asset);
+        if (asset.type == AssetType.FOLDER || asset.absolutePath == null || asset.absolutePath.isEmpty()) return;
+        String norm = asset.absolutePath.replace('\\', '/').toLowerCase();
+        byPath.put(norm, asset.uuid);
+        String sanitized = SceneSerializer.sanitizeAssetPath(asset.absolutePath).toLowerCase();
+        if (!sanitized.isEmpty()) byPath.putIfAbsent(sanitized, asset.uuid);
+        String fileName = new File(norm).getName();
+        if (!fileName.isEmpty()) byPath.putIfAbsent(fileName, asset.uuid);
     }
 
-    public void unregisterAssetUuid(AssetMeta asset) {
-        if (asset == null) return;
-        if (asset.uuid != null) uuidToAssetMap.remove(asset.uuid);
-        if (asset.absolutePath != null && !asset.absolutePath.trim().isEmpty()) {
-            String norm = normalizePath(asset.absolutePath).toLowerCase();
-            pathToUuidMap.remove(norm);
-            String fileName = new File(norm).getName().toLowerCase();
-            if (!fileName.isEmpty()) {
-                pathToUuidMap.remove(fileName);
-            }
-        }
+    // --- PROJECT BINDING ---
+
+    /**
+     * Binds the registry to a project root: clears all state, ensures Assets/ and .retro/ exist, seeds UUIDs
+     * from .retro/asset_registry.bin, mirrors Assets/ from disk, and starts the folder watcher.
+     * This is the only entry point that clears the registry.
+     */
+    public boolean openProject(String projectRootPath) {
+        if (projectRootPath == null || projectRootPath.trim().isEmpty()) return false;
+        File root = new File(projectRootPath.trim()).getAbsoluteFile();
+        if (!root.isDirectory()) return false;
+
+        clear();
+        this.activeProjectPath = normalizePath(root.getAbsolutePath());
+        new File(root, ASSETS_DIR).mkdirs();
+        new File(root, INTERNAL_DIR).mkdirs();
+
+        String savedFolder = loadManifestSeed();
+        rescanProjectAssets();
+        manifestUuidSeed.clear();
+        if (!savedFolder.isEmpty() && findFolder(savedFolder) != null) currentFolderPath = savedFolder;
+        saveManifest();
+
+        com.retro.engine.scripting.ScriptEngine.setProjectAssetsRoot(getProjectAssetsPath());
+        startWatching();
+        System.out.println("[AssetDatabase] Bound to project " + activeProjectPath + " (" + assetDirectory.size() + " entries under Assets/).");
+        return true;
     }
 
-    // --- DECOUPLED VIRTUAL DIRECTORY & WORKSPACE MANAGEMENT ---
+    /**
+     * Re-syncs the registry with the Assets/ tree on disk. Known paths keep their UUIDs; new files and folders
+     * are added; anything no longer on disk is dropped. The result is ordered folders-first, then by name.
+     */
+    public void rescanProjectAssets() {
+        if (!hasActiveProject()) return;
+        File assetsDir = new File(getProjectAssetsPath());
+        if (!assetsDir.isDirectory()) return;
 
-    public void navigateUpFolder() {
-        if (currentFolderPath == null || currentFolderPath.isEmpty()) return;
-        int lastSlash = currentFolderPath.lastIndexOf('/');
-        if (lastSlash != -1) {
-            currentFolderPath = currentFolderPath.substring(0, lastSlash);
-        } else {
-            currentFolderPath = "";
-        }
-    }
-
-    public void createNewFolder() {
-        int count = 1;
-        for (AssetMeta entry : assetDirectory) {
-            if (entry.type == AssetType.FOLDER && entry.parentFolderPath.equalsIgnoreCase(currentFolderPath)) {
-                count++;
-            }
-        }
-        String defaultName = "New_Folder_" + count;
-        String inputName = NativeFileDialog.promptInput("Create New Folder", "Enter folder name:", defaultName);
-        if (inputName == null) return;
-        String folderName = !inputName.trim().isEmpty() ? inputName.trim() : defaultName;
-
-        String virtualPath = currentFolderPath.isEmpty() ? folderName : currentFolderPath + "/" + folderName;
-        AssetMeta folderMeta = new AssetMeta(folderName, virtualPath, AssetType.FOLDER, currentFolderPath);
-        assetDirectory.add(folderMeta);
-        registerAssetUuid(folderMeta);
-        System.out.println("[AssetDatabase] Created new virtual folder: " + folderName + " in " + (currentFolderPath.isEmpty() ? "Assets" : currentFolderPath));
-    }
-
-    public void restoreAssetDirectory(List<AssetMeta> entries) {
-        if (entries == null) return;
-        for (final AssetMeta entry : entries) {
-            if (entry == null) continue;
-            boolean exists = assetDirectory.stream().anyMatch(e ->
-                (e.absolutePath != null && e.absolutePath.equalsIgnoreCase(entry.absolutePath)) ||
-                (e.name != null && e.name.equalsIgnoreCase(entry.name) && e.type == entry.type && e.parentFolderPath.equalsIgnoreCase(entry.parentFolderPath))
-            );
-            if (!exists) {
-                assetDirectory.add(entry);
-                registerAssetUuid(entry);
-            }
-        }
-    }
-
-    public void addAssetDirectoryIfNotExists(String absolutePath, AssetType type) {
-        addAssetDirectoryIfNotExists(absolutePath, type, currentFolderPath);
-    }
-
-    public void addAssetDirectoryIfNotExists(String absolutePath, AssetType type, String parentFolder) {
-        if (absolutePath == null || absolutePath.trim().isEmpty()) return;
-
-        String cleanPath = normalizePath(absolutePath);
-        File file = new File(cleanPath);
-        String fileName = file.getName();
-        String parentPath = (parentFolder != null) ? parentFolder : "";
-
-        if (type == AssetType.UNKNOWN || type == null) {
-            String ext = getFileExtension(fileName).toLowerCase();
-            type = switch (ext) {
-                case "obj", "fbx", "gltf", "glb" -> AssetType.MESH_3D;
-                case "png", "jpg", "jpeg", "tga" -> AssetType.TEXTURE;
-                case "wav", "mp3", "ogg" -> AssetType.AUDIO;
-                case "rscene", "scene" -> AssetType.SCENE;
-                case "java" -> AssetType.SCRIPT;
-                default -> AssetType.UNKNOWN;
-            };
+        Map<String, AssetMeta> previous = new HashMap<>();
+        for (AssetMeta meta : assetDirectory) {
+            previous.put(normalizePath(meta.absolutePath).toLowerCase(), meta);
         }
 
-        for (AssetMeta entry : assetDirectory) {
-            if (entry.absolutePath != null) {
-                String entryClean = normalizePath(entry.absolutePath);
-                if (entryClean.equalsIgnoreCase(cleanPath) ||
-                    entryClean.endsWith("/" + cleanPath) ||
-                    cleanPath.endsWith("/" + entryClean) ||
-                    (entry.name != null && entry.name.equalsIgnoreCase(fileName) && entry.type == type && entry.parentFolderPath.equalsIgnoreCase(parentPath))) {
-                    if (entry.type == AssetType.UNKNOWN && type != AssetType.UNKNOWN) {
-                        entry.type = type;
-                    }
-                    registerAssetUuid(entry);
+        List<AssetMeta> next = new ArrayList<>();
+        final Path rootPath = assetsDir.toPath();
+        try (var stream = Files.walk(rootPath)) {
+            stream.forEach(path -> {
+                if (path.equals(rootPath)) return;
+                String relPath = normalizePath(rootPath.relativize(path).toString());
+                if (isIgnoredRelativePath(relPath)) return;
+
+                boolean isDir = Files.isDirectory(path);
+                String abs = normalizePath(path.toAbsolutePath().toString());
+                String name = path.getFileName().toString();
+                int lastSlash = relPath.lastIndexOf('/');
+                String parent = (lastSlash != -1) ? relPath.substring(0, lastSlash) : "";
+                AssetType type = isDir ? AssetType.FOLDER : classifyFile(name);
+
+                AssetMeta meta = previous.get(abs.toLowerCase());
+                if (meta != null) {
+                    meta.name = name;
+                    meta.absolutePath = abs;
+                    meta.parentFolderPath = parent;
+                    meta.type = type;
+                } else {
+                    String seededUuid = manifestUuidSeed.get((ASSETS_DIR + "/" + relPath).toLowerCase());
+                    meta = new AssetMeta(seededUuid, name, abs, type, parent);
+                }
+                next.add(meta);
+            });
+        } catch (IOException | UncheckedIOException e) {
+            System.err.println("[AssetDatabase] Assets/ scan failed: " + e.getMessage());
+            return;
+        }
+
+        next.sort(Comparator
+            .comparing((AssetMeta m) -> m.parentFolderPath.toLowerCase())
+            .thenComparing(m -> m.type != AssetType.FOLDER)
+            .thenComparing(m -> m.name.toLowerCase()));
+
+        Map<String, AssetMeta> newByUuid = new HashMap<>();
+        Map<String, String> newByPath = new HashMap<>();
+        for (AssetMeta meta : next) indexAsset(meta, newByUuid, newByPath);
+
+        this.assetDirectory = new CopyOnWriteArrayList<>(next);
+        uuidToAssetMap.putAll(newByUuid);
+        uuidToAssetMap.keySet().retainAll(newByUuid.keySet());
+        pathToUuidMap.putAll(newByPath);
+        pathToUuidMap.keySet().retainAll(newByPath.keySet());
+
+        // The browser can never sit in a folder that no longer exists on disk
+        while (!currentFolderPath.isEmpty() && findFolder(currentFolderPath) == null) {
+            int lastSlash = currentFolderPath.lastIndexOf('/');
+            currentFolderPath = (lastSlash != -1) ? currentFolderPath.substring(0, lastSlash) : "";
+        }
+        saveManifest();
+    }
+
+    private static boolean isIgnoredRelativePath(String relPath) {
+        String lowerRel = relPath.toLowerCase();
+        // Hidden files/dirs (.DS_Store, .git), legacy sidecars, and in-flight temp files
+        return lowerRel.startsWith(".") || lowerRel.contains("/.") ||
+               lowerRel.endsWith(".rmeta") || lowerRel.endsWith(".meta") || lowerRel.endsWith(".tmp");
+    }
+
+    // --- LIVE ASSETS/ FOLDER WATCHER ---
+
+    /**
+     * Polls the Assets/ tree on a virtual thread (portable; macOS WatchService is itself a slow poller) and
+     * flags changes. The re-sync runs on the main thread via {@link #pollFileChanges()} so registry mutation
+     * never races the UI.
+     */
+    private void startWatching() {
+        stopWatching();
+        final String assetsRoot = getProjectAssetsPath();
+        final long[] lastSignature = { computeTreeSignature(assetsRoot) };
+        watcherThread = Thread.ofVirtual().name("asset-folder-watcher").start(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    Thread.sleep(WATCH_INTERVAL_MS);
+                } catch (InterruptedException e) {
                     return;
                 }
-            }
-        }
-        AssetMeta newAsset = new AssetMeta(fileName, absolutePath, type, parentPath);
-        assetDirectory.add(newAsset);
-        registerAssetUuid(newAsset);
-    }
-
-    public void scanWorkspaceDirectory(String rootDirPath) {
-        if (rootDirPath == null || rootDirPath.trim().isEmpty()) return;
-        File rootDir = new File(rootDirPath);
-        if (!rootDir.exists() || !rootDir.isDirectory()) return;
-
-        this.activeProjectPath = normalizePath(rootDirPath);
-        System.out.println("[AssetDatabase] Scanning workspace directory for raw assets & .rmeta sidecars: " + activeProjectPath);
-
-        try {
-            final Path rootPath = rootDir.toPath();
-            Files.walk(rootPath)
-                .filter(Files::isRegularFile)
-                .forEach(path -> {
-                    String relPath = normalizePath(rootPath.relativize(path).toString());
-                    String lowerRel = relPath.toLowerCase();
-
-                    // Filter out internal sidecars, git, and engine/editor internals
-                    if (lowerRel.endsWith(".rmeta") || lowerRel.endsWith(".meta") ||
-                        lowerRel.startsWith(".git") || lowerRel.contains("/.git") ||
-                        lowerRel.startsWith("editor/") || lowerRel.contains("/editor/") ||
-                        lowerRel.startsWith("engine/") || lowerRel.contains("/engine/")) {
-                        return;
-                    }
-
-                    registerDiscoveredFile(path, relPath);
-                });
-        } catch (IOException e) {
-            System.err.println("[AssetDatabase] Workspace scan failed: " + e.getMessage());
-        }
-    }
-
-    private void registerDiscoveredFile(Path filePath, String relPath) {
-        String absPath = filePath.toAbsolutePath().toString();
-        String name = filePath.getFileName().toString();
-        String ext = getFileExtension(name).toLowerCase();
-
-        int lastSlash = relPath.lastIndexOf('/');
-        String parentFolder = (lastSlash != -1) ? relPath.substring(0, lastSlash) : "";
-
-        AssetType type = switch (ext) {
-            case "obj", "fbx", "gltf", "glb" -> AssetType.MESH_3D;
-            case "png", "jpg", "jpeg", "tga" -> AssetType.TEXTURE;
-            case "wav", "mp3", "ogg" -> AssetType.AUDIO;
-            case "rscene", "scene" -> AssetType.SCENE;
-            case "java" -> AssetType.SCRIPT;
-            default -> AssetType.UNKNOWN;
-        };
-
-        if (type != AssetType.UNKNOWN) {
-            addAssetDirectoryIfNotExists(absPath, type, parentFolder);
-        }
-    }
-
-    public void renameFolder(AssetMeta folder, String newName) {
-        if (folder == null || folder.type != AssetType.FOLDER || newName == null || newName.trim().isEmpty()) return;
-
-        String oldFolderName = folder.name;
-        String cleanNewName = newName.trim();
-        if (cleanNewName.equalsIgnoreCase(oldFolderName)) return;
-
-        String parentPath = (folder.parentFolderPath != null) ? folder.parentFolderPath : "";
-        String oldVirtualPath = parentPath.isEmpty() ? oldFolderName : parentPath + "/" + oldFolderName;
-        String newVirtualPath = parentPath.isEmpty() ? cleanNewName : parentPath + "/" + cleanNewName;
-
-        unregisterAssetUuid(folder);
-        folder.name = cleanNewName;
-        folder.absolutePath = newVirtualPath;
-        registerAssetUuid(folder);
-
-        for (AssetMeta entry : assetDirectory) {
-            if (entry.parentFolderPath != null) {
-                if (entry.parentFolderPath.equalsIgnoreCase(oldVirtualPath)) {
-                    entry.parentFolderPath = newVirtualPath;
-                } else if (entry.parentFolderPath.toLowerCase().startsWith(oldVirtualPath.toLowerCase() + "/")) {
-                    entry.parentFolderPath = newVirtualPath + entry.parentFolderPath.substring(oldVirtualPath.length());
+                long signature = computeTreeSignature(assetsRoot);
+                if (signature != lastSignature[0]) {
+                    lastSignature[0] = signature;
+                    filesChangedOnDisk = true;
                 }
             }
-        }
+        });
+    }
 
-        if (currentFolderPath.equalsIgnoreCase(oldVirtualPath)) {
-            currentFolderPath = newVirtualPath;
-        } else if (currentFolderPath.toLowerCase().startsWith(oldVirtualPath.toLowerCase() + "/")) {
-            currentFolderPath = newVirtualPath + currentFolderPath.substring(oldVirtualPath.length());
+    private void stopWatching() {
+        if (watcherThread != null) {
+            watcherThread.interrupt();
+            watcherThread = null;
         }
-        System.out.println("[AssetDatabase] Renamed virtual folder '" + oldFolderName + "' to '" + cleanNewName + "'");
+        filesChangedOnDisk = false;
+    }
+
+    private static long computeTreeSignature(String root) {
+        File rootDir = new File(root);
+        if (!rootDir.isDirectory()) return 0L;
+        long sig = 1125899906842597L;
+        Path rootPath = rootDir.toPath();
+        try (var stream = Files.walk(rootPath)) {
+            for (Path p : (Iterable<Path>) stream.sorted()::iterator) {
+                File f = p.toFile();
+                sig = 31 * sig + rootPath.relativize(p).toString().hashCode();
+                sig = 31 * sig + (f.isFile() ? f.length() ^ f.lastModified() : 7L);
+            }
+        } catch (IOException | UncheckedIOException ignored) {
+            // Files vanishing mid-walk: report a change so the next poll settles
+            return sig ^ System.nanoTime();
+        }
+        return sig;
+    }
+
+    /** Main-thread hook: re-syncs with Assets/ if the watcher saw files added, removed, or modified. */
+    public void pollFileChanges() {
+        if (!filesChangedOnDisk || !hasActiveProject()) return;
+        filesChangedOnDisk = false;
+        rescanProjectAssets();
+    }
+
+    // --- DISK-BACKED BROWSER OPERATIONS ---
+
+    public void createNewFolder() {
+        if (!hasActiveProject()) return;
+        File parentDir = currentDirectory();
+        String defaultName = uniqueChild(parentDir, "New Folder").getName();
+        String inputName = NativeFileDialog.promptInput("Create New Folder", "Enter folder name:", defaultName);
+        if (inputName == null) return;
+        String folderName = inputName.trim().isEmpty() ? defaultName : inputName.trim();
+        if (!isValidName(folderName)) {
+            NativeFileDialog.showError("Create New Folder", "Invalid folder name: " + folderName);
+            return;
+        }
+        File dir = new File(parentDir, folderName);
+        if (dir.exists()) {
+            NativeFileDialog.showError("Create New Folder", "An item with that name already exists.");
+            return;
+        }
+        if (!dir.mkdirs()) {
+            NativeFileDialog.showError("Create New Folder", "Could not create folder on disk.");
+            return;
+        }
+        rescanProjectAssets();
+        System.out.println("[AssetDatabase] Created folder " + toProjectRelative(dir.getAbsolutePath()));
     }
 
     public void promptRenameFolder(AssetMeta folder) {
@@ -365,80 +375,397 @@ public class AssetDatabase {
         }
     }
 
+    public void renameFolder(AssetMeta folder, String newName) {
+        if (folder == null || folder.type != AssetType.FOLDER || newName == null) return;
+        String oldRel = relativePathOf(folder);
+        String parent = folder.parentFolderPath;
+        if (renameOnDisk(folder, newName.trim(), "Rename Folder") && currentFolderPath != null) {
+            String newRel = parent.isEmpty() ? newName.trim() : parent + "/" + newName.trim();
+            if (currentFolderPath.equalsIgnoreCase(oldRel)) {
+                currentFolderPath = newRel;
+            } else if (currentFolderPath.toLowerCase().startsWith(oldRel.toLowerCase() + "/")) {
+                currentFolderPath = newRel + currentFolderPath.substring(oldRel.length());
+            }
+            rescanProjectAssets();
+        }
+    }
+
     public void promptRenameAsset(AssetMeta asset) {
         if (asset == null || asset.type == AssetType.FOLDER) return;
-        String input = NativeFileDialog.promptInput("Rename Asset", "Enter new asset name:", asset.name);
-        if (input != null && !input.trim().isEmpty()) {
-            unregisterAssetUuid(asset);
-            asset.name = input.trim();
-            registerAssetUuid(asset);
-            System.out.println("[AssetDatabase] Renamed virtual asset entry to '" + asset.name + "'");
+        String input = NativeFileDialog.promptInput("Rename Asset", "Enter new file name:", asset.name);
+        if (input == null || input.trim().isEmpty()) return;
+
+        String newName = input.trim();
+        String ext = fullExtension(asset.name);
+        if (!ext.isEmpty() && !newName.toLowerCase().endsWith(ext.toLowerCase())) {
+            newName += ext; // keep the file type when the user types a bare name
+        }
+        if (renameOnDisk(asset, newName, "Rename Asset")) {
+            rescanProjectAssets();
         }
     }
 
-    public void deleteFolder(AssetMeta folder) {
-        if (folder == null || folder.type != AssetType.FOLDER) return;
+    /** Moves a file or folder to a sibling name, rewriting registry paths in place so UUIDs follow the move. */
+    private boolean renameOnDisk(AssetMeta asset, String newName, String dialogTitle) {
+        if (newName.equals(asset.name)) return false;
+        if (!isValidName(newName)) {
+            NativeFileDialog.showError(dialogTitle, "Invalid name: " + newName);
+            return false;
+        }
+        File source = new File(asset.absolutePath);
+        File target = new File(source.getParentFile(), newName);
+        if (!isInsideAssets(source) || !isInsideAssets(target)) return false;
+        if (target.exists() && !target.getAbsolutePath().equalsIgnoreCase(source.getAbsolutePath())) {
+            NativeFileDialog.showError(dialogTitle, "An item with that name already exists.");
+            return false;
+        }
+        try {
+            Files.move(source.toPath(), target.toPath());
+        } catch (IOException e) {
+            NativeFileDialog.showError(dialogTitle, "Rename failed: " + e.getMessage());
+            return false;
+        }
 
-        String parentPath = (folder.parentFolderPath != null) ? folder.parentFolderPath : "";
-        String folderVirtualPath = parentPath.isEmpty() ? folder.name : parentPath + "/" + folder.name;
-
-        for (AssetMeta entry : assetDirectory) {
-            if (entry.parentFolderPath != null && entry.parentFolderPath.equalsIgnoreCase(folderVirtualPath)) {
-                entry.parentFolderPath = parentPath;
+        String oldAbs = normalizePath(source.getAbsolutePath());
+        String newAbs = normalizePath(target.getAbsolutePath());
+        for (AssetMeta meta : assetDirectory) {
+            String p = normalizePath(meta.absolutePath);
+            if (p.equalsIgnoreCase(oldAbs)) {
+                meta.absolutePath = newAbs;
+            } else if (p.toLowerCase().startsWith(oldAbs.toLowerCase() + "/")) {
+                meta.absolutePath = newAbs + p.substring(oldAbs.length());
             }
         }
-
-        unregisterAssetUuid(folder);
-        assetDirectory.remove(folder);
-
-        if (currentFolderPath.equalsIgnoreCase(folderVirtualPath)) {
-            currentFolderPath = parentPath;
-        }
-        System.out.println("[AssetDatabase] Deleted virtual folder '" + folder.name + "' (reparented contents to '" + (parentPath.isEmpty() ? "Assets" : parentPath) + "')");
+        System.out.println("[AssetDatabase] Renamed " + toProjectRelative(oldAbs) + " -> " + toProjectRelative(newAbs));
+        return true;
     }
 
+    /** Deletes a folder and everything inside it from disk after confirmation. */
+    public void deleteFolder(AssetMeta folder) {
+        if (folder == null || folder.type != AssetType.FOLDER) return;
+        File dir = new File(folder.absolutePath);
+        if (!isInsideAssets(dir) || isAssetsRoot(dir)) return;
+        if (!NativeFileDialog.confirm("Delete Folder",
+                "Permanently delete the folder " + folder.name + " and everything inside it from disk?", false)) {
+            return;
+        }
+        try (var stream = Files.walk(dir.toPath())) {
+            for (Path p : (Iterable<Path>) stream.sorted(Comparator.reverseOrder())::iterator) {
+                Files.deleteIfExists(p);
+            }
+        } catch (IOException | UncheckedIOException e) {
+            NativeFileDialog.showError("Delete Folder", "Delete failed: " + e.getMessage());
+        }
+        rescanProjectAssets();
+        System.out.println("[AssetDatabase] Deleted folder " + toProjectRelative(dir.getAbsolutePath()));
+    }
+
+    /** Deletes an asset file from disk after confirmation. */
     public void removeAssetFromDirectory(AssetMeta asset) {
-        if (asset != null) {
-            unregisterAssetUuid(asset);
-            assetDirectory.remove(asset);
-            System.out.println("[AssetDatabase] Removed asset '" + asset.name + "' from virtual directory.");
+        if (asset == null || asset.type == AssetType.FOLDER) return;
+        File file = new File(asset.absolutePath);
+        if (!isInsideAssets(file)) return;
+        if (!NativeFileDialog.confirm("Delete Asset", "Permanently delete " + asset.name + " from disk?", false)) {
+            return;
         }
+        try {
+            Files.deleteIfExists(file.toPath());
+        } catch (IOException e) {
+            NativeFileDialog.showError("Delete Asset", "Delete failed: " + e.getMessage());
+        }
+        rescanProjectAssets();
+        System.out.println("[AssetDatabase] Deleted " + toProjectRelative(file.getAbsolutePath()));
     }
 
-    public void onFilesDropped(List<String> filePaths) {
-        if (filePaths == null) return;
+    /**
+     * Imports dropped / picked files into the current Assets/ folder. Files already inside Assets/ are used in
+     * place; anything outside is copied in (never overwriting). Returns the in-project path for each input,
+     * falling back to the original path if a copy failed, so callers can bind the result directly.
+     */
+    public List<String> onFilesDropped(List<String> filePaths) {
+        List<String> resolved = new ArrayList<>();
+        if (filePaths == null || !hasActiveProject()) return resolved;
+
+        File targetDir = currentDirectory();
         for (String path : filePaths) {
             if (path == null || path.trim().isEmpty()) continue;
-            File file = new File(path);
-            String name = file.getName();
-            String ext = getFileExtension(name).toLowerCase();
-            AssetType type = switch (ext) {
-                case "obj", "fbx", "gltf", "glb" -> AssetType.MESH_3D;
-                case "png", "jpg", "jpeg", "tga" -> AssetType.TEXTURE;
-                case "wav", "mp3", "ogg" -> AssetType.AUDIO;
-                case "rscene", "scene" -> AssetType.SCENE;
-                case "java" -> AssetType.SCRIPT;
-                default -> AssetType.UNKNOWN;
-            };
-            addAssetDirectoryIfNotExists(path, type);
+            File source = new File(path.trim()).getAbsoluteFile();
+            if (isInsideAssets(source)) {
+                resolved.add(normalizePath(source.getAbsolutePath()));
+                continue;
+            }
+            File target = uniqueChild(targetDir, source.getName());
+            try {
+                copyRecursive(source.toPath(), target.toPath());
+                resolved.add(normalizePath(target.getAbsolutePath()));
+                System.out.println("[AssetDatabase] Imported " + source.getName() + " -> " + toProjectRelative(target.getAbsolutePath()));
+            } catch (IOException | UncheckedIOException e) {
+                System.err.println("[AssetDatabase] Import failed for " + source + ": " + e.getMessage());
+                resolved.add(path);
+            }
+        }
+        rescanProjectAssets();
+        return resolved;
+    }
+
+    /**
+     * Legacy registration hook: files are discovered from disk, so this only triggers a re-sync when the path is
+     * inside Assets/. Paths outside Assets/ are never registered.
+     */
+    public void addAssetDirectoryIfNotExists(String absolutePath, AssetType type) {
+        addAssetDirectoryIfNotExists(absolutePath, type, null);
+    }
+
+    public void addAssetDirectoryIfNotExists(String absolutePath, AssetType type, String parentFolder) {
+        if (absolutePath == null || absolutePath.trim().isEmpty() || !hasActiveProject()) return;
+        File file = new File(absolutePath.trim()).getAbsoluteFile();
+        if (!isInsideAssets(file)) {
+            System.out.println("[AssetDatabase] " + file.getName() + " is outside Assets/ and will not appear in the asset browser.");
+            return;
+        }
+        if (resolveUuidByPath(normalizePath(file.getAbsolutePath())) == null) {
+            rescanProjectAssets();
+        }
+    }
+
+    // --- MANIFEST (.retro/asset_registry.bin) ---
+
+    public File getManifestFile() {
+        return hasActiveProject() ? new File(activeProjectPath + "/" + INTERNAL_DIR, MANIFEST_FILE) : null;
+    }
+
+    /** Writes every UUID mapping (project-relative paths) and the browser folder to the manifest (atomic replace). */
+    public void saveManifest() {
+        if (!hasActiveProject()) return;
+        File manifest = getManifestFile();
+        File tmp = new File(manifest.getParentFile(), MANIFEST_FILE + ".tmp");
+        manifest.getParentFile().mkdirs();
+
+        try (DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(tmp.toPath())))) {
+            dos.writeInt(MANIFEST_MAGIC);
+            dos.writeInt(MANIFEST_VERSION);
+            dos.writeUTF(currentFolderPath != null ? currentFolderPath : "");
+            List<AssetMeta> snapshot = assetDirectory;
+            dos.writeInt(snapshot.size());
+            for (AssetMeta meta : snapshot) {
+                UUID u = parseUuid(meta.uuid);
+                dos.writeLong(u.getMostSignificantBits());
+                dos.writeLong(u.getLeastSignificantBits());
+                dos.writeUTF(meta.name != null ? meta.name : "");
+                dos.writeUTF(toProjectRelative(meta.absolutePath));
+                dos.writeUTF(meta.type.name());
+                dos.writeUTF(meta.parentFolderPath != null ? meta.parentFolderPath : "");
+            }
+        } catch (IOException e) {
+            System.err.println("[AssetDatabase] Failed to write asset manifest: " + e.getMessage());
+            return;
+        }
+
+        try {
+            Files.move(tmp.toPath(), manifest.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException atomicUnsupported) {
+            try {
+                Files.move(tmp.toPath(), manifest.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException e) {
+                System.err.println("[AssetDatabase] Failed to commit asset manifest: " + e.getMessage());
+            }
+        }
+    }
+
+    /** Loads manifest UUIDs into the scan seed; returns the saved browser folder. Older manifests' virtual folders simply never match disk. */
+    private String loadManifestSeed() {
+        manifestUuidSeed.clear();
+        File manifest = getManifestFile();
+        if (manifest == null || !manifest.isFile()) return "";
+
+        try (DataInputStream dis = new DataInputStream(new BufferedInputStream(Files.newInputStream(manifest.toPath())))) {
+            if (dis.readInt() != MANIFEST_MAGIC) {
+                System.err.println("[AssetDatabase] Ignoring invalid asset manifest: " + manifest.getAbsolutePath());
+                return "";
+            }
+            int version = dis.readInt();
+            if (version > MANIFEST_VERSION) {
+                System.err.println("[AssetDatabase] Asset manifest version " + version + " is newer than supported; ignoring.");
+                return "";
+            }
+            String savedFolder = dis.readUTF();
+            int count = dis.readInt();
+            for (int i = 0; i < count; i++) {
+                String uuid = new UUID(dis.readLong(), dis.readLong()).toString();
+                dis.readUTF(); // name
+                String storedPath = normalizePath(dis.readUTF());
+                dis.readUTF(); // type
+                dis.readUTF(); // parent
+                manifestUuidSeed.put(storedPath.toLowerCase(), uuid);
+            }
+            return savedFolder;
+        } catch (IOException e) {
+            System.err.println("[AssetDatabase] Failed to read asset manifest: " + e.getMessage());
+            return "";
+        }
+    }
+
+    /**
+     * Looks up an asset's UUID in the manifest of the project that contains it, without binding a registry.
+     * Returns null when the file is not inside a project or has no manifest entry.
+     */
+    public static String lookupManifestUuid(File assetFile) {
+        if (assetFile == null) return null;
+        File abs = assetFile.getAbsoluteFile();
+        for (File dir = abs.getParentFile(); dir != null; dir = dir.getParentFile()) {
+            File manifest = new File(new File(dir, INTERNAL_DIR), MANIFEST_FILE);
+            if (!manifest.isFile()) continue;
+
+            String rootPrefix = dir.getAbsolutePath().replace('\\', '/') + "/";
+            String target = abs.getAbsolutePath().replace('\\', '/');
+            String relTarget = target.startsWith(rootPrefix) ? target.substring(rootPrefix.length()) : target;
+            try (DataInputStream dis = new DataInputStream(new BufferedInputStream(Files.newInputStream(manifest.toPath())))) {
+                if (dis.readInt() != MANIFEST_MAGIC) return null;
+                dis.readInt();
+                dis.readUTF();
+                int count = dis.readInt();
+                for (int i = 0; i < count; i++) {
+                    UUID u = new UUID(dis.readLong(), dis.readLong());
+                    dis.readUTF();
+                    String path = dis.readUTF();
+                    dis.readUTF();
+                    dis.readUTF();
+                    if (path.equalsIgnoreCase(relTarget) || path.equalsIgnoreCase(target)) return u.toString();
+                }
+            } catch (IOException ignored) {}
+            return null;
+        }
+        return null;
+    }
+
+    // --- HELPERS ---
+
+    public static AssetType classifyFile(String fileName) {
+        if (fileName == null) return AssetType.UNKNOWN;
+        String lower = fileName.toLowerCase();
+        if (lower.endsWith(".prefab.bin") || lower.endsWith(".prefab")) return AssetType.PREFAB;
+        int dot = lower.lastIndexOf('.');
+        String ext = (dot == -1) ? "" : lower.substring(dot + 1);
+        return switch (ext) {
+            case "obj", "fbx", "gltf", "glb" -> AssetType.MESH_3D;
+            case "png", "jpg", "jpeg", "tga" -> AssetType.TEXTURE;
+            case "wav", "mp3", "ogg" -> AssetType.AUDIO;
+            case "rscene", "scene" -> AssetType.SCENE;
+            case "java" -> AssetType.SCRIPT;
+            case "rmat" -> AssetType.MATERIAL;
+            default -> AssetType.UNKNOWN;
+        };
+    }
+
+    /** Folder path relative to Assets/ (the form used by currentFolderPath and parentFolderPath). */
+    public static String relativePathOf(AssetMeta folder) {
+        return folder.parentFolderPath.isEmpty() ? folder.name : folder.parentFolderPath + "/" + folder.name;
+    }
+
+    private AssetMeta findFolder(String relPath) {
+        for (AssetMeta meta : assetDirectory) {
+            if (meta.type == AssetType.FOLDER && relativePathOf(meta).equalsIgnoreCase(relPath)) return meta;
+        }
+        return null;
+    }
+
+    private File currentDirectory() {
+        File dir = currentFolderPath.isEmpty() ? new File(getProjectAssetsPath()) : new File(getProjectAssetsPath(), currentFolderPath);
+        return (dir.isDirectory() && isInsideAssets(dir)) ? dir : new File(getProjectAssetsPath());
+    }
+
+    private boolean isAssetsRoot(File file) {
+        try {
+            return file.getCanonicalFile().equals(new File(getProjectAssetsPath()).getCanonicalFile());
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /** True when the file is Assets/ itself or anything beneath it (canonicalized, so ../ and symlinks can't escape). */
+    private boolean isInsideAssets(File file) {
+        if (!hasActiveProject() || file == null) return false;
+        try {
+            Path root = new File(getProjectAssetsPath()).getCanonicalFile().toPath();
+            Path target = file.getAbsoluteFile().getCanonicalFile().toPath();
+            return target.startsWith(root);
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    private static boolean isValidName(String name) {
+        if (name == null || name.isEmpty() || name.startsWith(".") || name.length() > 200) return false;
+        for (char c : name.toCharArray()) {
+            if (c < 32 || c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') return false;
+        }
+        return true;
+    }
+
+    /** ".prefab.bin" style compound extensions are preserved as a unit. */
+    private static String fullExtension(String name) {
+        String lower = name.toLowerCase();
+        if (lower.endsWith(".prefab.bin")) return name.substring(name.length() - ".prefab.bin".length());
+        int dot = name.lastIndexOf('.');
+        return (dot > 0) ? name.substring(dot) : "";
+    }
+
+    /** "name.ext", or "name (2).ext", "name (3).ext"... - whichever does not yet exist in dir. */
+    private static File uniqueChild(File dir, String name) {
+        File candidate = new File(dir, name);
+        if (!candidate.exists()) return candidate;
+        String ext = fullExtension(name);
+        String base = name.substring(0, name.length() - ext.length());
+        for (int i = 2; ; i++) {
+            candidate = new File(dir, base + " (" + i + ")" + ext);
+            if (!candidate.exists()) return candidate;
+        }
+    }
+
+    private static void copyRecursive(Path source, Path target) throws IOException {
+        if (!Files.isDirectory(source)) {
+            Files.copy(source, target);
+            return;
+        }
+        try (var stream = Files.walk(source)) {
+            for (Path p : (Iterable<Path>) stream::iterator) {
+                Path dest = target.resolve(source.relativize(p).toString());
+                if (Files.isDirectory(p)) Files.createDirectories(dest);
+                else Files.copy(p, dest);
+            }
+        }
+    }
+
+    private String toProjectRelative(String path) {
+        String clean = normalizePath(path);
+        String prefix = activeProjectPath + "/";
+        if (!activeProjectPath.isEmpty() && clean.regionMatches(true, 0, prefix, 0, prefix.length())) {
+            return clean.substring(prefix.length());
+        }
+        return clean;
+    }
+
+    private static UUID parseUuid(String uuid) {
+        try {
+            return UUID.fromString(uuid);
+        } catch (Exception e) {
+            return UUID.nameUUIDFromBytes(String.valueOf(uuid).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         }
     }
 
     public void clear() {
-        this.assetDirectory.clear();
+        stopWatching();
+        this.assetDirectory = new CopyOnWriteArrayList<>();
         this.uuidToAssetMap.clear();
         this.pathToUuidMap.clear();
+        this.manifestUuidSeed.clear();
         this.currentFolderPath = "";
+        if (hasActiveProject()) com.retro.engine.scripting.ScriptEngine.setProjectAssetsRoot(null);
         this.activeProjectPath = "";
     }
 
-    private String normalizePath(String path) {
+    private static String normalizePath(String path) {
         if (path == null) return "";
         return path.replace('\\', '/').trim();
-    }
-
-    private String getFileExtension(String fileName) {
-        int dot = fileName.lastIndexOf('.');
-        return (dot == -1) ? "" : fileName.substring(dot + 1);
     }
 }

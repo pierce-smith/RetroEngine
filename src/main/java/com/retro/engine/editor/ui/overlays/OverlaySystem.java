@@ -222,19 +222,25 @@ public class OverlaySystem {
                     if (targetAsset.type == AssetType.PREFAB) {
                         items.add(new MenuItem("Spawn Prefab Entity", () -> spawnPrefabFromAsset(manager, finalAsset)));
                         items.add(new MenuItem("Rename Prefab", () -> manager.getAssetDatabase().promptRenameAsset(finalAsset)));
-                        items.add(new MenuItem("Remove Asset from Directory", () -> manager.getAssetDatabase().removeAssetFromDirectory(finalAsset)));
+                        items.add(new MenuItem("Delete Asset", () -> manager.getAssetDatabase().removeAssetFromDirectory(finalAsset)));
                     } else if (targetAsset.type == AssetType.MESH_3D) {
                         items.add(new MenuItem("Spawn Mesh Entity", () -> spawnEntityFromAsset(manager, finalAsset)));
                         items.add(new MenuItem("Rename Asset", () -> manager.getAssetDatabase().promptRenameAsset(finalAsset)));
-                        items.add(new MenuItem("Remove Asset from Directory", () -> manager.getAssetDatabase().removeAssetFromDirectory(finalAsset)));
+                        items.add(new MenuItem("Delete Asset", () -> manager.getAssetDatabase().removeAssetFromDirectory(finalAsset)));
                     } else if (targetAsset.type == AssetType.TEXTURE) {
                         items.add(new MenuItem("Link Texture to Selected", () -> assignTextureToSelectedEntity(manager, finalAsset)));
                         items.add(new MenuItem("Rename Asset", () -> manager.getAssetDatabase().promptRenameAsset(finalAsset)));
-                        items.add(new MenuItem("Remove Asset from Directory", () -> manager.getAssetDatabase().removeAssetFromDirectory(finalAsset)));
+                        items.add(new MenuItem("Delete Asset", () -> manager.getAssetDatabase().removeAssetFromDirectory(finalAsset)));
                     } else if (targetAsset.type == AssetType.SCRIPT) {
                         items.add(new MenuItem("Link Script to Selected", () -> assignScriptToSelectedEntity(manager, finalAsset)));
                         items.add(new MenuItem("Rename Asset", () -> manager.getAssetDatabase().promptRenameAsset(finalAsset)));
-                        items.add(new MenuItem("Remove Asset from Directory", () -> manager.getAssetDatabase().removeAssetFromDirectory(finalAsset)));
+                        items.add(new MenuItem("Delete Asset", () -> manager.getAssetDatabase().removeAssetFromDirectory(finalAsset)));
+                    } else {
+                        if (targetAsset.type == AssetType.SCENE) {
+                            items.add(new MenuItem("Open Scene", () -> manager.getSceneManager().loadSceneFromFile(finalAsset.absolutePath, manager.getAssetDatabase())));
+                        }
+                        items.add(new MenuItem("Rename Asset", () -> manager.getAssetDatabase().promptRenameAsset(finalAsset)));
+                        items.add(new MenuItem("Delete Asset", () -> manager.getAssetDatabase().removeAssetFromDirectory(finalAsset)));
                     }
                 }
             } else {

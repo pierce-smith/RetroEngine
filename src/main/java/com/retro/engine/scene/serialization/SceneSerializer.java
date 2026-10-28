@@ -305,6 +305,12 @@ public class SceneSerializer {
             int entityCount = dis.readInt();
             dis.readInt(); // Padding
 
+            // Empty scenes are written header-only (see saveBinaryScene)
+            if (entityCount == 0 && dis.available() == 0) {
+                System.out.println("[SceneSerializer] Loaded empty binary scene (.rscene): " + file.getAbsolutePath());
+                return new SceneLoadData(entities, assets);
+            }
+
             // Read String Table
             int stringCount = dis.readInt();
             String[] stringTable = new String[stringCount];
@@ -503,9 +509,8 @@ public class SceneSerializer {
                             assets.add(meta);
                         }
                     }
-                    if (assetDb != null) {
-                        assetDb.restoreAssetDirectory(assets);
-                    }
+                    // Legacy per-scene directory blocks are parsed for format compatibility only; the project
+                    // manifest (.retro/asset_registry.bin) is the sole authority, so scene loads never mutate it.
                 } catch (EOFException ignored) {}
             }
 

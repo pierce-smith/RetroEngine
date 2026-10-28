@@ -1,0 +1,7 @@
+# RetroEngine material definition
+name=Default
+shader=RETRO_MSL_3D
+albedo=Assets/Textures/Checker.png
+roughness=0.6
+specularStrength=0.0
+reflect=0.0

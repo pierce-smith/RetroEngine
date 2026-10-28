@@ -12,7 +12,7 @@ import java.util.List;
 /**
  * Command-Line Asset Cooker Utility for offline batch baking of raw 3D models
  * (.obj, .fbx, .gltf, .glb) and 2D textures (.png, .jpg, .tga) into binary
- * .rpack VRAM packages while preserving .rmeta 128-bit UUID indirection.
+ * .rpack VRAM packages while preserving the project manifest's 128-bit UUID indirection.
  */
 public class RpackCookerCli {
 
@@ -145,17 +145,8 @@ public class RpackCookerCli {
     }
 
     private static String resolveUuidSidecar(File rawFile) {
-        File sidecar = new File(rawFile.getAbsolutePath() + ".rmeta");
-        if (sidecar.exists()) {
-            try (java.util.Scanner scanner = new java.util.Scanner(sidecar)) {
-                if (scanner.hasNextLine()) {
-                    String line = scanner.nextLine().trim();
-                    if (line.startsWith("uuid=")) return line.substring(5).trim();
-                    return line;
-                }
-            } catch (Exception ignored) {}
-        }
-        return java.util.UUID.randomUUID().toString();
+        String uuid = com.retro.engine.assets.AssetDatabase.lookupManifestUuid(rawFile);
+        return (uuid != null) ? uuid : java.util.UUID.randomUUID().toString();
     }
 
     private static String getFileExtension(String name) {

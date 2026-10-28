@@ -258,8 +258,7 @@ public class InspectorPanel {
 
             // Pillar 3: Reflected User Script Custom Field Overrides
             if (comp instanceof ScriptComponent sc) {
-                String scriptRawName = (sc.scriptName != null && !sc.scriptName.isEmpty()) ? sc.scriptName : sc.scriptAssetPath;
-                Class<?> scriptClass = ScriptEngine.resolveScriptClass(scriptRawName);
+                Class<?> scriptClass = ScriptEngine.resolveScriptClass(sc);
                 if (scriptClass != null) {
                     List<Field> userFields = getUserScriptFields(scriptClass);
                     for (Field f : userFields) {

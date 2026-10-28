@@ -179,8 +179,7 @@ public class InspectorInputDelegate {
 
             // Pillar 3: User Script Reflected Custom Field Interactions
             if (comp instanceof ScriptComponent sc) {
-                String scriptRawName = (sc.scriptName != null && !sc.scriptName.isEmpty()) ? sc.scriptName : sc.scriptAssetPath;
-                Class<?> scriptClass = ScriptEngine.resolveScriptClass(scriptRawName);
+                Class<?> scriptClass = ScriptEngine.resolveScriptClass(sc);
                 if (scriptClass != null) {
                     List<Field> userFields = InspectorPanel.getUserScriptFields(scriptClass);
                     for (Field f : userFields) {
@@ -345,7 +344,9 @@ public class InspectorInputDelegate {
         );
         if (importedPaths != null && !importedPaths.isEmpty()) {
             UISoundPlayer.play(UISound.SPAWN);
-            manager.getAssetDatabase().onFilesDropped(importedPaths);
+            // Files outside the project are copied into the current Assets/ folder; bind the in-project copy
+            importedPaths = manager.getAssetDatabase().onFilesDropped(importedPaths);
+            if (importedPaths.isEmpty()) return;
             String primaryPath = importedPaths.get(0);
             Entity selected = manager.getSelectedEntity();
             if (selected != null) {
@@ -376,7 +377,9 @@ public class InspectorInputDelegate {
         );
         if (importedPaths != null && !importedPaths.isEmpty()) {
             UISoundPlayer.play(UISound.SPAWN);
-            manager.getAssetDatabase().onFilesDropped(importedPaths);
+            // Files outside the project are copied into the current Assets/ folder; bind the in-project copy
+            importedPaths = manager.getAssetDatabase().onFilesDropped(importedPaths);
+            if (importedPaths.isEmpty()) return;
             String primaryPath = importedPaths.get(0);
             File file = new File(primaryPath);
             Entity selected = manager.getSelectedEntity();
@@ -404,7 +407,9 @@ public class InspectorInputDelegate {
         );
         if (importedPaths != null && !importedPaths.isEmpty()) {
             UISoundPlayer.play(UISound.SPAWN);
-            manager.getAssetDatabase().onFilesDropped(importedPaths);
+            // Files outside the project are copied into the current Assets/ folder; bind the in-project copy
+            importedPaths = manager.getAssetDatabase().onFilesDropped(importedPaths);
+            if (importedPaths.isEmpty()) return;
             String primaryPath = importedPaths.get(0);
             Entity selected = manager.getSelectedEntity();
             if (selected != null) {
@@ -431,7 +436,9 @@ public class InspectorInputDelegate {
         );
         if (importedPaths != null && !importedPaths.isEmpty()) {
             UISoundPlayer.play(UISound.SPAWN);
-            manager.getAssetDatabase().onFilesDropped(importedPaths);
+            // Files outside the project are copied into the current Assets/ folder; bind the in-project copy
+            importedPaths = manager.getAssetDatabase().onFilesDropped(importedPaths);
+            if (importedPaths.isEmpty()) return;
             String primaryPath = importedPaths.get(0);
             Entity selected = manager.getSelectedEntity();
             if (selected != null) {

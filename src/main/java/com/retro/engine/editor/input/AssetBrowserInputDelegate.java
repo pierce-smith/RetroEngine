@@ -120,6 +120,10 @@ public class AssetBrowserInputDelegate {
                             }
                         }
                     }
+                } else if (asset.type == AssetType.SCENE) {
+                    // Scene loads swap entities only; the project asset registry is left untouched
+                    UISoundPlayer.play(UISound.SPAWN);
+                    manager.getSceneManager().loadSceneFromFile(asset.absolutePath, manager.getAssetDatabase());
                 } else if (asset.type == AssetType.SCRIPT) {
                     UISoundPlayer.play(UISound.CLICK);
                     Entity selected = manager.getSelectedEntity();

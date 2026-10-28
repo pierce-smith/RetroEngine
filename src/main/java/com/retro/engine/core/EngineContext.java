@@ -103,7 +103,7 @@ public class EngineContext {
         });
 
         window.setOnFileDropListener(filePaths -> {
-            if (editorManager != null && editorManager.getAssetDatabase() != null) {
+            if (editorManager != null && editorManager.hasActiveProject()) {
                 editorManager.getAssetDatabase().onFilesDropped(filePaths);
                 System.out.println("[Asset Directory] Ingested " + filePaths.size() + " asset(s).");
             }
@@ -149,8 +149,45 @@ public class EngineContext {
             ViewportPanel.setRhiCanvasTitle("3D VIEWPORT [" + apiName + " RHI CANVAS]");
         }
 
+        // Editor boots into the ProjectLauncherOverlay unless --project <dir> binds a project up front.
+        // Runtime builds keep the working-directory Assets/ layout.
+        if (!isRuntimeOnly) {
+            String cliProject = findCliValue(cliArgs, "--project");
+            if (cliProject != null && !openProject(cliProject)) {
+                System.err.println("[EngineContext] --project " + cliProject + " could not be opened; showing project launcher.");
+            } else if (cliProject == null) {
+                System.out.println("[EngineContext] No active project directory; showing project launcher.");
+            }
+        }
+
         System.out.println("[Engine] Running. Virtual Thread Asset Streaming Active (RuntimeOnly: " + isRuntimeOnly + ").");
         return true;
+    }
+
+    /** Opens an existing project directory (ProjectSettings.bin required) and binds the editor's AssetDatabase to it. */
+    public boolean openProject(String projectPath) {
+        if (editorManager == null || projectPath == null || projectPath.trim().isEmpty()) return false;
+        java.io.File dir = new java.io.File(projectPath.trim()).getAbsoluteFile();
+        if (!ProjectWorkspace.isProjectDirectory(dir)) {
+            System.err.println("[EngineContext] Not a RetroEngine project (missing " + ProjectWorkspace.SETTINGS_FILE + "): " + dir);
+            return false;
+        }
+        try {
+            ProjectWorkspace.openProject(editorManager, dir);
+            return true;
+        } catch (java.io.IOException e) {
+            System.err.println("[EngineContext] Failed to open project: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private static String findCliValue(String[] args, String flag) {
+        if (args == null) return null;
+        for (int i = 0; i < args.length; i++) {
+            if (flag.equalsIgnoreCase(args[i]) && i + 1 < args.length) return args[i + 1];
+            if (args[i] != null && args[i].toLowerCase().startsWith(flag + "=")) return args[i].substring(flag.length() + 1);
+        }
+        return null;
     }
 
     public boolean isHeadlessMode() { return headlessMode; }
