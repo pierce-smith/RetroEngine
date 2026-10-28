@@ -250,18 +250,36 @@ public class VulkanDevice {
         PointerBuffer pDevices = stack.mallocPointer(pCount.get(0));
         VK10.vkEnumeratePhysicalDevices(instance, pCount, pDevices);
 
+        VkPhysicalDevice bestDevice = null;
+        int bestScore = -1;
+
         for (int i = 0; i < pDevices.capacity(); i++) {
             VkPhysicalDevice pd = new VkPhysicalDevice(pDevices.get(i), instance);
             if (findQueueFamilies(stack, pd, surfaceHandle)) {
-                physicalDevice = pd;
-                break;
+                VkPhysicalDeviceProperties props = VkPhysicalDeviceProperties.malloc(stack);
+                VK10.vkGetPhysicalDeviceProperties(pd, props);
+
+                int score = 0;
+                if (props.deviceType() == VK10.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+                    score += 10000;
+                } else if (props.deviceType() == VK10.VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
+                    score += 1000;
+                }
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestDevice = pd;
+                }
             }
         }
 
-        if (physicalDevice == null) {
+        if (bestDevice == null) {
             System.err.println("[VulkanDevice] ERROR: Failed to find a suitable GPU!");
             return false;
         }
+
+        physicalDevice = bestDevice;
+        findQueueFamilies(stack, physicalDevice, surfaceHandle);
 
         VkPhysicalDeviceProperties props = VkPhysicalDeviceProperties.malloc(stack);
         VK10.vkGetPhysicalDeviceProperties(physicalDevice, props);

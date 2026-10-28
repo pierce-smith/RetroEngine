@@ -3,6 +3,7 @@ package com.retro.engine;
 import com.retro.engine.core.EngineContext;
 import com.retro.engine.core.EngineLoop;
 import com.retro.engine.core.RuntimeLoop;
+import org.lwjgl.system.Configuration;
 
 /**
  * Main Engine Entry Point.
@@ -15,6 +16,10 @@ import com.retro.engine.core.RuntimeLoop;
 public class Main {
 
     public static void main(String[] args) {
+        // LWJGL's default 64 KB thread stack overflows inside new VkInstance(...) on Windows NVIDIA drivers: it enumerates
+        // every extension (~260 bytes each) on the MemoryStack. Must be set before any thread touches MemoryStack.
+        Configuration.STACK_SIZE.set(1024);
+
         System.out.println("===========================================");
         System.out.println("  Retro Engine Shell - Visual Editor IDE   ");
         System.out.println("  JDK 21+ Virtual Thread Asset Streaming   ");
