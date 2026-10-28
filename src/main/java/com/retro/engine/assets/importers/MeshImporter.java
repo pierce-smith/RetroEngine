@@ -4,9 +4,10 @@ import com.retro.engine.scene.components.media.AnimatorComponent;
 import org.lwjgl.assimp.*;
 
 import java.io.File;
+import java.nio.IntBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -15,21 +16,20 @@ import static org.lwjgl.assimp.Assimp.*;
 /**
  * High-performance Assimp model importer enforcing:
  * 1. 22-float vertex stride: [PX, PY, PZ, NX, NY, NZ, R, G, B, A, U1, V1, U2, V2, TX, TY, TZ, BX, BY, BZ, LM_SCALE, LM_BIAS],
- *    extended to a 30-float skinned stride with [BONE_IDX_0..3, BONE_WT_0..3] when the scene contains bones.
+ *    extended to a 30-float skinned stride with [BONE_IDX_0..3, BONE_WT_0..3] when the scene contains bones and animations.
  *    Bone indices follow SkeletonImporter's first-seen bone order so they address AnimatorComponent palettes directly.
- * 2. Clean neutral base material color (no debug rainbow RGB normal packing).
- * 3. Safe Assimp buffer limits checking to prevent IndexOutOfBoundsException fallback to cube.
- * 4. True Voxel Grid Vertex Collapse Decimation (Rossignac-Borrel Algorithm) preserving
- *    closed 3D surface geometry, normals, UVs, and Tangents/Bitangents for RenderWare 3.5 target budgets (~4,500 verts).
+ *    Rigged scenes without animation clips are baked as static 22-float geometry in bind pose.
+ * 2. Static geometry walks the AINode hierarchy and bakes each sub-mesh's global node matrix into positions,
+ *    normals, and tangent frames, so multi-part vehicles and props assemble correctly.
+ * 3. Vertices are read straight from Assimp's native buffers into primitive float arrays; the full-resolution
+ *    triangle soup is never materialized on the Java heap.
+ * 4. Voxel Grid Vertex Collapse Decimation (Rossignac-Borrel) that coarsens the grid until the output strictly
+ *    fits the RenderWare 3.5 budget (4,500 verts), preserving UV seams, normals, and tangent frames.
  */
 public class MeshImporter {
 
     public static final int FLOATS_PER_VERTEX = MeshBufferData.STATIC_FLOATS_PER_VERTEX;
     public static final int RW35_TARGET_MAX_VERTICES = 4500; // RenderWare 3.5 target prop budget
-    // UV bins per axis for decimation clustering. Vertices whose UVs fall in different bins are never merged, which
-    // keeps texture seams and atlas boundaries intact. Finer bins catch narrower seams but split more cells inside
-    // a continuous UV island.
-    private static final int UV_SEAM_BINS = 16;
 
     public static MeshBufferData loadModel(String filePath) {
         if (filePath == null || filePath.trim().isEmpty()) return createDefaultCube();
@@ -46,364 +46,344 @@ public class MeshImporter {
             }
         }
 
+        AIScene scene = null;
         try {
-            AIScene scene = aiImportFile(filePath,
+            scene = aiImportFile(filePath,
                     aiProcess_Triangulate |
+                    aiProcess_SortByPType |
                     aiProcess_GenSmoothNormals |
                     aiProcess_CalcTangentSpace |
                     aiProcess_JoinIdenticalVertices |
                     aiProcess_LimitBoneWeights |
                     aiProcess_FlipUVs);
 
-            if (scene != null && scene.mNumMeshes() > 0) {
-                List<Float> vertexBuffer = new ArrayList<>();
+            if (scene == null) {
+                System.err.println("[MeshImporter] Assimp failed to parse " + filePath + ": " + aiGetErrorString());
+            } else if (scene.mNumMeshes() > 0) {
                 int numMeshes = scene.mNumMeshes();
-
-                boolean skinned = false;
+                boolean hasBones = false;
                 for (int i = 0; i < numMeshes; i++) {
                     if (AIMesh.create(scene.mMeshes().get(i)).mNumBones() > 0) {
-                        skinned = true;
+                        hasBones = true;
                         break;
                     }
                 }
-                int stride = skinned ? MeshBufferData.SKINNED_FLOATS_PER_VERTEX : MeshBufferData.STATIC_FLOATS_PER_VERTEX;
+                // Without animation clips the bone palette never leaves identity, so a skinned buffer would draw
+                // every part in its own mesh-local space. Bake those rigs as static geometry in bind pose instead.
+                boolean skinned = hasBones && scene.mNumAnimations() > 0;
                 Map<String, Integer> boneNameToIndex = new HashMap<>();
 
-                for (int i = 0; i < numMeshes; i++) {
-                    AIMesh mesh = AIMesh.create(scene.mMeshes().get(i));
-                    AIVector3D.Buffer vertices = mesh.mVertices();
-                    AIVector3D.Buffer normals = mesh.mNormals();
-                    AIVector3D.Buffer uvs = mesh.mTextureCoords(0);
-                    AIVector3D.Buffer lightmapUvs = mesh.mTextureCoords(1);
-                    AIVector3D.Buffer tangents = mesh.mTangents();
-                    AIVector3D.Buffer bitangents = mesh.mBitangents();
-
-                    int numVertices = mesh.mNumVertices();
-                    AIFace.Buffer faces = mesh.mFaces();
-                    int numFaces = mesh.mNumFaces();
-
-                    int[] boneIds = null;
-                    float[] boneWeights = null;
-                    if (skinned) {
-                        boneIds = new int[numVertices * MeshBufferData.MAX_BONE_INFLUENCES];
-                        boneWeights = new float[numVertices * MeshBufferData.MAX_BONE_INFLUENCES];
-                        gatherBoneInfluences(mesh, boneNameToIndex, boneIds, boneWeights);
+                List<MeshInstance> instances = new ArrayList<>();
+                if (skinned) {
+                    // Skinned vertices stay in mesh space; the bone palette carries each part's placement. Meshes are
+                    // walked in scene order so bone indices match SkeletonImporter.
+                    for (int i = 0; i < numMeshes; i++) {
+                        MeshInstance inst = new MeshInstance(AIMesh.create(scene.mMeshes().get(i)), null);
+                        inst.boneIds = new int[inst.numVertices * MeshBufferData.MAX_BONE_INFLUENCES];
+                        inst.boneWeights = new float[inst.numVertices * MeshBufferData.MAX_BONE_INFLUENCES];
+                        gatherBoneInfluences(inst.mesh, boneNameToIndex, inst.boneIds, inst.boneWeights);
+                        instances.add(inst);
                     }
-
-                    for (int f = 0; f < numFaces; f++) {
-                        AIFace aiFace = faces.get(f);
-                        if (aiFace.mNumIndices() == 3) {
-                            for (int k = 0; k < 3; k++) {
-                                int index = aiFace.mIndices().get(k);
-                                if (index < 0 || index >= numVertices) continue;
-
-                                AIVector3D pos = vertices.get(index);
-                                float px = pos.x();
-                                float py = pos.y();
-                                float pz = pos.z();
-
-                                // True Normals (NX, NY, NZ) with safe bounds check
-                                float nx = 0.0f, ny = 1.0f, nz = 0.0f;
-                                if (normals != null && index < normals.remaining()) {
-                                    AIVector3D norm = normals.get(index);
-                                    nx = norm.x();
-                                    ny = norm.y();
-                                    nz = norm.z();
-                                }
-
-                                // Clean neutral white base color
-                                float r = 1.0f, g = 1.0f, b = 1.0f, a = 1.0f;
-
-                                // Primary UVs with safe bounds check
-                                float u1 = 0.0f, v1 = 0.0f;
-                                if (uvs != null && index < uvs.remaining()) {
-                                    AIVector3D uv = uvs.get(index);
-                                    u1 = uv.x();
-                                    v1 = uv.y();
-                                }
-
-                                // Lightmap UVs (U2, V2)
-                                float u2 = u1, v2 = v1;
-                                if (lightmapUvs != null && index < lightmapUvs.remaining()) {
-                                    AIVector3D lmUv = lightmapUvs.get(index);
-                                    u2 = lmUv.x();
-                                    v2 = lmUv.y();
-                                }
-
-                                // Tangents (TX, TY, TZ)
-                                float tx = 1.0f, ty = 0.0f, tz = 0.0f;
-                                if (tangents != null && index < tangents.remaining()) {
-                                    AIVector3D tan = tangents.get(index);
-                                    tx = tan.x();
-                                    ty = tan.y();
-                                    tz = tan.z();
-                                }
-
-                                // Bitangents (BX, BY, BZ)
-                                float bx = 0.0f, by = 1.0f, bz = 0.0f;
-                                if (bitangents != null && index < bitangents.remaining()) {
-                                    AIVector3D bitan = bitangents.get(index);
-                                    bx = bitan.x();
-                                    by = bitan.y();
-                                    bz = bitan.z();
-                                }
-
-                                float lmScale = 1.0f, lmBias = 0.0f;
-
-                                // 22 floats per vertex
-                                vertexBuffer.add(px); vertexBuffer.add(py); vertexBuffer.add(pz);
-                                vertexBuffer.add(nx); vertexBuffer.add(ny); vertexBuffer.add(nz);
-                                vertexBuffer.add(r);  vertexBuffer.add(g);  vertexBuffer.add(b);  vertexBuffer.add(a);
-                                vertexBuffer.add(u1); vertexBuffer.add(v1);
-                                vertexBuffer.add(u2); vertexBuffer.add(v2);
-                                vertexBuffer.add(tx); vertexBuffer.add(ty); vertexBuffer.add(tz);
-                                vertexBuffer.add(bx); vertexBuffer.add(by); vertexBuffer.add(bz);
-                                vertexBuffer.add(lmScale); vertexBuffer.add(lmBias);
-
-                                if (skinned) {
-                                    int base = index * MeshBufferData.MAX_BONE_INFLUENCES;
-                                    for (int w = 0; w < MeshBufferData.MAX_BONE_INFLUENCES; w++) {
-                                        vertexBuffer.add(Float.intBitsToFloat(boneIds[base + w]));
-                                    }
-                                    for (int w = 0; w < MeshBufferData.MAX_BONE_INFLUENCES; w++) {
-                                        vertexBuffer.add(boneWeights[base + w]);
-                                    }
-                                }
-                            }
-                        }
+                } else if (scene.mRootNode() != null) {
+                    float unitScale = fbxUnitScaleToMeters(scene, file.getName());
+                    float[] root = identityMatrix();
+                    root[0] = root[5] = root[10] = unitScale;
+                    collectNodeInstances(scene, scene.mRootNode(), root, instances);
+                }
+                if (instances.isEmpty()) {
+                    for (int i = 0; i < numMeshes; i++) {
+                        instances.add(new MeshInstance(AIMesh.create(scene.mMeshes().get(i)), null));
                     }
                 }
 
-                aiReleaseImport(scene);
-
-                if (!vertexBuffer.isEmpty()) {
-                    float[] verts = new float[vertexBuffer.size()];
-                    for (int j = 0; j < vertexBuffer.size(); j++) {
-                        verts[j] = vertexBuffer.get(j);
-                    }
-                    int loadedCount = verts.length / stride;
-
-                    // Execute RenderWare 3.5 Auto-Decimation if poly count exceeds target budget
-                    if (loadedCount > RW35_TARGET_MAX_VERTICES) {
-                        System.out.println("[MeshImporter] High-poly model detected (" + loadedCount + " verts). Executing RenderWare 3.5 target voxel vertex collapse...");
-                        return decimateToRW35Target(verts, loadedCount, RW35_TARGET_MAX_VERTICES);
-                    }
-
-                    System.out.println("[MeshImporter] Successfully loaded 3D mesh " + file.getName() + " with " + loadedCount + " vertices (" + stride + "-float stride"
-                            + (skinned ? ", " + boneNameToIndex.size() + " bones" : "") + ").");
-                    return new MeshBufferData(verts, loadedCount);
+                AssimpSource source = new AssimpSource(instances, skinned);
+                MeshBufferData data = MeshDecimator.buildOrDecimate(source, RW35_TARGET_MAX_VERTICES);
+                if (data != null) {
+                    System.out.println("[MeshImporter] Successfully loaded 3D mesh " + file.getName() + " with " + data.vertexCount
+                            + " vertices from " + instances.size() + " sub-meshes (" + source.stride + "-float stride"
+                            + (skinned ? ", " + boneNameToIndex.size() + " bones" : hasBones ? ", static bind pose" : "") + ").");
+                    return data;
                 }
             }
         } catch (Throwable t) {
-            System.err.println("[MeshImporter] Assimp exception on " + filePath + ": " + t.getMessage());
+            System.err.println("[MeshImporter] Assimp exception on " + filePath + ": " + t);
             t.printStackTrace();
+        } finally {
+            if (scene != null) aiReleaseImport(scene);
         }
 
         return createDefaultCube();
     }
 
-    /**
-     * True Voxel Grid Vertex Collapse Decimation (Rossignac-Borrel Algorithm):
-     * Maps vertices to 3D spatial voxel centroids, split by quantized UV bin so seams never blend, rebuilds
-     * non-degenerate faces, and recomputes normals from the decimated face geometry.
-     */
+    /** Public entry for pre-expanded triangle soups (3 consecutive vertices per face). */
     public static MeshBufferData decimateToRW35Target(float[] rawVerts, int rawCount, int maxTargetVerts) {
         if (rawCount <= maxTargetVerts) return new MeshBufferData(rawVerts, rawCount);
+        MeshBufferData data = MeshDecimator.decimate(new MeshDecimator.SoupSource(rawVerts, rawCount), maxTargetVerts, true);
+        return data != null ? data : new MeshBufferData(rawVerts, rawCount);
+    }
 
-        final int FLOATS_PER_VERTEX = MeshBufferData.strideOf(rawVerts, rawCount);
-        final boolean skinned = FLOATS_PER_VERTEX >= MeshBufferData.SKINNED_FLOATS_PER_VERTEX;
+    // ------------------------------------------------------------------------------------------------------------
+    // Scene graph traversal
+    // ------------------------------------------------------------------------------------------------------------
 
-        int totalFaces = rawCount / 3;
+    private static void collectNodeInstances(AIScene scene, AINode node, float[] parentGlobal, List<MeshInstance> out) {
+        float[] global = multiply(parentGlobal, toRowMajor(node.mTransformation()));
+        IntBuffer meshIndices = node.mMeshes();
+        int numNodeMeshes = node.mNumMeshes();
+        for (int i = 0; i < numNodeMeshes && meshIndices != null; i++) {
+            int meshIndex = meshIndices.get(i);
+            if (meshIndex < 0 || meshIndex >= scene.mNumMeshes()) continue;
+            out.add(new MeshInstance(AIMesh.create(scene.mMeshes().get(meshIndex)), global));
+        }
+        int numChildren = node.mNumChildren();
+        for (int i = 0; i < numChildren && node.mChildren() != null; i++) {
+            collectNodeInstances(scene, AINode.create(node.mChildren().get(i)), global, out);
+        }
+    }
 
-        float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, minZ = Float.MAX_VALUE;
-        float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
+    /**
+     * FBX scenes are usually authored in centimeters (UnitScaleFactor 1) with a compensating 100x node scale. Baking
+     * node matrices pulls that scale into the vertices, so convert FBX units to meters. Other formats are unitless.
+     */
+    private static float fbxUnitScaleToMeters(AIScene scene, String fileName) {
+        if (!fileName.toLowerCase().endsWith(".fbx")) return 1.0f;
+        AIMetaData meta = scene.mMetaData();
+        if (meta == null) return 1.0f;
+        for (int i = 0; i < meta.mNumProperties(); i++) {
+            if (!"UnitScaleFactor".equals(meta.mKeys().get(i).dataString())) continue;
+            AIMetaDataEntry entry = meta.mValues().get(i);
+            double unit;
+            if (entry.mType() == AI_FLOAT) unit = entry.mData(4).getFloat(0);
+            else if (entry.mType() == AI_DOUBLE) unit = entry.mData(8).getDouble(0);
+            else return 1.0f;
+            return unit > 0.0 && Double.isFinite(unit) ? (float) (unit / 100.0) : 1.0f;
+        }
+        return 1.0f;
+    }
 
-        for (int i = 0; i < rawVerts.length; i += FLOATS_PER_VERTEX) {
-            minX = Math.min(minX, rawVerts[i]);
-            minY = Math.min(minY, rawVerts[i + 1]);
-            minZ = Math.min(minZ, rawVerts[i + 2]);
-            maxX = Math.max(maxX, rawVerts[i]);
-            maxY = Math.max(maxY, rawVerts[i + 1]);
-            maxZ = Math.max(maxZ, rawVerts[i + 2]);
+    private static float[] identityMatrix() {
+        return new float[] {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    }
+
+    private static float[] toRowMajor(AIMatrix4x4 m) {
+        return new float[] {
+                m.a1(), m.a2(), m.a3(), m.a4(),
+                m.b1(), m.b2(), m.b3(), m.b4(),
+                m.c1(), m.c2(), m.c3(), m.c4(),
+                m.d1(), m.d2(), m.d3(), m.d4()
+        };
+    }
+
+    private static float[] multiply(float[] a, float[] b) {
+        float[] r = new float[16];
+        for (int row = 0; row < 4; row++) {
+            for (int col = 0; col < 4; col++) {
+                r[row * 4 + col] = a[row * 4] * b[col] + a[row * 4 + 1] * b[4 + col]
+                        + a[row * 4 + 2] * b[8 + col] + a[row * 4 + 3] * b[12 + col];
+            }
+        }
+        return r;
+    }
+
+    /** One placement of an AIMesh in the scene, with cached native attribute buffers and its baked transform. */
+    private static final class MeshInstance {
+        final AIMesh mesh;
+        final AIVector3D.Buffer vertices, normals, uvs, lightmapUvs, tangents, bitangents;
+        final AIFace.Buffer faces;
+        final int numVertices, numFaces;
+        final float[] matrix;       // row-major 4x4, null for identity
+        final float[] normalMatrix; // cofactor (inverse-transpose up to scale) of the upper 3x3
+        final boolean flipWinding;  // mirrored transforms reverse triangle winding
+        int[] boneIds;
+        float[] boneWeights;
+
+        MeshInstance(AIMesh mesh, float[] matrix) {
+            this.mesh = mesh;
+            this.vertices = mesh.mVertices();
+            this.normals = mesh.mNormals();
+            this.uvs = mesh.mTextureCoords(0);
+            this.lightmapUvs = mesh.mTextureCoords(1);
+            this.tangents = mesh.mTangents();
+            this.bitangents = mesh.mBitangents();
+            this.faces = mesh.mFaces();
+            this.numVertices = vertices != null ? Math.min(mesh.mNumVertices(), vertices.remaining()) : 0;
+            this.numFaces = faces != null ? Math.min(mesh.mNumFaces(), faces.remaining()) : 0;
+
+            boolean identity = matrix == null || Arrays.equals(matrix, identityMatrix());
+            this.matrix = identity ? null : matrix;
+            if (identity) {
+                this.normalMatrix = null;
+                this.flipWinding = false;
+            } else {
+                float a = matrix[0], b = matrix[1], c = matrix[2];
+                float d = matrix[4], e = matrix[5], f = matrix[6];
+                float g = matrix[8], h = matrix[9], i = matrix[10];
+                float c00 = e * i - f * h, c01 = -(d * i - f * g), c02 = d * h - e * g;
+                float det = a * c00 + b * c01 + c * c02;
+                float s = det < 0.0f ? -1.0f : 1.0f;
+                this.normalMatrix = new float[] {
+                        s * c00, s * c01, s * c02,
+                        s * -(b * i - c * h), s * (a * i - c * g), s * -(a * h - b * g),
+                        s * (b * f - c * e), s * -(a * f - c * d), s * (a * e - b * d)
+                };
+                this.flipWinding = det < 0.0f;
+            }
+        }
+    }
+
+    /** Streams vertices from Assimp's native buffers, applying each instance's node transform on the fly. */
+    private static final class AssimpSource implements MeshDecimator.GroupedSource {
+        final MeshInstance[] instances;
+        final int[] vertexBase, triangleBase;
+        final int vertexCount, triangleCount, stride;
+        final boolean skinned;
+
+        AssimpSource(List<MeshInstance> list, boolean skinned) {
+            this.instances = list.toArray(new MeshInstance[0]);
+            this.skinned = skinned;
+            this.stride = skinned ? MeshBufferData.SKINNED_FLOATS_PER_VERTEX : MeshBufferData.STATIC_FLOATS_PER_VERTEX;
+            this.vertexBase = new int[instances.length];
+            this.triangleBase = new int[instances.length];
+            long verts = 0, tris = 0;
+            for (int i = 0; i < instances.length; i++) {
+                vertexBase[i] = (int) verts;
+                triangleBase[i] = (int) tris;
+                verts += instances[i].numVertices;
+                tris += instances[i].numFaces;
+            }
+            if (verts > Integer.MAX_VALUE || tris > Integer.MAX_VALUE) {
+                throw new IllegalStateException("Model exceeds addressable vertex/face count");
+            }
+            this.vertexCount = (int) verts;
+            this.triangleCount = (int) tris;
         }
 
-        float extentX = Math.max(0.001f, maxX - minX);
-        float extentY = Math.max(0.001f, maxY - minY);
-        float extentZ = Math.max(0.001f, maxZ - minZ);
+        public int vertexCount() { return vertexCount; }
+        public int triangleCount() { return triangleCount; }
+        public int stride() { return stride; }
 
-        // Calculate grid resolution targeting maxTargetVerts
-        int targetFaces = maxTargetVerts / 3;
-        int gridRes = Math.max(8, Math.min(48, (int) Math.round(Math.cbrt(targetFaces * 2.0))));
-        float voxelSizeX = extentX / gridRes;
-        float voxelSizeY = extentY / gridRes;
-        float voxelSizeZ = extentZ / gridRes;
-
-        // Map raw vertices to voxel cells. Each vertex gets two keys:
-        //  - spatialHash: the 3D voxel cell, which decides the collapsed position and whether a face survives
-        //  - clusterKey: the voxel cell plus the quantized UV bin, which decides which vertices share attributes.
-        // Vertices on opposite sides of a UV seam or atlas boundary share a position but land in different UV bins,
-        // so they become separate clusters at the same point. The surface stays watertight and the UVs never blend.
-        long[] vertSpatialHashes = new long[rawCount];
-        int[] vertClusters = new int[rawCount];
-        Map<Long, Integer> spatialIndex = new HashMap<>();
-        Map<Long, Integer> clusterIndex = new LinkedHashMap<>();
-        List<float[]> spatialSums = new ArrayList<>();   // [sumX, sumY, sumZ, count]
-        List<float[]> clusterSums = new ArrayList<>();   // summed static attributes
-        List<float[]> clusterFirst = new ArrayList<>();  // first vertex, for non-averageable bone data
-        List<Integer> clusterCounts = new ArrayList<>();
-        List<Integer> clusterSpatial = new ArrayList<>();
-
-        // Bone indices are int bit patterns and cannot be averaged; skinned clusters average only the
-        // static attributes and inherit bone indices/weights from the cluster's first vertex.
-        final int averagedFloats = skinned ? MeshBufferData.BONE_INDEX_OFFSET : FLOATS_PER_VERTEX;
-
-        for (int i = 0; i < rawCount; i++) {
-            int base = i * FLOATS_PER_VERTEX;
-            int vx = Math.max(0, Math.min(gridRes - 1, (int) ((rawVerts[base] - minX) / voxelSizeX)));
-            int vy = Math.max(0, Math.min(gridRes - 1, (int) ((rawVerts[base + 1] - minY) / voxelSizeY)));
-            int vz = Math.max(0, Math.min(gridRes - 1, (int) ((rawVerts[base + 2] - minZ) / voxelSizeZ)));
-            long spatialHash = ((long) vx & 0xFFL) | (((long) vy & 0xFFL) << 8) | (((long) vz & 0xFFL) << 16);
-
-            // floor() keeps tiled UVs outside [0, 1] in distinct bins; 20 bits per axis wraps only after ~65k tiles
-            long ub = (long) Math.floor(rawVerts[base + 10] * UV_SEAM_BINS) & 0xFFFFFL;
-            long vb = (long) Math.floor(rawVerts[base + 11] * UV_SEAM_BINS) & 0xFFFFFL;
-            long clusterKey = spatialHash | (ub << 24) | (vb << 44);
-
-            Integer s = spatialIndex.get(spatialHash);
-            if (s == null) {
-                s = spatialSums.size();
-                spatialIndex.put(spatialHash, s);
-                spatialSums.add(new float[4]);
+        /** Largest instance index whose base is <= x (skips empty instances sharing the same base). */
+        private static int find(int[] bases, int x) {
+            int lo = 0, hi = bases.length - 1;
+            while (lo < hi) {
+                int mid = (lo + hi + 1) >>> 1;
+                if (bases[mid] <= x) lo = mid; else hi = mid - 1;
             }
-            float[] ss = spatialSums.get(s);
-            ss[0] += rawVerts[base]; ss[1] += rawVerts[base + 1]; ss[2] += rawVerts[base + 2]; ss[3] += 1.0f;
-
-            Integer c = clusterIndex.get(clusterKey);
-            if (c == null) {
-                c = clusterSums.size();
-                clusterIndex.put(clusterKey, c);
-                clusterSums.add(new float[FLOATS_PER_VERTEX]);
-                float[] first = new float[FLOATS_PER_VERTEX];
-                System.arraycopy(rawVerts, base, first, 0, FLOATS_PER_VERTEX);
-                clusterFirst.add(first);
-                clusterCounts.add(0);
-                clusterSpatial.add(s);
-            }
-            float[] cs = clusterSums.get(c);
-            for (int k = 0; k < averagedFloats; k++) {
-                cs[k] += rawVerts[base + k];
-            }
-            clusterCounts.set(c, clusterCounts.get(c) + 1);
-
-            vertSpatialHashes[i] = spatialHash;
-            vertClusters[i] = c;
+            return lo;
         }
 
-        // Build each cluster's representative vertex: the shared spatial centroid as its position plus the
-        // cluster's own averaged UVs, colors, and tangent frame
-        int clusterCount = clusterSums.size();
-        float[][] clusterVerts = new float[clusterCount][];
-        for (int c = 0; c < clusterCount; c++) {
-            float[] avg = clusterSums.get(c);
-            float invCount = 1.0f / clusterCounts.get(c);
-            for (int k = 0; k < averagedFloats; k++) {
-                avg[k] *= invCount;
+        public boolean triangle(int t, int[] out) {
+            int i = find(triangleBase, t);
+            MeshInstance inst = instances[i];
+            AIFace face = inst.faces.get(t - triangleBase[i]);
+            if (face.mNumIndices() != 3) return false;
+            IntBuffer idx = face.mIndices();
+            int a = idx.get(0), b = idx.get(1), c = idx.get(2);
+            int n = inst.numVertices;
+            if (a < 0 || a >= n || b < 0 || b >= n || c < 0 || c >= n) return false;
+            int base = vertexBase[i];
+            out[0] = base + a;
+            out[1] = base + (inst.flipWinding ? c : b);
+            out[2] = base + (inst.flipWinding ? b : c);
+            return true;
+        }
+
+        public int groupCount() { return instances.length; }
+
+        public MeshDecimator.VertexSource group(int i) {
+            return new MeshDecimator.SubSource(this, vertexBase[i], instances[i].numVertices, triangleBase[i], instances[i].numFaces);
+        }
+
+        public void position(int v, float[] out) {
+            int i = find(vertexBase, v);
+            AIVector3D pos = instances[i].vertices.get(v - vertexBase[i]);
+            float px = pos.x(), py = pos.y(), pz = pos.z();
+            float[] m = instances[i].matrix;
+            if (m == null) {
+                out[0] = px; out[1] = py; out[2] = pz;
+            } else {
+                out[0] = m[0] * px + m[1] * py + m[2]  * pz + m[3];
+                out[1] = m[4] * px + m[5] * py + m[6]  * pz + m[7];
+                out[2] = m[8] * px + m[9] * py + m[10] * pz + m[11];
             }
+        }
+
+        public void read(int v, float[] out, int o) {
+            int i = find(vertexBase, v);
+            MeshInstance inst = instances[i];
+            int index = v - vertexBase[i];
+
+            AIVector3D pos = inst.vertices.get(index);
+            float px = pos.x(), py = pos.y(), pz = pos.z();
+
+            float nx = 0.0f, ny = 1.0f, nz = 0.0f;
+            if (inst.normals != null && index < inst.normals.remaining()) {
+                AIVector3D n = inst.normals.get(index);
+                nx = n.x(); ny = n.y(); nz = n.z();
+            }
+
+            float u1 = 0.0f, v1 = 0.0f;
+            if (inst.uvs != null && index < inst.uvs.remaining()) {
+                AIVector3D uv = inst.uvs.get(index);
+                u1 = uv.x(); v1 = uv.y();
+            }
+
+            float u2 = u1, v2 = v1;
+            if (inst.lightmapUvs != null && index < inst.lightmapUvs.remaining()) {
+                AIVector3D uv = inst.lightmapUvs.get(index);
+                u2 = uv.x(); v2 = uv.y();
+            }
+
+            float tx = 1.0f, ty = 0.0f, tz = 0.0f;
+            if (inst.tangents != null && index < inst.tangents.remaining()) {
+                AIVector3D t = inst.tangents.get(index);
+                tx = t.x(); ty = t.y(); tz = t.z();
+            }
+
+            float bx = 0.0f, by = 1.0f, bz = 0.0f;
+            if (inst.bitangents != null && index < inst.bitangents.remaining()) {
+                AIVector3D b = inst.bitangents.get(index);
+                bx = b.x(); by = b.y(); bz = b.z();
+            }
+
+            out[o] = px; out[o + 1] = py; out[o + 2] = pz;
+            out[o + 3] = nx; out[o + 4] = ny; out[o + 5] = nz;
+            out[o + 6] = 1.0f; out[o + 7] = 1.0f; out[o + 8] = 1.0f; out[o + 9] = 1.0f; // clean neutral white base color
+            out[o + 10] = u1; out[o + 11] = v1;
+            out[o + 12] = u2; out[o + 13] = v2;
+            out[o + 14] = tx; out[o + 15] = ty; out[o + 16] = tz;
+            out[o + 17] = bx; out[o + 18] = by; out[o + 19] = bz;
+            out[o + 20] = 1.0f; out[o + 21] = 0.0f; // lightmap scale, bias
+
+            float[] m = inst.matrix;
+            if (m != null) {
+                out[o]     = m[0] * px + m[1] * py + m[2]  * pz + m[3];
+                out[o + 1] = m[4] * px + m[5] * py + m[6]  * pz + m[7];
+                out[o + 2] = m[8] * px + m[9] * py + m[10] * pz + m[11];
+                transform3(inst.normalMatrix, 3, out, o + 3);
+                transform3(m, 4, out, o + 14);
+                transform3(m, 4, out, o + 17);
+            }
+
             if (skinned) {
-                System.arraycopy(clusterFirst.get(c), averagedFloats, avg, averagedFloats, FLOATS_PER_VERTEX - averagedFloats);
-            }
-
-            float[] ss = spatialSums.get(clusterSpatial.get(c));
-            avg[0] = ss[0] / ss[3]; avg[1] = ss[1] / ss[3]; avg[2] = ss[2] / ss[3];
-
-            // Normals are rebuilt from the decimated faces below; the averaged source normal is kept only as a
-            // fallback for clusters whose faces all collapsed
-            normalize3(avg, 3);
-            normalize3(avg, 14); // tangent (tx, ty, tz)
-            normalize3(avg, 17); // bitangent (bx, by, bz)
-
-            clusterVerts[c] = avg;
-        }
-
-        // Reconstruct faces. A face survives only if its 3 corners fall in distinct spatial cells. Two UV clusters
-        // from the same cell share one position, so letting them form a face would give a zero-area triangle.
-        List<int[]> faces = new ArrayList<>();
-        float[] faceNormalSums = new float[clusterCount * 3];
-        for (int f = 0; f < totalFaces; f++) {
-            int i0 = f * 3;
-            int i1 = f * 3 + 1;
-            int i2 = f * 3 + 2;
-
-            long h0 = vertSpatialHashes[i0];
-            long h1 = vertSpatialHashes[i1];
-            long h2 = vertSpatialHashes[i2];
-            if (h0 == h1 || h1 == h2 || h2 == h0) continue;
-
-            int c0 = vertClusters[i0], c1 = vertClusters[i1], c2 = vertClusters[i2];
-            float[] p0 = clusterVerts[c0], p1 = clusterVerts[c1], p2 = clusterVerts[c2];
-
-            // Face normal from the new triangle's edges; its length is twice the area, which gives area weighting
-            float e1x = p1[0] - p0[0], e1y = p1[1] - p0[1], e1z = p1[2] - p0[2];
-            float e2x = p2[0] - p0[0], e2y = p2[1] - p0[1], e2z = p2[2] - p0[2];
-            float fnx = e1y * e2z - e1z * e2y;
-            float fny = e1z * e2x - e1x * e2z;
-            float fnz = e1x * e2y - e1y * e2x;
-
-            // A face that folded over during the collapse points against the source triangle. Orient its
-            // contribution to match the source so a fold doesn't cancel out its neighbours' normals.
-            int b0 = i0 * FLOATS_PER_VERTEX, b1 = i1 * FLOATS_PER_VERTEX, b2 = i2 * FLOATS_PER_VERTEX;
-            float o1x = rawVerts[b1] - rawVerts[b0], o1y = rawVerts[b1 + 1] - rawVerts[b0 + 1], o1z = rawVerts[b1 + 2] - rawVerts[b0 + 2];
-            float o2x = rawVerts[b2] - rawVerts[b0], o2y = rawVerts[b2 + 1] - rawVerts[b0 + 1], o2z = rawVerts[b2 + 2] - rawVerts[b0 + 2];
-            float onx = o1y * o2z - o1z * o2y;
-            float ony = o1z * o2x - o1x * o2z;
-            float onz = o1x * o2y - o1y * o2x;
-            if (fnx * onx + fny * ony + fnz * onz < 0.0f) {
-                fnx = -fnx; fny = -fny; fnz = -fnz;
-            }
-
-            for (int c : new int[] {c0, c1, c2}) {
-                faceNormalSums[c * 3] += fnx;
-                faceNormalSums[c * 3 + 1] += fny;
-                faceNormalSums[c * 3 + 2] += fnz;
-            }
-            faces.add(new int[] {c0, c1, c2});
-        }
-
-        // Replace cluster normals with the area-weighted sum of their decimated face normals. Clusters on opposite
-        // sides of a UV seam accumulate separately, so seams keep their hard shading edge.
-        for (int c = 0; c < clusterCount; c++) {
-            float nx = faceNormalSums[c * 3], ny = faceNormalSums[c * 3 + 1], nz = faceNormalSums[c * 3 + 2];
-            float len = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
-            if (len > 1e-12f) {
-                float[] v = clusterVerts[c];
-                v[3] = nx / len; v[4] = ny / len; v[5] = nz / len;
+                int base = index * MeshBufferData.MAX_BONE_INFLUENCES;
+                for (int w = 0; w < MeshBufferData.MAX_BONE_INFLUENCES; w++) {
+                    out[o + MeshBufferData.BONE_INDEX_OFFSET + w] = Float.intBitsToFloat(inst.boneIds[base + w]);
+                    out[o + MeshBufferData.BONE_WEIGHT_OFFSET + w] = inst.boneWeights[base + w];
+                }
             }
         }
 
-        if (faces.isEmpty()) {
-            return new MeshBufferData(rawVerts, rawCount);
+        /** Multiplies the direction at out[o..o+2] by the upper-left 3x3 of row-major m (row length rowStep) and renormalizes. */
+        private static void transform3(float[] m, int rowStep, float[] out, int o) {
+            float x = out[o], y = out[o + 1], z = out[o + 2];
+            out[o]     = m[0] * x + m[1] * y + m[2] * z;
+            out[o + 1] = m[rowStep] * x + m[rowStep + 1] * y + m[rowStep + 2] * z;
+            out[o + 2] = m[2 * rowStep] * x + m[2 * rowStep + 1] * y + m[2 * rowStep + 2] * z;
+            MeshDecimator.normalize3(out, o);
         }
-
-        float[] finalVerts = new float[faces.size() * 3 * FLOATS_PER_VERTEX];
-        int dst = 0;
-        for (int[] face : faces) {
-            for (int c : face) {
-                System.arraycopy(clusterVerts[c], 0, finalVerts, dst, FLOATS_PER_VERTEX);
-                dst += FLOATS_PER_VERTEX;
-            }
-        }
-
-        int finalCount = finalVerts.length / FLOATS_PER_VERTEX;
-        System.out.println("[MeshImporter] Successfully decimated high-poly mesh from " + rawCount + " to " + finalCount + " vertices (RW 3.5 Target: " + maxTargetVerts + ").");
-        return new MeshBufferData(finalVerts, finalCount);
     }
 
-    private static void normalize3(float[] v, int offset) {
-        float len = (float) Math.sqrt(v[offset] * v[offset] + v[offset + 1] * v[offset + 1] + v[offset + 2] * v[offset + 2]);
-        if (len > 0.0001f) {
-            v[offset] /= len; v[offset + 1] /= len; v[offset + 2] /= len;
-        }
-    }
 
     /**
      * Collects the strongest MAX_BONE_INFLUENCES (bone, weight) pairs per vertex and renormalizes them to sum to 1.
