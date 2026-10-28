@@ -970,13 +970,15 @@ public class VulkanGpuCache {
             VkPhysicalDeviceMemoryProperties memProperties = VkPhysicalDeviceMemoryProperties.calloc(stack);
             vkGetPhysicalDeviceMemoryProperties(physicalDevice, memProperties);
 
-            for (int i = 0; i < memProperties.memoryTypes().capacity(); i++) {
+            for (int i = 0; i < memProperties.memoryTypeCount(); i++) {
                 if ((typeFilter & (1 << i)) != 0 && (memProperties.memoryTypes(i).propertyFlags() & properties) == properties) {
                     return i;
                 }
             }
         }
-        return 0;
+        // Never fall back to type 0: on discrete GPUs it is DEVICE_LOCAL-only, so mapping it as a staging buffer crashes
+        throw new IllegalStateException("[VulkanGpuCache] No memory type matches filter 0x" + Integer.toHexString(typeFilter)
+                + " with properties 0x" + Integer.toHexString(properties));
     }
 
     public void cleanup(VulkanDevice device) {
