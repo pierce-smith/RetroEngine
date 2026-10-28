@@ -1,14 +1,18 @@
 package com.retro.engine.backend.metal;
 
 import com.retro.engine.rhi.ViewportSpec;
+import org.lwjgl.PointerBuffer;
 import org.lwjgl.glfw.GLFWNativeCocoa;
+import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.system.libffi.FFICIF;
 import org.lwjgl.system.macosx.DynamicLinkLoader;
 import org.lwjgl.system.macosx.ObjCRuntime;
 
 import java.nio.ByteBuffer;
 
 import static org.lwjgl.system.JNI.*;
+import static org.lwjgl.system.libffi.LibFFI.*;
 import static org.lwjgl.system.macosx.ObjCRuntime.*;
 
 public class MetalDevice {
@@ -19,16 +23,20 @@ public class MetalDevice {
     private static final long SEL_RELEASE = sel_registerName("release");
     private static final long SEL_DRAIN = sel_registerName("drain");
     private static final long MTL_GPU_FAMILY_METAL3 = 5001L;
+    private static final long SEL_BACKING_SCALE_FACTOR = sel_registerName("backingScaleFactor");
+    private static final long SEL_SET_CONTENTS_SCALE = sel_registerName("setContentsScale:");
 
     private long device = 0L;
     private long commandQueue = 0L;
     private long metalLayer = 0L;
     private long objc_msgSend = 0L;
+    private long nsWindow = 0L;
+    private double contentsScale = 0.0;
 
     public boolean initialize(ViewportSpec windowInfo) {
         System.out.println("[MetalDevice] Initializing Native Apple Metal Device & Command Queue...");
 
-        long nsWindow = GLFWNativeCocoa.glfwGetCocoaWindow(windowInfo.nativeWindowHandle());
+        nsWindow = GLFWNativeCocoa.glfwGetCocoaWindow(windowInfo.nativeWindowHandle());
         if (nsWindow == 0L) {
             System.err.println("[MetalDevice] ERROR: Failed to obtain NSWindow handle from GLFW!");
             return false;
@@ -66,9 +74,33 @@ public class MetalDevice {
         long contentView = invokePPP(nsWindow, sel_registerName("contentView"), objc_msgSend);
         invokePPPP(contentView, sel_registerName("setLayer:"), metalLayer, objc_msgSend);
         invokePPPP(contentView, sel_registerName("setWantsLayer:"), 1L, objc_msgSend);
+        syncContentsScale();
 
         System.out.println("[MetalDevice] Native MTLDevice successfully initialized.");
         return true;
+    }
+
+    /**
+     * Matches the layer's contentsScale to the window's backing scale so the drawable renders at native (Retina)
+     * resolution instead of being upscaled from points; re-applied when the window moves to a different-DPI screen.
+     */
+    public void syncContentsScale() {
+        if (nsWindow == 0L || metalLayer == 0L) return;
+        double scale = invokePPD(nsWindow, SEL_BACKING_SCALE_FACTOR, objc_msgSend);
+        if (scale <= 0.0 || scale == contentsScale) return;
+        // setContentsScale: takes a CGFloat, which the integer-only JNI msgSend helpers cannot pass
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            FFICIF cif = FFICIF.malloc(stack);
+            PointerBuffer argTypes = stack.pointers(ffi_type_pointer, ffi_type_pointer, ffi_type_double);
+            if (ffi_prep_cif(cif, FFI_DEFAULT_ABI, ffi_type_void, argTypes) != FFI_OK) return;
+            PointerBuffer args = stack.mallocPointer(3);
+            args.put(0, MemoryUtil.memAddress(stack.pointers(metalLayer)));
+            args.put(1, MemoryUtil.memAddress(stack.pointers(SEL_SET_CONTENTS_SCALE)));
+            args.put(2, MemoryUtil.memAddress(stack.doubles(scale)));
+            ffi_call(cif, objc_msgSend, null, args);
+        }
+        contentsScale = scale;
+        System.out.println("[MetalDevice] Layer contentsScale set to " + scale + "x.");
     }
 
     /**

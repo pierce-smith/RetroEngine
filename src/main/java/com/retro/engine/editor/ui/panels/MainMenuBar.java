@@ -124,7 +124,7 @@ public class MainMenuBar {
         UIGeometryBatch.addBoundedText(buffer, "SCENE", 0.45f, 0.969f, 0.55f, MENU_TEXT, EditorTheme.TEXT_MUTED, 1.0f);
         sceneSb.setLength(0);
         sceneSb.append(extractSceneName(activeScenePath));
-        UIGeometryBatch.addTruncatedText(buffer, sceneSb, 0.525f, 0.969f, 0.98f, MENU_TEXT, EditorTheme.TEXT, 1.0f);
+        UIGeometryBatch.addTruncatedText(buffer, sceneSb, 0.45f + UIGeometryBatch.textWidth(buffer, "SCENE ", MENU_TEXT), 0.969f, 0.98f, MENU_TEXT, EditorTheme.TEXT, 1.0f);
     }
 
     private static void renderMenuTitle(UIGeometryBatch.Buffer buffer, String title, DropdownMenu menu, DropdownMenu activeMenu) {

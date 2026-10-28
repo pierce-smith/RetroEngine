@@ -36,6 +36,8 @@ public class VulkanPipeline {
 
     // 3D push constant block (bytes): mat4 model 0, vec4 params 64, vec4 surface 80, ivec4 texIndices 96, ivec4 texIndices2 112
     public static final int MESH_PUSH_CONSTANT_SIZE = 128;
+    /** UI fragment push constants: int font atlas bindless slot, padded to 16 bytes. */
+    public static final int UI_PUSH_CONSTANT_SIZE = 16;
 
     // Upper bound for the bindless texture table; clamped further to the device's descriptor limits
     private static final int MAX_BINDLESS_TEXTURES = 4096;
@@ -158,8 +160,14 @@ public class VulkanPipeline {
             if (vkCreateDescriptorSetLayout(vkDevice, dsCreateInfoUI, null, pDSLayoutUI) != VK_SUCCESS) return false;
             descriptorSetLayoutUI = pDSLayoutUI.get(0);
 
+            // The UI samples its SDF font atlas from the bindless table; the atlas slot travels in a push constant
+            VkPushConstantRange.Buffer pushConstantsUI = VkPushConstantRange.calloc(1, stack);
+            pushConstantsUI.get(0).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT).offset(0).size(UI_PUSH_CONSTANT_SIZE);
+
             VkPipelineLayoutCreateInfo layoutCreateInfoUI = VkPipelineLayoutCreateInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
+                    .sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO)
+                    .pSetLayouts(stack.longs(descriptorSetLayout3D))
+                    .pPushConstantRanges(pushConstantsUI);
 
             LongBuffer pPipelineLayoutUI = stack.mallocLong(1);
             if (vkCreatePipelineLayout(vkDevice, layoutCreateInfoUI, null, pPipelineLayoutUI) != VK_SUCCESS) return false;
@@ -478,10 +486,11 @@ public class VulkanPipeline {
                 shaderStagesUI.get(0).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_VERTEX_BIT).module(vertUIModule).pName(stack.UTF8("main"));
                 shaderStagesUI.get(1).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_FRAGMENT_BIT).module(fragUIModule).pName(stack.UTF8("main"));
 
-                VkVertexInputBindingDescription.Buffer bindingDescriptionUI = VkVertexInputBindingDescription.calloc(1, stack).binding(0).stride(24).inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
-                VkVertexInputAttributeDescription.Buffer attributeDescriptionsUI = VkVertexInputAttributeDescription.calloc(2, stack);
+                VkVertexInputBindingDescription.Buffer bindingDescriptionUI = VkVertexInputBindingDescription.calloc(1, stack).binding(0).stride(32).inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
+                VkVertexInputAttributeDescription.Buffer attributeDescriptionsUI = VkVertexInputAttributeDescription.calloc(3, stack);
                 attributeDescriptionsUI.get(0).binding(0).location(0).format(VK_FORMAT_R32G32_SFLOAT).offset(0);
                 attributeDescriptionsUI.get(1).binding(0).location(1).format(VK_FORMAT_R32G32B32A32_SFLOAT).offset(8);
+                attributeDescriptionsUI.get(2).binding(0).location(2).format(VK_FORMAT_R32G32_SFLOAT).offset(24);   // FONT ATLAS UV
 
                 VkPipelineVertexInputStateCreateInfo vertexInputInfoUI = VkPipelineVertexInputStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO).pVertexBindingDescriptions(bindingDescriptionUI).pVertexAttributeDescriptions(attributeDescriptionsUI);
                 VkPipelineInputAssemblyStateCreateInfo inputAssemblyUI = VkPipelineInputAssemblyStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO).topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST).primitiveRestartEnable(false);
@@ -497,7 +506,7 @@ public class VulkanPipeline {
                         .dstColorBlendFactor(VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
                         .colorBlendOp(VK_BLEND_OP_ADD)
                         .srcAlphaBlendFactor(VK_BLEND_FACTOR_ONE)
-                        .dstAlphaBlendFactor(VK_BLEND_FACTOR_ZERO)
+                        .dstAlphaBlendFactor(VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
                         .alphaBlendOp(VK_BLEND_OP_ADD);
 
                 VkPipelineColorBlendStateCreateInfo colorBlendingUI = VkPipelineColorBlendStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO).pAttachments(colorBlendAttachmentUI);

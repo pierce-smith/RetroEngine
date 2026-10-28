@@ -130,6 +130,12 @@ public class MetalGpuCache {
         return gridRingBuffer.getVertexCount();
     }
 
+    /** Raw id<MTLTexture> of the editor UI's SDF font atlas, or 0L when the UI uses its bitmap font. */
+    private volatile long uiFontTexture = 0L;
+
+    public long getUiFontTexture() { return uiFontTexture; }
+    public void setUiFontTexture(long mtlTexture) { this.uiFontTexture = mtlTexture; }
+
     public long getUiVertexBuffer() {
         return uiRingBuffer.getCurrentBufferHandle();
     }
@@ -248,7 +254,7 @@ public class MetalGpuCache {
     }
 
     public void updateUiMesh(MetalDevice metalDevice, float[] vertices, int count) {
-        uiRingBuffer.updateBuffer(metalDevice, vertices, count, 6, this);
+        uiRingBuffer.updateBuffer(metalDevice, vertices, count, 8, this);
     }
 
     /** Uploads a static VBO once (or returns the live handle for assetKey). Thread-safe. */

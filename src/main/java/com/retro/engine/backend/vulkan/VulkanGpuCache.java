@@ -188,6 +188,12 @@ public class VulkanGpuCache {
     private int[] entityPaletteSlots = new int[256];
     private int[] entityTextureSlots = new int[256 * CHANNEL_COUNT];
 
+    /** Texture handle of the editor UI's SDF font atlas, or 0L when the UI uses its bitmap font. */
+    private volatile long uiFontTexture = 0L;
+
+    public long getUiFontTexture() { return uiFontTexture; }
+    public void setUiFontTexture(long textureHandle) { this.uiFontTexture = textureHandle; }
+
     public long getUiVertexBuffer() { return uiRingBuffer.getCurrentBufferHandle(); }
     public int getUiVertexCount() { return uiRingBuffer.getVertexCount(); }
 
@@ -216,7 +222,7 @@ public class VulkanGpuCache {
     }
 
     public void updateUiMesh(VulkanDevice device, float[] vertices, int count) {
-        uiRingBuffer.updateBuffer(device, vertices, count, 6, deferredDisposalQueue, totalFrameCount);
+        uiRingBuffer.updateBuffer(device, vertices, count, 8, deferredDisposalQueue, totalFrameCount);
     }
 
     public void updateGridMesh(VulkanDevice device, float[] vertices, int count) {

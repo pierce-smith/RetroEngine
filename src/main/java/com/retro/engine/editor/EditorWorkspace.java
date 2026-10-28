@@ -61,9 +61,9 @@ public class EditorWorkspace {
     private float lastNdcX = 0.0f;
     private float lastNdcY = 0.0f;
 
-    private float[] cachedUiVertices = new float[16384 * 6];
+    private float[] cachedUiVertices = new float[16384 * UIGeometryBatch.VERTEX_STRIDE];
     private int cachedUiVertexCount = 0;
-    private final UIGeometryBatch.Buffer uiGeometryBuffer = new UIGeometryBatch.Buffer(16384 * 6);
+    private final UIGeometryBatch.Buffer uiGeometryBuffer = new UIGeometryBatch.Buffer(16384 * UIGeometryBatch.VERTEX_STRIDE);
 
     public EditorWorkspace() { this(new SceneWorld()); }
 
@@ -244,7 +244,7 @@ public class EditorWorkspace {
             cachedUiVertices = new float[size * 2];
         }
         System.arraycopy(uiGeometryBuffer.getArray(), 0, cachedUiVertices, 0, size);
-        this.cachedUiVertexCount = size / 6;
+        this.cachedUiVertexCount = size / UIGeometryBatch.VERTEX_STRIDE;
 
         return this.cachedUiVertices;
     }

@@ -124,9 +124,9 @@ public class MetalPipeline {
                 invokePPPP(color0, sel_registerName("setBlendingEnabled:"), 1L, send);
                 invokePPPP(color0, sel_registerName("setSourceRGBBlendFactor:"), 4L, send);       // SourceAlpha
                 invokePPPP(color0, sel_registerName("setDestinationRGBBlendFactor:"), 5L, send);  // OneMinusSourceAlpha
-                // UI keeps the drawable's alpha at the source value; 3D blends alpha like color
+                // UI accumulates coverage into the drawable's alpha (transparent glyph padding never punches holes); 3D blends alpha like color
                 invokePPPP(color0, sel_registerName("setSourceAlphaBlendFactor:"), blend == Blend.UI ? 1L : 4L, send);
-                invokePPPP(color0, sel_registerName("setDestinationAlphaBlendFactor:"), blend == Blend.UI ? 0L : 5L, send);
+                invokePPPP(color0, sel_registerName("setDestinationAlphaBlendFactor:"), 5L, send);
             }
         }
         invokePPPP(desc, sel_registerName("setDepthAttachmentPixelFormat:"), depthFormat, send);

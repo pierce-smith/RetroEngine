@@ -507,7 +507,7 @@ public final class DockSpace {
     // ------------------------------------------------------------------------------------------
 
     private static float naturalTabWidth(DockPanel p) {
-        return 0.035f + p.title.length() * TAB_TEXT_SIZE * 0.012f;
+        return 0.035f + UIGeometryBatch.screenTextWidth(p.title, TAB_TEXT_SIZE);
     }
 
     private static float tabScale(DockNode leaf) {
@@ -596,7 +596,7 @@ public final class DockSpace {
             String caption = captionFor(leaf.activePanel());
             if (caption != null) {
                 float capSize = 0.85f;
-                float capW = caption.length() * capSize * 0.012f;
+                float capW = UIGeometryBatch.screenTextWidth(caption, capSize);
                 float capX = Math.max(tx + 0.02f, leaf.x1 - 0.012f - capW);
                 if (capX + 0.05f < leaf.x1) {
                     UIGeometryBatch.addBoundedText(buffer, caption, capX, barY1 - 0.019f, leaf.x1 - 0.008f, capSize, EditorTheme.TEXT_MUTED, 1.0f);

@@ -219,6 +219,14 @@ public class MetalBackend implements IRenderBackend {
         return resourceCache.registerTexture(metalDevice, assetKey, pixels, width, height);
     }
 
+    @Override
+    public boolean setUiFontAtlas(long textureHandle) {
+        MetalTexture tex = (textureHandle != 0L) ? resourceCache.getTexture(textureHandle) : null;
+        if (tex == null || tex.getHasActiveTexture() != 1) return false;
+        resourceCache.setUiFontTexture(tex.getBindableTexture());
+        return true;
+    }
+
     @Override public void unregisterMesh(long meshHandle) { resourceCache.unregisterMesh(meshHandle); }
     @Override public void unregisterTexture(long textureHandle) { resourceCache.unregisterTexture(textureHandle); }
 
@@ -336,6 +344,7 @@ public class MetalBackend implements IRenderBackend {
 
         uniformStreamer.advanceFrameIndex();
 
+        metalDevice.syncContentsScale();
         currentDrawable = invokePPP(metalLayer, SEL_NEXT_DRAWABLE, send);
         if (currentDrawable == 0L) {
             releaseUnsubmittedFramePermit();

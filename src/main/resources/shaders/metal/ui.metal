@@ -7,24 +7,32 @@ using namespace metal;
 struct UIVertexOut {
     float4 position [[position]];
     float4 color;
+    float2 uv;
 };
 
-// 6-float stride: xy = NDC position, rgba = color
+// 8-float stride: xy = NDC position, rgba = color, uv = font atlas coordinate (< -1 for solid geometry)
 vertex UIVertexOut uiVertexMain(uint vertexID [[vertex_id]],
                                 constant float* vertices [[buffer(0)]]) {
     UIVertexOut out;
-    uint idx = vertexID * 6;
+    uint idx = vertexID * 8;
     out.position = float4(vertices[idx], vertices[idx+1], 0.0, 1.0);
     out.color = float4(vertices[idx+2], vertices[idx+3], vertices[idx+4], vertices[idx+5]);
+    out.uv = float2(vertices[idx+6], vertices[idx+7]);
     return out;
 }
 
-fragment float4 uiFragmentMain(UIVertexOut in [[stage_in]]) {
+// Glyphs sample a signed distance field (0.5 = outline); fwidth keeps the edge ~1 device pixel wide at any scale
+fragment float4 uiFragmentMain(UIVertexOut in [[stage_in]],
+                               texture2d<float> fontAtlas [[texture(0)]],
+                               sampler smp [[sampler(0)]]) {
     float a = in.color.a;
     if (a > 0.0f && a < 1.0f) {
         a = pow(a, 0.70f);
     }
-    return float4(in.color.rgb, a);
+    float dist = fontAtlas.sample(smp, in.uv).r;
+    float w = max(fwidth(dist) * 0.7f, 1e-4f);
+    float coverage = smoothstep(0.5f - w, 0.5f + w, dist);
+    return float4(in.color.rgb, in.uv.x < -1.0f ? a : a * coverage);
 }
 
 struct CompositeVertexOut {

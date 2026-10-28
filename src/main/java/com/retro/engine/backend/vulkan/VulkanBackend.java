@@ -301,6 +301,13 @@ public class VulkanBackend implements IRenderBackend {
         gpuCache.updateUiMesh(deviceManager, vertices, count);
     }
 
+    @Override
+    public boolean setUiFontAtlas(long textureHandle) {
+        if (gpuCache.getTexture(textureHandle) == null) return false;
+        gpuCache.setUiFontTexture(textureHandle);
+        return true;
+    }
+
     @Override public void clearSceneQueue() { activeSceneQueueCount = 0; }
 
     @Override

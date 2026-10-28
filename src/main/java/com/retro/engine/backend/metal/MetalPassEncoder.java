@@ -385,6 +385,13 @@ public class MetalPassEncoder {
         if (resourceCache.getUiVertexBuffer() != 0L && resourceCache.getUiVertexCount() > 0 && pipeline.getPipelineStateUI() != 0L) {
             bindPipeline(pipeline.getPipelineStateUI());
 
+            // SDF font atlas with the linear sampler; solid geometry ignores it, so the default texture stands in when absent
+            long fontAtlas = resourceCache.getUiFontTexture();
+            bindFragmentTexture(fontAtlas != 0L ? fontAtlas : texture.getBindableTexture());
+            if (texture.getSamplerStateHandle() != 0L) {
+                bindFragmentSampler(texture.getSamplerStateHandle());
+            }
+
             bindVertexBuffer(resourceCache.getUiVertexBuffer(), 0L, 0);
             invokePPPPPP(encoderWin, SEL_DRAW_PRIMITIVES, MTL_PRIMITIVE_TRIANGLE, 0L, (long) resourceCache.getUiVertexCount(), send);
         }

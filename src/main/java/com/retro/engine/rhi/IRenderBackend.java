@@ -23,6 +23,12 @@ public interface IRenderBackend {
 
     void updateGridMesh(float[] vertices, int count);
     void updateUiMesh(float[] vertices, int count);
+
+    /**
+     * Binds a {@link #registerTexture registered} signed-distance-field atlas for UI glyph quads. Returns false when the
+     * backend cannot sample it, in which case the editor keeps its bitmap font.
+     */
+    default boolean setUiFontAtlas(long textureHandle) { return false; }
     void clearSceneQueue();
 
     /**

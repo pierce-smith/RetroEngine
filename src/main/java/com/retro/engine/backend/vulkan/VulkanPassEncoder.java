@@ -326,7 +326,9 @@ public class VulkanPassEncoder {
             long uiVbo = gpuCache.getUiVertexBuffer();
             int uiCount = gpuCache.getUiVertexCount();
 
-            if (pipelineManager.getGraphicsPipelineUI() != 0L && uiVbo != 0L && uiCount > 0) {
+            long uiBindlessSet = gpuCache.getBindlessDescriptorSet();
+
+            if (pipelineManager.getGraphicsPipelineUI() != 0L && uiVbo != 0L && uiCount > 0 && uiBindlessSet != 0L) {
                 VkRenderingAttachmentInfo.Buffer swapchainColorAttachment = VkRenderingAttachmentInfo.calloc(1, stack);
                 swapchainColorAttachment.get(0)
                         .sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO)
@@ -359,6 +361,12 @@ public class VulkanPassEncoder {
                 vkCmdSetScissor(cmd, 0, swapchainScissor);
 
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getGraphicsPipelineUI());
+
+                // SDF font atlas from the bindless table; -1 until its table write lands (glyphs draw transparent meanwhile)
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayoutUI(), 0, stack.longs(uiBindlessSet), null);
+                ByteBuffer uiPush = stack.calloc(VulkanPipeline.UI_PUSH_CONSTANT_SIZE);
+                uiPush.putInt(0, gpuCache.resolveTextureSlot(gpuCache.getUiFontTexture()));
+                vkCmdPushConstants(cmd, pipelineManager.getPipelineLayoutUI(), VK_SHADER_STAGE_FRAGMENT_BIT, 0, uiPush);
 
                 LongBuffer pBuffers = stack.longs(uiVbo);
                 LongBuffer pOffsets = stack.longs(0L);

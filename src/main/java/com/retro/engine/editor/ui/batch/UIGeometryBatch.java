@@ -4,10 +4,15 @@ import java.util.List;
 
 /**
  * UIGeometryBatch provides high-performance 2D UI vertex batching routines
- * for quads, borders, lines, circles, arrowheads, and bitmap font text.
+ * for quads, borders, lines, circles, arrowheads, and system-font (SDF atlas) text with a bitmap fallback.
  * Target JDK: JDK 25 / macOS (Zero-allocation primitive buffer support)
  */
 public class UIGeometryBatch {
+
+    /** Floats per vertex: xy = NDC position, rgba = color, uv = font atlas coordinate (NO_UV for solid fills). */
+    public static final int VERTEX_STRIDE = 8;
+    /** UV sentinel marking untextured geometry; the UI shaders skip the atlas below -1. */
+    public static final float NO_UV = -2.0f;
 
     public static class Buffer {
         private float[] data;
@@ -21,11 +26,11 @@ public class UIGeometryBatch {
         private float clipX0, clipY0, clipX1, clipY1;
         private float textScale = 1.0f;
 
-        // Triangle assembly + Sutherland-Hodgman scratch (6 floats per vertex, zero per-frame allocation)
-        private final float[] tri = new float[18];
+        // Triangle assembly + Sutherland-Hodgman scratch (VERTEX_STRIDE floats per vertex, zero per-frame allocation)
+        private final float[] tri = new float[3 * VERTEX_STRIDE];
         private int triVerts = 0;
-        private final float[] polyA = new float[96];
-        private final float[] polyB = new float[96];
+        private final float[] polyA = new float[16 * VERTEX_STRIDE];
+        private final float[] polyB = new float[16 * VERTEX_STRIDE];
 
         public Buffer() {
             this(16384);
@@ -111,13 +116,13 @@ public class UIGeometryBatch {
 
         void suspendTransform(boolean suspended) { this.transformSuspended = suspended; }
 
-        void stageVertex(float x, float y, float r, float g, float b, float a) {
-            int o = triVerts * 6;
+        void stageVertex(float x, float y, float r, float g, float b, float a, float u, float v) {
+            int o = triVerts * VERTEX_STRIDE;
             if (!transformSuspended) {
                 x = x * mapSx + mapTx;
                 y = y * mapSy + mapTy;
             }
-            tri[o] = x; tri[o + 1] = y; tri[o + 2] = r; tri[o + 3] = g; tri[o + 4] = b; tri[o + 5] = a;
+            tri[o] = x; tri[o + 1] = y; tri[o + 2] = r; tri[o + 3] = g; tri[o + 4] = b; tri[o + 5] = a; tri[o + 6] = u; tri[o + 7] = v;
             if (++triVerts == 3) {
                 triVerts = 0;
                 emitClippedTriangle();
@@ -125,14 +130,16 @@ public class UIGeometryBatch {
         }
 
         private void emitRaw(float[] src, int vertIndex) {
-            int o = vertIndex * 6;
-            ensureCapacity(size + 6);
-            data[size++] = src[o]; data[size++] = src[o + 1];
-            data[size++] = src[o + 2]; data[size++] = src[o + 3]; data[size++] = src[o + 4]; data[size++] = src[o + 5];
+            int o = vertIndex * VERTEX_STRIDE;
+            ensureCapacity(size + VERTEX_STRIDE);
+            System.arraycopy(src, o, data, size, VERTEX_STRIDE);
+            size += VERTEX_STRIDE;
         }
 
         private void emitClippedTriangle() {
-            float x0 = tri[0], y0 = tri[1], x1 = tri[6], y1 = tri[7], x2 = tri[12], y2 = tri[13];
+            float x0 = tri[0], y0 = tri[1];
+            float x1 = tri[VERTEX_STRIDE], y1 = tri[VERTEX_STRIDE + 1];
+            float x2 = tri[2 * VERTEX_STRIDE], y2 = tri[2 * VERTEX_STRIDE + 1];
 
             // Trivial reject: entirely beyond one clip edge
             if ((x0 < clipX0 && x1 < clipX0 && x2 < clipX0) || (x0 > clipX1 && x1 > clipX1 && x2 > clipX1) ||
@@ -146,7 +153,7 @@ public class UIGeometryBatch {
                 return;
             }
 
-            System.arraycopy(tri, 0, polyA, 0, 18);
+            System.arraycopy(tri, 0, polyA, 0, 3 * VERTEX_STRIDE);
             int n = 3;
             n = clipEdge(polyA, n, polyB, 0, clipX0, false);
             n = clipEdge(polyB, n, polyA, 0, clipX1, true);
@@ -162,18 +169,18 @@ public class UIGeometryBatch {
             int out = 0;
             if (n == 0) return 0;
             for (int i = 0; i < n; i++) {
-                int cur = i * 6, prev = ((i + n - 1) % n) * 6;
+                int cur = i * VERTEX_STRIDE, prev = ((i + n - 1) % n) * VERTEX_STRIDE;
                 float cv = src[cur + axis], pv = src[prev + axis];
                 boolean cIn = keepBelow ? cv <= bound : cv >= bound;
                 boolean pIn = keepBelow ? pv <= bound : pv >= bound;
                 if (cIn != pIn) {
                     float t = (bound - pv) / (cv - pv);
-                    int o = out * 6;
-                    for (int k = 0; k < 6; k++) dst[o + k] = src[prev + k] + t * (src[cur + k] - src[prev + k]);
+                    int o = out * VERTEX_STRIDE;
+                    for (int k = 0; k < VERTEX_STRIDE; k++) dst[o + k] = src[prev + k] + t * (src[cur + k] - src[prev + k]);
                     out++;
                 }
                 if (cIn) {
-                    System.arraycopy(src, cur, dst, out * 6, 6);
+                    System.arraycopy(src, cur, dst, out * VERTEX_STRIDE, VERTEX_STRIDE);
                     out++;
                 }
             }
@@ -230,9 +237,24 @@ public class UIGeometryBatch {
 
     /** Pixel-height / pixel-width of the window; makes rounded corners circular on screen. */
     private static float pixelAspect = 720.0f / 1280.0f;
+    private static float windowWidth = 1280.0f, windowHeight = 720.0f;
 
     public static void setWindowSize(int width, int height) {
-        if (width > 0 && height > 0) pixelAspect = (float) height / (float) width;
+        if (width > 0 && height > 0) {
+            pixelAspect = (float) height / (float) width;
+            windowWidth = width;
+            windowHeight = height;
+        }
+    }
+
+    // Legacy bitmap metrics: cap height and advance per unit of text size (old text vertically centers on this cap)
+    private static final float BITMAP_CAP_NDC = 0.015f;
+    private static final float BITMAP_ADVANCE_NDC = 0.012f;
+
+    /** Snaps an NDC coordinate to the nearest window pixel boundary along an axis spanning {@code pixels}. */
+    private static float snapToPixel(float ndc, float pixels) {
+        float half = pixels * 0.5f;
+        return Math.round(ndc * half) / half;
     }
 
     // --- Packed 0xRRGGBB color overloads ---
@@ -332,15 +354,35 @@ public class UIGeometryBatch {
     // --- Text measurement & truncation ---
     private static final StringBuilder truncScratch = new StringBuilder(128);
 
-    /** Width of {@code len} glyphs at {@code size}, in the buffer's current drawing space. */
+    /** Screen-space NDC-X width of one em unit at {@code size} (already including the panel text scale). */
+    private static float emScreenWidth(Buffer buffer, float size) {
+        return size * buffer.getTextScale() * UIFont.EM_NDC_PER_SIZE * pixelAspect;
+    }
+
+    /** Width of {@code len} average (digit-width) glyphs at {@code size}, in the buffer's current drawing space. */
     public static float textWidth(Buffer buffer, int len, float size) {
         if (len <= 0) return 0.0f;
-        float screenW = len * size * 0.012f * buffer.getTextScale();
+        UIFont font = UIFont.active();
+        float screenW = font != null
+                ? len * font.digitAdvance * emScreenWidth(buffer, size)
+                : len * size * BITMAP_ADVANCE_NDC * buffer.getTextScale();
         return buffer.screenToLocalWidth(screenW);
     }
 
+    /** Unmapped (screen-space) width of {@code text} at {@code size}; for layout computed outside a buffer. */
+    public static float screenTextWidth(CharSequence text, float size) {
+        if (text == null) return 0.0f;
+        UIFont font = UIFont.active();
+        return font != null
+                ? font.measure(text, 0, text.length()) * size * UIFont.EM_NDC_PER_SIZE * pixelAspect
+                : text.length() * size * BITMAP_ADVANCE_NDC;
+    }
+
     public static float textWidth(Buffer buffer, CharSequence text, float size) {
-        return text == null ? 0.0f : textWidth(buffer, text.length(), size);
+        if (text == null) return 0.0f;
+        UIFont font = UIFont.active();
+        if (font == null) return textWidth(buffer, text.length(), size);
+        return buffer.screenToLocalWidth(font.measure(text, 0, text.length()) * emScreenWidth(buffer, size));
     }
 
     /** Text right-aligned so it ends at {@code rightX}. */
@@ -353,6 +395,25 @@ public class UIGeometryBatch {
     /** Text clipped to [startX, maxX], ending in an ellipsis instead of a hard cut when it doesn't fit. */
     public static void addTruncatedText(Buffer buffer, CharSequence text, float startX, float startY, float maxX, float size, int rgb, float a) {
         if (text == null) return;
+        UIFont font = UIFont.active();
+        if (font != null) {
+            float em = buffer.screenToLocalWidth(emScreenWidth(buffer, size));
+            float avail = em > 0.0f ? (maxX - startX) / em : Float.MAX_VALUE;
+            if (font.measure(text, 0, text.length()) <= avail) {
+                addBoundedText(buffer, text, startX, startY, maxX + 0.001f, size, rgb, a);
+                return;
+            }
+            float budget = avail - font.advanceOf('…');
+            int fit = 0;
+            float used = 0.0f;
+            while (fit < text.length() && used + font.advanceOf(text.charAt(fit)) <= budget) {
+                used += font.advanceOf(text.charAt(fit++));
+            }
+            truncScratch.setLength(0);
+            truncScratch.append(text, 0, fit).append('…');
+            addBoundedText(buffer, truncScratch, startX, startY, maxX + 0.001f, size, rgb, a);
+            return;
+        }
         float perChar = textWidth(buffer, 1, size);
         int fit = perChar > 0.0f ? (int) ((maxX - startX) / perChar) : text.length();
         if (text.length() <= fit) {
@@ -367,12 +428,26 @@ public class UIGeometryBatch {
 
     // --- Primitive Buffer Overloads (Zero Allocation) ---
     public static void addVert(Buffer buffer, float x, float y, float r, float g, float b, float a) {
+        addVert(buffer, x, y, r, g, b, a, NO_UV, NO_UV);
+    }
+
+    public static void addVert(Buffer buffer, float x, float y, float r, float g, float b, float a, float u, float v) {
         if (buffer.mapped) {
-            buffer.stageVertex(x, y, r, g, b, a);
+            buffer.stageVertex(x, y, r, g, b, a, u, v);
             return;
         }
-        buffer.add(x); buffer.add(y);
-        buffer.add(r); buffer.add(g); buffer.add(b); buffer.add(a);
+        buffer.ensureCapacity(buffer.size + VERTEX_STRIDE);
+        float[] d = buffer.data;
+        int o = buffer.size;
+        d[o] = x; d[o + 1] = y; d[o + 2] = r; d[o + 3] = g; d[o + 4] = b; d[o + 5] = a; d[o + 6] = u; d[o + 7] = v;
+        buffer.size = o + VERTEX_STRIDE;
+    }
+
+    /** Quad sampling the font atlas over [u0,u1]x[v0,v1]; v0 maps to the top edge (y2). */
+    private static void addGlyphQuad(Buffer buffer, float x1, float y1, float x2, float y2, float u0, float v0, float u1, float v1,
+                                     float r, float g, float b, float a) {
+        addVert(buffer, x1, y1, r, g, b, a, u0, v1); addVert(buffer, x2, y1, r, g, b, a, u1, v1); addVert(buffer, x1, y2, r, g, b, a, u0, v0);
+        addVert(buffer, x2, y1, r, g, b, a, u1, v1); addVert(buffer, x2, y2, r, g, b, a, u1, v0); addVert(buffer, x1, y2, r, g, b, a, u0, v0);
     }
 
     public static void addQuad(Buffer buffer, float x1, float y1, float x2, float y2, float r, float g, float b, float a) {
@@ -473,6 +548,11 @@ public class UIGeometryBatch {
     }
 
     private static void emitText(Buffer buffer, CharSequence text, float startX, float startY, float maxX, float size, float r, float g, float b, float a) {
+        UIFont font = UIFont.active();
+        if (font != null) {
+            emitFontText(buffer, font, text, startX, startY, maxX, size, r, g, b, a);
+            return;
+        }
         float charW = size * 0.010f;
         float charH = size * 0.018f;
         float pixelW = charW / 6.0f;
@@ -499,10 +579,59 @@ public class UIGeometryBatch {
         }
     }
 
+    /**
+     * System-font text in screen space. The cap height is centered where the legacy bitmap cap sat, so existing
+     * layouts keep their vertical alignment; the baseline and pen origin snap to window pixels for crisp edges.
+     */
+    private static void emitFontText(Buffer buffer, UIFont font, CharSequence text, float startX, float startY, float maxX, float size,
+                                     float r, float g, float b, float a) {
+        float emY = size * UIFont.EM_NDC_PER_SIZE;
+        float emX = emY * pixelAspect;
+        float capY = font.capHeight * emY;
+        float baseline = snapToPixel(startY - BITMAP_CAP_NDC * size * 0.5f - capY * 0.5f, windowHeight);
+        float penX = snapToPixel(startX, windowWidth);
+        float limit = maxX + 1e-5f;
+
+        int len = text.length();
+        for (int i = 0; i < len; i++) {
+            char c = text.charAt(i);
+            UIFont.Glyph gl = font.glyph(c);
+            if (gl == null) {
+                // Glyph missing from the system font: draw the bitmap glyph at the font's cap height
+                float cellH = capY / 5.0f, cellW = cellH * pixelAspect;
+                float adv = font.advanceOf(c) * emX;
+                if (penX + adv > limit) break;
+                long mask = glyph(c);
+                if (mask != 0L) {
+                    float top = baseline + capY;
+                    for (int row = 0; row < 5; row++) {
+                        for (int col = 0; col < 6; col++) {
+                            if (((mask >> ((4 - row) * 8 + (5 - col))) & 1L) != 0L) {
+                                float px1 = penX + col * cellW;
+                                float py1 = top - row * cellH;
+                                addQuad(buffer, px1, py1 - cellH, px1 + cellW, py1, r, g, b, a);
+                            }
+                        }
+                    }
+                }
+                penX += adv;
+                continue;
+            }
+            float adv = gl.advance * emX;
+            if (penX + adv > limit) break;
+            if (gl.hasQuad) {
+                addGlyphQuad(buffer, penX + gl.x0 * emX, baseline - gl.y1 * emY, penX + gl.x1 * emX, baseline - gl.y0 * emY,
+                        gl.u0, gl.v0, gl.u1, gl.v1, r, g, b, a);
+            }
+            penX += adv;
+        }
+    }
+
     // --- Backward Compatible List<Float> Overloads ---
     public static void addVert(List<Float> verts, float x, float y, float r, float g, float b, float a) {
         verts.add(x); verts.add(y);
         verts.add(r); verts.add(g); verts.add(b); verts.add(a);
+        verts.add(NO_UV); verts.add(NO_UV);
     }
 
     public static void addQuad(List<Float> verts, float x1, float y1, float x2, float y2, float r, float g, float b, float a) {

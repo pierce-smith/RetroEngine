@@ -5,6 +5,7 @@ import com.retro.engine.assets.importers.MeshBufferData;
 import com.retro.engine.assets.importers.MeshImporter;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ViewportCamera;
+import com.retro.engine.editor.ui.batch.UIFont;
 import com.retro.engine.editor.ui.dock.DockPanel;
 import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.panels.EngineConsolePanel;
@@ -385,8 +386,28 @@ public class SceneRenderPipeline {
         rhi.setSceneViewport(snapshot.sceneMinX, snapshot.sceneMinY, snapshot.sceneMaxX, snapshot.sceneMaxY, snapshot.sceneAspect);
         rhi.updateGridMesh(snapshot.gridVertices, snapshot.gridVertexCount);
         rhi.updateUiMesh(snapshot.uiVertices, snapshot.uiVertexCount);
+        if (!uiFontResolved) resolveUiFont(rhi);
 
         EngineConsolePanel.updateTelemetry(snapshot.totalDrawCalls, snapshot.totalActiveVertices);
+    }
+
+    private boolean uiFontResolved = false;
+
+    /**
+     * Bakes the system UI font once and hands its SDF atlas to the backend; glyph layout switches over on the next
+     * generated UI frame. Any failure keeps the default bitmap font.
+     */
+    private void resolveUiFont(IRenderBackend rhi) {
+        uiFontResolved = true;
+        UIFont font = UIFont.loadSystemFont();
+        if (font == null) return;
+        long atlas = rhi.registerTexture("editor://ui_font_atlas", font.getAtlasPixels(), font.atlasWidth, font.atlasHeight);
+        if (atlas != 0L && rhi.setUiFontAtlas(atlas)) {
+            font.activate();
+        } else {
+            if (atlas != 0L) rhi.unregisterTexture(atlas);
+            System.err.println("[SceneRenderPipeline] WARNING: Backend could not bind the UI font atlas; using the default bitmap font.");
+        }
     }
 
     /**
