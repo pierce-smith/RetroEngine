@@ -17,6 +17,7 @@ import java.util.List;
  * bars / splitters / drop previews, and handles tab activation, tab drag-and-drop re-docking
  * (stack, or split left/right/top/bottom) and splitter resizing.
  *
+ * One instance per editor UI, owned through {@link com.retro.engine.editor.ui.UIContext}; not thread-safe.
  * Panels keep rendering and hit-testing in their authored design-space NDC: rendering goes through
  * {@link #beginPanel}/{@link #endPanel} (a batch transform + clip), and input is mapped back with
  * {@link #toDesignX}/{@link #toDesignY}.
@@ -36,33 +37,37 @@ public final class DockSpace {
     public enum DropZone { CENTER, LEFT, RIGHT, TOP, BOTTOM }
 
     private static final int PANEL_COUNT = DockPanel.values().length;
-    private static final boolean[] visible = new boolean[PANEL_COUNT];
-    private static final float[] contentX0 = new float[PANEL_COUNT];
-    private static final float[] contentY0 = new float[PANEL_COUNT];
-    private static final float[] contentX1 = new float[PANEL_COUNT];
-    private static final float[] contentY1 = new float[PANEL_COUNT];
+    private final boolean[] visible = new boolean[PANEL_COUNT];
+    private final float[] contentX0 = new float[PANEL_COUNT];
+    private final float[] contentY0 = new float[PANEL_COUNT];
+    private final float[] contentX1 = new float[PANEL_COUNT];
+    private final float[] contentY1 = new float[PANEL_COUNT];
 
-    private static final List<DockNode> leaves = new ArrayList<>();
-    private static final List<DockNode> splits = new ArrayList<>();
+    private final List<DockNode> leaves = new ArrayList<>();
+    private final List<DockNode> splits = new ArrayList<>();
 
-    private static DockNode root;
-    private static int windowW = 1280;
-    private static int windowH = 720;
+    private DockNode root;
+    private int windowW = 1280;
+    private int windowH = 720;
 
     // Interaction state
-    private static DockNode draggingSplit = null;
-    private static DockPanel draggingTab = null;
-    private static boolean tabDragActive = false;
-    private static float pressX, pressY;
-    private static float cursorX, cursorY;
+    private DockNode draggingSplit = null;
+    private DockPanel draggingTab = null;
+    private boolean tabDragActive = false;
+    private float pressX, pressY;
+    private float cursorX, cursorY;
 
     // Scene <-> Animator focus, console tab sync, and input-space context
-    private static DockPanel focusedWorkspace = DockPanel.SCENE;
-    private static boolean lastConsoleFlag = false;
-    private static DockPanel consoleReturnPanel = DockPanel.ASSETS;
-    private static DockPanel inputPanel = null;
+    private DockPanel focusedWorkspace = DockPanel.SCENE;
+    private boolean lastConsoleFlag = false;
+    private DockPanel consoleReturnPanel = DockPanel.ASSETS;
+    private DockPanel inputPanel = null;
 
-    static {
+    // Measures tab captions with the window metrics of the buffer the dock chrome is drawn into
+    private final UIGeometryBatch.Buffer measureBuffer;
+
+    public DockSpace(UIGeometryBatch.Buffer measureBuffer) {
+        this.measureBuffer = measureBuffer;
         for (DockPanel p : DockPanel.values()) {
             int i = p.ordinal();
             contentX0[i] = p.designX0; contentY0[i] = p.designY0;
@@ -71,10 +76,8 @@ public final class DockSpace {
         root = buildDefaultLayout();
     }
 
-    private DockSpace() {}
-
     /** Default layout reproduces the classic editor arrangement, with every panel now dockable. */
-    private static DockNode buildDefaultLayout() {
+    private DockNode buildDefaultLayout() {
         float areaH = AREA_Y1 - AREA_Y0;
         DockNode left = DockNode.leaf(DockPanel.HIERARCHY, DockPanel.ANIMATOR_PARAMETERS);
         DockNode center = DockNode.leaf(DockPanel.SCENE, DockPanel.ANIMATOR);
@@ -86,7 +89,7 @@ public final class DockSpace {
         return DockNode.split(false, (AREA_Y1 - (-0.42f)) / areaH, top, bottom);
     }
 
-    public static void resetLayout() {
+    public void resetLayout() {
         root = buildDefaultLayout();
         draggingSplit = null;
         draggingTab = null;
@@ -102,10 +105,9 @@ public final class DockSpace {
     // ------------------------------------------------------------------------------------------
 
     /** Recomputes every tile for this frame. Call once per frame before rendering or routing input. */
-    public static void layout(int winW, int winH) {
+    public void layout(int winW, int winH) {
         if (winW > 0) windowW = winW;
         if (winH > 0) windowH = winH;
-        UIGeometryBatch.setWindowSize(windowW, windowH);
 
         syncConsoleVisibility();
 
@@ -119,7 +121,7 @@ public final class DockSpace {
         if (!visible[focusedWorkspace.ordinal()] && visible[other.ordinal()]) focusedWorkspace = other;
     }
 
-    private static void layoutNode(DockNode n, float x0, float y0, float x1, float y1) {
+    private void layoutNode(DockNode n, float x0, float y0, float x1, float y1) {
         n.x0 = x0; n.y0 = y0; n.x1 = x1; n.y1 = y1;
         if (n.leaf) {
             leaves.add(n);
@@ -148,47 +150,47 @@ public final class DockSpace {
     // Panel queries & coordinate mapping
     // ------------------------------------------------------------------------------------------
 
-    public static boolean isVisible(DockPanel p) {
+    public boolean isVisible(DockPanel p) {
         return visible[p.ordinal()];
     }
 
     /** Visible and large enough to draw meaningful content. */
-    public static boolean isRenderable(DockPanel p) {
+    public boolean isRenderable(DockPanel p) {
         int i = p.ordinal();
         return visible[i] && (contentX1[i] - contentX0[i]) > MIN_RENDERABLE && (contentY1[i] - contentY0[i]) > MIN_RENDERABLE;
     }
 
-    public static float getContentX0(DockPanel p) { return contentX0[p.ordinal()]; }
-    public static float getContentY0(DockPanel p) { return contentY0[p.ordinal()]; }
-    public static float getContentX1(DockPanel p) { return contentX1[p.ordinal()]; }
-    public static float getContentY1(DockPanel p) { return contentY1[p.ordinal()]; }
+    public float getContentX0(DockPanel p) { return contentX0[p.ordinal()]; }
+    public float getContentY0(DockPanel p) { return contentY0[p.ordinal()]; }
+    public float getContentX1(DockPanel p) { return contentX1[p.ordinal()]; }
+    public float getContentY1(DockPanel p) { return contentY1[p.ordinal()]; }
 
-    public static float toDesignX(DockPanel p, float screenX) {
+    public float toDesignX(DockPanel p, float screenX) {
         int i = p.ordinal();
         float w = contentX1[i] - contentX0[i];
         if (w <= 0.0001f) return p.designX0;
         return p.designX0 + (screenX - contentX0[i]) * (p.designX1 - p.designX0) / w;
     }
 
-    public static float toDesignY(DockPanel p, float screenY) {
+    public float toDesignY(DockPanel p, float screenY) {
         int i = p.ordinal();
         float h = contentY1[i] - contentY0[i];
         if (h <= 0.0001f) return p.designY0;
         return p.designY0 + (screenY - contentY0[i]) * (p.designY1 - p.designY0) / h;
     }
 
-    public static float toScreenX(DockPanel p, float designX) {
+    public float toScreenX(DockPanel p, float designX) {
         int i = p.ordinal();
         return contentX0[i] + (designX - p.designX0) * (contentX1[i] - contentX0[i]) / (p.designX1 - p.designX0);
     }
 
-    public static float toScreenY(DockPanel p, float designY) {
+    public float toScreenY(DockPanel p, float designY) {
         int i = p.ordinal();
         return contentY0[i] + (designY - p.designY0) * (contentY1[i] - contentY0[i]) / (p.designY1 - p.designY0);
     }
 
     /** Panel whose content area (excluding tab bar) contains the point, or null. */
-    public static DockPanel panelAt(float x, float y) {
+    public DockPanel panelAt(float x, float y) {
         for (int i = 0; i < leaves.size(); i++) {
             DockNode leaf = leaves.get(i);
             DockPanel p = leaf.activePanel();
@@ -199,13 +201,13 @@ public final class DockSpace {
         return null;
     }
 
-    public static void beginPanel(UIGeometryBatch.Buffer buffer, DockPanel p) {
+    public void beginPanel(UIGeometryBatch.Buffer buffer, DockPanel p) {
         int i = p.ordinal();
         buffer.setPanelMapping(p.designX0, p.designY0, p.designX1, p.designY1,
                 contentX0[i], contentY0[i], contentX1[i], contentY1[i]);
     }
 
-    public static void endPanel(UIGeometryBatch.Buffer buffer) {
+    public void endPanel(UIGeometryBatch.Buffer buffer) {
         buffer.clearPanelMapping();
     }
 
@@ -213,21 +215,21 @@ public final class DockSpace {
      * Marks input as being dispatched in a panel's design space, so code that opens screen-space
      * overlays (context menus) from inside a panel handler can convert back to screen coordinates.
      */
-    public static void beginInput(DockPanel p) { inputPanel = p; }
-    public static void endInput() { inputPanel = null; }
-    public static float inputToScreenX(float x) { return inputPanel == null ? x : toScreenX(inputPanel, x); }
-    public static float inputToScreenY(float y) { return inputPanel == null ? y : toScreenY(inputPanel, y); }
+    public void beginInput(DockPanel p) { inputPanel = p; }
+    public void endInput() { inputPanel = null; }
+    public float inputToScreenX(float x) { return inputPanel == null ? x : toScreenX(inputPanel, x); }
+    public float inputToScreenY(float y) { return inputPanel == null ? y : toScreenY(inputPanel, y); }
 
     // ------------------------------------------------------------------------------------------
     // Scene viewport (3D offscreen image placement)
     // ------------------------------------------------------------------------------------------
 
-    public static boolean isSceneViewportVisible() {
+    public boolean isSceneViewportVisible() {
         return isRenderable(DockPanel.SCENE);
     }
 
     /** Pixel aspect of the docked Scene tile; the projection uses it so the 3D image is never distorted. */
-    public static float getSceneAspect() {
+    public float getSceneAspect() {
         int i = DockPanel.SCENE.ordinal();
         float w = (contentX1[i] - contentX0[i]) * 0.5f * windowW;
         float h = (contentY1[i] - contentY0[i]) * 0.5f * windowH;
@@ -238,7 +240,7 @@ public final class DockSpace {
     // Activation, workspace focus, console sync
     // ------------------------------------------------------------------------------------------
 
-    public static DockPanel getFocusedWorkspace() {
+    public DockPanel getFocusedWorkspace() {
         return focusedWorkspace;
     }
 
@@ -246,7 +248,7 @@ public final class DockSpace {
      * Activates a panel's tab. Scene and Animator also swap their stacked companions, matching the
      * classic editor: Scene shows Hierarchy/Inspector, Animator shows Parameters/Anim Inspector.
      */
-    public static void activate(DockPanel p) {
+    public void activate(DockPanel p) {
         if (!activateTab(p)) return;
         if (p == DockPanel.SCENE) {
             focusedWorkspace = DockPanel.SCENE;
@@ -260,14 +262,14 @@ public final class DockSpace {
     }
 
     /** If 'from' is the shown tab of its stack, show 'to' instead (only when they share that stack). */
-    private static void swapCompanion(DockPanel from, DockPanel to) {
+    private void swapCompanion(DockPanel from, DockPanel to) {
         DockNode leaf = findLeaf(from);
         if (leaf != null && leaf.activePanel() == from && leaf.tabs.contains(to)) {
             leaf.activeTab = leaf.tabs.indexOf(to);
         }
     }
 
-    private static boolean activateTab(DockPanel p) {
+    private boolean activateTab(DockPanel p) {
         DockNode leaf = findLeaf(p);
         if (leaf == null) return false;
         if (p == DockPanel.CONSOLE && leaf.activePanel() != DockPanel.CONSOLE && leaf.activePanel() != null) {
@@ -281,7 +283,7 @@ public final class DockSpace {
      * Keeps EngineConsolePanel's visibility flag (toggled by the Cmd+~ hotkey) and the Console tab in
      * agreement: a hotkey toggle shows/hides the tab, and tab clicks update the flag.
      */
-    private static void syncConsoleVisibility() {
+    private void syncConsoleVisibility() {
         DockNode leaf = findLeaf(DockPanel.CONSOLE);
         if (leaf == null) return;
         boolean flag = EngineConsolePanel.isConsoleVisible();
@@ -306,12 +308,12 @@ public final class DockSpace {
     // Input: tab clicks, tab drag & drop, splitter resize
     // ------------------------------------------------------------------------------------------
 
-    public static boolean isDragging() {
+    public boolean isDragging() {
         return draggingSplit != null || (draggingTab != null && tabDragActive);
     }
 
     /** Left press on dock chrome (tab bars, splitters). Returns true if consumed. */
-    public static boolean onPress(float x, float y) {
+    public boolean onPress(float x, float y) {
         if (x < AREA_X0 || x > AREA_X1 || y < AREA_Y0 || y > AREA_Y1) return false;
 
         DockNode split = splitterAt(x, y);
@@ -338,7 +340,7 @@ public final class DockSpace {
     }
 
     /** Cursor move; returns true while a dock drag owns the pointer. */
-    public static boolean onCursor(float x, float y) {
+    public boolean onCursor(float x, float y) {
         cursorX = x;
         cursorY = y;
         if (draggingSplit != null) {
@@ -353,7 +355,7 @@ public final class DockSpace {
     }
 
     /** Left release; completes splitter drags and tab drops. Returns true if a dock interaction ended. */
-    public static boolean onRelease(float x, float y) {
+    public boolean onRelease(float x, float y) {
         if (draggingSplit != null) {
             draggingSplit = null;
             return true;
@@ -376,13 +378,13 @@ public final class DockSpace {
     }
 
     /** Cancels any in-progress dock drag (e.g. when a modal opens). */
-    public static void cancelDrag() {
+    public void cancelDrag() {
         draggingSplit = null;
         draggingTab = null;
         tabDragActive = false;
     }
 
-    private static void resizeSplit(DockNode n, float x, float y) {
+    private void resizeSplit(DockNode n, float x, float y) {
         float extent = n.horizontal ? (n.x1 - n.x0) : (n.y1 - n.y0);
         if (extent <= 0.0001f) return;
         float ratio = n.horizontal ? (x - n.x0) / extent : (n.y1 - y) / extent;
@@ -390,7 +392,7 @@ public final class DockSpace {
         n.ratio = Math.max(min, Math.min(1.0f - min, ratio));
     }
 
-    private static DockNode splitterAt(float x, float y) {
+    private DockNode splitterAt(float x, float y) {
         float half = SPLITTER_GRAB * 0.5f;
         for (int i = 0; i < splits.size(); i++) {
             DockNode n = splits.get(i);
@@ -405,7 +407,7 @@ public final class DockSpace {
         return null;
     }
 
-    private static DockNode leafAt(float x, float y) {
+    private DockNode leafAt(float x, float y) {
         for (int i = 0; i < leaves.size(); i++) {
             DockNode leaf = leaves.get(i);
             if (x >= leaf.x0 && x <= leaf.x1 && y >= leaf.y0 && y <= leaf.y1) return leaf;
@@ -413,7 +415,7 @@ public final class DockSpace {
         return null;
     }
 
-    private static DropZone dropZoneFor(DockNode leaf, float x, float y) {
+    private DropZone dropZoneFor(DockNode leaf, float x, float y) {
         if (y >= leaf.tabBarBottom()) return DropZone.CENTER;
         float w = leaf.x1 - leaf.x0;
         float h = leaf.tabBarBottom() - leaf.y0;
@@ -433,7 +435,7 @@ public final class DockSpace {
     // Tree mutation
     // ------------------------------------------------------------------------------------------
 
-    private static void dropPanel(DockPanel p, DockNode target, DropZone zone) {
+    private void dropPanel(DockPanel p, DockNode target, DropZone zone) {
         DockNode source = findLeaf(p);
         if (source == null || target == null || !target.leaf) return;
 
@@ -458,7 +460,7 @@ public final class DockSpace {
         activate(p);
     }
 
-    private static void removePanel(DockPanel p) {
+    private void removePanel(DockPanel p) {
         DockNode leaf = findLeaf(p);
         if (leaf == null) return;
         int idx = leaf.tabs.indexOf(p);
@@ -474,7 +476,7 @@ public final class DockSpace {
         }
     }
 
-    private static void replaceNode(DockNode old, DockNode replacement) {
+    private void replaceNode(DockNode old, DockNode replacement) {
         if (old == root) {
             root = replacement;
             return;
@@ -484,18 +486,18 @@ public final class DockSpace {
         if (parent.first == old) parent.first = replacement; else parent.second = replacement;
     }
 
-    private static DockNode findParent(DockNode node, DockNode child) {
+    private DockNode findParent(DockNode node, DockNode child) {
         if (node == null || node.leaf) return null;
         if (node.first == child || node.second == child) return node;
         DockNode found = findParent(node.first, child);
         return (found != null) ? found : findParent(node.second, child);
     }
 
-    private static DockNode findLeaf(DockPanel p) {
+    private DockNode findLeaf(DockPanel p) {
         return findLeaf(root, p);
     }
 
-    private static DockNode findLeaf(DockNode node, DockPanel p) {
+    private DockNode findLeaf(DockNode node, DockPanel p) {
         if (node == null) return null;
         if (node.leaf) return node.tabs.contains(p) ? node : null;
         DockNode found = findLeaf(node.first, p);
@@ -506,18 +508,18 @@ public final class DockSpace {
     // Rendering
     // ------------------------------------------------------------------------------------------
 
-    private static float naturalTabWidth(DockPanel p) {
-        return 0.035f + UIGeometryBatch.screenTextWidth(p.title, TAB_TEXT_SIZE);
+    private float naturalTabWidth(DockPanel p) {
+        return 0.035f + UIGeometryBatch.screenTextWidth(measureBuffer, p.title, TAB_TEXT_SIZE);
     }
 
-    private static float tabScale(DockNode leaf) {
+    private float tabScale(DockNode leaf) {
         float total = 0.0f;
         for (int i = 0; i < leaf.tabs.size(); i++) total += naturalTabWidth(leaf.tabs.get(i));
         float avail = (leaf.x1 - leaf.x0) - 0.01f;
         return (total > avail && total > 0.0f) ? Math.max(0.0f, avail / total) : 1.0f;
     }
 
-    private static int tabIndexAt(DockNode leaf, float x) {
+    private int tabIndexAt(DockNode leaf, float x) {
         float scale = tabScale(leaf);
         float tx = leaf.x0 + 0.005f;
         for (int i = 0; i < leaf.tabs.size(); i++) {
@@ -529,7 +531,7 @@ public final class DockSpace {
     }
 
     /** Opaque backing for every non-scene tile, drawn before panel content. */
-    public static void renderBackgrounds(UIGeometryBatch.Buffer buffer) {
+    public void renderBackgrounds(UIGeometryBatch.Buffer buffer) {
         for (int i = 0; i < leaves.size(); i++) {
             DockNode leaf = leaves.get(i);
             if (leaf.activePanel() == DockPanel.SCENE) continue;
@@ -538,7 +540,7 @@ public final class DockSpace {
     }
 
     /** Tab bars, tile frames and splitters, drawn after panel content. */
-    public static void renderChrome(UIGeometryBatch.Buffer buffer) {
+    public void renderChrome(UIGeometryBatch.Buffer buffer) {
         DockNode hoverSplit = (draggingSplit != null) ? draggingSplit : (draggingTab == null ? splitterAt(cursorX, cursorY) : null);
 
         // Splitters read as the charcoal window background showing between tiles; accent while grabbed/hovered
@@ -596,7 +598,7 @@ public final class DockSpace {
             String caption = captionFor(leaf.activePanel());
             if (caption != null) {
                 float capSize = 0.85f;
-                float capW = UIGeometryBatch.screenTextWidth(caption, capSize);
+                float capW = UIGeometryBatch.screenTextWidth(measureBuffer, caption, capSize);
                 float capX = Math.max(tx + 0.02f, leaf.x1 - 0.012f - capW);
                 if (capX + 0.05f < leaf.x1) {
                     UIGeometryBatch.addBoundedText(buffer, caption, capX, barY1 - 0.019f, leaf.x1 - 0.008f, capSize, EditorTheme.TEXT_MUTED, 1.0f);
@@ -607,14 +609,14 @@ public final class DockSpace {
         }
     }
 
-    private static String captionFor(DockPanel p) {
+    private String captionFor(DockPanel p) {
         if (p == DockPanel.SCENE) return ViewportPanel.getRhiCanvasTitle();
         if (p == DockPanel.ANIMATOR) return "STATE MACHINE";
         return null;
     }
 
     /** Drop-zone preview and dragged-tab ghost, drawn above everything docked. */
-    public static void renderDragOverlay(UIGeometryBatch.Buffer buffer) {
+    public void renderDragOverlay(UIGeometryBatch.Buffer buffer) {
         if (draggingTab == null || !tabDragActive) return;
 
         DockNode target = leafAt(cursorX, cursorY);

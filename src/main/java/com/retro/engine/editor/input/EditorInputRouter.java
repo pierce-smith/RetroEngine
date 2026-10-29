@@ -79,8 +79,8 @@ public class EditorInputRouter {
         if (workspace == null) return false;
         PointerCoordinates coords = calculateCoordinates(rawX, rawY);
         if (coords == null) return false;
-        if (DockSpace.isDragging() || !workspace.hasActiveProject()) return false;
-        return PanelRegion.getRegionAt(coords.ndcX, coords.ndcY, workspace.getOverlayManager()) == PanelRegion.VIEWPORT;
+        if (workspace.getDockSpace().isDragging() || !workspace.hasActiveProject()) return false;
+        return PanelRegion.getRegionAt(coords.ndcX, coords.ndcY, workspace.getOverlayManager(), workspace.getDockSpace()) == PanelRegion.VIEWPORT;
     }
 
     public boolean handleMouseClick(double rawX, double rawY, int button, int action) {
@@ -103,11 +103,11 @@ public class EditorInputRouter {
 
         OverlaySystem overlayManager = workspace.getOverlayManager();
         GizmoState gizmoStateController = workspace.getGizmoStateController();
-        PanelRegion region = PanelRegion.getRegionAt(ndcX, ndcY, overlayManager);
+        PanelRegion region = PanelRegion.getRegionAt(ndcX, ndcY, overlayManager, workspace.getDockSpace());
 
         if (action == 1) { // Press
             if (button == 1) {
-                DockSpace.cancelDrag();
+                workspace.getDockSpace().cancelDrag();
                 overlayManager.onRightClickPress(
                     refX, refY, ndcX, ndcY, cameraController,
                     gizmoStateController.getCamPitch(),
@@ -118,7 +118,7 @@ public class EditorInputRouter {
                 );
                 // Animator canvas opens its graph context menu on press; OverlaySystem's release-time
                 // menu builder then sees the open menu (OVERLAY_MODAL) and leaves it alone
-                if (region == PanelRegion.ANIMATOR && DockSpace.panelAt(ndcX, ndcY) == DockPanel.ANIMATOR) {
+                if (region == PanelRegion.ANIMATOR && workspace.getDockSpace().panelAt(ndcX, ndcY) == DockPanel.ANIMATOR) {
                     dispatchToPanel(DockPanel.ANIMATOR, ndcX, ndcY, button, action);
                 }
                 return true;
@@ -166,11 +166,11 @@ public class EditorInputRouter {
             }
 
             // Dock chrome (tab bars, splitters) takes priority over panel content
-            if (DockSpace.onPress(ndcX, ndcY)) {
+            if (workspace.getDockSpace().onPress(ndcX, ndcY)) {
                 return true;
             }
 
-            DockPanel panel = DockSpace.panelAt(ndcX, ndcY);
+            DockPanel panel = workspace.getDockSpace().panelAt(ndcX, ndcY);
             if (panel == null) return false;
             return dispatchToPanel(panel, ndcX, ndcY, button, action);
         } else if (action == 0) { // Release
@@ -189,7 +189,7 @@ public class EditorInputRouter {
                 return true;
             }
 
-            if (DockSpace.onRelease(ndcX, ndcY)) {
+            if (workspace.getDockSpace().onRelease(ndcX, ndcY)) {
                 return true;
             }
 
@@ -197,14 +197,14 @@ public class EditorInputRouter {
             if (button == 0 && AnimatorGraphPanel.handleInspectorRelease()) {
                 return true;
             }
-            if (DockSpace.isVisible(DockPanel.ANIMATOR)) {
-                DockSpace.beginInput(DockPanel.ANIMATOR);
+            if (workspace.getDockSpace().isVisible(DockPanel.ANIMATOR)) {
+                workspace.getDockSpace().beginInput(DockPanel.ANIMATOR);
                 try {
-                    if (AnimatorGraphPanel.handleCanvasClick(DockSpace.toDesignX(DockPanel.ANIMATOR, ndcX), DockSpace.toDesignY(DockPanel.ANIMATOR, ndcY), button, action, workspace)) {
+                    if (AnimatorGraphPanel.handleCanvasClick(workspace.getDockSpace().toDesignX(DockPanel.ANIMATOR, ndcX), workspace.getDockSpace().toDesignY(DockPanel.ANIMATOR, ndcY), button, action, workspace)) {
                         return true;
                     }
                 } finally {
-                    DockSpace.endInput();
+                    workspace.getDockSpace().endInput();
                 }
             }
 
@@ -239,11 +239,11 @@ public class EditorInputRouter {
      * hit-test keeps working wherever (and at whatever size) the panel is docked.
      */
     private boolean dispatchToPanel(DockPanel panel, float screenX, float screenY, int button, int action) {
-        float dx = DockSpace.toDesignX(panel, screenX);
-        float dy = DockSpace.toDesignY(panel, screenY);
+        float dx = workspace.getDockSpace().toDesignX(panel, screenX);
+        float dy = workspace.getDockSpace().toDesignY(panel, screenY);
         GizmoState gizmoStateController = workspace.getGizmoStateController();
 
-        DockSpace.beginInput(panel);
+        workspace.getDockSpace().beginInput(panel);
         try {
             switch (panel) {
                 case HIERARCHY -> {
@@ -281,7 +281,7 @@ public class EditorInputRouter {
                 }
             }
         } finally {
-            DockSpace.endInput();
+            workspace.getDockSpace().endInput();
         }
     }
 
@@ -292,22 +292,22 @@ public class EditorInputRouter {
             workspace.setLastNdcPos(coords.ndcX, coords.ndcY);
             if (!workspace.hasActiveProject()) return true;
 
-            if (DockSpace.onCursor(coords.ndcX, coords.ndcY)) {
+            if (workspace.getDockSpace().onCursor(coords.ndcX, coords.ndcY)) {
                 return true;
             }
 
-            if (DockSpace.isVisible(DockPanel.ANIMATOR)) {
-                AnimatorGraphPanel.handleCursorPos(DockSpace.toDesignX(DockPanel.ANIMATOR, coords.ndcX), DockSpace.toDesignY(DockPanel.ANIMATOR, coords.ndcY), workspace);
+            if (workspace.getDockSpace().isVisible(DockPanel.ANIMATOR)) {
+                AnimatorGraphPanel.handleCursorPos(workspace.getDockSpace().toDesignX(DockPanel.ANIMATOR, coords.ndcX), workspace.getDockSpace().toDesignY(DockPanel.ANIMATOR, coords.ndcY), workspace);
             }
-            if (DockSpace.isVisible(DockPanel.ANIMATOR_INSPECTOR)) {
-                AnimatorGraphPanel.handleInspectorCursorPos(DockSpace.toDesignX(DockPanel.ANIMATOR_INSPECTOR, coords.ndcX), DockSpace.toDesignY(DockPanel.ANIMATOR_INSPECTOR, coords.ndcY), workspace);
+            if (workspace.getDockSpace().isVisible(DockPanel.ANIMATOR_INSPECTOR)) {
+                AnimatorGraphPanel.handleInspectorCursorPos(workspace.getDockSpace().toDesignX(DockPanel.ANIMATOR_INSPECTOR, coords.ndcX), workspace.getDockSpace().toDesignY(DockPanel.ANIMATOR_INSPECTOR, coords.ndcY), workspace);
             }
-            if (DockSpace.isVisible(DockPanel.ASSETS)
-                    && AssetBrowserInputDelegate.processDrag(DockSpace.toDesignY(DockPanel.ASSETS, coords.ndcY))) {
+            if (workspace.getDockSpace().isVisible(DockPanel.ASSETS)
+                    && AssetBrowserInputDelegate.processDrag(workspace.getDockSpace().toDesignY(DockPanel.ASSETS, coords.ndcY))) {
                 return true;
             }
-            if (DockSpace.isVisible(DockPanel.INSPECTOR)) {
-                InspectorInputDelegate.processInspectorDrag(DockSpace.toDesignX(DockPanel.INSPECTOR, coords.ndcX), DockSpace.toDesignY(DockPanel.INSPECTOR, coords.ndcY), workspace);
+            if (workspace.getDockSpace().isVisible(DockPanel.INSPECTOR)) {
+                InspectorInputDelegate.processInspectorDrag(workspace.getDockSpace().toDesignX(DockPanel.INSPECTOR, coords.ndcX), workspace.getDockSpace().toDesignY(DockPanel.INSPECTOR, coords.ndcY), workspace);
             }
         }
         return workspace.getGizmoStateController().onCursorPos(rawX, rawY, workspace, workspace.getOverlayManager());
@@ -316,7 +316,7 @@ public class EditorInputRouter {
     public boolean handleScroll(double yOffset) {
         if (workspace == null) return false;
         if (!workspace.hasActiveProject()) return true;
-        DockPanel panel = DockSpace.panelAt(workspace.getLastNdcX(), workspace.getLastNdcY());
+        DockPanel panel = workspace.getDockSpace().panelAt(workspace.getLastNdcX(), workspace.getLastNdcY());
 
         if (panel == DockPanel.INSPECTOR) {
             InspectorPanel.scroll((float) -yOffset * 0.18f);
@@ -326,8 +326,8 @@ public class EditorInputRouter {
             return AssetBrowserInputDelegate.handleScroll(yOffset);
         }
         if (panel == DockPanel.ANIMATOR || panel == DockPanel.ANIMATOR_INSPECTOR) {
-            float dx = DockSpace.toDesignX(panel, workspace.getLastNdcX());
-            float dy = DockSpace.toDesignY(panel, workspace.getLastNdcY());
+            float dx = workspace.getDockSpace().toDesignX(panel, workspace.getLastNdcX());
+            float dy = workspace.getDockSpace().toDesignY(panel, workspace.getLastNdcY());
             return panel == DockPanel.ANIMATOR
                     ? AnimatorGraphPanel.handleCanvasScroll(dx, dy, yOffset)
                     : AnimatorGraphPanel.handleInspectorScroll(dx, dy, yOffset);

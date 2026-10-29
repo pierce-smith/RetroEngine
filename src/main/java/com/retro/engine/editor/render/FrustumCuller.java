@@ -83,6 +83,11 @@ public class FrustumCuller {
         planes[5].normalize();
     }
 
+    /** Planes for an explicit column-major world-to-view matrix with the backends' perspective projection. */
+    public void updateFromView(float[] view, float fovDeg, float aspect, float zNear, float zFar) {
+        updateFrustumPlanes(multiplyMatrices(computePerspectiveProjectionMatrix(fovDeg, aspect, zNear, zFar), view));
+    }
+
     public void updateFromCamera(float camPanX, float camPanY, float camZoom, float camPitch, float camYaw, float fovDeg, float aspect, float zNear, float zFar) {
         float[] view = computeViewMatrix(camPanX, camPanY, camZoom, camPitch, camYaw);
         float[] proj = computePerspectiveProjectionMatrix(fovDeg, aspect, zNear, zFar);

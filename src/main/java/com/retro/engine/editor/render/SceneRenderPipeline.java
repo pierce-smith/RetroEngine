@@ -6,15 +6,18 @@ import com.retro.engine.assets.importers.MeshImporter;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.ui.batch.UIFont;
+import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.dock.DockPanel;
 import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.panels.EngineConsolePanel;
 import com.retro.engine.editor.ui.panels.ViewportPanel;
+import com.retro.engine.render.ui.GameUIRenderer;
 import com.retro.engine.rhi.DirectionalShadowFrustum;
 import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.rhi.RenderCommand;
 import com.retro.engine.rhi.RenderQueue;
 import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.scene.world.SceneWorld;
 import com.retro.engine.scene.world.SceneWorld.WorldTransform;
 import com.retro.engine.scene.components.media.AnimatorComponent;
 import com.retro.engine.scene.components.rendering.Camera;
@@ -79,6 +82,8 @@ public class SceneRenderPipeline {
         public int gridVertexCount = 0;
         public float[] uiVertices = null;
         public int uiVertexCount = 0;
+        // Owned storage for the merged [game UI | editor UI] stream, so each snapshot's vertices outlive the next extract
+        public float[] uiMergeScratch = new float[0];
         public int totalDrawCalls = 0;
         public int totalActiveVertices = 0;
         // Docked Scene tile (screen NDC) the offscreen 3D image is composited into; empty when hidden
@@ -88,6 +93,10 @@ public class SceneRenderPipeline {
         public boolean cameraPreviewActive = false;
         public final float[] cameraPreviewViewProj = new float[16];
         public float cameraPreviewPosX, cameraPreviewPosY, cameraPreviewPosZ;
+        // Play-mode camera entity view (inverse world transform) handed to the backend instead of the orbit pose
+        public boolean cameraViewActive = false;
+        public final float[] cameraView = new float[16];
+        public final float[] cameraEye = new float[3];
 
         public void reset() {
             activeLight = null;
@@ -101,6 +110,7 @@ public class SceneRenderPipeline {
             totalDrawCalls = 0;
             totalActiveVertices = 0;
             cameraPreviewActive = false;
+            cameraViewActive = false;
         }
     }
 
@@ -114,6 +124,8 @@ public class SceneRenderPipeline {
     private final MeshBufferData fallbackCube = MeshImporter.createDefaultCube();
     private final FrustumCuller frustumCuller = new FrustumCuller();
     private final FrustumCuller previewCuller = new FrustumCuller();
+    private final GameUIRenderer gameUiRenderer = new GameUIRenderer();
+    private final float[] viewScratch = new float[16];
 
     // Backend camera preview target (0L = unsupported); refreshed every submitFrame
     private long cameraPreviewTexture = 0L;
@@ -146,12 +158,14 @@ public class SceneRenderPipeline {
         ViewportCamera camera = editorManager.getCameraController();
         if (camera != null) {
             float far = camera.isPlayLocked() ? camera.getFar() : 100.0f;
-            frustumCuller.updateFromCamera(
-                    camera.getPanX(), camera.getPanY(), camera.getZoom(),
-                    camera.getPitch(), camera.getYaw(),
-                    camera.getFov(), ViewportPanel.getSceneAspect(), camera.getNear(), far
-            );
+            camera.computeViewMatrix(viewScratch);
+            frustumCuller.updateFromView(viewScratch, camera.getFov(), ViewportPanel.getSceneAspect(editorManager.getDockSpace()), camera.getNear(), far);
             updateDepthRow(camera, far);
+            if (camera.hasEntityView()) {
+                snapshot.cameraViewActive = true;
+                System.arraycopy(viewScratch, 0, snapshot.cameraView, 0, 16);
+                camera.computeEyePosition(snapshot.cameraEye);
+            }
         } else {
             depthRowX = depthRowY = depthRowZ = depthRowW = 0.0f;
         }
@@ -159,7 +173,7 @@ public class SceneRenderPipeline {
         shadowFrustum.reset();
 
         // Selected Camera entity's preview; its frustum also keeps entities only that camera can see in the queue
-        boolean previewActive = cameraPreviewTexture != 0L && !ViewportPanel.isStandaloneFullscreen() && DockSpace.isSceneViewportVisible()
+        boolean previewActive = cameraPreviewTexture != 0L && !ViewportPanel.isStandaloneFullscreen() && editorManager.getDockSpace().isSceneViewportVisible()
                 && buildCameraPreview(editorManager, snapshot);
 
         List<Entity> entities = editorManager.getSceneEntities();
@@ -322,26 +336,32 @@ public class SceneRenderPipeline {
         // Every live entity has marked its assets; evict what deleted entities or an unloaded scene left behind
         streamingService.sweepUnreferenced();
 
-        snapshot.gridVisible = editorManager.getGizmoStateController().is3DGridVisible();
-        snapshot.gridVertices = editorManager.getGizmoStateController().get3DGridVertices();
-        snapshot.gridVertexCount = editorManager.getGizmoStateController().get3DGridVertexCount();
+        // The editor grid is an authoring aid: never drawn while playing or when viewing through a game camera
+        boolean gameView = editorManager.getPlayState() != SceneWorld.PlayState.EDITING || (camera != null && camera.hasEntityView());
+        snapshot.gridVisible = !gameView && editorManager.getGizmoStateController().is3DGridVisible();
+        snapshot.gridVertices = snapshot.gridVisible ? editorManager.getGizmoStateController().get3DGridVertices() : null;
+        snapshot.gridVertexCount = snapshot.gridVisible ? editorManager.getGizmoStateController().get3DGridVertexCount() : 0;
         editorManager.setCameraPreviewTexture(previewActive ? cameraPreviewTexture : 0L);
-        snapshot.uiVertices = editorManager.getUiVertices();
-        snapshot.uiVertexCount = editorManager.getUiVertexCount();
+        // Building the editor UI also lays out the dock, so the Scene tile read below is this frame's
+        boolean standalone = ViewportPanel.isStandaloneFullscreen();
+        float[] editorUi = standalone ? null : editorManager.getUiVertices();
+        int editorUiVertexCount = standalone ? 0 : editorManager.getUiVertexCount();
 
-        if (ViewportPanel.isStandaloneFullscreen()) {
+        if (standalone) {
             // Standalone runtime: full-window NDC quad
             snapshot.sceneMinX = snapshot.sceneMinY = -1.0f;
             snapshot.sceneMaxX = snapshot.sceneMaxY = 1.0f;
-        } else if (DockSpace.isSceneViewportVisible()) {
-            snapshot.sceneMinX = DockSpace.getContentX0(DockPanel.SCENE);
-            snapshot.sceneMinY = DockSpace.getContentY0(DockPanel.SCENE);
-            snapshot.sceneMaxX = DockSpace.getContentX1(DockPanel.SCENE);
-            snapshot.sceneMaxY = DockSpace.getContentY1(DockPanel.SCENE);
+        } else if (editorManager.getDockSpace().isSceneViewportVisible()) {
+            DockSpace dock = editorManager.getDockSpace();
+            snapshot.sceneMinX = dock.getContentX0(DockPanel.SCENE);
+            snapshot.sceneMinY = dock.getContentY0(DockPanel.SCENE);
+            snapshot.sceneMaxX = dock.getContentX1(DockPanel.SCENE);
+            snapshot.sceneMaxY = dock.getContentY1(DockPanel.SCENE);
         } else {
             snapshot.sceneMinX = snapshot.sceneMinY = snapshot.sceneMaxX = snapshot.sceneMaxY = 0.0f;
         }
-        snapshot.sceneAspect = ViewportPanel.getSceneAspect();
+        snapshot.sceneAspect = ViewportPanel.getSceneAspect(editorManager.getDockSpace());
+        composeUiStream(snapshot, editorManager, camera, standalone, editorUi, editorUiVertexCount);
 
         if (snapshot.gridVisible) {
             totalActiveVertices += snapshot.gridVertexCount;
@@ -375,6 +395,8 @@ public class SceneRenderPipeline {
             );
         }
 
+        rhi.setCameraView(snapshot.cameraViewActive ? snapshot.cameraView : null,
+                snapshot.cameraEye[0], snapshot.cameraEye[1], snapshot.cameraEye[2]);
         rhi.submitRenderQueue(snapshot.renderQueue);
 
         ViewportPanel.updatePicking(rhi);
@@ -390,6 +412,31 @@ public class SceneRenderPipeline {
     }
 
     private boolean uiFontResolved = false;
+
+    /**
+     * Fills the snapshot's UI stream: game UI first (drawn over the composited 3D image, clipped to the game viewport),
+     * then the editor UI on top. Standalone builds carry the game UI only.
+     */
+    private void composeUiStream(RenderSceneSnapshot snapshot, EditorWorkspace editorManager, ViewportCamera camera,
+                                 boolean standalone, float[] editorVerts, int editorVertexCount) {
+        int windowW = standalone ? ViewportPanel.getStandaloneWidth() : editorManager.getWindowWidth();
+        int windowH = standalone ? ViewportPanel.getStandaloneHeight() : editorManager.getWindowHeight();
+        UIGeometryBatch.Buffer game = gameUiRenderer.build(
+                editorManager.getSceneEntities(), editorManager.getSceneManager(),
+                snapshot.sceneMinX, snapshot.sceneMinY, snapshot.sceneMaxX, snapshot.sceneMaxY,
+                windowW, windowH, camera, snapshot.sceneAspect);
+        int gameFloats = game.getSize();
+
+        int editorFloats = (editorVerts != null) ? editorVertexCount * UIGeometryBatch.VERTEX_STRIDE : 0;
+
+        int total = gameFloats + editorFloats;
+        if (snapshot.uiMergeScratch.length < total) snapshot.uiMergeScratch = new float[Math.max(total, snapshot.uiMergeScratch.length * 2)];
+        float[] merged = snapshot.uiMergeScratch;
+        System.arraycopy(game.getArray(), 0, merged, 0, gameFloats);
+        if (editorFloats > 0) System.arraycopy(editorVerts, 0, merged, gameFloats, editorFloats);
+        snapshot.uiVertices = merged;
+        snapshot.uiVertexCount = total / UIGeometryBatch.VERTEX_STRIDE;
+    }
 
     /**
      * Bakes the system UI font once and hands its SDF atlas to the backend; glyph layout switches over on the next
@@ -496,15 +543,12 @@ public class SceneRenderPipeline {
         }
     }
 
-    /** Editor camera view matrix row 2 (matches the backends' view: R(yaw, pitch) then pan/zoom translation). */
+    /** Row 2 of the view matrix in {@code viewScratch} (view-space z) and the depth range for sort keys. */
     private void updateDepthRow(ViewportCamera camera, float far) {
-        double yaw = Math.toRadians(camera.getYaw()), pitch = Math.toRadians(camera.getPitch());
-        float cy = (float) Math.cos(yaw), sy = (float) Math.sin(yaw);
-        float cp = (float) Math.cos(pitch), sp = (float) Math.sin(pitch);
-        depthRowX = sy * cp;
-        depthRowY = -sp;
-        depthRowZ = cy * cp;
-        depthRowW = camera.getZoom();
+        depthRowX = viewScratch[2];
+        depthRowY = viewScratch[6];
+        depthRowZ = viewScratch[10];
+        depthRowW = viewScratch[14];
         depthNear = camera.getNear();
         depthFar = far;
     }

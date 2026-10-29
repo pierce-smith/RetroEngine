@@ -132,7 +132,7 @@ public class GizmoState {
         }
 
         // Pixel-exact GPU Color-ID pick: the background (PICK_ID_NONE) deselects
-        ViewportPanel.requestPickAtDesign((float) (refX / 640.0 - 1.0), (float) (1.0 - refY / 360.0),
+        ViewportPanel.requestPickAtDesign(manager.getDockSpace(), (float) (refX / 640.0 - 1.0), (float) (1.0 - refY / 360.0),
                 pickId -> manager.selectEntity(ViewportPanel.resolvePick(pickId, manager.getSceneEntities())));
     }
 
@@ -143,10 +143,11 @@ public class GizmoState {
         float screenX = (float) ((rawX / (double) manager.getWindowWidth()) * 2.0 - 1.0);
         float screenY = (float) (1.0 - (rawY / (double) manager.getWindowHeight()) * 2.0);
         // Keep the GPU pick probe on the cursor so a click usually finds its texel already read back
-        ViewportPanel.setPickProbeScreen(screenX, screenY);
-        if (DockSpace.isVisible(DockPanel.SCENE)) {
-            screenX = DockSpace.toDesignX(DockPanel.SCENE, screenX);
-            screenY = DockSpace.toDesignY(DockPanel.SCENE, screenY);
+        DockSpace dock = manager.getDockSpace();
+        ViewportPanel.setPickProbeScreen(dock, screenX, screenY);
+        if (dock.isVisible(DockPanel.SCENE)) {
+            screenX = dock.toDesignX(DockPanel.SCENE, screenX);
+            screenY = dock.toDesignY(DockPanel.SCENE, screenY);
         }
         double refX = (screenX + 1.0) * 640.0;
         double refY = (1.0 - screenY) * 360.0;

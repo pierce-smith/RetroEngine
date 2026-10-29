@@ -1,5 +1,6 @@
 package com.retro.engine.editor.ui.panels;
 
+import com.retro.engine.editor.ui.UIContext;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.theme.EditorTheme;
 import com.retro.engine.scene.components.media.AudioSource;
@@ -134,7 +135,8 @@ public class HierarchyPanel {
         return Category.EMPTY;
     }
 
-    public static void render(UIGeometryBatch.Buffer buffer, List<Entity> sceneEntities) {
+    public static void render(UIContext ui, List<Entity> sceneEntities) {
+        UIGeometryBatch.Buffer buffer = ui.geometry();
         UIGeometryBatch.addQuad(buffer, -1.0f, -0.5f, -0.55f, 1.0f, EditorTheme.SURFACE, 1.0f);
 
         List<HierarchyNode> visibleTree = buildFlattenedTree(sceneEntities);
@@ -213,11 +215,5 @@ public class HierarchyPanel {
         float w = UIGeometryBatch.textWidth(buffer, text, size);
         float x = -1.0f + Math.max(0.01f, (0.45f - w) * 0.5f);
         UIGeometryBatch.addBoundedText(buffer, text, x, midY + size * 0.009f, -0.555f, size, rgb, 1.0f);
-    }
-
-    public static void render(List<Float> verts, List<Entity> sceneEntities) {
-        UIGeometryBatch.Buffer tempBuf = new UIGeometryBatch.Buffer();
-        render(tempBuf, sceneEntities);
-        for (int idx = 0; idx < tempBuf.getSize(); idx++) verts.add(tempBuf.getArray()[idx]);
     }
 }

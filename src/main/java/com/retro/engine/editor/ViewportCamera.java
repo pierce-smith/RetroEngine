@@ -29,6 +29,13 @@ public class ViewportCamera {
     // Projection (backends and culling read these; a Play-mode Main Camera overrides them)
     public static final float EDITOR_FOV = 50.0f, EDITOR_NEAR = 0.1f, EDITOR_FAR = 500.0f;
     private float fov = EDITOR_FOV, near = EDITOR_NEAR, far = EDITOR_FAR;
+    private float sceneAspect = 712.0f / 488.0f;
+
+    // Play mode: the bound camera entity's world-to-view matrix (inverse of its world transform) and eye, used
+    // verbatim instead of the orbit parameters, which cannot represent roll or arbitrary entity rotations
+    private final float[] entityView = new float[16];
+    private float entityEyeX, entityEyeY, entityEyeZ;
+    private boolean entityViewActive = false;
 
     // Play-mode lock: the view follows the scene's Main Camera and editor navigation is disabled
     private boolean playLocked = false;
@@ -134,29 +141,59 @@ public class ViewportCamera {
     }
 
     /**
-     * Snaps the view to a camera entity's view matrix (column-major, world-to-view) and projection. The editor
-     * camera has no roll, so the look direction and eye position are matched exactly and roll is dropped.
+     * Binds a camera entity's view matrix (column-major, world-to-view: the inverse of its world transform), eye
+     * position and projection. {@link #computeViewMatrix} returns this matrix verbatim until {@link #clearEntityView}
+     * or {@link #unlockFromPlay}; the orbit parameters keep the pre-play editor pose.
      */
     public void snapToView(float[] view, float eyeX, float eyeY, float eyeZ, float fovDeg, float nearPlane, float farPlane) {
-        // Row 2 of the editor rotation is (sin(yaw)cos(pitch), -sin(pitch), cos(yaw)cos(pitch))
-        float bx = view[2], by = view[6], bz = view[10];
-        pitch = (float) Math.toDegrees(Math.asin(Math.max(-1.0f, Math.min(1.0f, -by))));
-        yaw = (float) Math.toDegrees(Math.atan2(bx, bz));
+        System.arraycopy(view, 0, entityView, 0, 16);
+        entityEyeX = eyeX; entityEyeY = eyeY; entityEyeZ = eyeZ;
+        entityViewActive = true;
+        fov = fovDeg; near = nearPlane; far = farPlane;
+    }
 
+    /** Falls back to the (locked) orbit pose, e.g. when the bound camera entity no longer exists. */
+    public void clearEntityView() {
+        entityViewActive = false;
+    }
+
+    /** True while the view comes from a camera entity's transform rather than the orbit parameters. */
+    public boolean hasEntityView() { return entityViewActive; }
+
+    /** Column-major world-to-view matrix: the bound entity view, else the orbit pose R(yaw, pitch) then pan/zoom. */
+    public void computeViewMatrix(float[] out) {
+        if (entityViewActive) {
+            System.arraycopy(entityView, 0, out, 0, 16);
+            return;
+        }
         float radYaw = (float) Math.toRadians(yaw), radPitch = (float) Math.toRadians(pitch);
         float cy = (float) Math.cos(radYaw), sy = (float) Math.sin(radYaw);
         float cp = (float) Math.cos(radPitch), sp = (float) Math.sin(radPitch);
-        panX = -(cy * eyeX - sy * eyeZ);
-        panY = -(sy * sp * eyeX + cp * eyeY + cy * sp * eyeZ);
-        zoom = -(sy * cp * eyeX - sp * eyeY + cy * cp * eyeZ);
+        out[0] = cy;    out[1] = sy * sp;  out[2] = sy * cp;   out[3] = 0.0f;
+        out[4] = 0.0f;  out[5] = cp;       out[6] = -sp;       out[7] = 0.0f;
+        out[8] = -sy;   out[9] = cy * sp;  out[10] = cy * cp;  out[11] = 0.0f;
+        out[12] = panX; out[13] = panY;    out[14] = zoom;     out[15] = 1.0f;
+    }
 
-        fov = fovDeg; near = nearPlane; far = farPlane;
+    /** World-space eye position matching {@link #computeViewMatrix} (-R^T * t for the orbit pose). */
+    public void computeEyePosition(float[] out) {
+        if (entityViewActive) {
+            out[0] = entityEyeX; out[1] = entityEyeY; out[2] = entityEyeZ;
+            return;
+        }
+        float radYaw = (float) Math.toRadians(yaw), radPitch = (float) Math.toRadians(pitch);
+        float cy = (float) Math.cos(radYaw), sy = (float) Math.sin(radYaw);
+        float cp = (float) Math.cos(radPitch), sp = (float) Math.sin(radPitch);
+        out[0] = -(cy * panX + sy * sp * panY + sy * cp * zoom);
+        out[1] = -(cp * panY - sp * zoom);
+        out[2] = -(-sy * panX + cy * sp * panY + cy * cp * zoom);
     }
 
     /** Leaves Play-mode lock, restoring the pre-play editor pose and projection. */
     public void unlockFromPlay() {
         if (!playLocked) return;
         playLocked = false;
+        entityViewActive = false;
         panX = savedPanX; panY = savedPanY; zoom = savedZoom; pitch = savedPitch; yaw = savedYaw;
         fov = EDITOR_FOV; near = EDITOR_NEAR; far = EDITOR_FAR;
         isDraggingRmb = isDraggingMmb = isDraggingLmb = false;
@@ -177,6 +214,10 @@ public class ViewportCamera {
     public float getFov() { return fov; }
     public float getNear() { return near; }
     public float getFar() { return far; }
+
+    /** Projection aspect of the viewport this camera renders into (refreshed by the editor after each dock layout). */
+    public float getSceneAspect() { return sceneAspect; }
+    public void setSceneAspect(float aspect) { if (aspect > 0.0f) this.sceneAspect = aspect; }
     public boolean isPlayLocked() { return playLocked; }
     public boolean isDraggingRmb() { return isDraggingRmb; }
     public boolean isDraggingMmb() { return isDraggingMmb; }

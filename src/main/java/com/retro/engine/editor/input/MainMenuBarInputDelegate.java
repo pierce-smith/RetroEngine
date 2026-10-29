@@ -117,7 +117,7 @@ public class MainMenuBarInputDelegate {
             } else if (activeDropdownMenu == DropdownMenu.VIEW) {
                 if (itemIndex == 0) { UISoundPlayer.play(UISound.CLICK); manager.resetViewportCamera(); }
                 else if (itemIndex == 1) { UISoundPlayer.play(UISound.TOGGLE); manager.getGizmoStateController().toggle3DGrid(); }
-                else if (itemIndex == 2) { UISoundPlayer.play(UISound.CLICK); DockSpace.resetLayout(); }
+                else if (itemIndex == 2) { UISoundPlayer.play(UISound.CLICK); manager.getDockSpace().resetLayout(); }
             }
             return true;
         }

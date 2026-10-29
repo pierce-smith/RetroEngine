@@ -276,6 +276,13 @@ public class MetalUniformStream {
         return matMVP;
     }
 
+    /** Projection * explicit view (column-major) for the current projection parameters. */
+    public float[] createViewProjMatrix(float aspect, float[] view) {
+        createPerspectiveMatrix(aspect);
+        multiplyMat4(matP, view, matMVP);
+        return matMVP;
+    }
+
     public float[] create3DMVPMatrix(float aspect, float panX, float panY, float zoom, float pitch, float yaw, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
         createPerspectiveMatrix(aspect);
         createCameraViewMatrix(panX, panY, zoom, pitch, yaw);

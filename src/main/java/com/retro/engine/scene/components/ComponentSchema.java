@@ -16,6 +16,11 @@ import com.retro.engine.scene.components.rendering.Light;
 import com.retro.engine.scene.components.rendering.Material;
 import com.retro.engine.scene.components.rendering.MeshFilter;
 import com.retro.engine.scene.components.transform.Transform;
+import com.retro.engine.scene.components.ui.UICanvasComponent;
+import com.retro.engine.scene.components.ui.UIImage;
+import com.retro.engine.scene.components.ui.UIPanel;
+import com.retro.engine.scene.components.ui.UIProgressBar;
+import com.retro.engine.scene.components.ui.UIText;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -39,7 +44,8 @@ public final class ComponentSchema {
             Transform.class, MeshFilter.class, Material.class, Light.class, AudioSource.class, Camera.class,
             ScriptComponent.class, RigidBodyComponent.class, BoxCollider.class, SphereCollider.class,
             CapsuleCollider.class, CharacterControllerComponent.class, VehicleControllerComponent.class,
-            AnimatorComponent.class
+            AnimatorComponent.class, UICanvasComponent.class, UIPanel.class, UIText.class, UIImage.class,
+            UIProgressBar.class
     );
 
     /** How the inspector presents and edits a property. */

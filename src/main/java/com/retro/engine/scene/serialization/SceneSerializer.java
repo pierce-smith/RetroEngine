@@ -16,7 +16,7 @@ import java.util.List;
 public class SceneSerializer {
 
     public static final int BINARY_MAGIC = 0x52455452; // 'RETR' in ASCII
-    public static final int BINARY_VERSION = 2;         // Version 2 (Phase 4 Overrides)
+    public static final int BINARY_VERSION = 3;         // Version 3 (Camera UI canvas link)
 
     public record SceneLoadData(List<Entity> entities, List<AssetMeta> assetDirectory) {}
 

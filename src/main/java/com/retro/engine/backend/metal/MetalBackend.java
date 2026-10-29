@@ -90,6 +90,10 @@ public class MetalBackend implements IRenderBackend {
     private float camZoom = -5.0f;
     private float camPitch = 0.0f;
     private float camYaw = 0.0f;
+    // Explicit camera view (Play mode camera entity), replacing the orbit parameters while active
+    private boolean explicitViewActive = false;
+    private final float[] explicitView = new float[16];
+    private final float[] explicitEye = new float[3];
 
     // Active Scene Lighting Parameters
     private int activeLightType = 0; // 0 = DIRECTIONAL, 1 = POINT, 2 = SPOT
@@ -199,6 +203,14 @@ public class MetalBackend implements IRenderBackend {
     @Override public void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw) {
         this.camPanX = panX; this.camPanY = panY; this.camZoom = zoom; this.camPitch = pitch; this.camYaw = yaw;
     }
+    @Override
+    public void setCameraView(float[] view, float eyeX, float eyeY, float eyeZ) {
+        explicitViewActive = view != null && view.length == 16;
+        if (!explicitViewActive) return;
+        System.arraycopy(view, 0, explicitView, 0, 16);
+        explicitEye[0] = eyeX; explicitEye[1] = eyeY; explicitEye[2] = eyeZ;
+    }
+
     @Override public void setCameraProjection(float fovDeg, float near, float far) {
         uniformStreamer.setProjection(fovDeg, near, far);
     }
@@ -367,6 +379,7 @@ public class MetalBackend implements IRenderBackend {
             currentCommandBuffer, metalDevice, metalPipeline, metalTexture,
             framebuffer, cameraPreviewTarget, resourceCache, uniformStreamer,
             queuedCommands, drawBuffers, camPanX, camPanY, camZoom, camPitch, camYaw,
+            explicitViewActive ? explicitView : null, explicitEye,
             cameraPreviewActive ? cameraPreviewViewProj : null, cameraPreviewPos,
             activeLightType, activeLightPosX, activeLightPosY, activeLightPosZ,
             activeLightDirX, activeLightDirY, activeLightDirZ,

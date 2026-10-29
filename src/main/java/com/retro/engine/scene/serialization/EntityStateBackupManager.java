@@ -1,5 +1,7 @@
 package com.retro.engine.scene.serialization;
 
+import com.retro.engine.scene.components.Component;
+import com.retro.engine.scene.components.ComponentSchema;
 import com.retro.engine.scene.components.gameplay.CharacterControllerComponent;
 import com.retro.engine.scene.components.gameplay.ScriptComponent;
 import com.retro.engine.scene.components.gameplay.VehicleControllerComponent;
@@ -14,9 +16,12 @@ import com.retro.engine.scene.components.rendering.Light;
 import com.retro.engine.scene.components.rendering.Material;
 import com.retro.engine.scene.components.rendering.MeshFilter;
 import com.retro.engine.scene.components.transform.Transform;
+import com.retro.engine.scene.components.ui.UICanvasComponent;
+import com.retro.engine.scene.components.ui.UIElement;
 import com.retro.engine.scene.entity.Entity;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -79,6 +84,12 @@ public class EntityStateBackupManager {
         public boolean hasCamera;
         public float cameraFov, cameraNearPlane, cameraFarPlane;
         public boolean cameraIsPrimary;
+        public String cameraUiCanvas;
+
+        // Game UI components are backed up generically from their persisted schema properties (restored in place)
+        private final List<Component> uiComponents = new ArrayList<>();
+        private Object[] uiValues = new Object[32];
+        private int uiValueCount;
 
         // Material (All 5 channels + surface params)
         public boolean hasMaterial;
@@ -204,6 +215,7 @@ public class EntityStateBackupManager {
                 this.cameraNearPlane = cam.nearPlane;
                 this.cameraFarPlane = cam.farPlane;
                 this.cameraIsPrimary = cam.isPrimary;
+                this.cameraUiCanvas = cam.uiCanvas;
             }
 
             Material mat = entity.getComponent(Material.class);
@@ -252,6 +264,30 @@ public class EntityStateBackupManager {
                 this.capsuleRadius = capsule.radius; this.capsuleHeight = capsule.height;
                 this.capsuleOffsetX = capsule.offsetX; this.capsuleOffsetY = capsule.offsetY; this.capsuleOffsetZ = capsule.offsetZ;
                 this.capsuleIsTrigger = capsule.isTrigger;
+            }
+            captureUiComponents(entity);
+        }
+
+        private void captureUiComponents(Entity entity) {
+            uiComponents.clear();
+            uiValueCount = 0;
+            for (Component comp : entity.getAllComponents()) {
+                if (!isGameUi(comp)) continue;
+                uiComponents.add(comp);
+                for (ComponentSchema.Property p : ComponentSchema.of(comp.getClass()).serializedProperties()) {
+                    if (uiValueCount == uiValues.length) uiValues = Arrays.copyOf(uiValues, uiValueCount * 2);
+                    uiValues[uiValueCount++] = readProperty(p, comp);
+                }
+            }
+        }
+
+        private void restoreUiComponents() {
+            int k = 0;
+            for (int i = 0; i < uiComponents.size(); i++) {
+                Component comp = uiComponents.get(i);
+                for (ComponentSchema.Property p : ComponentSchema.of(comp.getClass()).serializedProperties()) {
+                    writeProperty(p, comp, uiValues[k++]);
+                }
             }
         }
 
@@ -354,6 +390,7 @@ public class EntityStateBackupManager {
                     cam.nearPlane = this.cameraNearPlane;
                     cam.farPlane = this.cameraFarPlane;
                     cam.isPrimary = this.cameraIsPrimary;
+                    cam.uiCanvas = this.cameraUiCanvas;
                 }
             }
 
@@ -409,6 +446,41 @@ public class EntityStateBackupManager {
                     capsule.isTrigger = this.capsuleIsTrigger;
                 }
             }
+
+            restoreUiComponents();
+        }
+    }
+
+    private static boolean isGameUi(Component comp) {
+        return comp instanceof UIElement || comp instanceof UICanvasComponent;
+    }
+
+    private static Object readProperty(ComponentSchema.Property p, Component comp) {
+        try {
+            return p.get(comp);
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException("Cannot read " + comp.getClass().getName() + "." + p.name(), e);
+        }
+    }
+
+    private static void writeProperty(ComponentSchema.Property p, Component comp, Object value) {
+        try {
+            p.set(comp, value);
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException("Cannot write " + comp.getClass().getName() + "." + p.name(), e);
+        }
+    }
+
+    /** Copies every game UI component of {@code orig} onto {@code cloned} through its persisted properties. */
+    private static void cloneUiComponents(Entity orig, Entity cloned) {
+        for (Component comp : orig.getAllComponents()) {
+            if (!isGameUi(comp)) continue;
+            ComponentSchema schema = ComponentSchema.of(comp.getClass());
+            Component copy = schema.newInstance();
+            for (ComponentSchema.Property p : schema.serializedProperties()) {
+                writeProperty(p, copy, readProperty(p, comp));
+            }
+            cloned.addComponent(copy);
         }
     }
 
@@ -512,6 +584,7 @@ public class EntityStateBackupManager {
                 if (cloneCc == null) { cloneCc = new Camera(); cloned.addComponent(cloneCc); }
                 cloneCc.fov = origCc.fov; cloneCc.nearPlane = origCc.nearPlane;
                 cloneCc.farPlane = origCc.farPlane; cloneCc.isPrimary = origCc.isPrimary;
+                cloneCc.uiCanvas = origCc.uiCanvas;
             }
 
             AudioSource origAc = orig.getComponent(AudioSource.class);
@@ -614,6 +687,7 @@ public class EntityStateBackupManager {
                 cloned.addComponent(cloneVeh);
             }
 
+            cloneUiComponents(orig, cloned);
             copy.add(cloned);
         }
         return copy;

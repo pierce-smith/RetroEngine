@@ -5,6 +5,9 @@ import java.util.List;
 /**
  * UIGeometryBatch provides high-performance 2D UI vertex batching routines
  * for quads, borders, lines, circles, arrowheads, and system-font (SDF atlas) text with a bitmap fallback.
+ * The static routines are stateless: every piece of mutable state (vertices, window metrics, panel mapping, clip
+ * rect, text scratch) lives in the {@link Buffer} instance they are given, so separate buffers can be packed and
+ * measured concurrently. A single Buffer is not thread-safe. The active {@link UIFont} is read-only once published.
  * Target JDK: JDK 25 / macOS (Zero-allocation primitive buffer support)
  */
 public class UIGeometryBatch {
@@ -29,6 +32,11 @@ public class UIGeometryBatch {
         private float savedClipY0, savedClipY1;
         private float textScale = 1.0f;
 
+        // Window metrics: pixel-height / pixel-width keeps rounded corners circular; sizes snap text to pixels
+        private float pixelAspect = 720.0f / 1280.0f;
+        private float windowWidth = 1280.0f, windowHeight = 720.0f;
+        private final StringBuilder truncScratch = new StringBuilder(128);
+
         // Triangle assembly + Sutherland-Hodgman scratch (VERTEX_STRIDE floats per vertex, zero per-frame allocation)
         private final float[] tri = new float[3 * VERTEX_STRIDE];
         private int triVerts = 0;
@@ -47,6 +55,18 @@ public class UIGeometryBatch {
         public void reset() {
             this.size = 0;
         }
+
+        /** Window size in pixels that this buffer's NDC geometry is displayed at. */
+        public void setWindowSize(int width, int height) {
+            if (width > 0 && height > 0) {
+                pixelAspect = (float) height / (float) width;
+                windowWidth = width;
+                windowHeight = height;
+            }
+        }
+
+        public float getWindowWidth() { return windowWidth; }
+        public float getWindowHeight() { return windowHeight; }
 
         public void ensureCapacity(int minCapacity) {
             if (minCapacity > data.length) {
@@ -254,18 +274,6 @@ public class UIGeometryBatch {
         };
     }
 
-    /** Pixel-height / pixel-width of the window; makes rounded corners circular on screen. */
-    private static float pixelAspect = 720.0f / 1280.0f;
-    private static float windowWidth = 1280.0f, windowHeight = 720.0f;
-
-    public static void setWindowSize(int width, int height) {
-        if (width > 0 && height > 0) {
-            pixelAspect = (float) height / (float) width;
-            windowWidth = width;
-            windowHeight = height;
-        }
-    }
-
     // Legacy bitmap metrics: cap height and advance per unit of text size (old text vertically centers on this cap)
     private static final float BITMAP_CAP_NDC = 0.015f;
     private static final float BITMAP_ADVANCE_NDC = 0.012f;
@@ -371,11 +379,9 @@ public class UIGeometryBatch {
     }
 
     // --- Text measurement & truncation ---
-    private static final StringBuilder truncScratch = new StringBuilder(128);
-
     /** Screen-space NDC-X width of one em unit at {@code size} (already including the panel text scale). */
     private static float emScreenWidth(Buffer buffer, float size) {
-        return size * buffer.getTextScale() * UIFont.EM_NDC_PER_SIZE * pixelAspect;
+        return size * buffer.getTextScale() * UIFont.EM_NDC_PER_SIZE * buffer.pixelAspect;
     }
 
     /** Width of {@code len} average (digit-width) glyphs at {@code size}, in the buffer's current drawing space. */
@@ -388,12 +394,17 @@ public class UIGeometryBatch {
         return buffer.screenToLocalWidth(screenW);
     }
 
-    /** Unmapped (screen-space) width of {@code text} at {@code size}; for layout computed outside a buffer. */
-    public static float screenTextWidth(CharSequence text, float size) {
+    /** Text size whose em box is {@code emPixels} window pixels tall on {@code buffer}'s window. */
+    public static float textSizeForEmPixels(Buffer buffer, float emPixels) {
+        return (emPixels * 2.0f / buffer.windowHeight) / UIFont.EM_NDC_PER_SIZE;
+    }
+
+    /** Unmapped (screen-space) width of {@code text} at {@code size}, ignoring any panel mapping on {@code buffer}. */
+    public static float screenTextWidth(Buffer buffer, CharSequence text, float size) {
         if (text == null) return 0.0f;
         UIFont font = UIFont.active();
         return font != null
-                ? font.measure(text, 0, text.length()) * size * UIFont.EM_NDC_PER_SIZE * pixelAspect
+                ? font.measure(text, 0, text.length()) * size * UIFont.EM_NDC_PER_SIZE * buffer.pixelAspect
                 : text.length() * size * BITMAP_ADVANCE_NDC;
     }
 
@@ -428,6 +439,7 @@ public class UIGeometryBatch {
             while (fit < text.length() && used + font.advanceOf(text.charAt(fit)) <= budget) {
                 used += font.advanceOf(text.charAt(fit++));
             }
+            StringBuilder truncScratch = buffer.truncScratch;
             truncScratch.setLength(0);
             truncScratch.append(text, 0, fit).append('…');
             addBoundedText(buffer, truncScratch, startX, startY, maxX + 0.001f, size, rgb, a);
@@ -440,6 +452,7 @@ public class UIGeometryBatch {
             return;
         }
         if (fit <= 0) return;
+        StringBuilder truncScratch = buffer.truncScratch;
         truncScratch.setLength(0);
         truncScratch.append(text, 0, Math.max(0, fit - 1)).append('…');
         addBoundedText(buffer, truncScratch, startX, startY, maxX + 0.001f, size, rgb, a);
@@ -610,11 +623,12 @@ public class UIGeometryBatch {
      */
     private static void emitFontText(Buffer buffer, UIFont font, CharSequence text, float startX, float startY, float maxX, float size,
                                      float r, float g, float b, float a) {
+        float pixelAspect = buffer.pixelAspect;
         float emY = size * UIFont.EM_NDC_PER_SIZE;
         float emX = emY * pixelAspect;
         float capY = font.capHeight * emY;
-        float baseline = snapToPixel(startY - BITMAP_CAP_NDC * size * 0.5f - capY * 0.5f, windowHeight);
-        float penX = snapToPixel(startX, windowWidth);
+        float baseline = snapToPixel(startY - BITMAP_CAP_NDC * size * 0.5f - capY * 0.5f, buffer.windowHeight);
+        float penX = snapToPixel(startX, buffer.windowWidth);
         float limit = maxX + 1e-5f;
 
         int len = text.length();

@@ -10,6 +10,13 @@ public interface IRenderBackend {
     boolean initialize(ViewportSpec windowInfo);
 
     void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw);
+    /**
+     * Explicit scene camera: a column-major world-to-view matrix (same conventions as the view built from
+     * {@link #setCameraTransform}) and the eye's world position. While set it replaces the orbit transform for every
+     * scene pass; pass null to return to the orbit transform. The matrix is copied, never retained.
+     */
+    default void setCameraView(float[] view, float eyeX, float eyeY, float eyeZ) {}
+
     /** Perspective parameters for the scene camera (editor default 50 deg / 0.1 / 500; Play mode uses the Main Camera's). */
     default void setCameraProjection(float fovDeg, float near, float far) {}
     

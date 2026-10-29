@@ -101,9 +101,8 @@ public class RuntimeLoop {
                     // Render scene geometry without EditorWorkspace UI batches or 3D grid
                     renderSubmitter.submitFrame(context.getEditorManager(), streamingService, rhi);
 
-                    // Clear Editor UI Overlay & 3D Grid Buffers for Pure Standalone Game Render
+                    // No editor grid in standalone; the UI stream already carries only the game HUD
                     rhi.updateGridMesh(null, 0);
-                    rhi.updateUiMesh(null, 0);
 
                     rhi.beginFrame();
                     rhi.endFrame();

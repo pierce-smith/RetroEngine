@@ -145,6 +145,7 @@ public class MetalPassEncoder {
             long commandBuffer, MetalDevice device, MetalPipeline pipeline, MetalTexture texture,
             MetalTargetPass framebuffer, MetalTargetPass previewTarget, MetalGpuCache resourceCache, MetalUniformStream streamer,
             RenderCommand[] commands, MetalDrawBuffers draws, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw,
+            float[] explicitView, float[] explicitEye,
             float[] previewViewProj, float[] previewCamPos,
             int lightType, float lightPosX, float lightPosY, float lightPosZ,
             float lightDirX, float lightDirY, float lightDirZ,
@@ -193,8 +194,13 @@ public class MetalPassEncoder {
         // The offscreen image is stretched over the docked Scene tile, so project with that tile's aspect
         float aspect = sceneAspect > 0.0f ? sceneAspect
                 : (framebuffer.getWidth() > 0 && framebuffer.getHeight() > 0) ? ((float) framebuffer.getWidth() / (float) framebuffer.getHeight()) : (712.0f / 488.0f);
-        System.arraycopy(streamer.createGridMVPMatrix(aspect, camPanX, camPanY, camZoom, camPitch, camYaw), 0, editorViewProj, 0, 16);
-        System.arraycopy(streamer.computeCameraPosition(camPanX, camPanY, camZoom, camPitch, camYaw), 0, editorCamPos, 0, 3);
+        if (explicitView != null) {
+            System.arraycopy(streamer.createViewProjMatrix(aspect, explicitView), 0, editorViewProj, 0, 16);
+            System.arraycopy(explicitEye, 0, editorCamPos, 0, 3);
+        } else {
+            System.arraycopy(streamer.createGridMVPMatrix(aspect, camPanX, camPanY, camZoom, camPitch, camYaw), 0, editorViewProj, 0, 16);
+            System.arraycopy(streamer.computeCameraPosition(camPanX, camPanY, camZoom, camPitch, camYaw), 0, editorCamPos, 0, 3);
+        }
 
         // PASS 1: Editor viewport (grid, lit models, ground shadow blobs)
         encodeScenePass(commandBuffer, framebuffer.getOffscreenColorTexture(), framebuffer.getOffscreenDepthTexture(),

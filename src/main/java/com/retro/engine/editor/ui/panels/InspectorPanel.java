@@ -3,6 +3,7 @@ package com.retro.engine.editor.ui.panels;
 import com.retro.engine.scene.components.ComponentSchema;
 import com.retro.engine.scene.components.ComponentSchema.Control;
 import com.retro.engine.editor.ui.panels.InspectorProperty.PropertyType;
+import com.retro.engine.editor.ui.UIContext;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.theme.EditorTheme;
 import com.retro.engine.scene.components.Component;
@@ -123,17 +124,8 @@ public class InspectorPanel {
         return fields;
     }
 
-    public static void render(UIGeometryBatch.Buffer buffer, Entity selectedEntity) {
-        render(buffer, selectedEntity, null);
-    }
-
-    public static void render(List<Float> verts, Entity selectedEntity) {
-        UIGeometryBatch.Buffer tempBuf = new UIGeometryBatch.Buffer();
-        render(tempBuf, selectedEntity);
-        for (int idx = 0; idx < tempBuf.getSize(); idx++) verts.add(tempBuf.getArray()[idx]);
-    }
-
-    public static void render(UIGeometryBatch.Buffer buffer, Entity selectedEntity, List<AssetMeta> assetDirectory) {
+    public static void render(UIContext ui, Entity selectedEntity, List<AssetMeta> assetDirectory) {
+        UIGeometryBatch.Buffer buffer = ui.geometry();
         UIGeometryBatch.addQuad(buffer, 0.55f, -0.5f, 1.0f, 1.0f, EditorTheme.SURFACE, 1.0f);
 
         if (selectedEntity == null) {
@@ -355,12 +347,6 @@ public class InspectorPanel {
             float thumbTopY = VIEW_TOP - (scrollOffset / maxScroll) * (trackH - thumbHeight);
             UIGeometryBatch.addPill(buffer, 0.984f, thumbTopY - thumbHeight, 0.993f, thumbTopY, EditorTheme.GRAPHITE, 0.85f);
         }
-    }
-
-    public static void render(List<Float> verts, Entity selectedEntity, List<AssetMeta> assetDirectory) {
-        UIGeometryBatch.Buffer tempBuf = new UIGeometryBatch.Buffer();
-        render(tempBuf, selectedEntity, assetDirectory);
-        for (int idx = 0; idx < tempBuf.getSize(); idx++) verts.add(tempBuf.getArray()[idx]);
     }
 
     /** Vertical advance of one property row; shared with InspectorInputDelegate hit-testing. */

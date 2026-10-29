@@ -2,6 +2,7 @@ package com.retro.engine.editor.ui.panels;
 
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
+import com.retro.engine.editor.ui.UIContext;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.theme.EditorTheme;
 
@@ -164,24 +165,12 @@ public class AssetBrowserPanel {
         }
     }
 
-    public static void render(UIGeometryBatch.Buffer buffer, List<AssetMeta> assetDirectory) {
-        render(buffer, assetDirectory, "");
-    }
-    public static void render(List<Float> verts, List<AssetMeta> assetDirectory) {
-        UIGeometryBatch.Buffer tempBuf = new UIGeometryBatch.Buffer();
-        render(tempBuf, assetDirectory);
-        for (int idx = 0; idx < tempBuf.getSize(); idx++) verts.add(tempBuf.getArray()[idx]);
-    }
-
-    public static void render(UIGeometryBatch.Buffer buffer, List<AssetMeta> assetDirectory, String currentFolderPath) {
-        render(buffer, assetDirectory, currentFolderPath, "");
-    }
-
     /**
      * Renders the browser for the active project. The breadcrumb root is the project's Assets/ folder, and
      * only entries mirrored from that folder on disk are ever passed in.
      */
-    public static void render(UIGeometryBatch.Buffer buffer, List<AssetMeta> assetDirectory, String currentFolderPath, String projectRootPath) {
+    public static void render(UIContext ui, List<AssetMeta> assetDirectory, String currentFolderPath, String projectRootPath) {
+        UIGeometryBatch.Buffer buffer = ui.geometry();
         String activePath = (currentFolderPath != null) ? currentFolderPath : "";
 
         UIGeometryBatch.addQuad(buffer, -1.0f, -1.0f, 1.0f, HEADER_Y0, EditorTheme.SURFACE, 1.0f);

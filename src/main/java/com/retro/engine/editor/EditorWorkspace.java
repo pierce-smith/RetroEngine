@@ -9,6 +9,7 @@ import com.retro.engine.editor.commands.CommandStack;
 import com.retro.engine.editor.gizmos.ColliderDebugRenderer;
 import com.retro.engine.editor.gizmos.GizmoState;
 import com.retro.engine.editor.gizmos.GizmoSystem;
+import com.retro.engine.editor.ui.UIContext;
 import com.retro.engine.editor.ui.animator.AnimatorGraphPanel;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.dock.DockPanel;
@@ -65,12 +66,16 @@ public class EditorWorkspace {
 
     private float[] cachedUiVertices = new float[16384 * UIGeometryBatch.VERTEX_STRIDE];
     private int cachedUiVertexCount = 0;
-    private final UIGeometryBatch.Buffer uiGeometryBuffer = new UIGeometryBatch.Buffer(16384 * UIGeometryBatch.VERTEX_STRIDE);
+    // Editor UI vertex buffer + dock layout; panels receive it rather than reaching for global UI state
+    private final UIContext uiContext = new UIContext(16384 * UIGeometryBatch.VERTEX_STRIDE);
+    private final UIGeometryBatch.Buffer uiGeometryBuffer = uiContext.geometry();
+    private final DockSpace dockSpace = uiContext.dock();
 
     public EditorWorkspace() { this(new SceneWorld()); }
 
     public EditorWorkspace(SceneWorld sceneManager) {
         this.sceneManager = (sceneManager != null) ? sceneManager : new SceneWorld();
+        overlayManager.setDockSpace(dockSpace);
         EngineConsolePanel.installConsoleRedirect();
     }
 
@@ -80,6 +85,8 @@ public class EditorWorkspace {
     public GizmoState getGizmoStateController() { return gizmoStateController; }
     public OverlaySystem getOverlayManager() { return overlayManager; }
     public CommandStack getCommandHistory() { return commandHistory; }
+    public UIContext getUIContext() { return uiContext; }
+    public DockSpace getDockSpace() { return dockSpace; }
 
     // --- Session Window & Camera Properties ---
     public void setWindowHandle(long handle) { this.windowHandle = handle; }
@@ -109,13 +116,13 @@ public class EditorWorkspace {
     // --- Active Workspace Tab & Animator State ---
     // The focused workspace follows whichever of the docked Scene / Animator tabs the user last activated
     public WorkspaceTab getActiveWorkspaceTab() {
-        activeWorkspaceTab = (DockSpace.getFocusedWorkspace() == DockPanel.ANIMATOR) ? WorkspaceTab.ANIMATOR : WorkspaceTab.SCENE_3D;
+        activeWorkspaceTab = (dockSpace.getFocusedWorkspace() == DockPanel.ANIMATOR) ? WorkspaceTab.ANIMATOR : WorkspaceTab.SCENE_3D;
         return activeWorkspaceTab;
     }
     public void setActiveWorkspaceTab(WorkspaceTab tab) {
         if (tab == null) return;
         this.activeWorkspaceTab = tab;
-        DockSpace.activate(tab == WorkspaceTab.ANIMATOR ? DockPanel.ANIMATOR : DockPanel.SCENE);
+        dockSpace.activate(tab == WorkspaceTab.ANIMATOR ? DockPanel.ANIMATOR : DockPanel.SCENE);
     }
 
     public String getSelectedStateName() { return selectedStateName; }
@@ -235,7 +242,7 @@ public class EditorWorkspace {
     public int getUiVertexCount() { return this.cachedUiVertexCount; }
 
     public float[] generateUiVertices() {
-        uiGeometryBuffer.reset();
+        uiContext.beginFrame(windowWidth, windowHeight);
 
         // No bound project: the launcher replaces the entire editor UI
         if (!hasActiveProject()) {
@@ -244,24 +251,25 @@ public class EditorWorkspace {
         }
 
         // Master dock layout: every panel below the menu bar is a docked, tabbed tile
-        DockSpace.layout(windowWidth, windowHeight);
-        DockSpace.renderBackgrounds(uiGeometryBuffer);
+        dockSpace.layout(windowWidth, windowHeight);
+        if (cameraController != null) cameraController.setSceneAspect(ViewportPanel.getSceneAspect(dockSpace));
+        dockSpace.renderBackgrounds(uiGeometryBuffer);
 
         for (DockPanel panel : DockPanel.values()) {
-            if (!DockSpace.isRenderable(panel)) continue;
-            DockSpace.beginPanel(uiGeometryBuffer, panel);
+            if (!dockSpace.isRenderable(panel)) continue;
+            dockSpace.beginPanel(uiGeometryBuffer, panel);
             try {
                 renderDockedPanel(panel);
             } finally {
-                DockSpace.endPanel(uiGeometryBuffer);
+                dockSpace.endPanel(uiGeometryBuffer);
             }
         }
 
-        DockSpace.renderChrome(uiGeometryBuffer);
+        dockSpace.renderChrome(uiGeometryBuffer);
 
         MainMenuBar.render(uiGeometryBuffer, overlayManager.getActiveDropdownMenu(), sceneManager.getActiveScenePath(), sceneManager.getPlayState());
 
-        DockSpace.renderDragOverlay(uiGeometryBuffer);
+        dockSpace.renderDragOverlay(uiGeometryBuffer);
 
         if (overlayManager.getActiveDropdownMenu() != DropdownMenu.NONE) {
             MainMenuBar.renderDropdownMenuOverlay(uiGeometryBuffer, overlayManager.getActiveDropdownMenu(), commandHistory, gizmoStateController.is3DGridVisible(), lastNdcX, lastNdcY);
@@ -320,12 +328,12 @@ public class EditorWorkspace {
 
                 EngineConsolePanel.renderProfilerHUD(uiGeometryBuffer, lastDeltaTime);
             }
-            case HIERARCHY -> HierarchyPanel.render(uiGeometryBuffer, sceneManager.getSceneEntities());
-            case INSPECTOR -> InspectorPanel.render(uiGeometryBuffer, sceneManager.getSelectedEntity(), assetDirectoryManager.getAssetDirectory());
+            case HIERARCHY -> HierarchyPanel.render(uiContext, sceneManager.getSceneEntities());
+            case INSPECTOR -> InspectorPanel.render(uiContext, sceneManager.getSelectedEntity(), assetDirectoryManager.getAssetDirectory());
             case ANIMATOR -> AnimatorGraphPanel.renderCanvas(uiGeometryBuffer, getActiveAnimatorController(), selectedStateName);
             case ANIMATOR_PARAMETERS -> AnimatorGraphPanel.renderParameters(uiGeometryBuffer, getActiveAnimatorController());
             case ANIMATOR_INSPECTOR -> AnimatorGraphPanel.renderInspector(uiGeometryBuffer, getActiveAnimatorController(), selectedStateName, selectedTransition);
-            case ASSETS -> AssetBrowserPanel.render(uiGeometryBuffer, assetDirectoryManager.getAssetDirectory(), assetDirectoryManager.getCurrentFolderPath(), assetDirectoryManager.getActiveProjectPath());
+            case ASSETS -> AssetBrowserPanel.render(uiContext, assetDirectoryManager.getAssetDirectory(), assetDirectoryManager.getCurrentFolderPath(), assetDirectoryManager.getActiveProjectPath());
             case CONSOLE -> EngineConsolePanel.renderConsole(uiGeometryBuffer);
         }
     }

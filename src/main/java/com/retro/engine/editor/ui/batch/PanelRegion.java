@@ -26,7 +26,7 @@ public enum PanelRegion {
      * Panels are resolved through the dock layout, so regions follow panels wherever they are docked;
      * tab bars and splitters report DOCK_CHROME.
      */
-    public static PanelRegion getRegionAt(float ndcX, float ndcY, OverlaySystem overlayManager) {
+    public static PanelRegion getRegionAt(float ndcX, float ndcY, OverlaySystem overlayManager, DockSpace dock) {
         if (overlayManager != null) {
             if (overlayManager.getActiveModal() != EditorWorkspace.ModalState.NONE ||
                 overlayManager.getActiveDropdownMenu() != EditorWorkspace.DropdownMenu.NONE ||
@@ -38,7 +38,7 @@ public enum PanelRegion {
         if (ndcY >= DockSpace.AREA_Y1) {
             return TOP_BAR;
         }
-        DockPanel panel = DockSpace.panelAt(ndcX, ndcY);
+        DockPanel panel = dock.panelAt(ndcX, ndcY);
         return (panel != null) ? panel.region : DOCK_CHROME;
     }
 }

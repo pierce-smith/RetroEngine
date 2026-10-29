@@ -23,6 +23,11 @@ import com.retro.engine.scene.components.physics.SphereCollider;
 import com.retro.engine.scene.components.rendering.Light;
 import com.retro.engine.scene.components.rendering.Material;
 import com.retro.engine.scene.components.rendering.MeshFilter;
+import com.retro.engine.scene.components.ui.UICanvasComponent;
+import com.retro.engine.scene.components.ui.UIImage;
+import com.retro.engine.scene.components.ui.UIPanel;
+import com.retro.engine.scene.components.ui.UIProgressBar;
+import com.retro.engine.scene.components.ui.UIText;
 import com.retro.engine.scripting.ScriptEngine;
 
 import java.io.File;
@@ -514,6 +519,22 @@ public class InspectorInputDelegate {
             }
         }));
 
+        addUiComponentItem(items, entity, "+ UI Canvas", UICanvasComponent.class, UICanvasComponent::new);
+        addUiComponentItem(items, entity, "+ UI Panel", UIPanel.class, UIPanel::new);
+        addUiComponentItem(items, entity, "+ UI Text", UIText.class, UIText::new);
+        addUiComponentItem(items, entity, "+ UI Image", UIImage.class, UIImage::new);
+        addUiComponentItem(items, entity, "+ UI Progress Bar", UIProgressBar.class, UIProgressBar::new);
+
         manager.getOverlayManager().openContextMenu(ndcX, ndcY, items);
+    }
+
+    private static <T extends Component> void addUiComponentItem(List<MenuItem> items, Entity entity, String label,
+                                                                 Class<T> type, java.util.function.Supplier<T> factory) {
+        items.add(new MenuItem(label, () -> {
+            if (entity.getComponent(type) == null) {
+                entity.addComponent(factory.get());
+                UISoundPlayer.play(UISound.SPAWN);
+            }
+        }));
     }
 }

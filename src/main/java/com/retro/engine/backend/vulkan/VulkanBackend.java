@@ -80,6 +80,11 @@ public class VulkanBackend implements IRenderBackend {
 
     // Reusable Matrix Buffers for Zero-Allocation Frame Loops
     private final float[] viewMatrix = new float[16];
+    private final float[] cameraEye = new float[3];
+    // Explicit camera view (Play mode camera entity), replacing the orbit parameters while active
+    private boolean explicitViewActive = false;
+    private final float[] explicitView = new float[16];
+    private final float[] explicitEye = new float[3];
     private final float[] projMatrix = new float[16];
     private final float[] lightSpaceMatrix = new float[16];
     private float sceneAspect = 0.0f; // docked Scene tile aspect; 0 = use offscreen target aspect
@@ -177,7 +182,7 @@ public class VulkanBackend implements IRenderBackend {
                 activeLightDirX, activeLightDirY, activeLightDirZ,
                 activeLightR, activeLightG, activeLightB,
                 activeLightIntensity,
-                camPanX, camPanY, camZoom,
+                cameraEye[0], cameraEye[1], cameraEye[2],
                 0.0f,
                 viewMatrix,
                 projMatrix,
@@ -317,7 +322,21 @@ public class VulkanBackend implements IRenderBackend {
         swapchainManager.markOutOfDate();
     }
 
+    /** View matrix and eye for this frame: the explicit camera view when set, else the orbit transform. */
     private void computeViewMatrix() {
+        if (explicitViewActive) {
+            System.arraycopy(explicitView, 0, viewMatrix, 0, 16);
+            System.arraycopy(explicitEye, 0, cameraEye, 0, 3);
+            return;
+        }
+        computeOrbitViewMatrix();
+        // Eye = -R^T * t, so specular and reflections use the real camera position
+        for (int i = 0; i < 3; i++) {
+            cameraEye[i] = -(viewMatrix[i * 4] * viewMatrix[12] + viewMatrix[i * 4 + 1] * viewMatrix[13] + viewMatrix[i * 4 + 2] * viewMatrix[14]);
+        }
+    }
+
+    private void computeOrbitViewMatrix() {
         float radYaw = (float) Math.toRadians(camYaw);
         float radPitch = (float) Math.toRadians(camPitch);
 
@@ -442,6 +461,14 @@ public class VulkanBackend implements IRenderBackend {
     @Override public void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw) {
         this.camPanX = panX; this.camPanY = panY; this.camZoom = zoom; this.camPitch = pitch; this.camYaw = yaw;
     }
+    @Override
+    public void setCameraView(float[] view, float eyeX, float eyeY, float eyeZ) {
+        explicitViewActive = view != null && view.length == 16;
+        if (!explicitViewActive) return;
+        System.arraycopy(view, 0, explicitView, 0, 16);
+        explicitEye[0] = eyeX; explicitEye[1] = eyeY; explicitEye[2] = eyeZ;
+    }
+
     @Override public void setCameraProjection(float fovDeg, float near, float far) {
         this.projFovDeg = fovDeg; this.projNear = near; this.projFar = far;
     }

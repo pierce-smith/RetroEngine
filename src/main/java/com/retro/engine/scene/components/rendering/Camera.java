@@ -3,6 +3,7 @@ package com.retro.engine.scene.components.rendering;
 import com.retro.engine.editor.ui.panels.InspectorProperty;
 import com.retro.engine.editor.ui.panels.InspectorProperty.PropertyType;
 import com.retro.engine.scene.components.Component;
+import com.retro.engine.scene.components.ui.UICanvasComponent;
 
 /**
  * Encapsulates perspective 3D camera properties attached to an Entity.
@@ -20,6 +21,24 @@ public class Camera implements Component {
 
     @InspectorProperty(order = 3, label = "PRIMARY", type = PropertyType.TOGGLE)
     public boolean isPrimary = true;
+
+    /** Entity id or name of the screen-space UICanvas shown through this camera when it is primary ("" = none). */
+    @InspectorProperty(order = 4, label = "UI CANVAS", type = PropertyType.TEXT, since = 3, prefabSince = 3)
+    public String uiCanvas = "";
+
+    /** Runtime canvas set by scripts; takes precedence over {@link #uiCanvas} and is never persisted. */
+    public transient UICanvasComponent activeCanvas;
+
+    /**
+     * Default screen-space canvas bound automatically when UI elements sit on or under this camera's entity with no
+     * UICanvas above them, so HUD components render without extra setup. Created on first use; never persisted.
+     */
+    public transient UICanvasComponent autoCanvas;
+
+    public UICanvasComponent getOrCreateAutoCanvas() {
+        if (autoCanvas == null) autoCanvas = new UICanvasComponent();
+        return autoCanvas;
+    }
 
     public Camera() {}
 

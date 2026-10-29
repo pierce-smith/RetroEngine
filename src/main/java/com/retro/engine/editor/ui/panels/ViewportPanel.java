@@ -55,18 +55,27 @@ public class ViewportPanel {
     // Standalone runtime: the scene fills 100% of the WindowHost instead of the docked Scene tile
     private static volatile boolean standaloneFullscreen = false;
     private static volatile float standaloneAspect = 16.0f / 9.0f;
+    private static volatile int standaloneWidth = 1280, standaloneHeight = 720;
 
     /** Called each runtime frame with the WindowHost size; the scene viewport then covers the whole window. */
     public static void setStandaloneFullscreen(int windowWidth, int windowHeight) {
         standaloneFullscreen = true;
-        if (windowWidth > 0 && windowHeight > 0) standaloneAspect = (float) windowWidth / (float) windowHeight;
+        if (windowWidth > 0 && windowHeight > 0) {
+            standaloneAspect = (float) windowWidth / (float) windowHeight;
+            standaloneWidth = windowWidth;
+            standaloneHeight = windowHeight;
+        }
     }
+
+    public static int getStandaloneWidth() { return standaloneWidth; }
+    public static int getStandaloneHeight() { return standaloneHeight; }
 
     public static boolean isStandaloneFullscreen() { return standaloneFullscreen; }
 
     /** Scene projection aspect: the full window in standalone runtime, the docked Scene tile in the editor. */
-    public static float getSceneAspect() {
-        return standaloneFullscreen ? standaloneAspect : DockSpace.getSceneAspect();
+    public static float getSceneAspect(DockSpace dock) {
+        if (standaloneFullscreen) return standaloneAspect;
+        return (dock != null) ? dock.getSceneAspect() : 712.0f / 488.0f;
     }
 
     /**
@@ -84,7 +93,10 @@ public class ViewportPanel {
         viewportCamera.lockForPlay();
 
         Entity mainCamera = findMainCamera(workspace.getSceneEntities());
-        if (mainCamera == null) return;
+        if (mainCamera == null) {
+            viewportCamera.clearEntityView();
+            return;
+        }
         Camera camera = mainCamera.getComponent(Camera.class);
         WorldTransform wt = workspace.getSceneManager().getComputedWorldTransform(mainCamera);
         SceneRenderPipeline.computeCameraView(wt, playCameraView);
@@ -97,7 +109,7 @@ public class ViewportPanel {
     }
 
     /** First entity with a primary Camera, falling back to the first entity with any Camera. */
-    private static Entity findMainCamera(List<Entity> entities) {
+    public static Entity findMainCamera(List<Entity> entities) {
         if (entities == null) return null;
         Entity fallback = null;
         for (int i = 0, n = entities.size(); i < n; i++) {
@@ -151,24 +163,24 @@ public class ViewportPanel {
     }
 
     /** Scene-tile UV (origin top-left) of a screen-space NDC point, or {-1, -1} when the Scene tile is hidden. */
-    private static float[] screenToSceneUv(float screenX, float screenY) {
-        if (!DockSpace.isSceneViewportVisible()) return new float[] { -1.0f, -1.0f };
-        float x0 = DockSpace.getContentX0(DockPanel.SCENE), x1 = DockSpace.getContentX1(DockPanel.SCENE);
-        float y0 = DockSpace.getContentY0(DockPanel.SCENE), y1 = DockSpace.getContentY1(DockPanel.SCENE);
+    private static float[] screenToSceneUv(DockSpace dock, float screenX, float screenY) {
+        if (!dock.isSceneViewportVisible()) return new float[] { -1.0f, -1.0f };
+        float x0 = dock.getContentX0(DockPanel.SCENE), x1 = dock.getContentX1(DockPanel.SCENE);
+        float y0 = dock.getContentY0(DockPanel.SCENE), y1 = dock.getContentY1(DockPanel.SCENE);
         return new float[] { (screenX - x0) / (x1 - x0), (y1 - screenY) / (y1 - y0) };
     }
 
     /** Points the pick probe at the cursor (screen-space NDC); points off the Scene tile disarm it. */
-    public static void setPickProbeScreen(float screenX, float screenY) {
-        float[] uv = screenToSceneUv(screenX, screenY);
+    public static void setPickProbeScreen(DockSpace dock, float screenX, float screenY) {
+        float[] uv = screenToSceneUv(dock, screenX, screenY);
         hoverU = uv[0];
         hoverV = uv[1];
     }
 
     /** Pick ID under a screen-space NDC point from the newest readback, or PICK_UNAVAILABLE. Never blocks. */
-    public static int queryPickAtScreen(float screenX, float screenY) {
+    public static int queryPickAtScreen(DockSpace dock, float screenX, float screenY) {
         if (pickBackend == null) return IRenderBackend.PICK_UNAVAILABLE;
-        float[] uv = screenToSceneUv(screenX, screenY);
+        float[] uv = screenToSceneUv(dock, screenX, screenY);
         return pickBackend.queryPick(uv[0], uv[1]);
     }
 
@@ -182,10 +194,10 @@ public class ViewportPanel {
      * otherwise the probe is moved there and {@code onResolved} runs from {@link #updatePicking} once it catches up.
      * A newer request replaces a pending one.
      */
-    public static void requestPickAtDesign(float designX, float designY, IntConsumer onResolved) {
-        float screenX = DockSpace.toScreenX(DockPanel.SCENE, designX);
-        float screenY = DockSpace.toScreenY(DockPanel.SCENE, designY);
-        float[] uv = screenToSceneUv(screenX, screenY);
+    public static void requestPickAtDesign(DockSpace dock, float designX, float designY, IntConsumer onResolved) {
+        float screenX = dock.toScreenX(DockPanel.SCENE, designX);
+        float screenY = dock.toScreenY(DockPanel.SCENE, designY);
+        float[] uv = screenToSceneUv(dock, screenX, screenY);
         if (uv[0] < 0.0f || uv[0] >= 1.0f || uv[1] < 0.0f || uv[1] >= 1.0f) return;
 
         int id = (pickBackend != null) ? pickBackend.queryPick(uv[0], uv[1]) : IRenderBackend.PICK_UNAVAILABLE;

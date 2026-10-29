@@ -35,6 +35,8 @@ import java.util.List;
  * dynamic context menus, and right-click popup tracking.
  */
 public class OverlaySystem {
+    private DockSpace dockSpace;
+
 
     private DropdownMenu activeDropdownMenu = DropdownMenu.NONE;
     private ModalState activeModal = ModalState.NONE;
@@ -117,10 +119,14 @@ public class OverlaySystem {
     }
     public void hideContextMenu() { closeContextMenu(); }
 
+    /** Dock layout used to convert panel design-space input to screen space; set once by the owning workspace. */
+    public void setDockSpace(DockSpace dockSpace) { this.dockSpace = dockSpace; }
+    public DockSpace getDockSpace() { return dockSpace; }
+
     public void openContextMenu(float ndcX, float ndcY, List<MenuItem> items) {
         // Panel handlers run in their docked design space; the menu itself is drawn in screen space
-        this.contextMenuNdcX = DockSpace.inputToScreenX(ndcX);
-        this.contextMenuNdcY = DockSpace.inputToScreenY(ndcY);
+        this.contextMenuNdcX = dockSpace.inputToScreenX(ndcX);
+        this.contextMenuNdcY = dockSpace.inputToScreenY(ndcY);
         this.contextMenuItems.clear();
         if (items != null) this.contextMenuItems.addAll(items);
         this.contextMenuVisible = true;
@@ -182,12 +188,12 @@ public class OverlaySystem {
         if (manager == null) return;
         List<MenuItem> items = new ArrayList<>();
 
-        PanelRegion region = PanelRegion.getRegionAt(screenX, screenY, this);
+        PanelRegion region = PanelRegion.getRegionAt(screenX, screenY, this, dockSpace);
 
         // Hit-tests below are authored in each panel's design space; the menu opens at the screen point
-        DockPanel dockPanel = DockSpace.panelAt(screenX, screenY);
-        float ndcX = (dockPanel != null) ? DockSpace.toDesignX(dockPanel, screenX) : screenX;
-        float ndcY = (dockPanel != null) ? DockSpace.toDesignY(dockPanel, screenY) : screenY;
+        DockPanel dockPanel = dockSpace.panelAt(screenX, screenY);
+        float ndcX = (dockPanel != null) ? dockSpace.toDesignX(dockPanel, screenX) : screenX;
+        float ndcY = (dockPanel != null) ? dockSpace.toDesignY(dockPanel, screenY) : screenY;
 
         if (region == PanelRegion.ASSET_DIRECTORY) {
             String activePath = manager.getAssetDatabase().getCurrentFolderPath();
@@ -279,7 +285,7 @@ public class OverlaySystem {
         } else if (region == PanelRegion.VIEWPORT) {
             // Pixel-exact GPU Color-ID pick at the press point; the release lands within a few pixels of it, so fall
             // back to the hover probe's texel when the press texel has no completed readback
-            int pickId = ViewportPanel.queryPickAtScreen(screenX, screenY);
+            int pickId = ViewportPanel.queryPickAtScreen(dockSpace, screenX, screenY);
             if (pickId == IRenderBackend.PICK_UNAVAILABLE) pickId = ViewportPanel.queryPickAtHover();
             Entity bestEntity = ViewportPanel.resolvePick(pickId, manager.getSceneEntities());
 
