@@ -60,6 +60,15 @@ public class SceneWorld {
     private Entity selectedEntity = null;
 
     private String activeScenePath = "Assets/Scenes/Default.rscene";
+    // Scene transition requested by a script; applied at the end of update() so no entity list is mid-iteration
+    private volatile String pendingScenePath = null;
+    // Last project database used to load a scene, reused so deferred transitions resolve project-relative assets
+    private AssetDatabase lastAssetDatabase = null;
+    // Scene that was open when Play was pressed, parked (already restored to its pre-play state) while a
+    // script-triggered transition runs another scene; Stop swaps it back in. Null when no transition happened.
+    private List<Entity> originSceneEntities = null;
+    private String originScenePath = null;
+    private String originSelectedId = null;
 
     // ECS Subsystem Delegates, Contiguous Component Storage, & Animation Engine
     private final HierarchySystem graphEvaluator = new HierarchySystem();
@@ -215,7 +224,7 @@ public class SceneWorld {
 
     public void play() {
         boolean enteringPlayMode = simulationEngine.getPlayState() == PlayState.EDITING;
-        simulationEngine.play(sceneEntities);
+        simulationEngine.play(sceneEntities, this);
         syncAnimationPlayState();
         if (enteringPlayMode) enterAnimatorEntryStates();
     }
@@ -231,6 +240,11 @@ public class SceneWorld {
     }
 
     public void stop() {
+        stopSimulation(true);
+    }
+
+    /** restoreOrigin: if a script transitioned scenes during play, return to the scene Play was pressed in. */
+    private void stopSimulation(boolean restoreOrigin) {
         boolean leavingPlayMode = simulationEngine.getPlayState() != PlayState.EDITING;
         List<Entity> restored = simulationEngine.stop(sceneEntities);
         syncAnimationPlayState();
@@ -238,6 +252,21 @@ public class SceneWorld {
             clearRegistryAndRebind(restored);
         }
         if (leavingPlayMode) stopAnimators();
+        if (leavingPlayMode && restoreOrigin) {
+            pendingScenePath = null;
+            restoreOriginScene();
+        }
+    }
+
+    private void restoreOriginScene() {
+        if (originSceneEntities == null) return;
+        List<Entity> origin = originSceneEntities;
+        originSceneEntities = null;
+        this.activeScenePath = originScenePath;
+        clearRegistryAndRebind(origin, true);
+        selectEntity(findEntityById(originSelectedId));
+        // Re-arms the parked scene's animators in the bind pose; its components were never disposed
+        attachAndArmAnimators();
     }
 
     /** Restarts every animator from its controller's Entry State (resuming from Pause does not call this). */
@@ -279,10 +308,18 @@ public class SceneWorld {
     }
 
     private void clearRegistryAndRebind(List<Entity> newEntities) {
+        clearRegistryAndRebind(newEntities, true);
+    }
+
+    /** disposeOld=false keeps the outgoing entities' native resources alive so they can be rebound later. */
+    private void clearRegistryAndRebind(List<Entity> newEntities, boolean disposeOld) {
         for (Entity e : sceneEntities) {
             if (e != null) {
                 AudioSource ac = e.getComponent(AudioSource.class);
-                if (ac != null) ac.dispose();
+                if (ac != null) {
+                    if (disposeOld) ac.dispose();
+                    else ac.stop();
+                }
             }
         }
 
@@ -316,7 +353,7 @@ public class SceneWorld {
     }
 
     public void update(float deltaTime) {
-        simulationEngine.update(deltaTime, sceneEntities);
+        simulationEngine.update(deltaTime, sceneEntities, this);
         syncAnimationPlayState();
         
         // Per-frame Skeletal Animation Keyframe Sampling & Pose Matrix Palette Evaluation
@@ -331,6 +368,42 @@ public class SceneWorld {
                 }
             }
         }
+
+        applyPendingSceneLoad();
+    }
+
+    /** Queues a scene transition; the load runs after the current frame's physics, script, and animation ticks. */
+    public void requestSceneLoad(String scenePath) {
+        if (scenePath == null || scenePath.trim().isEmpty()) return;
+        this.pendingScenePath = scenePath;
+    }
+
+    public boolean hasPendingSceneLoad() { return pendingScenePath != null; }
+
+    /**
+     * Swaps in the queued scene: stop() destroys scripts and tears down physics bodies, the registry rebind
+     * disposes audio and invalidates old handles, and the new scene's animators are armed. GPU meshes/textures
+     * no longer referenced are released by AssetStreamer's residency sweep. If the old scene was running,
+     * the new one re-enters play so its physics world and scripts initialize.
+     */
+    private void applyPendingSceneLoad() {
+        String path = pendingScenePath;
+        if (path == null) return;
+        pendingScenePath = null;
+
+        boolean wasRunning = simulationEngine.getPlayState() != PlayState.EDITING;
+        // Tear down the running scene without jumping back to the origin; this restores it to its pre-play state
+        stopSimulation(false);
+        if (wasRunning && originSceneEntities == null) {
+            // First transition this play session: park the scene Play was pressed in instead of disposing it
+            originSceneEntities = new ArrayList<>(sceneEntities);
+            originScenePath = activeScenePath;
+            Entity selected = getSelectedEntity();
+            originSelectedId = selected != null ? selected.id : null;
+            clearRegistryAndRebind(new ArrayList<>(), false);
+        }
+        loadSceneFromFile(path, lastAssetDatabase);
+        if (wasRunning) play();
     }
 
     public Entity findEntityById(String id) {
@@ -487,6 +560,7 @@ public class SceneWorld {
     // --- SCENE SERIALIZATION & DIALOGS ---
     public void newScene() {
         stop();
+        pendingScenePath = null;
         clearRegistryAndRebind(new ArrayList<>());
         this.activeScenePath = "Assets/Scenes/Untitled.rscene";
     }
@@ -530,6 +604,7 @@ public class SceneWorld {
 
     public SceneSerializer.SceneLoadData loadSceneFromFile(String filePath, AssetDatabase assetDb) {
         stop();
+        if (assetDb != null) this.lastAssetDatabase = assetDb;
         String sanitized = SceneSerializer.sanitizeScenePath(filePath);
         this.activeScenePath = sanitized;
         SceneSerializer.SceneLoadData data = SceneSerializer.loadSceneData(sanitized, assetDb);

@@ -253,6 +253,19 @@ public abstract class EntityScript {
     }
 
     // =========================================================================
+    // Scene Management
+    // =========================================================================
+
+    /** Requests a level transition; the scene swaps at the end of the current frame, so it is safe from any callback. */
+    public void loadScene(String scenePath) {
+        if (sceneWorld == null) {
+            logError("loadScene('" + scenePath + "') failed: script is not bound to a SceneWorld.");
+            return;
+        }
+        sceneWorld.requestSceneLoad(scenePath);
+    }
+
+    // =========================================================================
     // Logging Utilities
     // =========================================================================
 
