@@ -6,7 +6,9 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Annotation for automated ECS component property reflection in InspectorPanel.
+ * Component field metadata: drives InspectorPanel rendering/editing and binary .rscene/.prefab.bin serialization.
+ * Serialized fields are written in {@link #order()} sequence, so never reorder, insert or remove annotated fields
+ * without bumping the format version and gating the change with {@link #since()} / {@link #prefabSince()}.
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.FIELD)
@@ -19,4 +21,15 @@ public @interface InspectorProperty {
     float step() default 0.1f;
     PropertyType type() default PropertyType.AUTO;
     String assetType() default "";
+
+    /** Persisted in scenes/prefabs but not shown in the inspector. */
+    boolean hidden() default false;
+    /** Shown in the inspector but never persisted. */
+    boolean serialized() default true;
+    /** Scene and prefab format version that introduced this field. */
+    int since() default 1;
+    /** Prefab format version that introduced this field (prefabs historically stored a reduced layout). */
+    int prefabSince() default 1;
+    /** Binary layout and inspector position; must be unique per component class. */
+    int order() default 0;
 }

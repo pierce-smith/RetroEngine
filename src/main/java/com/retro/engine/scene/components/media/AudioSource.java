@@ -3,6 +3,7 @@ package com.retro.engine.scene.components.media;
 import com.retro.engine.editor.ui.panels.InspectorProperty;
 import com.retro.engine.editor.ui.panels.InspectorProperty.PropertyType;
 import com.retro.engine.scene.components.Component;
+import com.retro.engine.scene.entity.Entity;
 import org.lwjgl.stb.STBVorbis;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -21,27 +22,28 @@ import java.nio.ShortBuffer;
 public class AudioSource implements Component {
     public enum PlaybackState { PLAYING, PAUSED, STOPPED }
 
-    @InspectorProperty(label = "AUDIO CLIP", type = PropertyType.ASSET_PICKER, assetType = "AUDIO")
+    @InspectorProperty(order = 0, label = "AUDIO CLIP", type = PropertyType.ASSET_PICKER, assetType = "AUDIO")
     public String audioAssetPath = "";
 
-    @InspectorProperty(label = "VOLUME", min = 0.0f, max = 2.0f, step = 0.05f)
+    @InspectorProperty(order = 1, label = "VOLUME", min = 0.0f, max = 2.0f, step = 0.05f)
     public float volume = 1.0f;       // User-configured base volume (0.0f to 1.0f)
 
-    @InspectorProperty(label = "PITCH", min = 0.1f, max = 3.0f, step = 0.1f)
+    @InspectorProperty(order = 2, label = "PITCH", min = 0.1f, max = 3.0f, step = 0.1f)
     public float pitch = 1.0f;        // 0.5f to 2.0f
 
-    @InspectorProperty(label = "LOOP", type = PropertyType.TOGGLE)
+    @InspectorProperty(order = 3, label = "LOOP", type = PropertyType.TOGGLE)
     public boolean loop = false;
 
-    @InspectorProperty(label = "MIN DIST", min = 0.1f, max = 100.0f, step = 0.5f)
+    @InspectorProperty(order = 4, label = "MIN DIST", min = 0.1f, max = 100.0f, step = 0.5f)
     public float minDistance = 1.0f;  // Distance at which sound is at full volume
 
-    @InspectorProperty(label = "MAX DIST", min = 1.0f, max = 500.0f, step = 1.0f)
+    @InspectorProperty(order = 5, label = "MAX DIST", min = 1.0f, max = 500.0f, step = 1.0f)
     public float maxDistance = 25.0f; // Distance beyond which sound is completely silent
 
-    @InspectorProperty(label = "ATTENUATION", min = 0.0f, max = 10.0f, step = 0.1f)
+    @InspectorProperty(order = 6, label = "ATTENUATION", min = 0.0f, max = 10.0f, step = 0.1f)
     public float attenuation = 1.0f;  // Rolloff factor
 
+    @InspectorProperty(order = 7, label = "STATE", hidden = true)
     public PlaybackState state = PlaybackState.STOPPED;
 
     // Native Audio Line Handle
@@ -244,6 +246,14 @@ public class AudioSource implements Component {
                 MemoryUtil.memFree(rawAudio);
             }
         }
+    }
+
+    @Override
+    public void onDeserialized(Entity owner) {
+        // Route loaded values through the clamping setters
+        setVolume(volume);
+        setPitch(pitch);
+        setDistances(minDistance, maxDistance);
     }
 
     @Override

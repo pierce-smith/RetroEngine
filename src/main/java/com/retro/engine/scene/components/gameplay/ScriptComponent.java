@@ -14,16 +14,17 @@ import java.util.Map;
  */
 public class ScriptComponent implements Component {
 
-    @InspectorProperty(label = "SCRIPT PATH", type = PropertyType.ASSET_PICKER, assetType = "SCRIPT")
+    @InspectorProperty(order = 0, label = "SCRIPT PATH", type = PropertyType.ASSET_PICKER, assetType = "SCRIPT")
     public String scriptAssetPath;
 
-    @InspectorProperty(label = "SCRIPT NAME", type = PropertyType.TEXT)
+    @InspectorProperty(order = 1, label = "SCRIPT NAME", type = PropertyType.TEXT)
     public String scriptName;
 
-    @InspectorProperty(label = "ENABLED", type = PropertyType.TOGGLE)
+    @InspectorProperty(order = 2, label = "ENABLED", type = PropertyType.TOGGLE)
     public boolean enabled = true;
 
     // Reflected field overrides for user script properties (key = fieldName, value = stringValue)
+    @InspectorProperty(order = 3, label = "OVERRIDES", hidden = true, since = 2)
     public Map<String, String> propertyOverrides = new HashMap<>();
 
     public transient EntityScript activeScriptInstance;

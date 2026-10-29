@@ -9,22 +9,22 @@ import com.retro.engine.scene.components.Component;
  */
 public class CapsuleCollider implements Component {
 
-    @InspectorProperty(label = "RADIUS", min = 0.01f, max = 50.0f, step = 0.1f)
+    @InspectorProperty(order = 0, label = "RADIUS", min = 0.01f, max = 50.0f, step = 0.1f)
     public float radius = 0.5f;
 
-    @InspectorProperty(label = "HEIGHT", min = 0.01f, max = 50.0f, step = 0.1f)
+    @InspectorProperty(order = 1, label = "HEIGHT", min = 0.01f, max = 50.0f, step = 0.1f)
     public float height = 1.8f;
 
-    @InspectorProperty(label = "OFFSET X", min = -50.0f, max = 50.0f, step = 0.1f)
+    @InspectorProperty(order = 2, label = "OFFSET X", min = -50.0f, max = 50.0f, step = 0.1f)
     public float offsetX = 0.0f;
 
-    @InspectorProperty(label = "OFFSET Y", min = -50.0f, max = 50.0f, step = 0.1f)
+    @InspectorProperty(order = 3, label = "OFFSET Y", min = -50.0f, max = 50.0f, step = 0.1f)
     public float offsetY = 0.0f;
 
-    @InspectorProperty(label = "OFFSET Z", min = -50.0f, max = 50.0f, step = 0.1f)
+    @InspectorProperty(order = 4, label = "OFFSET Z", min = -50.0f, max = 50.0f, step = 0.1f)
     public float offsetZ = 0.0f;
 
-    @InspectorProperty(label = "TRIGGER", type = PropertyType.TOGGLE)
+    @InspectorProperty(order = 5, label = "TRIGGER", type = PropertyType.TOGGLE)
     public boolean isTrigger = false;
 
     public CapsuleCollider() {}

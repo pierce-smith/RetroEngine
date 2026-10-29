@@ -3,21 +3,23 @@ package com.retro.engine.scene.components.rendering;
 import com.retro.engine.editor.ui.panels.InspectorProperty;
 import com.retro.engine.editor.ui.panels.InspectorProperty.PropertyType;
 import com.retro.engine.scene.components.Component;
+import com.retro.engine.scene.entity.Entity;
 
 /**
  * Links an Entity to its 3D geometry asset handle with RenderWare 3.5+ Multi-Atomic Clump support
  * (RpClump / RpAtomic parity). Allows a single Entity container to hold multi-part sub-meshes
  * sharing unified parent transform nodes.
  */
+@Component.LegacyNames("MeshRendererComponent")
 public class MeshFilter implements Component {
 
-    @InspectorProperty(label = "PRIMARY MESH", type = PropertyType.ASSET_PICKER, assetType = "MESH_3D")
+    @InspectorProperty(order = 0, label = "PRIMARY MESH", type = PropertyType.ASSET_PICKER, assetType = "MESH_3D")
     public String meshAssetPath;
 
-    @InspectorProperty(label = "VISIBLE", type = PropertyType.TOGGLE)
+    @InspectorProperty(order = 1, label = "VISIBLE", type = PropertyType.TOGGLE)
     public boolean isVisible = true;
 
-    @InspectorProperty(label = "CLUMP AGGREGATION", type = PropertyType.TOGGLE)
+    @InspectorProperty(order = 2, label = "CLUMP AGGREGATION", type = PropertyType.TOGGLE, serialized = false)
     public boolean isClump = false;
 
     public String[] subMeshPaths = new String[0];
@@ -38,6 +40,8 @@ public class MeshFilter implements Component {
         this.gpuHandleEpoch = epoch;
     }
 
+    public MeshFilter() {}
+
     public MeshFilter(String meshAssetPath) {
         this.meshAssetPath = meshAssetPath;
     }
@@ -47,6 +51,14 @@ public class MeshFilter implements Component {
         if (subMeshPaths != null && subMeshPaths.length > 0) {
             this.subMeshPaths = subMeshPaths;
             this.isClump = true;
+        }
+    }
+
+    @Override
+    public void onDeserialized(Entity owner) {
+        // Renderable entities always carry a Material (mirrors Entity.setMeshAssetPath)
+        if (owner.getComponent(Material.class) == null) {
+            owner.addComponent(new Material());
         }
     }
 

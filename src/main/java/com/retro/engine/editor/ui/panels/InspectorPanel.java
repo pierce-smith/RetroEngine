@@ -1,5 +1,7 @@
 package com.retro.engine.editor.ui.panels;
 
+import com.retro.engine.scene.components.ComponentSchema;
+import com.retro.engine.scene.components.ComponentSchema.Control;
 import com.retro.engine.editor.ui.panels.InspectorProperty.PropertyType;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.theme.EditorTheme;
@@ -63,9 +65,6 @@ public class InspectorPanel {
     private static final float VALUE_TEXT = 0.85f;
 
     // Reflection Caches
-    private static final Map<Class<?>, Field[]> CACHED_FIELDS = new HashMap<>();
-    private static final Map<Field, InspectorProperty> CACHED_ANNOTATIONS = new HashMap<>();
-    private static final Map<Field, String> CACHED_LABELS = new HashMap<>();
     private static final Map<Field, Integer> CACHED_AXES = new HashMap<>();
     private static final Map<Field, String> CACHED_DISPLAY_LABELS = new HashMap<>();
 
@@ -160,15 +159,10 @@ public class InspectorPanel {
             }
             curY -= HEADER_ADVANCE;
 
-            Class<?> compClass = comp.getClass();
-            Field[] fields = CACHED_FIELDS.computeIfAbsent(compClass, Class::getDeclaredFields);
-
-            for (Field field : fields) {
-                InspectorProperty prop = CACHED_ANNOTATIONS.computeIfAbsent(field, f -> f.getAnnotation(InspectorProperty.class));
-                if (prop == null) continue;
-
-                field.setAccessible(true);
-                String label = CACHED_LABELS.computeIfAbsent(field, f -> prop.label().isEmpty() ? f.getName().toUpperCase() : prop.label());
+            for (ComponentSchema.Property p : ComponentSchema.of(comp.getClass()).inspectorProperties()) {
+                Field field = p.field;
+                InspectorProperty prop = p.meta;
+                String label = p.label;
 
                 float drawY = curY + scrollOffset;
                 boolean isVisible = isRowVisible(drawY);
@@ -177,7 +171,7 @@ public class InspectorPanel {
                 try {
                     Object val = field.get(comp);
 
-                    if (prop.type() == PropertyType.ASSET_PICKER) {
+                    if (p.control == Control.ASSET) {
                         if (isVisible) {
                             String pathStr = (val != null) ? val.toString() : "";
                             boolean empty = pathStr.isEmpty();
@@ -188,28 +182,22 @@ public class InspectorPanel {
                             button(buffer, "PICK", PICK_X0, PICK_X1, drawY, EditorTheme.SURFACE_RAISED);
                             button(buffer, "IMPORT", IMPORT_X0, IMPORT_X1, drawY, EditorTheme.ACCENT);
                         }
-                        curY -= ASSET_ROW_ADVANCE;
-
-                    } else if (prop.type() == PropertyType.TOGGLE || field.getType() == boolean.class) {
+                    } else if (p.control == Control.TOGGLE) {
                         if (isVisible) {
                             boolean boolVal = (val != null) && (Boolean) val;
                             rowLabel(buffer, label, midY);
                             renderSwitch(buffer, boolVal, midY);
                         }
-                        curY -= ROW_ADVANCE;
-
-                    } else if (prop.type() == PropertyType.BUTTON_GROUP || field.getType().isEnum()) {
+                    } else if (p.control == Control.CHOICE) {
                         if (isVisible) {
                             String enumStr = (val != null) ? val.toString() : "NONE";
                             rowLabel(buffer, label, midY);
                             renderPopupButton(buffer, enumStr, drawY, midY);
                         }
-                        curY -= ROW_ADVANCE;
-
-                    } else if (prop.type() == PropertyType.COLOR || field.getType() == float.class || field.getType() == Float.class) {
+                    } else if (p.control == Control.NUMBER) {
                         if (isVisible) {
                             float floatVal = (val != null) ? (Float) val : 0.0f;
-                            boolean isColor = prop.type() == PropertyType.COLOR;
+                            boolean isColor = p.isColor();
                             int axis = isColor ? -1 : CACHED_AXES.computeIfAbsent(field, f -> axisOf(label));
                             String display = CACHED_DISPLAY_LABELS.computeIfAbsent(field, f -> {
                                 int ax = axisOf(label);
@@ -240,8 +228,14 @@ public class InspectorPanel {
 
                             renderStepper(buffer, drawY, midY);
                         }
-                        curY -= ROW_ADVANCE;
-
+                    } else if (p.control == Control.STRING) {
+                        if (isVisible) {
+                            String strVal = (val != null) ? (String) val : "";
+                            rowLabel(buffer, label, midY);
+                            well(buffer, VALUE_X0, VALUE_X1, drawY);
+                            UIGeometryBatch.addTruncatedText(buffer, strVal, VALUE_X0 + 0.008f, textTop(midY, VALUE_TEXT),
+                                    VALUE_X1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+                        }
                     } else {
                         if (isVisible) {
                             String textVal = (val != null) ? val.toString() : "";
@@ -249,11 +243,11 @@ public class InspectorPanel {
                             UIGeometryBatch.addTruncatedText(buffer, textVal.isEmpty() ? "-" : textVal, VALUE_X0 + 0.008f, textTop(midY, VALUE_TEXT),
                                     VALUE_X1, VALUE_TEXT, EditorTheme.TEXT_MUTED, 1.0f);
                         }
-                        curY -= TEXT_ROW_ADVANCE;
                     }
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
+                curY -= rowAdvance(p.control);
             }
 
             // Pillar 3: Reflected User Script Custom Field Overrides
@@ -317,6 +311,14 @@ public class InspectorPanel {
                                 renderPopupButton(buffer, valStr, drawY, midY);
                             }
                             curY -= ROW_ADVANCE;
+                        } else if (fieldType == String.class) {
+                            if (isVisible) {
+                                rowLabel(buffer, label, midY);
+                                well(buffer, VALUE_X0, VALUE_X1, drawY);
+                                UIGeometryBatch.addTruncatedText(buffer, valStr, VALUE_X0 + 0.008f, textTop(midY, VALUE_TEXT),
+                                        VALUE_X1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+                            }
+                            curY -= ROW_ADVANCE;
                         } else {
                             if (isVisible) {
                                 rowLabel(buffer, label, midY);
@@ -359,6 +361,15 @@ public class InspectorPanel {
         UIGeometryBatch.Buffer tempBuf = new UIGeometryBatch.Buffer();
         render(tempBuf, selectedEntity, assetDirectory);
         for (int idx = 0; idx < tempBuf.getSize(); idx++) verts.add(tempBuf.getArray()[idx]);
+    }
+
+    /** Vertical advance of one property row; shared with InspectorInputDelegate hit-testing. */
+    public static float rowAdvance(Control control) {
+        return switch (control) {
+            case ASSET -> ASSET_ROW_ADVANCE;
+            case READ_ONLY -> TEXT_ROW_ADVANCE;
+            default -> ROW_ADVANCE;
+        };
     }
 
     private static float textTop(float midY, float size) {

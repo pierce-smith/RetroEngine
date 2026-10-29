@@ -20,42 +20,42 @@ public class Material implements Component {
     public static final int CHANNEL_COUNT = 5;
 
     /** Albedo / diffuse channel. Field name kept for serializer and editor compatibility. */
-    @InspectorProperty(label = "ALBEDO", type = PropertyType.ASSET_PICKER, assetType = "TEXTURE")
+    @InspectorProperty(order = 0, label = "ALBEDO", type = PropertyType.ASSET_PICKER, assetType = "TEXTURE")
     public String textureAssetPath;
 
-    @InspectorProperty(label = "NORMAL MAP", type = PropertyType.ASSET_PICKER, assetType = "TEXTURE")
+    @InspectorProperty(order = 1, label = "NORMAL MAP", type = PropertyType.ASSET_PICKER, assetType = "TEXTURE", prefabSince = 3)
     public String normalMapAssetPath;
 
-    @InspectorProperty(label = "SPEC / ROUGH", type = PropertyType.ASSET_PICKER, assetType = "TEXTURE")
+    @InspectorProperty(order = 2, label = "SPEC / ROUGH", type = PropertyType.ASSET_PICKER, assetType = "TEXTURE", prefabSince = 3)
     public String specularMapAssetPath;
 
-    @InspectorProperty(label = "LIGHTMAP / AO", type = PropertyType.ASSET_PICKER, assetType = "TEXTURE")
+    @InspectorProperty(order = 3, label = "LIGHTMAP / AO", type = PropertyType.ASSET_PICKER, assetType = "TEXTURE", prefabSince = 3)
     public String lightmapAssetPath;
 
-    @InspectorProperty(label = "EMISSIVE", type = PropertyType.ASSET_PICKER, assetType = "TEXTURE")
+    @InspectorProperty(order = 4, label = "EMISSIVE", type = PropertyType.ASSET_PICKER, assetType = "TEXTURE", prefabSince = 3)
     public String emissiveMapAssetPath;
 
-    @InspectorProperty(label = "TEX NAME", type = PropertyType.TEXT)
+    @InspectorProperty(order = 5, label = "TEX NAME", type = PropertyType.TEXT)
     public String textureName = "DEFAULT_CHECKER";
 
-    @InspectorProperty(label = "SHADER", type = PropertyType.TEXT)
+    @InspectorProperty(order = 6, label = "SHADER", type = PropertyType.TEXT)
     public String shaderName = "RETRO_MSL_3D";
 
-    @InspectorProperty(label = "REFLECT", min = 0.0f, max = 1.0f, step = 0.05f)
+    @InspectorProperty(order = 7, label = "REFLECT", min = 0.0f, max = 1.0f, step = 0.05f, prefabSince = 3)
     public float reflect = 0.0f;
 
     /** Scales the specular map's R channel (or acts alone without a map); 0 disables highlights. */
-    @InspectorProperty(label = "SPECULAR", min = 0.0f, max = 2.0f, step = 0.05f)
+    @InspectorProperty(order = 8, label = "SPECULAR", min = 0.0f, max = 2.0f, step = 0.05f, prefabSince = 3)
     public float specularStrength = 0.0f;
 
     /** Scales the specular map's G channel (or acts alone without a map); 0 = mirror-sharp, 1 = fully rough. */
-    @InspectorProperty(label = "ROUGHNESS", min = 0.0f, max = 1.0f, step = 0.05f)
+    @InspectorProperty(order = 9, label = "ROUGHNESS", min = 0.0f, max = 1.0f, step = 0.05f, prefabSince = 3)
     public float roughness = 0.6f;
 
-    @InspectorProperty(label = "NORMAL STR", min = 0.0f, max = 2.0f, step = 0.05f)
+    @InspectorProperty(order = 10, label = "NORMAL STR", min = 0.0f, max = 2.0f, step = 0.05f, prefabSince = 3)
     public float normalStrength = 1.0f;
 
-    @InspectorProperty(label = "EMISSIVE STR", min = 0.0f, max = 10.0f, step = 0.1f)
+    @InspectorProperty(order = 11, label = "EMISSIVE STR", min = 0.0f, max = 10.0f, step = 0.1f, prefabSince = 3)
     public float emissiveIntensity = 1.0f;
 
     // Runtime-only GPU handle cache per channel, filled by SceneRenderPipeline; never serialized or shown in the inspector

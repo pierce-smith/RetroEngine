@@ -28,17 +28,13 @@ import com.retro.engine.scripting.ScriptEngine;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Dynamic reflection-driven input delegate for InspectorPanel UI controls.
  */
 public class InspectorInputDelegate {
-
-    private static final Map<Class<?>, Field[]> CACHED_FIELDS = new HashMap<>();
-    private static final Map<Field, InspectorProperty> CACHED_ANNOTATIONS = new HashMap<>();
 
     private static boolean isDraggingSlider = false;
     private static String draggingFieldName = null;
@@ -76,102 +72,13 @@ public class InspectorInputDelegate {
             }
             curY -= InspectorPanel.HEADER_ADVANCE;
 
-            Class<?> compClass = comp.getClass();
-            Field[] fields = CACHED_FIELDS.computeIfAbsent(compClass, Class::getDeclaredFields);
-
-            for (Field field : fields) {
-                InspectorProperty prop = CACHED_ANNOTATIONS.computeIfAbsent(field, f -> f.getAnnotation(InspectorProperty.class));
-                if (prop == null) continue;
-
-                field.setAccessible(true);
-                String label = prop.label().isEmpty() ? field.getName().toUpperCase() : prop.label();
+            for (ComponentSchema.Property p : ComponentSchema.of(comp.getClass()).inspectorProperties()) {
                 float drawY = curY + scrollOffset;
-                boolean isVisible = InspectorPanel.isRowVisible(drawY);
-                boolean inRow = isVisible && ndcY >= drawY - InspectorPanel.CTRL_BELOW && ndcY <= drawY + InspectorPanel.CTRL_ABOVE;
+                curY -= InspectorPanel.rowAdvance(p.control);
+                if (!InspectorPanel.isRowVisible(drawY) || ndcY < drawY - InspectorPanel.CTRL_BELOW || ndcY > drawY + InspectorPanel.CTRL_ABOVE) continue;
 
                 try {
-                    Object val = field.get(comp);
-
-                    if (prop.type() == InspectorProperty.PropertyType.ASSET_PICKER) {
-                        if (inRow) {
-                            if (ndcX >= InspectorPanel.PICK_X0 && ndcX <= InspectorPanel.PICK_X1) {
-                                UISoundPlayer.play(UISound.OPEN_MODAL);
-                                AssetType assetType = parseAssetType(prop.assetType());
-                                manager.getOverlayManager().openAssetPicker(assetType, (comp instanceof Material) ? field.getName() : null);
-                                return;
-                            }
-                            if (ndcX >= InspectorPanel.IMPORT_X0 && ndcX <= InspectorPanel.IMPORT_X1) {
-                                UISoundPlayer.play(UISound.OPEN_MODAL);
-                                if (comp instanceof Material && "TEXTURE".equalsIgnoreCase(prop.assetType())) {
-                                    promptImportTexture(manager, field.getName());
-                                } else {
-                                    promptImportAssetForType(manager, prop.assetType());
-                                }
-                                return;
-                            }
-                        }
-                        curY -= InspectorPanel.ASSET_ROW_ADVANCE;
-
-                    } else if (prop.type() == InspectorProperty.PropertyType.TOGGLE || field.getType() == boolean.class) {
-                        if (inRow) {
-                            if (ndcX >= InspectorPanel.LABEL_X && ndcX <= InspectorPanel.VALUE_X1) {
-                                UISoundPlayer.play(UISound.CLICK);
-                                boolean currentBool = (val != null) && (Boolean) val;
-                                boolean newBool = !currentBool;
-                                EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, currentBool, newBool, label);
-                                manager.getCommandHistory().executeCommand(cmd);
-                                return;
-                            }
-                        }
-                        curY -= InspectorPanel.ROW_ADVANCE;
-
-                    } else if (prop.type() == InspectorProperty.PropertyType.BUTTON_GROUP || field.getType().isEnum()) {
-                        if (inRow) {
-                            if (ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.VALUE_X1) {
-                                UISoundPlayer.play(UISound.CLICK);
-                                Object[] enumConstants = field.getType().getEnumConstants();
-                                if (enumConstants != null && enumConstants.length > 0) {
-                                    int currentIdx = 0;
-                                    for (int i = 0; i < enumConstants.length; i++) {
-                                        if (enumConstants[i].equals(val)) {
-                                            currentIdx = i;
-                                            break;
-                                        }
-                                    }
-                                    Object nextEnum = enumConstants[(currentIdx + 1) % enumConstants.length];
-                                    EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, val, nextEnum, label);
-                                    manager.getCommandHistory().executeCommand(cmd);
-                                    return;
-                                }
-                            }
-                        }
-                        curY -= InspectorPanel.ROW_ADVANCE;
-
-                    } else if (prop.type() == InspectorProperty.PropertyType.COLOR || field.getType() == float.class || field.getType() == Float.class) {
-                        if (inRow) {
-                            float currentVal = (val != null) ? (Float) val : 0.0f;
-                            float step = prop.step() > 0.0f ? prop.step() : 0.1f;
-
-                            if (ndcX >= InspectorPanel.DEC_X0 && ndcX < InspectorPanel.DEC_X1) {
-                                UISoundPlayer.play(UISound.CLICK);
-                                float newVal = Math.max(prop.min(), Math.min(prop.max(), currentVal - step));
-                                EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, currentVal, newVal, label);
-                                manager.getCommandHistory().executeCommand(cmd);
-                                return;
-                            }
-                            if (ndcX >= InspectorPanel.INC_X0 && ndcX <= InspectorPanel.INC_X1) {
-                                UISoundPlayer.play(UISound.CLICK);
-                                float newVal = Math.max(prop.min(), Math.min(prop.max(), currentVal + step));
-                                EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(comp, field, currentVal, newVal, label);
-                                manager.getCommandHistory().executeCommand(cmd);
-                                return;
-                            }
-                        }
-                        curY -= InspectorPanel.ROW_ADVANCE;
-
-                    } else {
-                        curY -= InspectorPanel.TEXT_ROW_ADVANCE;
-                    }
+                    if (handlePropertyClick(manager, comp, p, p.get(comp), ndcX)) return;
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -265,6 +172,19 @@ public class InspectorInputDelegate {
                                 }
                             }
                             curY -= InspectorPanel.ROW_ADVANCE;
+                        } else if (fieldType == String.class) {
+                            if (inRow && ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.VALUE_X1) {
+                                UISoundPlayer.play(UISound.OPEN_MODAL);
+                                String input = NativeFileDialog.promptInput("Edit " + label, label + ":", valStr);
+                                if (input != null && !input.equals(valStr)) {
+                                    EditorCommands.ScriptPropertyOverrideCommand cmd = new EditorCommands.ScriptPropertyOverrideCommand(sc, fName, valStr, input);
+                                    manager.getCommandHistory().executeCommand(cmd);
+                                } else {
+                                    UISoundPlayer.play(UISound.CLOSE_MODAL);
+                                }
+                                return;
+                            }
+                            curY -= InspectorPanel.ROW_ADVANCE;
                         } else {
                             curY -= InspectorPanel.TEXT_ROW_ADVANCE;
                         }
@@ -285,6 +205,82 @@ public class InspectorInputDelegate {
                 return;
             }
         }
+    }
+
+    /** Applies a click inside a property row; returns true when the click was consumed. */
+    private static boolean handlePropertyClick(EditorWorkspace manager, Component comp, ComponentSchema.Property p, Object val, float ndcX) {
+        Field field = p.field;
+        InspectorProperty prop = p.meta;
+        String label = p.label;
+
+        switch (p.control) {
+            case ASSET -> {
+                if (ndcX >= InspectorPanel.PICK_X0 && ndcX <= InspectorPanel.PICK_X1) {
+                    UISoundPlayer.play(UISound.OPEN_MODAL);
+                    AssetType assetType = parseAssetType(prop.assetType());
+                    manager.getOverlayManager().openAssetPicker(assetType, (comp instanceof Material) ? field.getName() : null);
+                    return true;
+                }
+                if (ndcX >= InspectorPanel.IMPORT_X0 && ndcX <= InspectorPanel.IMPORT_X1) {
+                    UISoundPlayer.play(UISound.OPEN_MODAL);
+                    if (comp instanceof Material && "TEXTURE".equalsIgnoreCase(prop.assetType())) {
+                        promptImportTexture(manager, field.getName());
+                    } else {
+                        promptImportAssetForType(manager, prop.assetType());
+                    }
+                    return true;
+                }
+            }
+            case TOGGLE -> {
+                if (ndcX >= InspectorPanel.LABEL_X && ndcX <= InspectorPanel.VALUE_X1) {
+                    UISoundPlayer.play(UISound.CLICK);
+                    boolean currentBool = (val != null) && (Boolean) val;
+                    execute(manager, comp, field, currentBool, !currentBool, label);
+                    return true;
+                }
+            }
+            case CHOICE -> {
+                Object[] enumConstants = field.getType().getEnumConstants();
+                if (ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.VALUE_X1 && enumConstants != null && enumConstants.length > 0) {
+                    UISoundPlayer.play(UISound.CLICK);
+                    int currentIdx = Math.max(0, Arrays.asList(enumConstants).indexOf(val));
+                    execute(manager, comp, field, val, enumConstants[(currentIdx + 1) % enumConstants.length], label);
+                    return true;
+                }
+            }
+            case NUMBER -> {
+                float currentVal = (val != null) ? (Float) val : 0.0f;
+                float step = prop.step() > 0.0f ? prop.step() : 0.1f;
+                float delta = 0.0f;
+                if (ndcX >= InspectorPanel.DEC_X0 && ndcX < InspectorPanel.DEC_X1) delta = -step;
+                else if (ndcX >= InspectorPanel.INC_X0 && ndcX <= InspectorPanel.INC_X1) delta = step;
+                if (delta != 0.0f) {
+                    UISoundPlayer.play(UISound.CLICK);
+                    float newVal = Math.max(prop.min(), Math.min(prop.max(), currentVal + delta));
+                    execute(manager, comp, field, currentVal, newVal, label);
+                    return true;
+                }
+            }
+            case STRING -> {
+                if (ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.VALUE_X1) {
+                    UISoundPlayer.play(UISound.OPEN_MODAL);
+                    String current = (val != null) ? (String) val : "";
+                    String input = NativeFileDialog.promptInput("Edit " + label, label + ":", current);
+                    if (input != null && !input.equals(current)) {
+                        execute(manager, comp, field, val, input, label);
+                    } else {
+                        UISoundPlayer.play(UISound.CLOSE_MODAL);
+                    }
+                    return true;
+                }
+            }
+            case READ_ONLY -> {}
+        }
+        return false;
+    }
+
+    private static void execute(EditorWorkspace manager, Component comp, Field field, Object oldVal, Object newVal, String label) {
+        manager.getCommandHistory().executeCommand(new EditorCommands.ModifyPropertyCommand(comp, field, oldVal, newVal, label));
     }
 
     private static AssetType parseAssetType(String typeStr) {
