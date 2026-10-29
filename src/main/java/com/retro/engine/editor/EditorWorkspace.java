@@ -37,7 +37,7 @@ public class EditorWorkspace {
     public enum GizmoMode { TRANSLATE, ROTATE, SCALE }
     public enum GizmoAxis { NONE, X, Y, Z }
     public enum DropdownMenu { NONE, FILE, EDIT, ENTITY, VIEW }
-    public enum ModalState { NONE, ASSET_PICKER, PARENT_PICKER }
+    public enum ModalState { NONE, ASSET_PICKER, PARENT_PICKER, BUILD_EXPORTER }
     public enum WorkspaceTab { SCENE_3D, ANIMATOR }
 
     // Domain Subsystem Managers (Service Registry)
@@ -271,6 +271,8 @@ public class EditorWorkspace {
             ModalDialogOverlay.renderAssetPickerModal(uiGeometryBuffer, overlayManager.getPickerFilterType(), assetDirectoryManager.getAssetDirectory());
         } else if (overlayManager.getActiveModal() == ModalState.PARENT_PICKER && overlayManager.getParentPickerTargetEntity() != null) {
             ModalDialogOverlay.renderEntityParentPickerModal(uiGeometryBuffer, overlayManager.getParentPickerTargetEntity(), sceneManager.getSceneEntities());
+        } else if (overlayManager.getActiveModal() == ModalState.BUILD_EXPORTER) {
+            com.retro.engine.editor.ui.overlays.BuildExporterOverlay.render(uiGeometryBuffer);
         }
 
         if (overlayManager.isContextMenuVisible()) {

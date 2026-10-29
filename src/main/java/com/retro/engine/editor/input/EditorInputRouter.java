@@ -1,5 +1,7 @@
 package com.retro.engine.editor.input;
 
+import com.retro.engine.editor.ui.overlays.BuildExporterOverlay;
+
 import com.retro.engine.editor.ui.overlays.ProjectLauncherOverlay;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ViewportCamera;
@@ -135,6 +137,11 @@ public class EditorInputRouter {
 
             if (overlayManager.getActiveModal() == EditorWorkspace.ModalState.ASSET_PICKER) {
                 MainMenuBarInputDelegate.processModalClick(ndcX, ndcY, workspace);
+                return true;
+            }
+
+            if (overlayManager.getActiveModal() == EditorWorkspace.ModalState.BUILD_EXPORTER) {
+                if (button == 0) BuildExporterOverlay.handleClick(ndcX, ndcY, workspace);
                 return true;
             }
 
@@ -326,7 +333,8 @@ public class EditorInputRouter {
                     : AnimatorGraphPanel.handleInspectorScroll(dx, dy, yOffset);
         }
         if (panel == DockPanel.SCENE && !workspace.getOverlayManager().isContextMenuVisible()) {
-            if (cameraController != null) {
+            // Play mode: the Main Camera owns the view, so zoom is not consumed here
+            if (cameraController != null && !cameraController.isPlayLocked()) {
                 cameraController.onScroll(yOffset);
                 return true;
             }

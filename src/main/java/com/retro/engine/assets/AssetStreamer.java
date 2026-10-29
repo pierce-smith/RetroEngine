@@ -37,6 +37,27 @@ public class AssetStreamer {
 
     private final ExecutorService ioExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
+    // Standalone builds: raw Assets/ paths resolve to pre-cooked packages under Game_Data/Cooked/
+    private static volatile File cookedAssetsRoot = null;
+    private static volatile File cookedOutputRoot = null;
+
+    public static void setCookedMirror(File assetsRoot, File cookedRoot) {
+        cookedAssetsRoot = (assetsRoot != null) ? assetsRoot.getAbsoluteFile() : null;
+        cookedOutputRoot = (cookedRoot != null) ? cookedRoot.getAbsoluteFile() : null;
+    }
+
+    /** Pre-cooked .rpack for a raw asset path: the sidecar next to it, else the cooked mirror; null when neither exists. */
+    private static String findCookedPackage(String filePath) {
+        String sidecar = filePath + ".rpack";
+        if (new File(sidecar).exists()) return sidecar;
+        File assetsRoot = cookedAssetsRoot, cookedRoot = cookedOutputRoot;
+        if (assetsRoot == null || cookedRoot == null) return null;
+        File raw = new File(filePath).getAbsoluteFile();
+        if (!raw.toPath().normalize().startsWith(assetsRoot.toPath().normalize())) return null;
+        File cooked = com.retro.engine.assets.cooker.RpackCookerCli.cookedPathFor(assetsRoot, cookedRoot, raw);
+        return cooked.isFile() ? cooked.getPath() : null;
+    }
+
     private final Map<String, MeshBufferData> modelCache = new ConcurrentHashMap<>();
     private final Map<String, PixelBufferData> textureCache = new ConcurrentHashMap<>();
 
@@ -223,9 +244,9 @@ public class AssetStreamer {
                 if (filePath.endsWith(".rpack")) {
                     data = RpackCooker.readRpackMesh(filePath);
                 } else {
-                    String rpackSidecar = filePath + ".rpack";
-                    if (new File(rpackSidecar).exists()) {
-                        data = RpackCooker.readRpackMesh(rpackSidecar);
+                    String cooked = findCookedPackage(filePath);
+                    if (cooked != null) {
+                        data = RpackCooker.readRpackMesh(cooked);
                     }
                 }
 
@@ -261,9 +282,9 @@ public class AssetStreamer {
                 if (filePath.endsWith(".rpack")) {
                     data = RpackCooker.readRpackTexture(filePath);
                 } else {
-                    String rpackSidecar = filePath + ".rpack";
-                    if (new File(rpackSidecar).exists()) {
-                        data = RpackCooker.readRpackTexture(rpackSidecar);
+                    String cooked = findCookedPackage(filePath);
+                    if (cooked != null) {
+                        data = RpackCooker.readRpackTexture(cooked);
                     }
                 }
 

@@ -85,11 +85,12 @@ public class RpackCookerCli {
         }
     }
 
-    private static void cookDirectory(String inputDirPath, String outputDirPath) {
+    /** Batch-cooks every mesh/texture under inputDirPath into outputDirPath, mirroring folders. Returns the cooked count. */
+    public static int cookDirectory(String inputDirPath, String outputDirPath) {
         File inDir = new File(inputDirPath);
         if (!inDir.exists() || !inDir.isDirectory()) {
             System.err.println("[RpackCookerCli] Error: Input directory not found -> " + inputDirPath);
-            return;
+            return 0;
         }
 
         List<File> rawAssets = new ArrayList<>();
@@ -119,6 +120,13 @@ public class RpackCookerCli {
         System.out.println("==========================================================================");
         System.out.println("[RpackCookerCli] Batch Cooking Complete: " + cookedCount + " / " + rawAssets.size() + " assets processed into " + outputDirPath + "/");
         System.out.println("==========================================================================");
+        return cookedCount;
+    }
+
+    /** Cooked package path for a raw asset: cookedRoot + its Assets/-relative path with the extension swapped to .rpack. */
+    public static File cookedPathFor(File assetsRoot, File cookedRoot, File rawFile) {
+        String rel = assetsRoot.toPath().relativize(rawFile.toPath()).toString();
+        return new File(cookedRoot, getFileNameWithoutExtension(rel) + ".rpack");
     }
 
     private static void scanAssetsRecursive(File dir, List<File> outList) {

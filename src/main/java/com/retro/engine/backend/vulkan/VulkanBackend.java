@@ -65,6 +65,7 @@ public class VulkanBackend implements IRenderBackend {
     private long windowHandle = 0L;
 
     private float camPanX = 0.0f;
+    private float projFovDeg = 50.0f, projNear = 0.1f, projFar = 500.0f;
     private float camPanY = 0.25f;
     private float camZoom = -5.0f;
     private float camPitch = 0.0f;
@@ -170,7 +171,7 @@ public class VulkanBackend implements IRenderBackend {
         // View/projection feed the light UBO (binding 0), so they must be ready before it is written
         computeViewMatrix();
         float aspect = sceneAspect > 0.0f ? sceneAspect : (float) targetPass.getWidth() / (float) targetPass.getHeight();
-        computePerspectiveProjectionMatrix(50.0f, aspect, 0.1f, 500.0f);
+        computePerspectiveProjectionMatrix(projFovDeg, aspect, projNear, projFar);
         computeLightSpaceMatrix();
 
         gpuCache.updateLightUniformBuffer(
@@ -457,6 +458,9 @@ public class VulkanBackend implements IRenderBackend {
 
     @Override public void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw) {
         this.camPanX = panX; this.camPanY = panY; this.camZoom = zoom; this.camPitch = pitch; this.camYaw = yaw;
+    }
+    @Override public void setCameraProjection(float fovDeg, float near, float far) {
+        this.projFovDeg = fovDeg; this.projNear = near; this.projFar = far;
     }
 
     @Override

@@ -150,8 +150,19 @@ public class EngineContext {
         }
 
         // Editor boots into the ProjectLauncherOverlay unless --project <dir> binds a project up front.
-        // Runtime builds keep the working-directory Assets/ layout.
-        if (!isRuntimeOnly) {
+        // Runtime builds bind their exported Game_Data/ (or --project <dir>) and load its startup scene.
+        if (isRuntimeOnly) {
+            java.io.File gameData = resolveRuntimeGameData(cliArgs);
+            if (gameData == null) {
+                System.err.println("[EngineContext] No Game_Data/ or --project folder found; starting with an empty scene.");
+            } else {
+                try {
+                    ProjectWorkspace.openRuntimeProject(editorManager, gameData);
+                } catch (java.io.IOException e) {
+                    System.err.println("[EngineContext] Failed to load game data: " + e.getMessage());
+                }
+            }
+        } else {
             String cliProject = findCliValue(cliArgs, "--project");
             if (cliProject != null && !openProject(cliProject)) {
                 System.err.println("[EngineContext] --project " + cliProject + " could not be opened; showing project launcher.");
@@ -179,6 +190,21 @@ public class EngineContext {
             System.err.println("[EngineContext] Failed to open project: " + e.getMessage());
             return false;
         }
+    }
+
+    private static java.io.File resolveRuntimeGameData(String[] cliArgs) {
+        String[] candidates = {
+            findCliValue(cliArgs, "--project"),
+            System.getProperty(com.retro.engine.editor.build.StandaloneExporter.GAME_DATA_PROPERTY),
+            new java.io.File(System.getProperty("user.dir"), com.retro.engine.editor.build.StandaloneExporter.GAME_DATA_DIR).getPath(),
+            System.getProperty("user.dir")
+        };
+        for (String c : candidates) {
+            if (c == null || c.isBlank()) continue;
+            java.io.File dir = new java.io.File(c.trim()).getAbsoluteFile();
+            if (ProjectWorkspace.isProjectDirectory(dir)) return dir;
+        }
+        return null;
     }
 
     private static String findCliValue(String[] args, String flag) {

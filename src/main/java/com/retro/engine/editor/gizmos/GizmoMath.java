@@ -12,7 +12,7 @@ public class GizmoMath {
 
     public static float[] projectWorldToNdc(float wx, float wy, float wz, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
         float aspect = DockSpace.getSceneAspect();
-        float fov = (float) Math.toRadians(50.0);
+        float fov = (float) Math.toRadians(cameraController != null ? cameraController.getFov() : 50.0f);
         float f = (float) (1.0 / Math.tan(fov / 2.0));
 
         float p00 = f / aspect;

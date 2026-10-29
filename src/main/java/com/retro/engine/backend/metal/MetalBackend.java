@@ -201,6 +201,9 @@ public class MetalBackend implements IRenderBackend {
     @Override public void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw) {
         this.camPanX = panX; this.camPanY = panY; this.camZoom = zoom; this.camPitch = pitch; this.camYaw = yaw;
     }
+    @Override public void setCameraProjection(float fovDeg, float near, float far) {
+        uniformStreamer.setProjection(fovDeg, near, far);
+    }
 
     @Override
     public void setSceneLight(int type, float posX, float posY, float posZ, float dirX, float dirY, float dirZ, float r, float g, float b, float intensity) {

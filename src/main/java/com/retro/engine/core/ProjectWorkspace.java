@@ -175,6 +175,21 @@ public final class ProjectWorkspace {
         System.out.println("[Project] Opened project '" + settings.projectName + "' (" + dir.getAbsolutePath() + ")");
     }
 
+    /**
+     * Standalone runtime boot: binds the exported Game_Data/ folder (read-only settings) and loads its startup scene.
+     * Cooked .rpack packages under Game_Data/Cooked/ take priority over the raw sources when streaming.
+     */
+    public static void openRuntimeProject(EditorWorkspace workspace, File gameDataDir) throws IOException {
+        File dir = gameDataDir.getAbsoluteFile();
+        ProjectSettings settings = readSettings(dir);
+        if (!workspace.getAssetDatabase().openProject(dir.getAbsolutePath())) {
+            throw new IOException("Could not bind asset registry to " + dir.getAbsolutePath());
+        }
+        com.retro.engine.assets.AssetStreamer.setCookedMirror(new File(dir, AssetDatabase.ASSETS_DIR), new File(dir, AssetDatabase.COOKED_DIR));
+        loadStartupScene(workspace, dir, settings);
+        System.out.println("[Runtime] Loaded game '" + settings.projectName + "' (startup scene: " + settings.startupScene + ")");
+    }
+
     private static void loadStartupScene(EditorWorkspace workspace, File projectDir, ProjectSettings settings) {
         if (settings.startupScene == null || settings.startupScene.isEmpty()) return;
         File scene = new File(projectDir, settings.startupScene);

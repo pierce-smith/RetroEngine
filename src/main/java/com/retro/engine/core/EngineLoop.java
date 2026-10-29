@@ -5,6 +5,7 @@ import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.input.HotkeyRouter;
 import com.retro.engine.editor.render.SceneRenderPipeline;
+import com.retro.engine.editor.ui.panels.ViewportPanel;
 import com.retro.engine.rhi.IRenderBackend;
 
 /**
@@ -66,8 +67,12 @@ public class EngineLoop {
                 hotkeyHandler.processInput(window, editorManager, cameraController, frameDelta);
             }
 
+            // Play mode locks the viewport to the scene's Main Camera; Stop restores the editor camera
+            ViewportPanel.syncPlayCamera(editorManager, cameraController);
+
             // Synchronize Camera MVP Parameters across RHI and EditorWorkspace
             if (cameraController != null && editorManager != null && rhi != null) {
+                rhi.setCameraProjection(cameraController.getFov(), cameraController.getNear(), cameraController.getFar());
                 rhi.setCameraTransform(
                         cameraController.getPanX(),
                         cameraController.getPanY(),

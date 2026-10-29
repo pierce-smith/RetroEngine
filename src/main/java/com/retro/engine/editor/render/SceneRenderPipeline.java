@@ -174,7 +174,8 @@ public class SceneRenderPipeline {
     // Backend camera preview target (0L = unsupported); refreshed every submitFrame
     private long cameraPreviewTexture = 0L;
     // Camera preview matrix scratch (3x3 row-major rotations, 4x4 column-major view / projection)
-    private final float[] rotX = new float[9], rotY = new float[9], rotZ = new float[9], rotYX = new float[9], rot = new float[9];
+    // Static: only touched on the main thread (render extraction and ViewportPanel's play-camera sync)
+    private static final float[] rotX = new float[9], rotY = new float[9], rotZ = new float[9], rotYX = new float[9], rot = new float[9];
     private final float[] previewView = new float[16], previewProj = new float[16];
 
     /**
@@ -194,7 +195,7 @@ public class SceneRenderPipeline {
             frustumCuller.updateFromCamera(
                     camera.getPanX(), camera.getPanY(), camera.getZoom(),
                     camera.getPitch(), camera.getYaw(),
-                    50.0f, DockSpace.getSceneAspect(), 0.1f, 100.0f
+                    camera.getFov(), DockSpace.getSceneAspect(), camera.getNear(), camera.isPlayLocked() ? camera.getFar() : 100.0f
             );
         }
 
@@ -509,7 +510,7 @@ public class SceneRenderPipeline {
      * Column-major view matrix R^T * T(-p) for an entity transform. R = Rz * Ry * Rx matches the backends' model matrix,
      * so a camera with zero rotation looks down -Z, rotY yaws and positive rotX pitches down (the Light convention).
      */
-    private void computeCameraView(WorldTransform wt, float[] out) {
+    public static void computeCameraView(WorldTransform wt, float[] out) {
         float ax = (float) Math.toRadians(wt.rx()), ay = (float) Math.toRadians(wt.ry()), az = (float) Math.toRadians(wt.rz());
         float cx = (float) Math.cos(ax), sx = (float) Math.sin(ax);
         float cy = (float) Math.cos(ay), sy = (float) Math.sin(ay);

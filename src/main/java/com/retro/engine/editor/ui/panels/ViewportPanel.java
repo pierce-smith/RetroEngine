@@ -1,6 +1,9 @@
 package com.retro.engine.editor.ui.panels;
 
+import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.EditorWorkspace.WorkspaceTab;
+import com.retro.engine.editor.ViewportCamera;
+import com.retro.engine.editor.render.SceneRenderPipeline;
 import com.retro.engine.editor.EditorWorkspace.GizmoMode;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.dock.DockPanel;
@@ -9,6 +12,8 @@ import com.retro.engine.editor.ui.theme.EditorTheme;
 import com.retro.engine.scene.components.rendering.Camera;
 import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.scene.world.SceneWorld.PlayState;
+import com.retro.engine.scene.world.SceneWorld.WorldTransform;
 
 import java.lang.ref.WeakReference;
 import java.util.HashMap;
@@ -44,6 +49,49 @@ public class ViewportPanel {
     // On-screen width/height of the last drawn viewfinder; the camera preview pass projects with it so the
     // fixed-size preview target is stretched into the frame without distortion
     private static volatile float cameraPreviewAspect = 16.0f / 9.0f;
+
+    private static final float[] playCameraView = new float[16];
+
+    /**
+     * Per-frame Play-mode camera lock. While the scene is playing (SIMULATING or PAUSED) the viewport camera follows
+     * the Main Camera with the camera preview's view transform and projection, and editor navigation is disabled;
+     * back in EDITING the pre-play editor pose and free flight controls are restored. A scene without a Camera
+     * leaves the editor camera locked in place.
+     */
+    public static void syncPlayCamera(EditorWorkspace workspace, ViewportCamera viewportCamera) {
+        if (workspace == null || viewportCamera == null) return;
+        if (workspace.getPlayState() == PlayState.EDITING) {
+            viewportCamera.unlockFromPlay();
+            return;
+        }
+        viewportCamera.lockForPlay();
+
+        Entity mainCamera = findMainCamera(workspace.getSceneEntities());
+        if (mainCamera == null) return;
+        Camera camera = mainCamera.getComponent(Camera.class);
+        WorldTransform wt = workspace.getSceneManager().getComputedWorldTransform(mainCamera);
+        SceneRenderPipeline.computeCameraView(wt, playCameraView);
+
+        // Same clamps as the camera preview pass
+        float fov = Math.max(1.0f, Math.min(179.0f, camera.fov));
+        float near = Math.max(0.01f, camera.nearPlane);
+        float far = Math.max(near + 0.01f, camera.farPlane);
+        viewportCamera.snapToView(playCameraView, wt.px(), wt.py(), wt.pz(), fov, near, far);
+    }
+
+    /** First entity with a primary Camera, falling back to the first entity with any Camera. */
+    private static Entity findMainCamera(List<Entity> entities) {
+        if (entities == null) return null;
+        Entity fallback = null;
+        for (int i = 0, n = entities.size(); i < n; i++) {
+            Entity entity = entities.get(i);
+            Camera camera = entity.getComponent(Camera.class);
+            if (camera == null) continue;
+            if (camera.isPrimary) return entity;
+            if (fallback == null) fallback = entity;
+        }
+        return fallback;
+    }
 
     public static float getCameraPreviewAspect() {
         return cameraPreviewAspect;

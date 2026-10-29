@@ -10,6 +10,8 @@ public interface IRenderBackend {
     boolean initialize(ViewportSpec windowInfo);
 
     void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw);
+    /** Perspective parameters for the scene camera (editor default 50 deg / 0.1 / 500; Play mode uses the Main Camera's). */
+    default void setCameraProjection(float fovDeg, float near, float far) {}
     
     default void setSceneLight(int lightType, float posX, float posY, float posZ, 
                               float dirX, float dirY, float dirZ, 

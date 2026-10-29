@@ -71,11 +71,15 @@ public class MainMenuBarInputDelegate {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     manager.getSceneManager().promptSaveSceneWithNativeDialog(manager.getAssetDatabase().getMutableAssetDirectory(), manager.getAssetDatabase());
                 } else if (itemIndex == 3) {
+                    UISoundPlayer.play(UISound.OPEN_MODAL);
+                    manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
+                    com.retro.engine.editor.ui.overlays.BuildExporterOverlay.open(manager);
+                } else if (itemIndex == 4) {
                     // Unbind the project and return to the launcher, which clears and re-scans on the next open
                     UISoundPlayer.play(UISound.CLOSE_MODAL);
                     manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
                     manager.closeProject();
-                } else if (itemIndex == 4) {
+                } else if (itemIndex == 5) {
                     // Quit: same path as the OS-level ⌘Q / Alt + F4 (window close request)
                     UISoundPlayer.play(UISound.CLICK);
                     if (manager.getWindowHandle() != 0L) glfwSetWindowShouldClose(manager.getWindowHandle(), true);

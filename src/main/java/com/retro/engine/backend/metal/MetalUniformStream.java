@@ -250,10 +250,16 @@ public class MetalUniformStream {
         }
     }
 
+    private float projFovDeg = 50.0f, projNear = 0.1f, projFar = 500.0f;
+
+    public void setProjection(float fovDeg, float near, float far) {
+        projFovDeg = fovDeg; projNear = near; projFar = far;
+    }
+
     public float[] createPerspectiveMatrix(float aspect) {
-        float fov = (float) Math.toRadians(50.0);
+        float fov = (float) Math.toRadians(projFovDeg);
         float f = (float) (1.0 / Math.tan(fov / 2.0));
-        float zNear = 0.1f, zFar = 500.0f;
+        float zNear = projNear, zFar = projFar;
 
         float p00 = f / aspect;
         float p11 = f;
