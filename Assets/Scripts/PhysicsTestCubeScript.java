@@ -29,7 +29,7 @@ public class PhysicsTestCubeScript extends EntityScript {
     @Override
     public void onUpdate(float deltaTime) {
         // 1. Continuous Y-axis rotation (Phase 1 Transform API)
-        rotate(0.0f, rotationSpeed * deltaTime, 0.0f);
+        //rotate(0.0f, rotationSpeed * deltaTime, 0.0f);
 
         // 2. WASD Movement (Phase 1 Input API)
         // GLFW Key Codes: W=87, S=83, A=65, D=68, SPACE=32, C=67

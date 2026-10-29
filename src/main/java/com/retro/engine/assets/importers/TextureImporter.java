@@ -1,5 +1,7 @@
 package com.retro.engine.assets.importers;
 
+import com.retro.engine.core.EngineContext;
+
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.File;
@@ -80,7 +82,10 @@ public class TextureImporter {
 
         // 4. Recursive search by filename in working directory, Assets/, and Downloads
         String fileName = new File(clean).getName();
-        if (!fileName.isEmpty()) {
+        // Runtime builds never scan user.dir ("/" when launched from Finder) or ~/Downloads: those walks trip macOS
+        // iCloud Drive / Downloads / network-volume permission prompts. Exported assets resolve from Game_Data/.
+        if (fileName.isEmpty() || EngineContext.isRuntimeProcess()) return null;
+        {
             File rootAssets = new File("Assets");
             if (rootAssets.exists() && rootAssets.isDirectory()) {
                 File found = findFileByName(rootAssets, fileName, 0);

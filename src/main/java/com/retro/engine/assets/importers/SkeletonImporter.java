@@ -1,5 +1,7 @@
 package com.retro.engine.assets.importers;
 
+import com.retro.engine.core.EngineContext;
+
 import com.retro.engine.animation.clips.AnimationClip;
 import com.retro.engine.animation.clips.KeyframeTrack;
 import com.retro.engine.animation.skeleton.Skeleton;
@@ -38,7 +40,10 @@ public class SkeletonImporter {
         }
 
         String fileName = new File(clean).getName();
-        if (!fileName.isEmpty()) {
+        // Runtime builds never scan user.dir ("/" when launched from Finder) or ~/Downloads: those walks trip macOS
+        // iCloud Drive / Downloads / network-volume permission prompts. Exported assets resolve from Game_Data/.
+        if (fileName.isEmpty() || EngineContext.isRuntimeProcess()) return null;
+        {
             File found = findFileByName(new File(System.getProperty("user.dir")), fileName, 0);
             if (found != null && found.exists()) return found;
 

@@ -297,7 +297,13 @@ public final class StandaloneExporter {
             cmd.add(opt);
         }
         if (req.platform == Platform.WINDOWS) cmd.add("--win-console");
+        if (req.platform == Platform.MACOS) {
+            cmd.add("--mac-package-identifier");
+            cmd.add(bundleId(req.executableName));
+        }
         run(cmd, null);
+
+        if (req.platform == Platform.MACOS) finalizeMacBundle(target);
 
         if (req.platform == Platform.LINUX) {
             File appImage = tryBuildAppImage(target);
@@ -358,10 +364,11 @@ public final class StandaloneExporter {
                 File contents = new File(target, "Contents");
                 copyTree(runtime.toPath(), new File(contents, "runtime").toPath());
                 copyTree(app.toPath(), new File(contents, "app").toPath());
-                Files.writeString(new File(contents, "Info.plist").toPath(), infoPlist(exe));
+                Files.writeString(new File(contents, "Info.plist").toPath(), infoPlist(exe, null));
                 writeExecutable(new File(contents, "MacOS/" + exe),
                     "#!/bin/sh\nCONTENTS=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"\nAPPDIR=\"$CONTENTS/app\"\n"
                         + "exec \"$CONTENTS/runtime/bin/java\" " + shellOptions("$APPDIR") + " -cp \"$APPDIR/*\" " + Main.class.getName() + " --runtime \"$@\"\n");
+                if (Platform.host() == Platform.MACOS) adHocSign(target);
             }
             case LINUX -> {
                 target = new File(req.exportDir, exe);
@@ -393,19 +400,52 @@ public final class StandaloneExporter {
         return sb.toString().trim();
     }
 
-    private static String infoPlist(String exe) {
-        String id = "com.retro.game." + exe.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
+    private static String bundleId(String exe) {
+        String id = exe.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
+        return "com.retro.game." + (id.isEmpty() ? "app" : id);
+    }
+
+    /**
+     * Minimal game Info.plist: no NS*UsageDescription, NSBonjourServices, NSLocalNetworkUsageDescription,
+     * iCloud container or document-type keys, so macOS has nothing to prompt for on launch.
+     */
+    private static String infoPlist(String exe, String iconFile) {
         return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
             + "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
             + "<plist version=\"1.0\"><dict>\n"
+            + "  <key>CFBundleDevelopmentRegion</key><string>en</string>\n"
+            + "  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>\n"
             + "  <key>CFBundleName</key><string>" + exe + "</string>\n"
+            + "  <key>CFBundleDisplayName</key><string>" + exe + "</string>\n"
             + "  <key>CFBundleExecutable</key><string>" + exe + "</string>\n"
-            + "  <key>CFBundleIdentifier</key><string>" + id + "</string>\n"
+            + "  <key>CFBundleIdentifier</key><string>" + bundleId(exe) + "</string>\n"
             + "  <key>CFBundlePackageType</key><string>APPL</string>\n"
             + "  <key>CFBundleShortVersionString</key><string>1.0</string>\n"
+            + "  <key>CFBundleVersion</key><string>1</string>\n"
+            + (iconFile != null ? "  <key>CFBundleIconFile</key><string>" + iconFile + "</string>\n" : "")
+            + "  <key>LSApplicationCategoryType</key><string>public.app-category.games</string>\n"
             + "  <key>LSMinimumSystemVersion</key><string>13.0</string>\n"
             + "  <key>NSHighResolutionCapable</key><true/>\n"
+            + "  <key>NSSupportsAutomaticGraphicsSwitching</key><true/>\n"
+            + "  <key>NSPrincipalClass</key><string>NSApplication</string>\n"
             + "</dict></plist>\n";
+    }
+
+    /** Replaces jpackage's Info.plist with the clean one (keeping its icon) and re-signs, since the edit breaks its seal. */
+    private void finalizeMacBundle(File app) throws IOException, InterruptedException {
+        File contents = new File(app, "Contents");
+        File[] icons = new File(contents, "Resources").listFiles((d, n) -> n.endsWith(".icns"));
+        String icon = (icons != null && icons.length > 0) ? icons[0].getName() : null;
+        Files.writeString(new File(contents, "Info.plist").toPath(), infoPlist(req.executableName, icon));
+        adHocSign(app);
+    }
+
+    /**
+     * Ad-hoc signature with no entitlements file: no com.apple.security.network.*, iCloud or app-group entitlements,
+     * and arm64 Macs still accept the bundle as intact.
+     */
+    private void adHocSign(File app) throws IOException, InterruptedException {
+        run(List.of("codesign", "--force", "--deep", "--sign", "-", app.getAbsolutePath()), null);
     }
 
     // ------------------------------------------------------------------------------------------

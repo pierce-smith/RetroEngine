@@ -195,12 +195,12 @@ public class SceneRenderPipeline {
             frustumCuller.updateFromCamera(
                     camera.getPanX(), camera.getPanY(), camera.getZoom(),
                     camera.getPitch(), camera.getYaw(),
-                    camera.getFov(), DockSpace.getSceneAspect(), camera.getNear(), camera.isPlayLocked() ? camera.getFar() : 100.0f
+                    camera.getFov(), ViewportPanel.getSceneAspect(), camera.getNear(), camera.isPlayLocked() ? camera.getFar() : 100.0f
             );
         }
 
         // Selected Camera entity's preview; its frustum also keeps entities only that camera can see in the queue
-        boolean previewActive = cameraPreviewTexture != 0L && DockSpace.isSceneViewportVisible()
+        boolean previewActive = cameraPreviewTexture != 0L && !ViewportPanel.isStandaloneFullscreen() && DockSpace.isSceneViewportVisible()
                 && buildCameraPreview(editorManager, snapshot);
 
         List<Entity> entities = editorManager.getSceneEntities();
@@ -364,7 +364,11 @@ public class SceneRenderPipeline {
         snapshot.uiVertices = editorManager.getUiVertices();
         snapshot.uiVertexCount = editorManager.getUiVertexCount();
 
-        if (DockSpace.isSceneViewportVisible()) {
+        if (ViewportPanel.isStandaloneFullscreen()) {
+            // Standalone runtime: full-window NDC quad
+            snapshot.sceneMinX = snapshot.sceneMinY = -1.0f;
+            snapshot.sceneMaxX = snapshot.sceneMaxY = 1.0f;
+        } else if (DockSpace.isSceneViewportVisible()) {
             snapshot.sceneMinX = DockSpace.getContentX0(DockPanel.SCENE);
             snapshot.sceneMinY = DockSpace.getContentY0(DockPanel.SCENE);
             snapshot.sceneMaxX = DockSpace.getContentX1(DockPanel.SCENE);
@@ -372,7 +376,7 @@ public class SceneRenderPipeline {
         } else {
             snapshot.sceneMinX = snapshot.sceneMinY = snapshot.sceneMaxX = snapshot.sceneMaxY = 0.0f;
         }
-        snapshot.sceneAspect = DockSpace.getSceneAspect();
+        snapshot.sceneAspect = ViewportPanel.getSceneAspect();
 
         if (snapshot.gridVisible) {
             totalActiveVertices += snapshot.gridVertexCount;

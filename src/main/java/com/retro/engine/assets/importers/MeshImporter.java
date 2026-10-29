@@ -1,5 +1,7 @@
 package com.retro.engine.assets.importers;
 
+import com.retro.engine.core.EngineContext;
+
 import com.retro.engine.scene.components.media.AnimatorComponent;
 import org.lwjgl.assimp.*;
 
@@ -463,7 +465,10 @@ public class MeshImporter {
         }
 
         String fileName = new File(clean).getName();
-        if (!fileName.isEmpty()) {
+        // Runtime builds never scan user.dir ("/" when launched from Finder) or ~/Downloads: those walks trip macOS
+        // iCloud Drive / Downloads / network-volume permission prompts. Exported assets resolve from Game_Data/.
+        if (fileName.isEmpty() || EngineContext.isRuntimeProcess()) return null;
+        {
             File found = findFileByName(new File(System.getProperty("user.dir")), fileName, 0);
             if (found != null && found.exists()) return found;
 

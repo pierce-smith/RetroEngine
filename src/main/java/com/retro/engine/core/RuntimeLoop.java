@@ -1,7 +1,9 @@
 package com.retro.engine.core;
 
 import com.retro.engine.assets.AssetStreamer;
+import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.render.SceneRenderPipeline;
+import com.retro.engine.editor.ui.panels.ViewportPanel;
 import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.scene.world.SceneWorld;
 import com.retro.engine.scene.world.SceneWorld.PlayState;
@@ -55,6 +57,7 @@ public class RuntimeLoop {
         AssetStreamer streamingService = context.getStreamingService();
         SceneRenderPipeline renderSubmitter = context.getRenderSubmitter();
         IRenderBackend rhi = context.getRhi();
+        ViewportCamera camera = context.getCameraController();
 
         this.running = true;
 
@@ -83,7 +86,15 @@ public class RuntimeLoop {
                 // 2. Continuous Scene World Simulation Tick
                 sceneWorld.update(deltaTime);
 
-                // 3. Submit Scene Graph Geometry to RHI Execution Queue (Zero Editor Overlay UI)
+                // 3. Fullscreen viewport at the WindowHost size, viewed through the scene's Main Camera
+                if (window != null) ViewportPanel.setStandaloneFullscreen(window.getWidth(), window.getHeight());
+                if (camera != null && rhi != null) {
+                    ViewportPanel.syncPlayCamera(context.getEditorManager(), camera);
+                    rhi.setCameraTransform(camera.getPanX(), camera.getPanY(), camera.getZoom(), camera.getPitch(), camera.getYaw());
+                    rhi.setCameraProjection(camera.getFov(), camera.getNear(), camera.getFar());
+                }
+
+                // 4. Submit Scene Graph Geometry to RHI Execution Queue (Zero Editor Overlay UI)
                 if (renderSubmitter != null && rhi != null && streamingService != null) {
                     rhi.clearSceneQueue();
 

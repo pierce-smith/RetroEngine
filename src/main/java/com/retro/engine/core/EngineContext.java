@@ -27,6 +27,10 @@ public class EngineContext {
     private IRenderBackend rhi;
     private boolean headlessMode = false;
     private boolean runtimeOnlyMode = false;
+    // Process-wide: set once a standalone runtime boots, so static asset resolvers can skip editor-only fallbacks
+    private static volatile boolean runtimeProcess = false;
+
+    public static boolean isRuntimeProcess() { return runtimeProcess; }
 
     public boolean initialize(int width, int height, String title) {
         return initialize(width, height, title, false, null);
@@ -43,6 +47,7 @@ public class EngineContext {
     public boolean initializeHeadless(String[] args) {
         this.headlessMode = true;
         this.runtimeOnlyMode = true;
+        runtimeProcess = true;
         this.editorManager = new EditorWorkspace();
         this.cameraController = new ViewportCamera();
         this.hotkeyHandler = new HotkeyRouter();
@@ -55,6 +60,7 @@ public class EngineContext {
 
     public boolean initialize(int width, int height, String title, boolean isRuntimeOnly, String[] cliArgs) {
         this.runtimeOnlyMode = isRuntimeOnly;
+        if (isRuntimeOnly) runtimeProcess = true;
         window = new WindowHost(width, height, title);
         if (!window.create()) {
             System.err.println("[Fatal] Could not create GLFW window. Halting.");

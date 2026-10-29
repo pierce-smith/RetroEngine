@@ -52,6 +52,23 @@ public class ViewportPanel {
 
     private static final float[] playCameraView = new float[16];
 
+    // Standalone runtime: the scene fills 100% of the WindowHost instead of the docked Scene tile
+    private static volatile boolean standaloneFullscreen = false;
+    private static volatile float standaloneAspect = 16.0f / 9.0f;
+
+    /** Called each runtime frame with the WindowHost size; the scene viewport then covers the whole window. */
+    public static void setStandaloneFullscreen(int windowWidth, int windowHeight) {
+        standaloneFullscreen = true;
+        if (windowWidth > 0 && windowHeight > 0) standaloneAspect = (float) windowWidth / (float) windowHeight;
+    }
+
+    public static boolean isStandaloneFullscreen() { return standaloneFullscreen; }
+
+    /** Scene projection aspect: the full window in standalone runtime, the docked Scene tile in the editor. */
+    public static float getSceneAspect() {
+        return standaloneFullscreen ? standaloneAspect : DockSpace.getSceneAspect();
+    }
+
     /**
      * Per-frame Play-mode camera lock. While the scene is playing (SIMULATING or PAUSED) the viewport camera follows
      * the Main Camera with the camera preview's view transform and projection, and editor navigation is disabled;
