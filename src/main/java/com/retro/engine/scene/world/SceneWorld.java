@@ -22,14 +22,12 @@ import com.retro.engine.scene.entity.EntitySpawner;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Refactored SceneWorld acting as a Backwards-Compatible Facade Bridge.
- * Coordinates entity storage, 64-bit generational entity handle lifecycle management,
- * selection state, and scene file path state while delegating matrix evaluation,
+ * Coordinates entity storage, selection state, and scene file path state while delegating
+ * generational handle and ComponentPool bookkeeping (EntityManager), matrix evaluation,
  * simulation state machine, and entity instantiation.
  * Hardened with hardware audio clip disposal, contiguous ComponentPool ECS storage,
  * and per-frame skeletal AnimationSystem updates.
@@ -53,9 +51,8 @@ public class SceneWorld {
     // Live read-only view, created once so per-frame scene traversal does not allocate a wrapper
     private final List<Entity> sceneEntitiesView = Collections.unmodifiableList(sceneEntities);
     
-    // --- 64-Bit Generational Handle Registry ---
-    private final List<Entity> entitySlots = new ArrayList<>();
-    private final List<Integer> entityGenerations = new ArrayList<>();
+    // 64-bit generational handle registry and contiguous ComponentPool storage
+    private final EntityManager entityManager = new EntityManager();
     private EntityHandle selectedHandle = EntityHandle.NULL;
     private Entity selectedEntity = null;
 
@@ -75,100 +72,42 @@ public class SceneWorld {
     private final SimulationSystem simulationEngine = new SimulationSystem();
     private final EntitySpawner entityFactory = new EntitySpawner();
     private final AnimationSystem animationEngine = new AnimationSystem();
-    private final Map<Class<?>, ComponentPool<?>> componentPools = new HashMap<>();
 
     public SceneWorld() {}
 
     public List<Entity> getSceneEntities() { return sceneEntitiesView; }
 
-    @SuppressWarnings("unchecked")
     public <T extends Component> ComponentPool<T> getComponentPool(Class<T> clazz) {
-        if (clazz == null) return null;
-        return (ComponentPool<T>) componentPools.computeIfAbsent(clazz, k -> new ComponentPool<>(clazz, 256));
+        return entityManager.getComponentPool(clazz);
     }
 
     public void syncEntityToPools(Entity entity) {
-        if (entity == null || entity.id == null) return;
-        for (Component comp : entity.getAllComponents()) {
-            if (comp != null) {
-                syncComponentToPool(entity.id, comp);
-            }
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private <T extends Component> void syncComponentToPool(String entityId, T component) {
-        Class<T> clazz = (Class<T>) component.getClass();
-        ComponentPool<T> pool = getComponentPool(clazz);
-        if (pool != null) {
-            pool.add(entityId, component);
-        }
+        entityManager.syncEntityToPools(entity);
     }
 
     public void removeComponentFromPool(Entity entity, Component component) {
-        if (entity == null || entity.id == null || component == null) return;
-        ComponentPool<?> pool = componentPools.get(component.getClass());
-        if (pool != null && pool.get(entity.id) == component) {
-            pool.remove(entity.id);
-        }
+        entityManager.removeComponentFromPool(entity, component);
     }
 
     public void removeEntityFromPools(Entity entity) {
-        if (entity == null || entity.id == null) return;
-        for (ComponentPool<?> pool : componentPools.values()) {
-            pool.remove(entity.id);
-        }
+        entityManager.removeEntityFromPools(entity);
     }
 
     // --- GENERATIONAL HANDLE REGISTRY API ---
     public EntityHandle registerEntityHandle(Entity entity) {
-        if (entity == null) return EntityHandle.NULL;
-        
-        int slotIndex = -1;
-        for (int i = 0; i < entitySlots.size(); i++) {
-            if (entitySlots.get(i) == null) {
-                slotIndex = i;
-                break;
-            }
-        }
-
-        if (slotIndex == -1) {
-            slotIndex = entitySlots.size();
-            entitySlots.add(entity);
-            entityGenerations.add(1);
-        } else {
-            entitySlots.set(slotIndex, entity);
-        }
-
-        int gen = entityGenerations.get(slotIndex);
-        EntityHandle handle = new EntityHandle(slotIndex, gen);
-        entity.setHandle(handle);
-
-        syncEntityToPools(entity);
-        return handle;
+        return entityManager.registerEntityHandle(entity);
     }
 
     public void unregisterEntityHandle(Entity entity) {
-        if (entity == null || entity.handle == null || !entity.handle.isValid()) return;
-        int idx = entity.handle.index();
-        if (idx >= 0 && idx < entitySlots.size()) {
-            entitySlots.set(idx, null);
-            entityGenerations.set(idx, entityGenerations.get(idx) + 1);
-        }
-        removeEntityFromPools(entity);
-        entity.setHandle(EntityHandle.NULL);
+        entityManager.unregisterEntityHandle(entity);
     }
 
     public boolean isValidHandle(EntityHandle handle) {
-        if (handle == null || !handle.isValid()) return false;
-        int idx = handle.index();
-        if (idx < 0 || idx >= entitySlots.size()) return false;
-        return entityGenerations.get(idx) == handle.generation() && entitySlots.get(idx) != null;
+        return entityManager.isValidHandle(handle);
     }
 
     public Entity getEntityByHandle(EntityHandle handle) {
-        if (!isValidHandle(handle)) return null;
-        return entitySlots.get(handle.index());
+        return entityManager.getEntityByHandle(handle);
     }
 
     public EntityHandle getSelectedEntityHandle() {
@@ -323,16 +262,7 @@ public class SceneWorld {
             }
         }
 
-        for (int i = 0; i < entitySlots.size(); i++) {
-            if (entitySlots.get(i) != null) {
-                entityGenerations.set(i, entityGenerations.get(i) + 1);
-                entitySlots.set(i, null);
-            }
-        }
-
-        for (ComponentPool<?> pool : componentPools.values()) {
-            pool.clear();
-        }
+        entityManager.clear();
 
         this.sceneEntities.clear();
         if (newEntities != null) {
