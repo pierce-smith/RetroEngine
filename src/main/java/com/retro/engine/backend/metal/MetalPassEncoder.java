@@ -1,6 +1,7 @@
 package com.retro.engine.backend.metal;
 
 import com.retro.engine.rhi.DirectionalShadowFrustum;
+import com.retro.engine.rhi.RenderCommand;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.libffi.FFICIF;
@@ -9,7 +10,6 @@ import org.lwjgl.system.libffi.FFIType;
 import java.nio.FloatBuffer;
 import java.nio.LongBuffer;
 import java.util.Arrays;
-import java.util.List;
 
 import static org.lwjgl.system.APIUtil.apiCreateCIF;
 import static org.lwjgl.system.JNI.*;
@@ -30,38 +30,9 @@ import static org.lwjgl.system.macosx.ObjCRuntime.*;
  */
 public class MetalPassEncoder {
 
-    private static final java.util.Comparator<RenderEntity> BATCH_COMPARATOR = (a, b) -> {
-        int cmp = Long.compare(a.vertexBufferHandle, b.vertexBufferHandle);
-        if (cmp != 0) return cmp;
-        return Long.compare(a.materialTextures[0], b.materialTextures[0]);
-    };
-
-    public static class RenderEntity {
-        public long vertexBufferHandle;
-        public long vertexBufferAddress; // gpuAddress written into DrawArgs.vertices
-        public int vertexCount;
-        public long indexBufferHandle;   // 0L = non-indexed draw
-        public int indexCount;
-        public long indexType;           // MTLIndexType (0 = UInt16, 1 = UInt32)
-        // Per channel (albedo, normal, specular, lightmap, emissive): id<MTLTexture> for residency, 0L = absent
-        public final long[] materialTextures = new long[MetalUniformStream.MATERIAL_CHANNELS];
-        public final long[] materialResourceIds = new long[MetalUniformStream.MATERIAL_CHANNELS];
-        public int materialMask;         // MetalUniformStream.MATERIAL_* bits for the present channels
-        public float specularStrength = 0.0f;
-        public float roughness = 0.6f;
-        public float normalStrength = 1.0f;
-        public float emissiveIntensity = 1.0f;
-        public float px, py, pz;
-        public float rx, ry, rz;
-        public float sx, sy, sz;
-        public float groundY = 0.0f;
-        public float reflectionStrength = 0.0f;
-        public int stride = 22;
-        public float[][] bonePalette = null;
-        public float boundsRadius = 1.0f; // local bounding sphere radius, fits the shadow frustum
-        int skinnedSlot = -1;             // bone palette slot assigned for this frame, -1 = not skinned
-        public int pickId = 0;            // Color-ID value (IRenderBackend.PICK_ID_NONE = not pickable)
-    }
+    // Current frame's draw list: transforms and material scalars per command, raw Metal objects per draw (key order)
+    private RenderCommand[] commands;
+    private MetalDrawBuffers draws;
 
     // Selectors are interned once at class load; nothing on the encoding path performs a string lookup
     private static final long SEL_RENDER_PASS_DESCRIPTOR = sel_registerName("renderPassDescriptor");
@@ -167,13 +138,13 @@ public class MetalPassEncoder {
 
     /**
      * Encodes the shadow map pass, the editor viewport pass and, when {@code previewViewProj} is non-null, the selected
-     * Camera entity's picture-in-picture pass into {@code previewTarget}. Both scene passes share the sorted queue, skinning
-     * slots, residency list and shadow map; each writes its own uniform slot range.
+     * Camera entity's picture-in-picture pass into {@code previewTarget}. Draws arrive key-sorted from the RenderQueue;
+     * both scene passes share their skinning slots, residency list and shadow map, and each writes its own uniform slot range.
      */
     public void encodeOffscreen3DPass(
             long commandBuffer, MetalDevice device, MetalPipeline pipeline, MetalTexture texture,
             MetalTargetPass framebuffer, MetalTargetPass previewTarget, MetalGpuCache resourceCache, MetalUniformStream streamer,
-            List<RenderEntity> sceneQueue, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw,
+            RenderCommand[] commands, MetalDrawBuffers draws, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw,
             float[] previewViewProj, float[] previewCamPos,
             int lightType, float lightPosX, float lightPosY, float lightPosZ,
             float lightDirX, float lightDirY, float lightDirZ,
@@ -196,23 +167,21 @@ public class MetalPassEncoder {
         long defaultTexture = texture.getBindableTexture();
         long defaultResourceId = texture.getBindableResourceId();
 
-        // Sort once and stream bone palettes once; the shadow and main passes share slot assignments
-        int entityCount = 0;
-        if (sceneQueue != null && !sceneQueue.isEmpty()) {
-            sceneQueue.sort(BATCH_COMPARATOR);
-            assignSkinningSlots(sceneQueue, streamer, pBoneContents);
-            entityCount = Math.min(sceneQueue.size(), MetalUniformStream.MAX_ENTITIES_PER_FRAME);
-        }
+        // Stream bone palettes once; the shadow and main passes share slot assignments
+        this.commands = commands;
+        this.draws = draws;
+        int entityCount = Math.min(draws.count, MetalUniformStream.MAX_ENTITIES_PER_FRAME);
+        assignSkinningSlots(streamer, pBoneContents, entityCount);
 
         long gridBuffer = resourceCache.getGridVertexBuffer();
         boolean drawGrid = gridBuffer != 0L && resourceCache.getGridVertexCount() > 0;
         long groundQuadBuf = resourceCache.getGroundQuadBuffer();
 
-        collectResidency(sceneQueue, entityCount, streamingUniformBuffer, bonePaletteBuffer, defaultTexture,
+        collectResidency(entityCount, streamingUniformBuffer, bonePaletteBuffer, defaultTexture,
                 drawGrid ? gridBuffer : 0L, groundQuadBuf);
 
         // PASS 0: Directional shadow map depth pass, encoded before the main 3D pass samples it
-        encodeShadowMapPass(commandBuffer, pipeline, texture, resourceCache, streamer, sceneQueue, entityCount,
+        encodeShadowMapPass(commandBuffer, pipeline, texture, resourceCache, streamer, entityCount,
                 pBufferContents, currentSlotOffset, defaultResourceId);
 
         this.lightType = lightType;
@@ -229,19 +198,19 @@ public class MetalPassEncoder {
 
         // PASS 1: Editor viewport (grid, lit models, ground shadow blobs)
         encodeScenePass(commandBuffer, framebuffer.getOffscreenColorTexture(), framebuffer.getOffscreenDepthTexture(),
-                pipeline, texture, resourceCache, streamer, sceneQueue, entityCount, pBufferContents, currentSlotOffset,
+                pipeline, texture, resourceCache, streamer, entityCount, pBufferContents, currentSlotOffset,
                 defaultResourceId, editorViewProj, editorCamPos, drawGrid ? gridBuffer : 0L, groundQuadBuf,
                 MetalUniformStream.SLOT_BASE_ENTITIES, MetalUniformStream.SLOT_BASE_SHADOW_BLOBS);
 
         // PASS 1B: Color-ID picking from the editor camera, with the probed texel blitted back for the host
         if (pickTarget != null && pickTarget.getOffscreenColorTexture() != 0L && pickReadbackBuffer != 0L && pipeline.getPipelineStatePick() != 0L) {
-            encodePickPass(commandBuffer, pipeline, texture, streamer, sceneQueue, entityCount, pBufferContents, currentSlotOffset, defaultResourceId);
+            encodePickPass(commandBuffer, pipeline, texture, streamer, entityCount, pBufferContents, currentSlotOffset, defaultResourceId);
         }
 
         // PASS 2: Selected Camera entity's view for the picture-in-picture preview (game view: no editor grid)
         if (previewViewProj != null && previewCamPos != null && previewTarget != null && previewTarget.getOffscreenColorTexture() != 0L) {
             encodeScenePass(commandBuffer, previewTarget.getOffscreenColorTexture(), previewTarget.getOffscreenDepthTexture(),
-                    pipeline, texture, resourceCache, streamer, sceneQueue, entityCount, pBufferContents, currentSlotOffset,
+                    pipeline, texture, resourceCache, streamer, entityCount, pBufferContents, currentSlotOffset,
                     defaultResourceId, previewViewProj, previewCamPos, 0L, groundQuadBuf,
                     MetalUniformStream.SLOT_BASE_PREVIEW_ENTITIES, MetalUniformStream.SLOT_BASE_PREVIEW_SHADOW_BLOBS);
         }
@@ -253,7 +222,7 @@ public class MetalPassEncoder {
      */
     private void encodeScenePass(long commandBuffer, long colorTarget, long depthTarget,
                                  MetalPipeline pipeline, MetalTexture texture, MetalGpuCache resourceCache, MetalUniformStream streamer,
-                                 List<RenderEntity> sceneQueue, int entityCount, long pBufferContents, long currentSlotOffset,
+                                 int entityCount, long pBufferContents, long currentSlotOffset,
                                  long defaultResourceId, float[] viewProj, float[] camPos, long gridBuffer, long groundQuadBuf,
                                  int entitySlotBase, int blobSlotBase) {
         long offscreenPassDesc = invokePPP(renderPassDescClass(), SEL_RENDER_PASS_DESCRIPTOR, send);
@@ -296,7 +265,7 @@ public class MetalPassEncoder {
             MemoryUtil.memPutInt(gridAddr + MetalUniformStream.OFFSET_PASS_FLAGS, 0);
 
             writeDrawArgs(slot, MetalBuffer.gpuAddress(gridBuffer, send), streamer.getUniformSlotAddress(slot),
-                    streamer.getBonePaletteAddress(0), null, defaultResourceId);
+                    streamer.getBonePaletteAddress(0), -1, defaultResourceId);
 
             bindPipeline(pipeline.getPipelineState3D());
             long shadowDepthState = pipeline.getDepthStencilStateShadow() != 0L ? pipeline.getDepthStencilStateShadow() : pipeline.getDepthStencilState3D();
@@ -316,8 +285,8 @@ public class MetalPassEncoder {
             bindDepthStencil(pipeline.getDepthStencilState3D());
 
             for (int i = 0; i < entityCount; i++) {
-                RenderEntity item = sceneQueue.get(i);
-                boolean skinned = item.skinnedSlot >= 0;
+                RenderCommand item = commands[draws.commandIndex[i]];
+                boolean skinned = draws.skinnedSlot[i] >= 0;
                 int slot = entitySlotBase + i;
 
                 float[] mvpModel = streamer.createMVPFromViewProj(viewProj, item.px, item.py, item.pz, item.rx, item.ry, item.rz, item.sx, item.sy, item.sz);
@@ -351,7 +320,7 @@ public class MetalPassEncoder {
                 MemoryUtil.memPutFloat(baseAddr + 184L, 0.38f);
                 MemoryUtil.memPutFloat(baseAddr + 188L, 1.0f);
 
-                MemoryUtil.memPutFloat(baseAddr + 208L, item.reflectionStrength);
+                MemoryUtil.memPutFloat(baseAddr + 208L, item.reflect);
                 MemoryUtil.memPutFloat(baseAddr + 216L, DirectionalShadowFrustum.SHADOW_BIAS);
                 streamer.writeLightSpaceMatrix(baseAddr);
 
@@ -363,12 +332,12 @@ public class MetalPassEncoder {
                 MemoryUtil.memPutFloat(baseAddr + MetalUniformStream.OFFSET_VIEW_POS + 4L, camPos[1]);
                 MemoryUtil.memPutFloat(baseAddr + MetalUniformStream.OFFSET_VIEW_POS + 8L, camPos[2]);
 
-                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_MATERIAL_MASK, item.materialMask);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_MATERIAL_MASK, draws.materialMask[i]);
                 MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_IS_UNLIT, 0);
-                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_STRIDE, item.stride);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_STRIDE, draws.floatStride[i]);
 
                 int passFlags = 0;
-                if (item.reflectionStrength > 0.0f) {
+                if (item.reflect > 0.0f) {
                     passFlags |= 2;
                 }
                 if (skinned) {
@@ -376,9 +345,9 @@ public class MetalPassEncoder {
                 }
                 MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PASS_FLAGS, passFlags);
 
-                writeDrawArgs(slot, item.vertexBufferAddress, streamer.getUniformSlotAddress(slot),
-                        streamer.getBonePaletteAddress(item.skinnedSlot), item.materialResourceIds, defaultResourceId);
-                drawEntity(item, slot);
+                writeDrawArgs(slot, draws.vertexAddress[i], streamer.getUniformSlotAddress(slot),
+                        streamer.getBonePaletteAddress(draws.skinnedSlot[i]), i, defaultResourceId);
+                drawEntity(i, slot);
             }
         }
 
@@ -389,8 +358,9 @@ public class MetalPassEncoder {
             long shadowDepthState = pipeline.getDepthStencilStateShadow() != 0L ? pipeline.getDepthStencilStateShadow() : pipeline.getDepthStencilState3D();
             bindDepthStencil(shadowDepthState);
 
-            for (RenderEntity item : sceneQueue) {
+            for (int i = 0; i < draws.count; i++) {
                 if (shadowIndex >= MAX_SHADOW_BLOBS) break;
+                RenderCommand item = commands[draws.commandIndex[i]];
 
                 float clearance = item.py - item.groundY;
                 if (clearance < -0.01f) continue;
@@ -419,7 +389,7 @@ public class MetalPassEncoder {
                 MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PASS_FLAGS, 1);
 
                 writeDrawArgs(slot, resourceCache.getGroundQuadAddress(), streamer.getUniformSlotAddress(slot),
-                        streamer.getBonePaletteAddress(0), null, defaultResourceId);
+                        streamer.getBonePaletteAddress(0), -1, defaultResourceId);
                 drawInstanced(MTL_PRIMITIVE_TRIANGLE, 0L, 6L, slot);
 
                 shadowIndex++;
@@ -435,7 +405,7 @@ public class MetalPassEncoder {
      * single probed texel into the shared readback buffer. The cleared background decodes to PICK_ID_NONE (see entity_id.metal).
      */
     private void encodePickPass(long commandBuffer, MetalPipeline pipeline, MetalTexture texture, MetalUniformStream streamer,
-                                List<RenderEntity> sceneQueue, int entityCount, long pBufferContents, long currentSlotOffset,
+                                int entityCount, long pBufferContents, long currentSlotOffset,
                                 long defaultResourceId) {
         long pickPassDesc = invokePPP(renderPassDescClass(), SEL_RENDER_PASS_DESCRIPTOR, send);
         long colorAttach = invokePPPP(invokePPP(pickPassDesc, SEL_COLOR_ATTACHMENTS, send), SEL_OBJECT_AT_INDEXED_SUBSCRIPT, 0L, send);
@@ -458,7 +428,7 @@ public class MetalPassEncoder {
             useResidentResources();
 
             for (int i = 0; i < entityCount; i++) {
-                RenderEntity item = sceneQueue.get(i);
+                RenderCommand item = commands[draws.commandIndex[i]];
                 if (item.pickId == 0) continue;
                 int slot = MetalUniformStream.SLOT_BASE_PICK_ENTITIES + i;
 
@@ -467,15 +437,15 @@ public class MetalPassEncoder {
                 MemoryUtil.memFloatBuffer(baseAddr + MetalUniformStream.OFFSET_MVP, 16).put(mvp);
                 MemoryUtil.memFloatBuffer(baseAddr + MetalUniformStream.OFFSET_MODEL, 16).put(streamer.getModelMatrix());
                 // Only the albedo alpha cutout runs in the pick pass
-                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_MATERIAL_MASK, item.materialMask & MetalUniformStream.MATERIAL_ALBEDO);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_MATERIAL_MASK, draws.materialMask[i] & MetalUniformStream.MATERIAL_ALBEDO);
                 MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_IS_UNLIT, 0);
-                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_STRIDE, item.stride);
-                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PASS_FLAGS, item.skinnedSlot >= 0 ? MetalUniformStream.PASS_FLAG_SKINNED : 0);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_STRIDE, draws.floatStride[i]);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PASS_FLAGS, draws.skinnedSlot[i] >= 0 ? MetalUniformStream.PASS_FLAG_SKINNED : 0);
                 MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PICK_ID, item.pickId);
 
-                writeDrawArgs(slot, item.vertexBufferAddress, streamer.getUniformSlotAddress(slot),
-                        streamer.getBonePaletteAddress(item.skinnedSlot), item.materialResourceIds, defaultResourceId);
-                drawEntity(item, slot);
+                writeDrawArgs(slot, draws.vertexAddress[i], streamer.getUniformSlotAddress(slot),
+                        streamer.getBonePaletteAddress(draws.skinnedSlot[i]), i, defaultResourceId);
+                drawEntity(i, slot);
             }
         }
 
@@ -584,19 +554,18 @@ public class MetalPassEncoder {
     }
 
     /**
-     * Assigns each skinned entity a bone palette slot (in sorted queue order) and streams its palette once,
+     * Assigns each skinned draw a bone palette slot (in key order) and streams its palette once,
      * so the shadow map pass and the main pass bind identical skinning data.
      */
-    private void assignSkinningSlots(List<RenderEntity> sceneQueue, MetalUniformStream streamer, long pBoneContents) {
+    private void assignSkinningSlots(MetalUniformStream streamer, long pBoneContents, int count) {
         int skinnedIndex = 0;
-        int count = Math.min(sceneQueue.size(), MetalUniformStream.MAX_ENTITIES_PER_FRAME);
         for (int i = 0; i < count; i++) {
-            RenderEntity item = sceneQueue.get(i);
-            item.skinnedSlot = -1;
-            if (item.stride >= 30 && item.bonePalette != null && pBoneContents != 0L
+            float[][] palette = commands[draws.commandIndex[i]].bonePalette;
+            draws.skinnedSlot[i] = -1;
+            if (draws.floatStride[i] >= 30 && palette != null && pBoneContents != 0L
                     && skinnedIndex < MetalUniformStream.MAX_SKINNED_ENTITIES_PER_FRAME) {
-                streamer.writeBonePalette(pBoneContents, skinnedIndex, item.bonePalette);
-                item.skinnedSlot = skinnedIndex++;
+                streamer.writeBonePalette(pBoneContents, skinnedIndex, palette);
+                draws.skinnedSlot[i] = skinnedIndex++;
             }
         }
     }
@@ -607,7 +576,7 @@ public class MetalPassEncoder {
      */
     private void encodeShadowMapPass(long commandBuffer, MetalPipeline pipeline, MetalTexture texture,
                                      MetalGpuCache resourceCache, MetalUniformStream streamer,
-                                     List<RenderEntity> sceneQueue, int entityCount, long pBufferContents,
+                                     int entityCount, long pBufferContents,
                                      long currentSlotOffset, long defaultResourceId) {
         long shadowMap = resourceCache.getShadowMapTexture();
         if (shadowMap == 0L) return;
@@ -630,9 +599,9 @@ public class MetalPassEncoder {
             useResidentResources();
 
             for (int i = 0; i < entityCount; i++) {
-                RenderEntity item = sceneQueue.get(i);
+                RenderCommand item = commands[draws.commandIndex[i]];
                 // Same skinning rule as the main pass: unskinned 30-float meshes draw in bind pose there too
-                boolean skinned = item.skinnedSlot >= 0;
+                boolean skinned = draws.skinnedSlot[i] >= 0;
                 int slot = MetalUniformStream.SLOT_BASE_SHADOW_CASTERS + i;
 
                 long baseAddr = pBufferContents + currentSlotOffset + MetalUniformStream.UNIFORM_STRIDE * slot;
@@ -641,14 +610,14 @@ public class MetalPassEncoder {
                 MemoryUtil.memFloatBuffer(baseAddr + MetalUniformStream.OFFSET_MODEL, 16).put(streamer.getModelMatrix());
                 streamer.writeLightSpaceMatrix(baseAddr);
                 // Only the albedo alpha cutout runs in the depth pass
-                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_MATERIAL_MASK, item.materialMask & MetalUniformStream.MATERIAL_ALBEDO);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_MATERIAL_MASK, draws.materialMask[i] & MetalUniformStream.MATERIAL_ALBEDO);
                 MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_IS_UNLIT, 0);
-                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_STRIDE, item.stride);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_STRIDE, draws.floatStride[i]);
                 MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PASS_FLAGS, skinned ? MetalUniformStream.PASS_FLAG_SKINNED : 0);
 
-                writeDrawArgs(slot, item.vertexBufferAddress, streamer.getUniformSlotAddress(slot),
-                        streamer.getBonePaletteAddress(item.skinnedSlot), item.materialResourceIds, defaultResourceId);
-                drawEntity(item, slot);
+                writeDrawArgs(slot, draws.vertexAddress[i], streamer.getUniformSlotAddress(slot),
+                        streamer.getBonePaletteAddress(draws.skinnedSlot[i]), i, defaultResourceId);
+                drawEntity(i, slot);
             }
         }
 
@@ -656,26 +625,31 @@ public class MetalPassEncoder {
         encoder = 0L;
     }
 
-    /** Fills DrawArgs[slot] of the current frame; absent material channels (resource ID 0) point at the default texture. */
+    /**
+     * Fills DrawArgs[slot] of the current frame with draw {@code draw}'s material channels (-1 = no material); absent
+     * channels (resource ID 0) point at the default texture.
+     */
     private void writeDrawArgs(int slot, long vertexAddress, long uniformAddress, long boneAddress,
-                               long[] resourceIds, long defaultResourceId) {
+                               int draw, long defaultResourceId) {
         long entry = pDrawArgs + MetalUniformStream.DRAW_ARGS_STRIDE * slot;
         MemoryUtil.memPutLong(entry + MetalUniformStream.DRAW_ARGS_VERTICES, vertexAddress);
         MemoryUtil.memPutLong(entry + MetalUniformStream.DRAW_ARGS_UNIFORMS, uniformAddress);
         MemoryUtil.memPutLong(entry + MetalUniformStream.DRAW_ARGS_BONES, boneAddress);
+        long[] resourceIds = draws.resourceIds;
+        int base = draw * MetalDrawBuffers.CHANNELS;
         for (int c = 0; c < MetalUniformStream.MATERIAL_CHANNELS; c++) {
-            long id = (resourceIds != null && resourceIds[c] != 0L) ? resourceIds[c] : defaultResourceId;
+            long id = (draw >= 0 && resourceIds[base + c] != 0L) ? resourceIds[base + c] : defaultResourceId;
             MemoryUtil.memPutLong(entry + MetalUniformStream.DRAW_ARGS_TEXTURES + 8L * c, id);
         }
     }
 
-    private void drawEntity(RenderEntity item, int slot) {
-        if (item.indexBufferHandle != 0L && item.indexCount > 0) {
+    private void drawEntity(int draw, int slot) {
+        if (draws.indexBuffer[draw] != 0L && draws.indexCount[draw] > 0) {
             invokePPPPPPPPPPP(encoder, SEL_DRAW_INDEXED_PRIMITIVES_INSTANCED,
-                    MTL_PRIMITIVE_TRIANGLE, (long) item.indexCount, item.indexType, item.indexBufferHandle, 0L,
+                    MTL_PRIMITIVE_TRIANGLE, (long) draws.indexCount[draw], draws.indexType[draw], draws.indexBuffer[draw], 0L,
                     1L, 0L, (long) slot, send);
         } else {
-            drawInstanced(MTL_PRIMITIVE_TRIANGLE, 0L, (long) item.vertexCount, slot);
+            drawInstanced(MTL_PRIMITIVE_TRIANGLE, 0L, (long) draws.vertexCount[draw], slot);
         }
     }
 
@@ -688,7 +662,7 @@ public class MetalPassEncoder {
      * Gathers every resource the DrawArgs table references indirectly (vertex buffers, the uniform and bone palette rings,
      * and material textures) into a sorted, deduplicated native list. Index buffers are passed straight to the draw call.
      */
-    private void collectResidency(List<RenderEntity> sceneQueue, int entityCount, long uniformBuffer, long boneBuffer,
+    private void collectResidency(int entityCount, long uniformBuffer, long boneBuffer,
                                   long defaultTexture, long gridBuffer, long groundQuadBuffer) {
         int n = 0;
         int capacity = 5 + entityCount * (1 + MetalUniformStream.MATERIAL_CHANNELS);
@@ -702,9 +676,9 @@ public class MetalPassEncoder {
         scratch[n++] = gridBuffer;
         scratch[n++] = groundQuadBuffer;
         for (int i = 0; i < entityCount; i++) {
-            RenderEntity item = sceneQueue.get(i);
-            scratch[n++] = item.vertexBufferHandle;
-            for (long tex : item.materialTextures) scratch[n++] = tex;
+            scratch[n++] = draws.vertexBuffer[i];
+            int base = i * MetalDrawBuffers.CHANNELS;
+            for (int c = 0; c < MetalDrawBuffers.CHANNELS; c++) scratch[n++] = draws.textures[base + c];
         }
 
         Arrays.sort(scratch, 0, n);

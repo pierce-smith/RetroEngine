@@ -1,5 +1,6 @@
 package com.retro.engine.backend.vulkan;
 
+import com.retro.engine.rhi.RenderCommand;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
@@ -7,7 +8,6 @@ import org.lwjgl.vulkan.*;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.LongBuffer;
-import java.util.List;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
@@ -23,26 +23,9 @@ import static org.lwjgl.vulkan.KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
  */
 public class VulkanPassEncoder {
 
-    /** One queued draw. Mesh and textures are opaque VulkanGpuCache handles, resolved to bindless slots before recording. */
-    public static class RenderEntity {
-        public long meshHandle;
-        public long textureHandle; // albedo / diffuse
-        public long normalTextureHandle;
-        public long specularTextureHandle;
-        public long lightmapTextureHandle;
-        public long emissiveTextureHandle;
-        public float px, py, pz;
-        public float rx, ry, rz;
-        public float sx, sy, sz;
-        public float groundY = 0.0f;
-        public float reflectionStrength = 0.0f;
-        public float specularStrength = 0.0f;
-        public float roughness = 0.6f;
-        public float normalStrength = 1.0f;
-        public float emissiveIntensity = 1.0f;
-        public float[][] bonePalette = null;
-        public int pickId = 0; // Color-ID value (IRenderBackend.PICK_ID_NONE = not pickable)
-    }
+    // Current frame's draw list: transforms and material scalars per command, raw handles and slots per draw (key order)
+    private RenderCommand[] commands;
+    private VulkanDrawBuffers draws;
 
     // Pass flags read by blinn_phong.frag (params.x)
     private static final float PASS_SCENE = 0.0f;
@@ -90,18 +73,20 @@ public class VulkanPassEncoder {
                                      VulkanDevice deviceManager,
                                      float[] viewMatrix,
                                      float[] projMatrix,
-                                     List<RenderEntity> sceneQueue,
-                                     int sceneQueueCount,
+                                     RenderCommand[] commands,
+                                     VulkanDrawBuffers draws,
                                      VulkanTargetPass previewTarget,
                                      boolean previewActive,
                                      int previewSlot) {
+        this.commands = commands;
+        this.draws = draws;
         try (MemoryStack stack = stackPush()) {
             // Reused for every 3D/shadow draw: vkCmdPushConstants copies the data at record time
             ByteBuffer meshPush = stack.malloc(VulkanPipeline.MESH_PUSH_CONSTANT_SIZE);
             long bindlessSet = gpuCache.getBindlessDescriptorSet();
 
             // PASS 0: DIRECTIONAL SHADOW MAP DEPTH PASS (leaves the shadow map in SHADER_READ_ONLY_OPTIMAL)
-            encodeShadowDepthPass(cmd, stack, meshPush, bindlessSet, pipelineManager, gpuCache, deviceManager, sceneQueue, sceneQueueCount);
+            encodeShadowDepthPass(cmd, stack, meshPush, bindlessSet, pipelineManager, gpuCache, deviceManager);
 
             // Offscreen color and depth are fully cleared each frame, so their previous contents (last frame's blit
             // source / depth) are discarded; the source scopes only order this frame's writes after last frame's use.
@@ -155,19 +140,19 @@ public class VulkanPassEncoder {
             }
 
             recordSceneDraws(cmd, stack, meshPush, bindlessSet, pipelineManager, gpuCache, deviceManager,
-                    sceneQueue, sceneQueueCount, CAMERA_VIEW_EDITOR);
+                    CAMERA_VIEW_EDITOR);
 
             vkCmdEndRendering(cmd);
 
             // PASS 3A: Color-ID picking pass from the editor camera, with the probed texel copied back for the host
             if (pickTarget != null && pickTarget.getOffscreenImageView() != 0L && pickReadbackBuffer != 0L) {
-                recordPickPass(cmd, stack, meshPush, bindlessSet, pipelineManager, gpuCache, deviceManager, sceneQueue, sceneQueueCount);
+                recordPickPass(cmd, stack, meshPush, bindlessSet, pipelineManager, gpuCache, deviceManager);
             }
 
             // PASS 3B: Selected Camera entity's view into the picture-in-picture target (game view: no editor grid)
             if (previewActive && previewTarget != null && previewTarget.getOffscreenImageView() != 0L) {
                 recordCameraPreviewPass(cmd, stack, meshPush, bindlessSet, previewTarget, pipelineManager, gpuCache,
-                        deviceManager, sceneQueue, sceneQueueCount);
+                        deviceManager);
             }
 
             // ---------------------------------------------------------------------------------
@@ -308,11 +293,11 @@ public class VulkanPassEncoder {
      */
     private void recordSceneDraws(VkCommandBuffer cmd, MemoryStack stack, ByteBuffer meshPush, long bindlessSet,
                                   VulkanPipeline pipelineManager, VulkanGpuCache gpuCache, VulkanDevice deviceManager,
-                                  List<RenderEntity> sceneQueue, int sceneQueueCount, int cameraView) {
+                                  int cameraView) {
         // ---------------------------------------------------------------------------------
         // STEP 2: 3D Scene Mesh Pass
         // ---------------------------------------------------------------------------------
-        if (pipelineManager.getGraphicsPipeline3D() != 0L && bindlessSet != 0L && sceneQueue != null && sceneQueueCount > 0) {
+        if (pipelineManager.getGraphicsPipeline3D() != 0L && bindlessSet != 0L && draws.count > 0) {
             VulkanGpuCache.VulkanBuffer bonePaletteBuf = gpuCache.getOrCreateBonePaletteBuffer(deviceManager);
             long skinnedPipeline = pipelineManager.getGraphicsPipelineSkinned();
 
@@ -322,15 +307,12 @@ public class VulkanPassEncoder {
             LongBuffer pOffsets = stack.longs(0L);
             long boundPipeline = 0L;
 
-            for (int i = 0; i < sceneQueueCount; i++) {
-                RenderEntity entity = sceneQueue.get(i);
-                VulkanGpuCache.VulkanBuffer mesh = gpuCache.getMesh(entity.meshHandle);
-                if (mesh == null || mesh.bufferHandle == 0L || mesh.vertexCount <= 0) continue;
-                long vboHandle = mesh.bufferHandle;
+            for (int i = 0; i < draws.count; i++) {
+                RenderCommand entity = commands[draws.commandIndex[i]];
 
                 // 30-float buffers must go through the 120-byte skinned pipeline; without a palette or a free
                 // slot they still draw there against an identity-seeded slot rather than misreading the stride.
-                boolean skinnedLayout = mesh.floatStride >= 30;
+                boolean skinnedLayout = draws.skinnedLayout[i];
                 if (skinnedLayout && (skinnedPipeline == 0L || bonePaletteBuf == null)) continue;
 
                 long wantedPipeline = skinnedLayout ? skinnedPipeline : pipelineManager.getGraphicsPipeline3D();
@@ -340,16 +322,10 @@ public class VulkanPassEncoder {
                 }
 
                 computeModelMatrixInPlace(entity.px, entity.py, entity.pz, entity.rx, entity.ry, entity.rz, entity.sx, entity.sy, entity.sz, modelMatrixScratch);
-                writeEntityPush(meshPush, modelMatrixScratch, PASS_SCENE, entity, gpuCache, i, cameraView);
+                writeEntityPush(meshPush, modelMatrixScratch, PASS_SCENE, entity, draws, i, cameraView);
                 vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, meshPush);
 
-                vkCmdBindVertexBuffers(cmd, 0, pBuffers.put(0, vboHandle), pOffsets);
-                if (mesh.indexBufferHandle != 0L && mesh.indexCount > 0) {
-                    vkCmdBindIndexBuffer(cmd, mesh.indexBufferHandle, 0, mesh.indexType);
-                    vkCmdDrawIndexed(cmd, mesh.indexCount, 1, 0, 0, 0);
-                } else {
-                    vkCmdDraw(cmd, mesh.vertexCount, 1, 0, 0);
-                }
+                drawMesh(cmd, pBuffers, pOffsets, i);
             }
         }
 
@@ -360,7 +336,7 @@ public class VulkanPassEncoder {
         long shadowPipeline = pipelineManager.getGraphicsPipelineShadow();
         if (shadowPipeline == 0L) shadowPipeline = pipelineManager.getGraphicsPipeline3D();
 
-        if (shadowPipeline != 0L && bindlessSet != 0L && sceneQueue != null && sceneQueueCount > 0 && groundQuadBuf != 0L) {
+        if (shadowPipeline != 0L && bindlessSet != 0L && draws.count > 0 && groundQuadBuf != 0L) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, stack.longs(bindlessSet), null);
 
@@ -368,9 +344,9 @@ public class VulkanPassEncoder {
             vkCmdBindVertexBuffers(cmd, 0, stack.longs(groundQuadBuf), stack.longs(0L));
 
             int shadowIndex = 0;
-            for (int i = 0; i < sceneQueueCount; i++) {
+            for (int i = 0; i < draws.count; i++) {
                 if (shadowIndex >= 64) break;
-                RenderEntity entity = sceneQueue.get(i);
+                RenderCommand entity = commands[draws.commandIndex[i]];
                 float clearance = entity.py - entity.groundY;
                 if (clearance < -0.01f) continue;
 
@@ -396,8 +372,7 @@ public class VulkanPassEncoder {
      * editor view-projection as the scene pass, then copies the single probed texel into the host-visible readback buffer.
      */
     private void recordPickPass(VkCommandBuffer cmd, MemoryStack stack, ByteBuffer meshPush, long bindlessSet,
-                                VulkanPipeline pipelineManager, VulkanGpuCache gpuCache, VulkanDevice deviceManager,
-                                List<RenderEntity> sceneQueue, int sceneQueueCount) {
+                                VulkanPipeline pipelineManager, VulkanGpuCache gpuCache, VulkanDevice deviceManager) {
         VulkanTargetPass target = pickTarget;
 
         // Fully cleared each frame; the source scope orders this frame's writes after last frame's texel copy
@@ -417,20 +392,18 @@ public class VulkanPassEncoder {
         long skinnedPipeline = pipelineManager.getGraphicsPipelinePickSkinned();
         VulkanGpuCache.VulkanBuffer bonePaletteBuf = gpuCache.getOrCreateBonePaletteBuffer(deviceManager);
 
-        if (staticPipeline != 0L && bindlessSet != 0L && sceneQueue != null && sceneQueueCount > 0) {
+        if (staticPipeline != 0L && bindlessSet != 0L && draws.count > 0) {
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, stack.longs(bindlessSet), null);
             LongBuffer pBuffers = stack.mallocLong(1);
             LongBuffer pOffsets = stack.longs(0L);
             long boundPipeline = 0L;
 
-            for (int i = 0; i < sceneQueueCount; i++) {
-                RenderEntity entity = sceneQueue.get(i);
+            for (int i = 0; i < draws.count; i++) {
+                RenderCommand entity = commands[draws.commandIndex[i]];
                 if (entity.pickId == 0) continue;
-                VulkanGpuCache.VulkanBuffer mesh = gpuCache.getMesh(entity.meshHandle);
-                if (mesh == null || mesh.bufferHandle == 0L || mesh.vertexCount <= 0) continue;
 
                 // Same pipeline-selection rules as the scene pass so picks match what is drawn
-                boolean skinnedLayout = mesh.floatStride >= 30;
+                boolean skinnedLayout = draws.skinnedLayout[i];
                 if (skinnedLayout && (skinnedPipeline == 0L || bonePaletteBuf == null)) continue;
 
                 long wantedPipeline = skinnedLayout ? skinnedPipeline : staticPipeline;
@@ -440,16 +413,10 @@ public class VulkanPassEncoder {
                 }
 
                 computeModelMatrixInPlace(entity.px, entity.py, entity.pz, entity.rx, entity.ry, entity.rz, entity.sx, entity.sy, entity.sz, modelMatrixScratch);
-                writeEntityPush(meshPush, modelMatrixScratch, PASS_SCENE, entity, gpuCache, i, CAMERA_VIEW_EDITOR);
+                writeEntityPush(meshPush, modelMatrixScratch, PASS_SCENE, entity, draws, i, CAMERA_VIEW_EDITOR);
                 vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, meshPush);
 
-                vkCmdBindVertexBuffers(cmd, 0, pBuffers.put(0, mesh.bufferHandle), pOffsets);
-                if (mesh.indexBufferHandle != 0L && mesh.indexCount > 0) {
-                    vkCmdBindIndexBuffer(cmd, mesh.indexBufferHandle, 0, mesh.indexType);
-                    vkCmdDrawIndexed(cmd, mesh.indexCount, 1, 0, 0, 0);
-                } else {
-                    vkCmdDraw(cmd, mesh.vertexCount, 1, 0, 0);
-                }
+                drawMesh(cmd, pBuffers, pOffsets, i);
             }
         }
 
@@ -540,7 +507,7 @@ public class VulkanPassEncoder {
      */
     private void recordCameraPreviewPass(VkCommandBuffer cmd, MemoryStack stack, ByteBuffer meshPush, long bindlessSet,
                                          VulkanTargetPass previewTarget, VulkanPipeline pipelineManager, VulkanGpuCache gpuCache,
-                                         VulkanDevice deviceManager, List<RenderEntity> sceneQueue, int sceneQueueCount) {
+                                         VulkanDevice deviceManager) {
         // Fully cleared each frame, so previous contents are discarded; the source scope orders this frame's writes
         // after last frame's UI sampling
         imageBarrier(cmd, stack, previewTarget.getOffscreenImage(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -555,7 +522,7 @@ public class VulkanPassEncoder {
 
         beginOffscreenRendering(cmd, stack, previewTarget);
         recordSceneDraws(cmd, stack, meshPush, bindlessSet, pipelineManager, gpuCache, deviceManager,
-                sceneQueue, sceneQueueCount, CAMERA_VIEW_PREVIEW);
+                CAMERA_VIEW_PREVIEW);
         vkCmdEndRendering(cmd);
 
         imageBarrier(cmd, stack, previewTarget.getOffscreenImage(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -564,24 +531,37 @@ public class VulkanPassEncoder {
                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     }
 
-    /** Writes the 128-byte push block for a scene or shadow-depth draw of queued entity {@code index}. */
-    private static void writeEntityPush(ByteBuffer push, float[] model, float passFlag, RenderEntity entity, VulkanGpuCache gpuCache, int index, int cameraView) {
+    /** Writes the 128-byte push block for a scene or shadow-depth draw {@code d} of command {@code entity}. */
+    private static void writeEntityPush(ByteBuffer push, float[] model, float passFlag, RenderCommand entity, VulkanDrawBuffers draws, int d, int cameraView) {
         push.clear();
         for (int m = 0; m < 16; m++) push.putFloat(model[m]);
         // params: passFlags, heightFade, reflection, emissiveIntensity
-        push.putFloat(passFlag).putFloat(1.0f).putFloat(entity.reflectionStrength).putFloat(entity.emissiveIntensity);
+        push.putFloat(passFlag).putFloat(1.0f).putFloat(entity.reflect).putFloat(entity.emissiveIntensity);
         // surface: specularStrength, roughness, normalStrength, unused
         push.putFloat(entity.specularStrength).putFloat(entity.roughness).putFloat(entity.normalStrength).putFloat(0.0f);
         // texIndices: albedo, normal, specular/roughness, lightmap/AO
-        push.putInt(gpuCache.getEntityTextureSlot(index, VulkanGpuCache.CHANNEL_ALBEDO))
-            .putInt(gpuCache.getEntityTextureSlot(index, VulkanGpuCache.CHANNEL_NORMAL))
-            .putInt(gpuCache.getEntityTextureSlot(index, VulkanGpuCache.CHANNEL_SPECULAR))
-            .putInt(gpuCache.getEntityTextureSlot(index, VulkanGpuCache.CHANNEL_LIGHTMAP));
+        int base = d * VulkanDrawBuffers.CHANNELS;
+        int[] slots = draws.textureSlots;
+        push.putInt(slots[base + VulkanGpuCache.CHANNEL_ALBEDO])
+            .putInt(slots[base + VulkanGpuCache.CHANNEL_NORMAL])
+            .putInt(slots[base + VulkanGpuCache.CHANNEL_SPECULAR])
+            .putInt(slots[base + VulkanGpuCache.CHANNEL_LIGHTMAP]);
         // texIndices2: emissive, bone palette slot, camera view, pick ID (read only by entity_id.frag)
-        push.putInt(gpuCache.getEntityTextureSlot(index, VulkanGpuCache.CHANNEL_EMISSIVE))
-            .putInt(gpuCache.getEntityPaletteSlot(index))
+        push.putInt(slots[base + VulkanGpuCache.CHANNEL_EMISSIVE])
+            .putInt(draws.paletteSlot[d])
             .putInt(cameraView).putInt(entity.pickId);
         push.flip();
+    }
+
+    /** Binds draw {@code d}'s vertex (and index) buffer and issues its draw. */
+    private void drawMesh(VkCommandBuffer cmd, LongBuffer pBuffers, LongBuffer pOffsets, int d) {
+        vkCmdBindVertexBuffers(cmd, 0, pBuffers.put(0, draws.vertexBuffer[d]), pOffsets);
+        if (draws.indexBuffer[d] != 0L && draws.indexCount[d] > 0) {
+            vkCmdBindIndexBuffer(cmd, draws.indexBuffer[d], 0, draws.indexType[d]);
+            vkCmdDrawIndexed(cmd, draws.indexCount[d], 1, 0, 0, 0);
+        } else {
+            vkCmdDraw(cmd, draws.vertexCount[d], 1, 0, 0);
+        }
     }
 
     /** Push block for a ground shadow blob: procedural alpha in the fragment stage, so every channel is absent. */
@@ -632,8 +612,7 @@ public class VulkanPassEncoder {
      * empty queue, because the main pass descriptors always expect the shadow map in the read-only layout.
      */
     private void encodeShadowDepthPass(VkCommandBuffer cmd, MemoryStack stack, ByteBuffer meshPush, long bindlessSet,
-                                       VulkanPipeline pipelineManager, VulkanGpuCache gpuCache, VulkanDevice deviceManager,
-                                       List<RenderEntity> sceneQueue, int sceneQueueCount) {
+                                       VulkanPipeline pipelineManager, VulkanGpuCache gpuCache, VulkanDevice deviceManager) {
         if (!gpuCache.hasShadowMap()) return;
 
         int size = VulkanGpuCache.SHADOW_MAP_SIZE;
@@ -676,20 +655,18 @@ public class VulkanPassEncoder {
         long skinnedPipeline = pipelineManager.getGraphicsPipelineShadowDepthSkinned();
         VulkanGpuCache.VulkanBuffer bonePaletteBuf = gpuCache.getOrCreateBonePaletteBuffer(deviceManager);
 
-        if (staticPipeline != 0L && bindlessSet != 0L && sceneQueue != null && sceneQueueCount > 0) {
+        if (staticPipeline != 0L && bindlessSet != 0L && draws.count > 0) {
             // Bound once for the pass: shadow_depth.frag reads only the albedo slot for alpha cutout
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, stack.longs(bindlessSet), null);
             LongBuffer pBuffers = stack.mallocLong(1);
             LongBuffer pOffsets = stack.longs(0L);
             long boundPipeline = 0L;
 
-            for (int i = 0; i < sceneQueueCount; i++) {
-                RenderEntity entity = sceneQueue.get(i);
-                VulkanGpuCache.VulkanBuffer mesh = gpuCache.getMesh(entity.meshHandle);
-                if (mesh == null || mesh.bufferHandle == 0L || mesh.vertexCount <= 0) continue;
+            for (int i = 0; i < draws.count; i++) {
+                RenderCommand entity = commands[draws.commandIndex[i]];
 
                 // Same pipeline-selection rules as the main 3D pass so casters and receivers always match
-                boolean skinnedLayout = mesh.floatStride >= 30;
+                boolean skinnedLayout = draws.skinnedLayout[i];
                 if (skinnedLayout && (skinnedPipeline == 0L || bonePaletteBuf == null)) continue;
 
                 long wantedPipeline = skinnedLayout ? skinnedPipeline : staticPipeline;
@@ -699,16 +676,10 @@ public class VulkanPassEncoder {
                 }
 
                 computeModelMatrixInPlace(entity.px, entity.py, entity.pz, entity.rx, entity.ry, entity.rz, entity.sx, entity.sy, entity.sz, modelMatrixScratch);
-                writeEntityPush(meshPush, modelMatrixScratch, PASS_SHADOW_DEPTH, entity, gpuCache, i, CAMERA_VIEW_EDITOR);
+                writeEntityPush(meshPush, modelMatrixScratch, PASS_SHADOW_DEPTH, entity, draws, i, CAMERA_VIEW_EDITOR);
                 vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, meshPush);
 
-                vkCmdBindVertexBuffers(cmd, 0, pBuffers.put(0, mesh.bufferHandle), pOffsets);
-                if (mesh.indexBufferHandle != 0L && mesh.indexCount > 0) {
-                    vkCmdBindIndexBuffer(cmd, mesh.indexBufferHandle, 0, mesh.indexType);
-                    vkCmdDrawIndexed(cmd, mesh.indexCount, 1, 0, 0, 0);
-                } else {
-                    vkCmdDraw(cmd, mesh.vertexCount, 1, 0, 0);
-                }
+                drawMesh(cmd, pBuffers, pOffsets, i);
             }
         }
 

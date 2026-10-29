@@ -1,5 +1,7 @@
 package com.retro.engine.assets.importers;
 
+import com.retro.engine.rhi.DirectionalShadowFrustum;
+
 /**
  * Immutable container for interleaved vertex buffer data. Two strides are produced by the importers:
  * 22-float static:  [PX, PY, PZ, NX, NY, NZ, R, G, B, A, U1, V1, U2, V2, TX, TY, TZ, BX, BY, BZ, LM_SCALE, LM_BIAS]
@@ -38,6 +40,19 @@ public class MeshBufferData {
 
     /** Exact float stride derived from the buffer length; avoids ambiguous modulo-based guessing. */
     public int stride() { return strideOf(vertices, vertexCount); }
+
+    // Racy single-check: concurrent first calls compute the same value
+    private float boundsRadius = -1.0f;
+
+    /** Local-space bounding sphere radius around the mesh origin, computed once on first use. */
+    public float boundsRadius() {
+        float r = boundsRadius;
+        if (r < 0.0f) {
+            r = DirectionalShadowFrustum.computeLocalBoundsRadius(vertices, stride(), vertexCount);
+            boundsRadius = r;
+        }
+        return r;
+    }
 
     public static int strideOf(float[] vertices, int vertexCount) {
         if (vertices == null || vertexCount <= 0) return STATIC_FLOATS_PER_VERTEX;

@@ -2,6 +2,8 @@ package com.retro.engine.backend.vulkan;
 
 import com.retro.engine.rhi.DirectionalShadowFrustum;
 import com.retro.engine.rhi.HandleRegistry;
+import com.retro.engine.rhi.RenderCommand;
+import com.retro.engine.rhi.RenderQueue;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.MemoryStack;
@@ -10,7 +12,6 @@ import org.lwjgl.vulkan.*;
 import java.nio.FloatBuffer;
 import java.nio.LongBuffer;
 import java.util.ArrayDeque;
-import java.util.List;
 import java.util.Queue;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
@@ -188,8 +189,6 @@ public class VulkanGpuCache {
     private volatile int totalFrameCount = 0;
 
     // Per-frame draw state built by prepareScene before recording; reused to keep frames allocation-free
-    private int[] entityPaletteSlots = new int[256];
-    private int[] entityTextureSlots = new int[256 * CHANNEL_COUNT];
 
     /** Texture handle of the editor UI's SDF font atlas, or 0L when the UI uses its bitmap font. */
     private volatile long uiFontTexture = 0L;
@@ -856,50 +855,51 @@ public class VulkanGpuCache {
     }
 
     /**
-     * Resolves every queued entity's material channel slots and bone palette slot, writing the palettes, before command
-     * recording begins. Nothing here touches descriptors: draws hand these slots to the shaders as push constants.
+     * Resolves {@code queue}'s commands, in key order, into {@code draws}: raw vertex/index buffers, bindless material
+     * slots and bone palette slots (writing the palettes). Commands whose mesh is 0L, stale or empty are dropped.
+     * Nothing here touches descriptors: draws hand these slots to the shaders as push constants.
      * Must run after {@link #beginFrame} so freshly flushed textures are already resident.
      */
-    public void prepareScene(VulkanDevice device, List<VulkanPassEncoder.RenderEntity> sceneQueue, int sceneQueueCount) {
-        if (entityPaletteSlots.length < sceneQueueCount) {
-            int cap = Math.max(sceneQueueCount, entityPaletteSlots.length * 2);
-            entityPaletteSlots = new int[cap];
-            entityTextureSlots = new int[cap * CHANNEL_COUNT];
-        }
+    void prepareScene(VulkanDevice device, RenderQueue queue, VulkanDrawBuffers draws) {
+        int n = (queue != null) ? queue.size() : 0;
+        draws.reset(n);
+        if (n == 0) return;
 
+        RenderCommand[] commands = queue.commands();
         VulkanBuffer bonePaletteBuf = getOrCreateBonePaletteBuffer(device);
         int skinnedIndex = 0;
-        for (int i = 0; i < sceneQueueCount; i++) {
-            VulkanPassEncoder.RenderEntity entity = sceneQueue.get(i);
-            entityPaletteSlots[i] = 0;
-
-            int base = i * CHANNEL_COUNT;
-            entityTextureSlots[base + CHANNEL_ALBEDO] = resolveTextureSlot(entity.textureHandle);
-            entityTextureSlots[base + CHANNEL_NORMAL] = resolveTextureSlot(entity.normalTextureHandle);
-            entityTextureSlots[base + CHANNEL_SPECULAR] = resolveTextureSlot(entity.specularTextureHandle);
-            entityTextureSlots[base + CHANNEL_LIGHTMAP] = resolveTextureSlot(entity.lightmapTextureHandle);
-            entityTextureSlots[base + CHANNEL_EMISSIVE] = resolveTextureSlot(entity.emissiveTextureHandle);
-
-            VulkanBuffer mesh = getMesh(entity.meshHandle);
+        for (int i = 0; i < n; i++) {
+            int index = queue.sortedIndex(i);
+            RenderCommand cmd = commands[index];
+            VulkanBuffer mesh = getMesh(cmd.meshHandle);
             if (mesh == null || mesh.bufferHandle == 0L || mesh.vertexCount <= 0) continue;
 
+            int d = draws.count++;
+            draws.commandIndex[d] = index;
+            draws.vertexBuffer[d] = mesh.bufferHandle;
+            draws.vertexCount[d] = mesh.vertexCount;
+            boolean indexed = mesh.indexBufferHandle != 0L && mesh.indexCount > 0;
+            draws.indexBuffer[d] = indexed ? mesh.indexBufferHandle : 0L;
+            draws.indexCount[d] = indexed ? mesh.indexCount : 0;
+            draws.indexType[d] = mesh.indexType;
+            draws.skinnedLayout[d] = mesh.floatStride >= 30;
+
+            int base = d * CHANNEL_COUNT;
+            draws.textureSlots[base + CHANNEL_ALBEDO] = resolveTextureSlot(cmd.albedoTexture);
+            draws.textureSlots[base + CHANNEL_NORMAL] = resolveTextureSlot(cmd.normalTexture);
+            draws.textureSlots[base + CHANNEL_SPECULAR] = resolveTextureSlot(cmd.specularTexture);
+            draws.textureSlots[base + CHANNEL_LIGHTMAP] = resolveTextureSlot(cmd.lightmapTexture);
+            draws.textureSlots[base + CHANNEL_EMISSIVE] = resolveTextureSlot(cmd.emissiveTexture);
+
             // slot 0 stays identity for palette-less skinned meshes
-            if (mesh.floatStride >= 30 && bonePaletteBuf != null && entity.bonePalette != null
+            draws.paletteSlot[d] = 0;
+            if (draws.skinnedLayout[d] && bonePaletteBuf != null && cmd.bonePalette != null
                     && skinnedIndex < MAX_SKINNED_ENTITIES_PER_FRAME - 1) {
                 int paletteSlot = ++skinnedIndex;
-                writeBonePalette(paletteSlot, entity.bonePalette);
-                entityPaletteSlots[i] = paletteSlot;
+                writeBonePalette(paletteSlot, cmd.bonePalette);
+                draws.paletteSlot[d] = paletteSlot;
             }
         }
-    }
-
-    /** Bone palette slot (index into binding 3) for the given scene-queue index this frame. */
-    public int getEntityPaletteSlot(int index) { return index < entityPaletteSlots.length ? entityPaletteSlots[index] : 0; }
-
-    /** Bindless slot of one material channel for the given scene-queue index, or NO_TEXTURE when absent. */
-    public int getEntityTextureSlot(int index, int channel) {
-        int i = index * CHANNEL_COUNT + channel;
-        return i < entityTextureSlots.length ? entityTextureSlots[i] : NO_TEXTURE;
     }
 
     public VulkanBuffer getOrCreateLightUniformBuffer(VulkanDevice device) {

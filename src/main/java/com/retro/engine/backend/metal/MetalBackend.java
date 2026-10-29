@@ -1,10 +1,10 @@
 package com.retro.engine.backend.metal;
 
 import com.retro.engine.rhi.BufferDesc;
-import com.retro.engine.rhi.DirectionalShadowFrustum;
 import com.retro.engine.rhi.GraphicsAPI;
 import com.retro.engine.rhi.IRenderBackend;
-import com.retro.engine.rhi.MaterialBinding;
+import com.retro.engine.rhi.RenderCommand;
+import com.retro.engine.rhi.RenderQueue;
 import com.retro.engine.rhi.TextureDesc;
 import com.retro.engine.rhi.ViewportSpec;
 
@@ -14,8 +14,6 @@ import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.libffi.FFICIF;
 import org.lwjgl.system.macosx.LibSystem;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
@@ -30,7 +28,7 @@ import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 
 /**
  * MetalBackend Facade Bridge routing scene queue and downward-raycast shadow parameters to MetalPassEncoder.
- * Hardened with zero-allocation scene queue views and triple-buffered uniform streaming.
+ * Consumes key-sorted RenderQueues resolved into flat MetalDrawBuffers, with triple-buffered uniform streaming.
  * Frames in flight are capped at the uniform ring depth: each committed command buffer carries an
  * addCompletedHandler: block that returns its in-flight permit once the GPU has consumed the frame. The same handler
  * advances MetalGpuCache's completion fence, which gates every deferred MTLBuffer / MTLTexture release.
@@ -110,9 +108,9 @@ public class MetalBackend implements IRenderBackend {
     private final float[] cameraPreviewViewProj = new float[16];
     private final float[] cameraPreviewPos = new float[3];
 
-    private final List<MetalPassEncoder.RenderEntity> sceneQueuePool = new ArrayList<>();
-    private final List<MetalPassEncoder.RenderEntity> activeSceneQueueView = new ArrayList<>();
-    private int activeSceneQueueCount = 0;
+    // Submitted queue (read again while encoding) and its draws resolved to raw Metal objects
+    private RenderCommand[] queuedCommands = new RenderCommand[0];
+    private final MetalDrawBuffers drawBuffers = new MetalDrawBuffers();
 
     @Override
     public boolean initialize(ViewportSpec windowInfo) {
@@ -236,14 +234,71 @@ public class MetalBackend implements IRenderBackend {
         resourceCache.updateUiMesh(metalDevice, vertices, count);
     }
 
-    @Override public void clearSceneQueue() { activeSceneQueueCount = 0; }
+    @Override public void clearSceneQueue() { drawBuffers.count = 0; }
 
-    public List<MetalPassEncoder.RenderEntity> getActiveSceneQueue() {
-        activeSceneQueueView.clear();
-        for (int i = 0; i < activeSceneQueueCount; i++) {
-            activeSceneQueueView.add(sceneQueuePool.get(i));
+    /**
+     * Resolves every command's mesh and material handles to raw id<MTLBuffer> / id<MTLTexture> objects, gpuAddresses
+     * and gpuResourceIDs in key order, so MetalPassEncoder writes argument buffers without lookups. Commands whose mesh
+     * is 0L, stale or empty are dropped; a 0L or stale texture leaves its channel absent.
+     */
+    @Override
+    public void submitRenderQueue(RenderQueue queue) {
+        if (queue == null) {
+            clearSceneQueue();
+            return;
         }
-        return activeSceneQueueView;
+        uniformStreamer.setLightSpaceMatrix(queue.lightSpaceMatrix);
+        queuedCommands = queue.commands();
+        MetalDrawBuffers draws = drawBuffers;
+        int n = queue.size();
+        draws.reset(n);
+        long send = metalDevice.getObjcMsgSend();
+        for (int i = 0; i < n; i++) {
+            int index = queue.sortedIndex(i);
+            RenderCommand cmd = queuedCommands[index];
+            MetalBuffer mesh = resourceCache.getMesh(cmd.meshHandle);
+            if (mesh == null || mesh.getElementCount() <= 0) continue;
+
+            int d = draws.count++;
+            draws.commandIndex[d] = index;
+            draws.vertexBuffer[d] = mesh.getHandle();
+            draws.vertexCount[d] = mesh.getElementCount();
+            draws.floatStride[d] = mesh.getFloatStride();
+            if (mesh instanceof MetalGpuCache.MetalMesh m) {
+                draws.vertexAddress[d] = m.vertexAddress;
+                draws.indexBuffer[d] = m.isIndexed() ? m.indexBufferHandle : 0L;
+                draws.indexCount[d] = m.isIndexed() ? m.indexCount : 0;
+                draws.indexType[d] = m.isIndexed() ? m.indexType : MetalGpuCache.MTL_INDEX_TYPE_UINT32;
+            } else {
+                draws.vertexAddress[d] = MetalBuffer.gpuAddress(mesh.getHandle(), send);
+                draws.indexBuffer[d] = 0L;
+                draws.indexCount[d] = 0;
+                draws.indexType[d] = MetalGpuCache.MTL_INDEX_TYPE_UINT32;
+            }
+            draws.skinnedSlot[d] = -1;
+
+            int mask = 0;
+            mask |= resolveChannel(draws, d, 0, MetalUniformStream.MATERIAL_ALBEDO, cmd.albedoTexture);
+            mask |= resolveChannel(draws, d, 1, MetalUniformStream.MATERIAL_NORMAL, cmd.normalTexture);
+            mask |= resolveChannel(draws, d, 2, MetalUniformStream.MATERIAL_SPECULAR, cmd.specularTexture);
+            mask |= resolveChannel(draws, d, 3, MetalUniformStream.MATERIAL_LIGHTMAP, cmd.lightmapTexture);
+            mask |= resolveChannel(draws, d, 4, MetalUniformStream.MATERIAL_EMISSIVE, cmd.emissiveTexture);
+            draws.materialMask[d] = mask;
+        }
+    }
+
+    /** Writes one material channel of draw {@code d}; returns {@code maskBit} when the texture is live. */
+    private int resolveChannel(MetalDrawBuffers draws, int d, int channel, int maskBit, long textureHandle) {
+        int at = d * MetalDrawBuffers.CHANNELS + channel;
+        MetalTexture tex = (textureHandle != 0L) ? resourceCache.getTexture(textureHandle) : null;
+        if (tex != null && tex.getBindableResourceId() != 0L) {
+            draws.textures[at] = tex.getBindableTexture();
+            draws.resourceIds[at] = tex.getBindableResourceId();
+            return maskBit;
+        }
+        draws.textures[at] = 0L;
+        draws.resourceIds[at] = 0L;
+        return 0;
     }
 
     @Override
@@ -266,104 +321,6 @@ public class MetalBackend implements IRenderBackend {
 
     @Override public void unregisterMesh(long meshHandle) { resourceCache.unregisterMesh(meshHandle); }
     @Override public void unregisterTexture(long textureHandle) { resourceCache.unregisterTexture(textureHandle); }
-
-    @Override
-    public void submitEntity(long meshHandle, long textureHandle, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float reflectionStrength, float[][] bonePalette) {
-        MetalPassEncoder.RenderEntity item = queueEntity(meshHandle, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, reflectionStrength, bonePalette);
-        if (item == null) return;
-        // Legacy single-texture submissions carry no extra channels; reset what a pooled item may still hold
-        item.materialMask = 0;
-        setMaterialChannel(item, 0, MetalUniformStream.MATERIAL_ALBEDO, textureHandle);
-        for (int c = 1; c < MetalUniformStream.MATERIAL_CHANNELS; c++) setMaterialChannel(item, c, 0, 0L);
-        item.specularStrength = 0.0f;
-        item.roughness = 0.6f;
-        item.normalStrength = 1.0f;
-        item.emissiveIntensity = 1.0f;
-        item.pickId = PICK_ID_NONE;
-    }
-
-    @Override
-    public void submitEntity(long meshHandle, MaterialBinding material, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float[][] bonePalette) {
-        if (material == null) {
-            submitEntity(meshHandle, 0L, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, 0.0f, bonePalette);
-            return;
-        }
-        MetalPassEncoder.RenderEntity item = queueEntity(meshHandle, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, material.reflect, bonePalette);
-        if (item == null) return;
-        item.materialMask = 0;
-        setMaterialChannel(item, 0, MetalUniformStream.MATERIAL_ALBEDO, material.albedoTexture);
-        setMaterialChannel(item, 1, MetalUniformStream.MATERIAL_NORMAL, material.normalTexture);
-        setMaterialChannel(item, 2, MetalUniformStream.MATERIAL_SPECULAR, material.specularTexture);
-        setMaterialChannel(item, 3, MetalUniformStream.MATERIAL_LIGHTMAP, material.lightmapTexture);
-        setMaterialChannel(item, 4, MetalUniformStream.MATERIAL_EMISSIVE, material.emissiveTexture);
-        item.specularStrength = material.specularStrength;
-        item.roughness = material.roughness;
-        item.normalStrength = material.normalStrength;
-        item.emissiveIntensity = material.emissiveIntensity;
-        item.pickId = PICK_ID_NONE;
-    }
-
-    @Override
-    public void submitEntity(long meshHandle, MaterialBinding material, int pickId, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float[][] bonePalette) {
-        int before = activeSceneQueueCount;
-        submitEntity(meshHandle, material, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, bonePalette);
-        if (activeSceneQueueCount != before) sceneQueuePool.get(activeSceneQueueCount - 1).pickId = pickId;
-    }
-
-    /**
-     * Resolves a texture handle to its raw id<MTLTexture> and gpuResourceID here, so MetalPassEncoder writes argument
-     * buffers without lookups. A 0L or stale handle leaves the channel absent.
-     */
-    private void setMaterialChannel(MetalPassEncoder.RenderEntity item, int channel, int maskBit, long textureHandle) {
-        MetalTexture tex = (textureHandle != 0L) ? resourceCache.getTexture(textureHandle) : null;
-        if (tex != null && tex.getBindableResourceId() != 0L) {
-            item.materialTextures[channel] = tex.getBindableTexture();
-            item.materialResourceIds[channel] = tex.getBindableResourceId();
-            item.materialMask |= maskBit;
-        } else {
-            item.materialTextures[channel] = 0L;
-            item.materialResourceIds[channel] = 0L;
-        }
-    }
-
-    /** Claims a pooled queue entry for a live mesh and fills its geometry and transform; null skips the draw. */
-    private MetalPassEncoder.RenderEntity queueEntity(long meshHandle, float px, float py, float pz, float rx, float ry, float rz,
-                                                      float sx, float sy, float sz, float groundY, float reflectionStrength, float[][] bonePalette) {
-        MetalBuffer mesh = resourceCache.getMesh(meshHandle);
-        if (mesh == null || mesh.getElementCount() <= 0) return null;
-
-        MetalPassEncoder.RenderEntity item;
-        if (activeSceneQueueCount < sceneQueuePool.size()) {
-            item = sceneQueuePool.get(activeSceneQueueCount);
-        } else {
-            item = new MetalPassEncoder.RenderEntity();
-            sceneQueuePool.add(item);
-        }
-        activeSceneQueueCount++;
-
-        item.vertexBufferHandle = mesh.getHandle();
-        item.vertexBufferAddress = (mesh instanceof MetalGpuCache.MetalMesh m) ? m.vertexAddress
-                : MetalBuffer.gpuAddress(mesh.getHandle(), metalDevice.getObjcMsgSend());
-        item.vertexCount = mesh.getElementCount();
-        if (mesh instanceof MetalGpuCache.MetalMesh indexed && indexed.isIndexed()) {
-            item.indexBufferHandle = indexed.indexBufferHandle;
-            item.indexCount = indexed.indexCount;
-            item.indexType = indexed.indexType;
-        } else {
-            item.indexBufferHandle = 0L;
-            item.indexCount = 0;
-            item.indexType = MetalGpuCache.MTL_INDEX_TYPE_UINT32;
-        }
-        item.stride = mesh.getFloatStride();
-        item.boundsRadius = (mesh instanceof MetalGpuCache.MetalMesh m) ? m.boundsRadius : 1.0f;
-        item.px = px; item.py = py; item.pz = pz;
-        item.rx = rx; item.ry = ry; item.rz = rz;
-        item.sx = sx; item.sy = sy; item.sz = sz;
-        item.groundY = groundY;
-        item.reflectionStrength = reflectionStrength;
-        item.bonePalette = bonePalette;
-        return item;
-    }
 
     @Override
     public void beginFrame() {
@@ -404,13 +361,12 @@ public class MetalBackend implements IRenderBackend {
 
         currentCommandBuffer = invokePPP(commandQueue, SEL_COMMAND_BUFFER, send);
 
-        computeLightSpaceMatrix();
         armPickPass();
 
         passEncoder.encodeOffscreen3DPass(
             currentCommandBuffer, metalDevice, metalPipeline, metalTexture,
             framebuffer, cameraPreviewTarget, resourceCache, uniformStreamer,
-            getActiveSceneQueue(), camPanX, camPanY, camZoom, camPitch, camYaw,
+            queuedCommands, drawBuffers, camPanX, camPanY, camZoom, camPitch, camYaw,
             cameraPreviewActive ? cameraPreviewViewProj : null, cameraPreviewPos,
             activeLightType, activeLightPosX, activeLightPosY, activeLightPosZ,
             activeLightDirX, activeLightDirY, activeLightDirZ,
@@ -480,18 +436,6 @@ public class MetalBackend implements IRenderBackend {
         int w = framebuffer.getWidth(), h = framebuffer.getHeight();
         if (w != lastPickW || h != lastPickH || pickTexel(u, w) != lastPickX || pickTexel(v, h) != lastPickY) return PICK_UNAVAILABLE;
         return lastPickId;
-    }
-
-    /** Orthographic directional light view-projection fitted around the bounding spheres of every queued entity. */
-    private void computeLightSpaceMatrix() {
-        DirectionalShadowFrustum frustum = uniformStreamer.getShadowFrustum();
-        frustum.reset();
-        for (int i = 0; i < activeSceneQueueCount; i++) {
-            MetalPassEncoder.RenderEntity item = sceneQueuePool.get(i);
-            float scale = Math.max(Math.abs(item.sx), Math.max(Math.abs(item.sy), Math.abs(item.sz)));
-            frustum.include(item.px, item.py, item.pz, item.boundsRadius * scale);
-        }
-        uniformStreamer.updateLightSpaceMatrix(activeLightDirX, activeLightDirY, activeLightDirZ);
     }
 
     @Override

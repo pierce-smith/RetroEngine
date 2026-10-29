@@ -349,7 +349,7 @@ public class MetalGpuCache {
     public MetalTexture getTexture(long textureHandle) { return textureHandles.get(textureHandle); }
 
     /**
-     * Unregistration runs on streaming threads and can race with the submitEntity that resolves the handle for the
+     * Unregistration runs on streaming threads and can race with the submitRenderQueue that resolves the handle for the
      * frame after the one being encoded, so the release also waits for that frame to complete.
      */
     private void enqueueHandleDisposal(long handle) {

@@ -10,8 +10,10 @@ import com.retro.engine.editor.ui.dock.DockPanel;
 import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.panels.EngineConsolePanel;
 import com.retro.engine.editor.ui.panels.ViewportPanel;
+import com.retro.engine.rhi.DirectionalShadowFrustum;
 import com.retro.engine.rhi.IRenderBackend;
-import com.retro.engine.rhi.MaterialBinding;
+import com.retro.engine.rhi.RenderCommand;
+import com.retro.engine.rhi.RenderQueue;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.world.SceneWorld.WorldTransform;
 import com.retro.engine.scene.components.media.AnimatorComponent;
@@ -21,7 +23,6 @@ import com.retro.engine.scene.components.rendering.Material;
 import com.retro.engine.scene.components.rendering.MeshFilter;
 import com.retro.engine.scene.components.transform.Transform;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -29,10 +30,10 @@ import java.util.List;
  * High-level render pipeline processing 3D scene entities, view-frustum culling,
  * light state, GPU skeletal animation bone palette extraction, and downward-raycast ground shadows
  * through a vendor-agnostic IRenderBackend contract.
- * Fully decoupled from EditorWorkspace via thread-safe RenderSceneSnapshot structures with zero per-frame heap allocations
- * using an auto-expanding descriptor pool and pooled LightDescriptor state.
+ * Fully decoupled from EditorWorkspace via thread-safe RenderSceneSnapshot structures with zero per-frame heap allocations:
+ * each snapshot owns a pooled, key-sorted RenderQueue of flat RenderCommands plus the fitted shadow light-space matrix.
  * Geometry and textures are referenced by opaque GPU handles registered through AssetStreamer;
- * no vertex or pixel arrays cross the RHI boundary per frame.
+ * no vertex or pixel arrays or scene objects cross the RHI boundary per frame.
  */
 public class SceneRenderPipeline {
 
@@ -68,54 +69,11 @@ public class SceneRenderPipeline {
         }
     }
 
-    public record RenderEntityDescriptor(
-            long meshHandle,
-            long textureHandle,
-            float px, float py, float pz,
-            float rx, float ry, float rz,
-            float sx, float sy, float sz,
-            float groundY,
-            float reflectVal,
-            float[][] bonePalette
-    ) {}
-
-    public static class MutableRenderEntityDescriptor {
-        public long meshHandle;
-        public long textureHandle;
-        public float px, py, pz;
-        public float rx, ry, rz;
-        public float sx, sy, sz;
-        public float groundY;
-        public float reflectVal;
-        public float[][] bonePalette;
-        public int pickId; // Color-ID value from ViewportPanel.pickIdFor (PICK_ID_NONE = not pickable)
-        // Full multi-channel material; albedo and reflection mirror textureHandle and reflectVal
-        public final MaterialBinding material = new MaterialBinding();
-
-        public void set(long meshHandle, long textureHandle, float px, float py, float pz,
-                        float rx, float ry, float rz, float sx, float sy, float sz,
-                        float groundY, float reflectVal, float[][] bonePalette) {
-            this.meshHandle = meshHandle;
-            this.textureHandle = textureHandle;
-            this.px = px; this.py = py; this.pz = pz;
-            this.rx = rx; this.ry = ry; this.rz = rz;
-            this.sx = sx; this.sy = sy; this.sz = sz;
-            this.groundY = groundY;
-            this.reflectVal = reflectVal;
-            this.bonePalette = bonePalette;
-            this.pickId = IRenderBackend.PICK_ID_NONE;
-            this.material.reset();
-            this.material.albedoTexture = textureHandle;
-            this.material.reflect = reflectVal;
-        }
-    }
-
     public static class RenderSceneSnapshot {
         public LightDescriptor activeLight = null;
         public final MutableLightDescriptor pooledLight = new MutableLightDescriptor();
-        public final List<RenderEntityDescriptor> entities = new ArrayList<>();
-        public final List<MutableRenderEntityDescriptor> pooledEntities = new ArrayList<>();
-        public int activeEntityCount = 0;
+        // Sorted, flat draw list handed to the backend; owns the fitted shadow light-space matrix
+        public final RenderQueue renderQueue = new RenderQueue();
         public boolean gridVisible = true;
         public float[] gridVertices = null;
         public int gridVertexCount = 0;
@@ -131,24 +89,10 @@ public class SceneRenderPipeline {
         public final float[] cameraPreviewViewProj = new float[16];
         public float cameraPreviewPosX, cameraPreviewPosY, cameraPreviewPosZ;
 
-        public RenderSceneSnapshot() {
-            for (int i = 0; i < 1024; i++) {
-                pooledEntities.add(new MutableRenderEntityDescriptor());
-            }
-        }
-
-        public MutableRenderEntityDescriptor obtainDescriptor(int index) {
-            while (pooledEntities.size() <= index) {
-                pooledEntities.add(new MutableRenderEntityDescriptor());
-            }
-            return pooledEntities.get(index);
-        }
-
         public void reset() {
             activeLight = null;
             pooledLight.reset();
-            entities.clear();
-            activeEntityCount = 0;
+            renderQueue.clear();
             gridVisible = true;
             gridVertices = null;
             gridVertexCount = 0;
@@ -178,6 +122,15 @@ public class SceneRenderPipeline {
     private static final float[] rotX = new float[9], rotY = new float[9], rotZ = new float[9], rotYX = new float[9], rot = new float[9];
     private final float[] previewView = new float[16], previewProj = new float[16];
 
+    // Shadow map frustum fitted around every queued draw. The direction persists across frames like the backends' light
+    // state (and starts at their default), so a scene without a Light keeps shadowing from the last one.
+    private final DirectionalShadowFrustum shadowFrustum = new DirectionalShadowFrustum();
+    private float shadowLightDirX = -0.5f, shadowLightDirY = -1.0f, shadowLightDirZ = -0.5f;
+
+    // Editor camera view-space depth row (view z = dot(row, p) + w) and range used to quantize sort-key depth
+    private float depthRowX, depthRowY, depthRowZ, depthRowW;
+    private float depthNear = 0.1f, depthFar = 100.0f;
+
     /**
      * Extracts a decoupled, thread-safe RenderSceneSnapshot from the editor scene graph with zero heap allocations.
      */
@@ -192,12 +145,18 @@ public class SceneRenderPipeline {
 
         ViewportCamera camera = editorManager.getCameraController();
         if (camera != null) {
+            float far = camera.isPlayLocked() ? camera.getFar() : 100.0f;
             frustumCuller.updateFromCamera(
                     camera.getPanX(), camera.getPanY(), camera.getZoom(),
                     camera.getPitch(), camera.getYaw(),
-                    camera.getFov(), ViewportPanel.getSceneAspect(), camera.getNear(), camera.isPlayLocked() ? camera.getFar() : 100.0f
+                    camera.getFov(), ViewportPanel.getSceneAspect(), camera.getNear(), far
             );
+            updateDepthRow(camera, far);
+        } else {
+            depthRowX = depthRowY = depthRowZ = depthRowW = 0.0f;
         }
+        RenderQueue queue = snapshot.renderQueue;
+        shadowFrustum.reset();
 
         // Selected Camera entity's preview; its frustum also keeps entities only that camera can see in the queue
         boolean previewActive = cameraPreviewTexture != 0L && !ViewportPanel.isStandaloneFullscreen() && DockSpace.isSceneViewportVisible()
@@ -242,6 +201,7 @@ public class SceneRenderPipeline {
                             lightType, posX, posY, posZ, dirX, dirY, dirZ,
                             light.r, light.g, light.b, light.intensity
                     );
+                    shadowLightDirX = dirX; shadowLightDirY = dirY; shadowLightDirZ = dirZ;
                     break;
                 }
             }
@@ -296,7 +256,7 @@ public class SceneRenderPipeline {
                     MeshBufferData model = streamingService.getModel(meshPath);
 
                     long meshHandle;
-                    int vertexCountToSubmit;
+                    MeshBufferData drawn;
 
                     if (model != null && model.vertices != null && model.vertices.length > 0) {
                         meshHandle = mc.getCachedMeshHandle(meshPath, handleEpoch);
@@ -304,55 +264,60 @@ public class SceneRenderPipeline {
                             meshHandle = streamingService.getMeshHandle(meshPath);
                             mc.cacheMeshHandle(meshPath, meshHandle, handleEpoch);
                         }
-                        vertexCountToSubmit = model.vertexCount;
+                        drawn = model;
                     } else if (streamingService.isMeshLoaded(meshPath)) {
                         meshHandle = streamingService.resolveMeshHandle(FALLBACK_CUBE_KEY, fallbackCube);
-                        vertexCountToSubmit = fallbackCube.vertexCount;
+                        drawn = fallbackCube;
                     } else {
                         continue;
                     }
 
-                    // 0L handles (headless/null backends) are still submitted so entity counts stay consistent
-                    long textureHandle = 0L;
-                    if (texturePath != null && mat != null) {
-                        textureHandle = mat.getCachedTextureHandle(texturePath, handleEpoch);
-                        if (textureHandle == 0L) {
-                            textureHandle = streamingService.getTextureHandle(texturePath);
-                            mat.cacheTextureHandle(texturePath, textureHandle, handleEpoch);
-                        }
-                    }
-
-                    totalActiveVertices += vertexCountToSubmit;
+                    totalActiveVertices += drawn.vertexCount;
                     entityDrawCalls++;
 
-                    float groundY = findGroundSurfaceY(entity, wt, entities, editorManager);
-                    float reflectVal = (mat != null) ? mat.reflect : 0.0f;
-                    float[][] bonePalette = (anim != null && anim.skeleton != null) ? anim.bonePaletteMatrices : null;
-
-                    MutableRenderEntityDescriptor desc = snapshot.obtainDescriptor(snapshot.activeEntityCount);
-                    desc.set(
-                            meshHandle, textureHandle,
-                            wt.px(), wt.py(), wt.pz(),
-                            wt.rx(), wt.ry(), wt.rz(),
-                            wt.sx(), wt.sy(), wt.sz(),
-                            groundY, reflectVal, bonePalette
-                    );
-                    desc.pickId = ViewportPanel.pickIdFor(entity);
+                    // 0L handles (headless/null backends) are still queued so entity counts stay consistent
+                    RenderCommand cmd = queue.add();
+                    cmd.meshHandle = meshHandle;
+                    cmd.px = wt.px(); cmd.py = wt.py(); cmd.pz = wt.pz();
+                    cmd.rx = wt.rx(); cmd.ry = wt.ry(); cmd.rz = wt.rz();
+                    cmd.sx = wt.sx(); cmd.sy = wt.sy(); cmd.sz = wt.sz();
+                    cmd.groundY = findGroundSurfaceY(entity, wt, entities, editorManager);
+                    cmd.bonePalette = (anim != null && anim.skeleton != null) ? anim.bonePaletteMatrices : null;
+                    cmd.pickId = ViewportPanel.pickIdFor(entity);
                     if (mat != null) {
-                        MaterialBinding binding = desc.material;
-                        binding.normalTexture = resolveChannelHandle(mat, Material.CHANNEL_NORMAL, streamingService, handleEpoch);
-                        binding.specularTexture = resolveChannelHandle(mat, Material.CHANNEL_SPECULAR, streamingService, handleEpoch);
-                        binding.lightmapTexture = resolveChannelHandle(mat, Material.CHANNEL_LIGHTMAP, streamingService, handleEpoch);
-                        binding.emissiveTexture = resolveChannelHandle(mat, Material.CHANNEL_EMISSIVE, streamingService, handleEpoch);
-                        binding.specularStrength = mat.specularStrength;
-                        binding.roughness = mat.roughness;
-                        binding.normalStrength = mat.normalStrength;
-                        binding.emissiveIntensity = mat.emissiveIntensity;
+                        if (texturePath != null) {
+                            long albedo = mat.getCachedTextureHandle(texturePath, handleEpoch);
+                            if (albedo == 0L) {
+                                albedo = streamingService.getTextureHandle(texturePath);
+                                mat.cacheTextureHandle(texturePath, albedo, handleEpoch);
+                            }
+                            cmd.albedoTexture = albedo;
+                        }
+                        cmd.normalTexture = resolveChannelHandle(mat, Material.CHANNEL_NORMAL, streamingService, handleEpoch);
+                        cmd.specularTexture = resolveChannelHandle(mat, Material.CHANNEL_SPECULAR, streamingService, handleEpoch);
+                        cmd.lightmapTexture = resolveChannelHandle(mat, Material.CHANNEL_LIGHTMAP, streamingService, handleEpoch);
+                        cmd.emissiveTexture = resolveChannelHandle(mat, Material.CHANNEL_EMISSIVE, streamingService, handleEpoch);
+                        cmd.reflect = mat.reflect;
+                        cmd.specularStrength = mat.specularStrength;
+                        cmd.roughness = mat.roughness;
+                        cmd.normalStrength = mat.normalStrength;
+                        cmd.emissiveIntensity = mat.emissiveIntensity;
                     }
-                    snapshot.activeEntityCount++;
+
+                    boolean skinned = drawn.stride() >= MeshBufferData.SKINNED_FLOATS_PER_VERTEX;
+                    float viewDepth = -(depthRowX * cmd.px + depthRowY * cmd.py + depthRowZ * cmd.pz + depthRowW);
+                    cmd.sortKey = RenderQueue.packKey(false, RenderQueue.PASS_SCENE,
+                            skinned ? RenderQueue.PIPELINE_SKINNED : RenderQueue.PIPELINE_STATIC,
+                            materialId(cmd), RenderQueue.quantizeDepth(viewDepth, depthNear, depthFar));
+
+                    float maxScale = Math.max(Math.abs(cmd.sx), Math.max(Math.abs(cmd.sy), Math.abs(cmd.sz)));
+                    shadowFrustum.include(cmd.px, cmd.py, cmd.pz, drawn.boundsRadius() * maxScale);
                 }
             }
         }
+
+        shadowFrustum.build(shadowLightDirX, shadowLightDirY, shadowLightDirZ, queue.lightSpaceMatrix);
+        queue.sort();
 
         // Every live entity has marked its assets; evict what deleted entities or an unloaded scene left behind
         streamingService.sweepUnreferenced();
@@ -394,8 +359,6 @@ public class SceneRenderPipeline {
     public void submitFrame(RenderSceneSnapshot snapshot, IRenderBackend rhi) {
         if (snapshot == null || rhi == null) return;
 
-        rhi.clearSceneQueue();
-
         if (snapshot.pooledLight.active) {
             MutableLightDescriptor l = snapshot.pooledLight;
             rhi.setSceneLight(
@@ -412,22 +375,7 @@ public class SceneRenderPipeline {
             );
         }
 
-        for (int i = 0; i < snapshot.activeEntityCount; i++) {
-            MutableRenderEntityDescriptor e = snapshot.pooledEntities.get(i);
-            rhi.submitEntity(
-                    e.meshHandle, e.material, e.pickId,
-                    e.px, e.py, e.pz, e.rx, e.ry, e.rz, e.sx, e.sy, e.sz,
-                    e.groundY, e.bonePalette
-            );
-        }
-
-        for (RenderEntityDescriptor e : snapshot.entities) {
-            rhi.submitEntity(
-                    e.meshHandle(), e.textureHandle(),
-                    e.px(), e.py(), e.pz(), e.rx(), e.ry(), e.rz(), e.sx(), e.sy(), e.sz(),
-                    e.groundY(), e.reflectVal(), e.bonePalette()
-            );
-        }
+        rhi.submitRenderQueue(snapshot.renderQueue);
 
         ViewportPanel.updatePicking(rhi);
         rhi.setSceneViewport(snapshot.sceneMinX, snapshot.sceneMinY, snapshot.sceneMaxX, snapshot.sceneMaxY, snapshot.sceneAspect);
@@ -546,6 +494,32 @@ public class SceneRenderPipeline {
                 out[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c];
             }
         }
+    }
+
+    /** Editor camera view matrix row 2 (matches the backends' view: R(yaw, pitch) then pan/zoom translation). */
+    private void updateDepthRow(ViewportCamera camera, float far) {
+        double yaw = Math.toRadians(camera.getYaw()), pitch = Math.toRadians(camera.getPitch());
+        float cy = (float) Math.cos(yaw), sy = (float) Math.sin(yaw);
+        float cp = (float) Math.cos(pitch), sp = (float) Math.sin(pitch);
+        depthRowX = sy * cp;
+        depthRowY = -sp;
+        depthRowZ = cy * cp;
+        depthRowW = camera.getZoom();
+        depthNear = camera.getNear();
+        depthFar = far;
+    }
+
+    /** 15-bit material bucket hashed from the texture set; collisions only weaken batching, never correctness. */
+    private static int materialId(RenderCommand cmd) {
+        long h = cmd.albedoTexture;
+        h = h * 31L + cmd.normalTexture;
+        h = h * 31L + cmd.specularTexture;
+        h = h * 31L + cmd.lightmapTexture;
+        h = h * 31L + cmd.emissiveTexture;
+        h ^= h >>> 33;
+        h *= 0xff51afd7ed558ccdL;
+        h ^= h >>> 33;
+        return (int) (h & ((1 << RenderQueue.MATERIAL_BITS) - 1));
     }
 
     /** GPU handle for one material channel, cached on the Material per handle epoch; 0L when empty or not yet streamed. */

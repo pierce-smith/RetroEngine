@@ -1,10 +1,9 @@
 package com.retro.engine.backend.vulkan;
 
 import com.retro.engine.rhi.BufferDesc;
-import com.retro.engine.rhi.DirectionalShadowFrustum;
 import com.retro.engine.rhi.GraphicsAPI;
 import com.retro.engine.rhi.IRenderBackend;
-import com.retro.engine.rhi.MaterialBinding;
+import com.retro.engine.rhi.RenderQueue;
 import com.retro.engine.rhi.TextureDesc;
 import com.retro.engine.rhi.ViewportSpec;
 import org.lwjgl.PointerBuffer;
@@ -14,8 +13,6 @@ import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
 
 import java.nio.IntBuffer;
-import java.util.ArrayList;
-import java.util.List;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
@@ -77,14 +74,14 @@ public class VulkanBackend implements IRenderBackend {
     private float activeLightR = 1.0f, activeLightG = 0.95f, activeLightB = 0.85f;
     private float activeLightIntensity = 1.2f;
 
-    private final List<VulkanPassEncoder.RenderEntity> sceneQueuePool = new ArrayList<>();
-    private int activeSceneQueueCount = 0;
+    // Submitted queue (resolved into drawBuffers at beginFrame, then read while recording); null = no scene draws
+    private RenderQueue submittedQueue = null;
+    private final VulkanDrawBuffers drawBuffers = new VulkanDrawBuffers();
 
     // Reusable Matrix Buffers for Zero-Allocation Frame Loops
     private final float[] viewMatrix = new float[16];
     private final float[] projMatrix = new float[16];
     private final float[] lightSpaceMatrix = new float[16];
-    private final DirectionalShadowFrustum shadowFrustum = new DirectionalShadowFrustum();
     private float sceneAspect = 0.0f; // docked Scene tile aspect; 0 = use offscreen target aspect
 
     @Override
@@ -172,7 +169,6 @@ public class VulkanBackend implements IRenderBackend {
         computeViewMatrix();
         float aspect = sceneAspect > 0.0f ? sceneAspect : (float) targetPass.getWidth() / (float) targetPass.getHeight();
         computePerspectiveProjectionMatrix(projFovDeg, aspect, projNear, projFar);
-        computeLightSpaceMatrix();
 
         gpuCache.updateLightUniformBuffer(
                 deviceManager,
@@ -191,7 +187,7 @@ public class VulkanBackend implements IRenderBackend {
         );
 
         // Material slots and bone palettes are resolved here; recording only pushes constants
-        gpuCache.prepareScene(deviceManager, sceneQueuePool, activeSceneQueueCount);
+        gpuCache.prepareScene(deviceManager, submittedQueue, drawBuffers);
 
         armPickPass();
 
@@ -215,8 +211,8 @@ public class VulkanBackend implements IRenderBackend {
                     deviceManager,
                     viewMatrix,
                     projMatrix,
-                    sceneQueuePool,
-                    activeSceneQueueCount,
+                    submittedQueue != null ? submittedQueue.commands() : null,
+                    drawBuffers,
                     cameraPreviewTarget,
                     cameraPreviewActive && cameraPreviewSlot != VulkanGpuCache.NO_TEXTURE,
                     cameraPreviewSlot
@@ -332,19 +328,6 @@ public class VulkanBackend implements IRenderBackend {
         viewMatrix[4] = 0.0f;      viewMatrix[5] = cp;        viewMatrix[6] = -sp;       viewMatrix[7] = 0.0f;
         viewMatrix[8] = -sy;       viewMatrix[9] = cy * sp;   viewMatrix[10] = cy * cp;  viewMatrix[11] = 0.0f;
         viewMatrix[12] = camPanX;  viewMatrix[13] = camPanY;  viewMatrix[14] = camZoom;  viewMatrix[15] = 1.0f;
-    }
-
-    /** Orthographic directional light view-projection fitted around the bounding spheres of every queued entity. */
-    private void computeLightSpaceMatrix() {
-        shadowFrustum.reset();
-        for (int i = 0; i < activeSceneQueueCount; i++) {
-            VulkanPassEncoder.RenderEntity entity = sceneQueuePool.get(i);
-            VulkanGpuCache.VulkanBuffer mesh = gpuCache.getMesh(entity.meshHandle);
-            if (mesh == null) continue;
-            float scale = Math.max(Math.abs(entity.sx), Math.max(Math.abs(entity.sy), Math.abs(entity.sz)));
-            shadowFrustum.include(entity.px, entity.py, entity.pz, mesh.boundsRadius * scale);
-        }
-        shadowFrustum.build(activeLightDirX, activeLightDirY, activeLightDirZ, lightSpaceMatrix);
     }
 
     @Override
@@ -489,7 +472,13 @@ public class VulkanBackend implements IRenderBackend {
         return true;
     }
 
-    @Override public void clearSceneQueue() { activeSceneQueueCount = 0; }
+    @Override public void clearSceneQueue() { submittedQueue = null; }
+
+    @Override
+    public void submitRenderQueue(RenderQueue queue) {
+        submittedQueue = queue;
+        if (queue != null) System.arraycopy(queue.lightSpaceMatrix, 0, lightSpaceMatrix, 0, 16);
+    }
 
     @Override
     public long registerMesh(String assetKey, float[] vertices, int vertexCount, int[] indices, int indexCount) {
@@ -503,67 +492,6 @@ public class VulkanBackend implements IRenderBackend {
 
     @Override public void unregisterMesh(long meshHandle) { gpuCache.unregisterMesh(meshHandle); }
     @Override public void unregisterTexture(long textureHandle) { gpuCache.unregisterTexture(textureHandle); }
-
-    @Override
-    public void submitEntity(long meshHandle, long textureHandle, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float reflectionStrength, float[][] bonePalette) {
-        if (meshHandle == 0L) return;
-
-        VulkanPassEncoder.RenderEntity item;
-        if (activeSceneQueueCount < sceneQueuePool.size()) {
-            item = sceneQueuePool.get(activeSceneQueueCount);
-        } else {
-            item = new VulkanPassEncoder.RenderEntity();
-            sceneQueuePool.add(item);
-        }
-        activeSceneQueueCount++;
-
-        item.meshHandle = meshHandle;
-        item.textureHandle = textureHandle;
-        item.bonePalette = bonePalette;
-        item.px = px; item.py = py; item.pz = pz;
-        item.rx = rx; item.ry = ry; item.rz = rz;
-        item.sx = sx; item.sy = sy; item.sz = sz;
-        item.groundY = groundY;
-        item.reflectionStrength = reflectionStrength;
-        // Legacy single-texture submissions carry no extra channels; reset what a pooled item may still hold
-        item.normalTextureHandle = 0L;
-        item.specularTextureHandle = 0L;
-        item.lightmapTextureHandle = 0L;
-        item.emissiveTextureHandle = 0L;
-        item.specularStrength = 0.0f;
-        item.roughness = 0.6f;
-        item.normalStrength = 1.0f;
-        item.emissiveIntensity = 1.0f;
-        item.pickId = PICK_ID_NONE;
-    }
-
-    @Override
-    public void submitEntity(long meshHandle, MaterialBinding material, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float[][] bonePalette) {
-        if (material == null) {
-            submitEntity(meshHandle, 0L, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, 0.0f, bonePalette);
-            return;
-        }
-        int before = activeSceneQueueCount;
-        submitEntity(meshHandle, material.albedoTexture, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, material.reflect, bonePalette);
-        if (activeSceneQueueCount == before) return;
-
-        VulkanPassEncoder.RenderEntity item = sceneQueuePool.get(activeSceneQueueCount - 1);
-        item.normalTextureHandle = material.normalTexture;
-        item.specularTextureHandle = material.specularTexture;
-        item.lightmapTextureHandle = material.lightmapTexture;
-        item.emissiveTextureHandle = material.emissiveTexture;
-        item.specularStrength = material.specularStrength;
-        item.roughness = material.roughness;
-        item.normalStrength = material.normalStrength;
-        item.emissiveIntensity = material.emissiveIntensity;
-    }
-
-    @Override
-    public void submitEntity(long meshHandle, MaterialBinding material, int pickId, float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz, float groundY, float[][] bonePalette) {
-        int before = activeSceneQueueCount;
-        submitEntity(meshHandle, material, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, bonePalette);
-        if (activeSceneQueueCount != before) sceneQueuePool.get(activeSceneQueueCount - 1).pickId = pickId;
-    }
 
     @Override public long createBuffer(BufferDesc createInfo) { return 101L; }
     @Override public void destroyBuffer(long handle) { }

@@ -41,10 +41,11 @@ public interface IRenderBackend {
      * backend cannot sample it, in which case the editor keeps its bitmap font.
      */
     default boolean setUiFontAtlas(long textureHandle) { return false; }
+    /** Drops the submitted draw list; the next frame renders no scene geometry until another queue is submitted. */
     void clearSceneQueue();
 
     /**
-     * Uploads a mesh to GPU memory once and returns an opaque handle for {@link #submitEntity}.
+     * Uploads a mesh to GPU memory once and returns an opaque handle for {@link RenderCommand#meshHandle}.
      * Registering an assetKey that is already live returns the existing handle without re-uploading.
      * Safe to call from any thread (e.g. AssetStreamer virtual threads). Returns 0L when the backend
      * has no GPU (headless/null rendering) or the upload fails.
@@ -70,44 +71,12 @@ public interface IRenderBackend {
     default void unregisterTexture(long textureHandle) {}
 
     /**
-     * Queues one entity for this frame using handles from {@link #registerMesh} / {@link #registerTexture}.
-     * A 0L or stale meshHandle skips the draw; a 0L or stale textureHandle falls back to the default white texture.
+     * Replaces this frame's draw list with {@code queue}, already sorted ({@link RenderQueue#sort()}) and carrying the
+     * fitted {@link RenderQueue#lightSpaceMatrix}. Backends resolve handles here and read the commands again while
+     * encoding the next {@link #beginFrame}, so the queue must not be modified until that call returns.
+     * A 0L or stale meshHandle skips the draw; a 0L or stale texture handle leaves that material channel absent.
      */
-    void submitEntity(long meshHandle, long textureHandle,
-                      float px, float py, float pz,
-                      float rx, float ry, float rz,
-                      float sx, float sy, float sz,
-                      float groundY, float reflectionStrength,
-                      float[][] bonePalette);
-
-    default void submitEntity(long meshHandle, long textureHandle,
-                              float px, float py, float pz,
-                              float rx, float ry, float rz,
-                              float sx, float sy, float sz,
-                              float groundY, float reflectionStrength) {
-        submitEntity(meshHandle, textureHandle, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, reflectionStrength, null);
-    }
-
-    default void submitEntity(long meshHandle, long textureHandle,
-                              float px, float py, float pz,
-                              float rx, float ry, float rz,
-                              float sx, float sy, float sz) {
-        submitEntity(meshHandle, textureHandle, px, py, pz, rx, ry, rz, sx, sy, sz, 0.0f, 0.0f, null);
-    }
-
-    /**
-     * Multi-channel material variant of {@link #submitEntity}. Backends without multi-texture support fall back to the
-     * albedo channel and reflection strength; the binding is read immediately and never retained.
-     */
-    default void submitEntity(long meshHandle, MaterialBinding material,
-                              float px, float py, float pz,
-                              float rx, float ry, float rz,
-                              float sx, float sy, float sz,
-                              float groundY, float[][] bonePalette) {
-        long albedo = (material != null) ? material.albedoTexture : 0L;
-        float reflect = (material != null) ? material.reflect : 0.0f;
-        submitEntity(meshHandle, albedo, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, reflect, bonePalette);
-    }
+    void submitRenderQueue(RenderQueue queue);
 
     /** Color-ID value of the cleared pick target background and of draws that carry no pick ID. */
     int PICK_ID_NONE = 0;
@@ -115,19 +84,7 @@ public interface IRenderBackend {
     int PICK_UNAVAILABLE = -1;
 
     /**
-     * Pickable variant of the material {@link #submitEntity}: {@code pickId} is an opaque 32-bit value written to the
-     * Color-ID target for every covered pixel ({@link #PICK_ID_NONE} = not pickable). Backends without an ID pass ignore it.
-     */
-    default void submitEntity(long meshHandle, MaterialBinding material, int pickId,
-                              float px, float py, float pz,
-                              float rx, float ry, float rz,
-                              float sx, float sy, float sz,
-                              float groundY, float[][] bonePalette) {
-        submitEntity(meshHandle, material, px, py, pz, rx, ry, rz, sx, sy, sz, groundY, bonePalette);
-    }
-
-    /**
-     * Arms the Color-ID probe. While armed, each frame renders the queued entities' pick IDs (editor camera) into an
+     * Arms the Color-ID probe. While armed, each frame renders the queued commands' pick IDs (editor camera) into an
      * offscreen R8G8B8A8_UINT target the size of the scene target, packed little-endian (r = bits 0-7 ... a = bits
      * 24-31), and copies back the single texel at scene-tile UV (u, v), origin top-left. Texel = (int) (u * width),
      * (int) (v * height). Coordinates outside [0, 1) disarm the probe and skip the pass.

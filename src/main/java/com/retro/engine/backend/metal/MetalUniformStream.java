@@ -1,6 +1,5 @@
 package com.retro.engine.backend.metal;
 
-import com.retro.engine.rhi.DirectionalShadowFrustum;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.FloatBuffer;
@@ -98,7 +97,6 @@ public class MetalUniformStream {
     private final float[] matTempR = new float[16];
 
     // Directional shadow map view-projection, refit to the scene bounds once per frame and streamed into every slot
-    private final DirectionalShadowFrustum shadowFrustum = new DirectionalShadowFrustum();
     private final float[] matLightSpace = new float[16];
     private final float[] matLightMVP = new float[16];
     private final float[] cameraPos = new float[3];
@@ -147,12 +145,9 @@ public class MetalUniformStream {
         }
     }
 
-    /** Bounds accumulator for this frame's shadow frustum; reset, include every entity, then call updateLightSpaceMatrix. */
-    public DirectionalShadowFrustum getShadowFrustum() { return shadowFrustum; }
-
-    public float[] updateLightSpaceMatrix(float lightDirX, float lightDirY, float lightDirZ) {
-        shadowFrustum.build(lightDirX, lightDirY, lightDirZ, matLightSpace);
-        return matLightSpace;
+    /** Copies the scene pipeline's fitted directional light view-projection (column-major) for this frame's passes. */
+    public void setLightSpaceMatrix(float[] lightSpace) {
+        System.arraycopy(lightSpace, 0, matLightSpace, 0, 16);
     }
 
     public float[] getLightSpaceMatrix() { return matLightSpace; }
