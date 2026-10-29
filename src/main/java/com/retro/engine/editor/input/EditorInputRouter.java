@@ -168,6 +168,7 @@ public class EditorInputRouter {
             return dispatchToPanel(panel, ndcX, ndcY, button, action);
         } else if (action == 0) { // Release
             InspectorInputDelegate.onMouseRelease();
+            AssetBrowserInputDelegate.onMouseRelease();
             if (button == 1) {
                 overlayManager.onRightClickRelease(
                     refX, refY, workspace, cameraController,
@@ -294,6 +295,10 @@ public class EditorInputRouter {
             if (DockSpace.isVisible(DockPanel.ANIMATOR_INSPECTOR)) {
                 AnimatorGraphPanel.handleInspectorCursorPos(DockSpace.toDesignX(DockPanel.ANIMATOR_INSPECTOR, coords.ndcX), DockSpace.toDesignY(DockPanel.ANIMATOR_INSPECTOR, coords.ndcY), workspace);
             }
+            if (DockSpace.isVisible(DockPanel.ASSETS)
+                    && AssetBrowserInputDelegate.processDrag(DockSpace.toDesignY(DockPanel.ASSETS, coords.ndcY))) {
+                return true;
+            }
             if (DockSpace.isVisible(DockPanel.INSPECTOR)) {
                 InspectorInputDelegate.processInspectorDrag(DockSpace.toDesignX(DockPanel.INSPECTOR, coords.ndcX), DockSpace.toDesignY(DockPanel.INSPECTOR, coords.ndcY), workspace);
             }
@@ -309,6 +314,9 @@ public class EditorInputRouter {
         if (panel == DockPanel.INSPECTOR) {
             InspectorPanel.scroll((float) -yOffset * 0.18f);
             return true;
+        }
+        if (panel == DockPanel.ASSETS) {
+            return AssetBrowserInputDelegate.handleScroll(yOffset);
         }
         if (panel == DockPanel.ANIMATOR || panel == DockPanel.ANIMATOR_INSPECTOR) {
             float dx = DockSpace.toDesignX(panel, workspace.getLastNdcX());

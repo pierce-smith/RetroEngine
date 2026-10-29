@@ -34,6 +34,90 @@ public class AssetBrowserPanel {
         return cardX + CARD_PITCH - 0.01f <= CARD_LIMIT_X;
     }
 
+    // --- Grid + vertical scroll (cards wrap into rows; rows scroll beneath the header, clipped to the view) ---
+    public static final float VIEW_TOP = HEADER_Y0 - 0.02f, VIEW_BOTTOM = -0.99f;
+    public static final float ROW_PITCH = (CARD_Y1 - CARD_Y0) + 0.04f;
+    public static final int COLUMNS = computeColumns();
+
+    // Scrollbar (pill thumb, Inspector style); the hit band is wider than the drawn pill
+    public static final float SCROLLBAR_X0 = 0.979f, SCROLLBAR_X1 = 0.988f;
+    public static final float SCROLLBAR_HIT_X0 = 0.960f, SCROLLBAR_HIT_X1 = 1.0f;
+    private static final float MIN_THUMB_H = 0.06f;
+
+    private static float scrollOffsetY = 0.0f;
+    private static float maxScrollY = 0.0f;
+    private static String lastFolderPath = null;
+
+    private static int computeColumns() {
+        int n = 0;
+        for (float x = CARD_START_X; cardFits(x); x += CARD_PITCH) n++;
+        return Math.max(1, n);
+    }
+
+    public static float getScrollOffsetY() { return scrollOffsetY; }
+    public static float getMaxScrollY() { return maxScrollY; }
+    public static void setScrollOffsetY(float offset) { scrollOffsetY = Math.max(0.0f, Math.min(maxScrollY, offset)); }
+    public static void scroll(float delta) { setScrollOffsetY(scrollOffsetY + delta); }
+    public static void resetScroll() { scrollOffsetY = 0.0f; }
+
+    /** Recomputes the scroll bound for {@code slotCount} grid slots and re-clamps the offset. */
+    public static void updateScrollBounds(int slotCount) {
+        int rows = (slotCount + COLUMNS - 1) / COLUMNS;
+        float contentH = rows > 0 ? (CARD_Y1 - CARD_Y0) + (rows - 1) * ROW_PITCH + (VIEW_TOP - CARD_Y1) : 0.0f;
+        maxScrollY = Math.max(0.0f, contentH - (VIEW_TOP - VIEW_BOTTOM) + 0.01f);
+        scrollOffsetY = Math.max(0.0f, Math.min(maxScrollY, scrollOffsetY));
+    }
+
+    public static float slotX(int slot) {
+        return CARD_START_X + (slot % COLUMNS) * CARD_PITCH;
+    }
+
+    /** Vertical shift applied to the base card geometry (CARD_Y0..CARD_Y1) for a grid slot, scroll included. */
+    public static float slotShiftY(int slot) {
+        return -(slot / COLUMNS) * ROW_PITCH + scrollOffsetY;
+    }
+
+    /** True when any part of the slot's card intersects the view. */
+    public static boolean slotVisible(int slot) {
+        float dy = slotShiftY(slot);
+        return CARD_Y0 + dy < VIEW_TOP && CARD_Y1 + dy > VIEW_BOTTOM;
+    }
+
+    /** Grid slot under the cursor, or -1 when none (clipped areas and gaps included). */
+    public static int slotAt(float ndcX, float ndcY, int slotCount) {
+        if (ndcY > VIEW_TOP || ndcY < VIEW_BOTTOM) return -1;
+        for (int slot = 0; slot < slotCount; slot++) {
+            if (!slotVisible(slot)) continue;
+            float x = slotX(slot), dy = slotShiftY(slot);
+            if (ndcX >= x && ndcX <= x + CARD_W && ndcY >= CARD_Y0 + dy && ndcY <= CARD_Y1 + dy) return slot;
+        }
+        return -1;
+    }
+
+    // --- Scrollbar geometry (shared with AssetBrowserInputDelegate) ---
+    public static boolean hasScrollbar() { return maxScrollY > 0.001f; }
+
+    public static float thumbHeight() {
+        float trackH = VIEW_TOP - VIEW_BOTTOM;
+        return Math.max(MIN_THUMB_H, trackH * trackH / (trackH + maxScrollY));
+    }
+
+    public static float thumbTop() {
+        float trackH = VIEW_TOP - VIEW_BOTTOM;
+        return VIEW_TOP - (maxScrollY > 0.0f ? scrollOffsetY / maxScrollY : 0.0f) * (trackH - thumbHeight());
+    }
+
+    public static boolean inScrollbar(float ndcX, float ndcY) {
+        return hasScrollbar() && ndcX >= SCROLLBAR_HIT_X0 && ndcX <= SCROLLBAR_HIT_X1 && ndcY >= VIEW_BOTTOM && ndcY <= VIEW_TOP;
+    }
+
+    /** Scrolls so the thumb's top edge sits at {@code thumbTopY} (used by thumb dragging). */
+    public static void setThumbTop(float thumbTopY) {
+        float travel = (VIEW_TOP - VIEW_BOTTOM) - thumbHeight();
+        if (travel <= 0.0f) return;
+        setScrollOffsetY((VIEW_TOP - thumbTopY) / travel * maxScrollY);
+    }
+
     private static final float CARD_RADIUS = 0.018f;
 
     private static final List<AssetMeta> visibleAssetsScratch = new ArrayList<>(128);
@@ -116,34 +200,44 @@ public class AssetBrowserPanel {
 
         boolean hasUpLevel = !activePath.isEmpty();
 
+        if (!activePath.equalsIgnoreCase(lastFolderPath == null ? "\0" : lastFolderPath)) {
+            lastFolderPath = activePath;
+            resetScroll();
+        }
+        int slotCount = visibleAssetsScratch.size() + (hasUpLevel ? 1 : 0);
+        updateScrollBounds(slotCount);
+
         if (visibleAssetsScratch.isEmpty() && !hasUpLevel) {
             centeredText(buffer, "NO ASSETS IN THIS FOLDER", -0.68f, 1.1f, EditorTheme.TEXT_MUTED);
             centeredText(buffer, "DRAG & DROP FILES HERE OR CLICK + IMPORT", -0.76f, 0.85f, EditorTheme.TEXT_DISABLED);
             return;
         }
 
-        float cardX = CARD_START_X;
-
+        buffer.pushClipY(VIEW_BOTTOM, VIEW_TOP);
+        int slot = 0;
         if (hasUpLevel) {
-            renderCard(buffer, cardX, TypeStyle.FOLDER, "..", "ENCLOSING FOLDER", "BACK", "UP", true);
-            cardX += CARD_PITCH;
+            if (slotVisible(slot)) {
+                renderCard(buffer, slotX(slot), slotShiftY(slot), TypeStyle.FOLDER, "..", "ENCLOSING FOLDER", "BACK", "UP", true);
+            }
+            slot++;
         }
 
-        for (int i = 0; i < visibleAssetsScratch.size(); i++) {
+        for (int i = 0; i < visibleAssetsScratch.size(); i++, slot++) {
+            if (!slotVisible(slot)) continue;
             AssetMeta asset = visibleAssetsScratch.get(i);
-            if (!cardFits(cardX)) break;
-
             TypeStyle style = TypeStyle.of(asset.type);
             String badge = (style == TypeStyle.FOLDER) ? style.code : extensionBadge(asset.name, style);
-            renderCard(buffer, cardX, style, asset.name, style.displayName, style.hint, badge, false);
-            cardX += CARD_PITCH;
+            renderCard(buffer, slotX(slot), slotShiftY(slot), style, asset.name, style.displayName, style.hint, badge, false);
         }
+        buffer.popClipY();
+
+        renderScrollbar(buffer);
     }
 
-    public static void render(List<Float> verts, List<AssetMeta> assetDirectory, String currentFolderPath) {
-        UIGeometryBatch.Buffer tempBuf = new UIGeometryBatch.Buffer();
-        render(tempBuf, assetDirectory, currentFolderPath);
-        for (int idx = 0; idx < tempBuf.getSize(); idx++) verts.add(tempBuf.getArray()[idx]);
+    private static void renderScrollbar(UIGeometryBatch.Buffer buffer) {
+        if (!hasScrollbar()) return;
+        float top = thumbTop();
+        UIGeometryBatch.addPill(buffer, SCROLLBAR_X0, top - thumbHeight(), SCROLLBAR_X1, top, EditorTheme.GRAPHITE, 0.85f);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -205,14 +299,14 @@ public class AssetBrowserPanel {
     // Cards
     // ------------------------------------------------------------------------------------------
 
-    private static void renderCard(UIGeometryBatch.Buffer buffer, float cardX, TypeStyle style, String name, String subtitle,
+    private static void renderCard(UIGeometryBatch.Buffer buffer, float cardX, float dy, TypeStyle style, String name, String subtitle,
                                    String hint, String badge, boolean upLevel) {
         float x0 = cardX, x1 = cardX + CARD_W;
-        UIGeometryBatch.addRoundedCard(buffer, x0, CARD_Y0, x1, CARD_Y1, CARD_RADIUS, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER, 1.0f);
+        UIGeometryBatch.addRoundedCard(buffer, x0, CARD_Y0 + dy, x1, CARD_Y1 + dy, CARD_RADIUS, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER, 1.0f);
 
         // Thumbnail well tinted with the type color
         float tx0 = x0 + 0.014f, tx1 = x1 - 0.014f;
-        float ty0 = -0.735f, ty1 = CARD_Y1 - 0.016f;
+        float ty0 = -0.735f + dy, ty1 = CARD_Y1 - 0.016f + dy;
         UIGeometryBatch.addRoundedQuad(buffer, tx0, ty0, tx1, ty1, EditorTheme.RADIUS, EditorTheme.SURFACE_SUNKEN, 1.0f);
         UIGeometryBatch.addRoundedQuad(buffer, tx0, ty0, tx1, ty1, EditorTheme.RADIUS, style.color, 0.10f);
 
@@ -235,9 +329,9 @@ public class AssetBrowserPanel {
 
         // Asset key (ellipsized) + type / click hint
         float textX0 = x0 + 0.016f, textX1 = x1 - 0.016f;
-        UIGeometryBatch.addTruncatedText(buffer, name, textX0, -0.765f, textX1, 1.0f, EditorTheme.TEXT, 1.0f);
+        UIGeometryBatch.addTruncatedText(buffer, name, textX0, -0.765f + dy, textX1, 1.0f, EditorTheme.TEXT, 1.0f);
 
-        float subTop = -0.835f;
+        float subTop = -0.835f + dy;
         float hintW = 0.0f;
         if (hint != null) {
             hintW = UIGeometryBatch.textWidth(buffer, hint, 0.75f);

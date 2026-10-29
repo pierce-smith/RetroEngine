@@ -59,6 +59,19 @@ public class AssetBrowserInputDelegate {
             return;
         }
 
+        // Scrollbar: grab the thumb, or jump-to-click on the track, then drag
+        if (AssetBrowserPanel.inScrollbar(ndcX, ndcY)) {
+            float top = AssetBrowserPanel.thumbTop();
+            float h = AssetBrowserPanel.thumbHeight();
+            if (ndcY > top || ndcY < top - h) {
+                AssetBrowserPanel.setThumbTop(ndcY + h * 0.5f);
+                top = AssetBrowserPanel.thumbTop();
+            }
+            scrollbarGrabOffset = top - ndcY;
+            draggingScrollbar = true;
+            return;
+        }
+
         String activePath = manager.getAssetDatabase().getCurrentFolderPath();
         List<AssetMeta> assetDirectory = manager.getAssetDatabase().getAssetDirectory();
 
@@ -71,78 +84,89 @@ public class AssetBrowserInputDelegate {
             return;
         }
 
-        // 2. Click specific Asset or Folder Cards
-        float cardX = AssetBrowserPanel.CARD_START_X;
+        // 2. Click specific Asset or Folder Cards (grid slot under cursor, scroll offset applied)
+        int slot = AssetBrowserPanel.slotAt(ndcX, ndcY, visibleAssets.size() + (hasUpLevel ? 1 : 0));
+        if (slot < 0) return;
 
         // Check if clicked the Up Level card
         if (hasUpLevel) {
-            if (inCard(ndcX, ndcY, cardX)) {
+            if (slot == 0) {
                 UISoundPlayer.play(UISound.CLICK);
                 manager.getAssetDatabase().navigateUpFolder();
                 return;
             }
-            cardX += AssetBrowserPanel.CARD_PITCH;
+            slot--;
         }
 
-        for (AssetMeta asset : visibleAssets) {
-            if (!AssetBrowserPanel.cardFits(cardX)) break;
-            if (inCard(ndcX, ndcY, cardX)) {
-                if (asset.type == AssetType.FOLDER) {
-                    UISoundPlayer.play(UISound.OPEN_MODAL);
-                    String newPath = activePath.isEmpty() ? asset.name : activePath + "/" + asset.name;
-                    manager.getAssetDatabase().setCurrentFolderPath(newPath);
-                } else if (asset.type == AssetType.PREFAB) {
-                    UISoundPlayer.play(UISound.SPAWN);
-                    List<Entity> spawned = manager.getSceneManager().instantiatePrefab(asset.absolutePath, manager.getAssetDatabase());
-                    if (spawned != null && !spawned.isEmpty()) {
-                        manager.getAssetDatabase().addAssetDirectoryIfNotExists(asset.absolutePath, AssetType.PREFAB);
-                    }
-                } else if (asset.type == AssetType.MESH_3D) {
-                    UISoundPlayer.play(UISound.SPAWN);
-                    manager.getSceneManager().spawnEntityFromAsset(asset);
-                    Entity newlySpawned = manager.getSelectedEntity();
-                    if (newlySpawned != null) {
-                        EditorCommands.EntitySpawnCommand cmd = new EditorCommands.EntitySpawnCommand(manager, newlySpawned);
+        AssetMeta asset = visibleAssets.get(slot);
+        if (asset.type == AssetType.FOLDER) {
+            UISoundPlayer.play(UISound.OPEN_MODAL);
+            String newPath = activePath.isEmpty() ? asset.name : activePath + "/" + asset.name;
+            manager.getAssetDatabase().setCurrentFolderPath(newPath);
+        } else if (asset.type == AssetType.PREFAB) {
+            UISoundPlayer.play(UISound.SPAWN);
+            List<Entity> spawned = manager.getSceneManager().instantiatePrefab(asset.absolutePath, manager.getAssetDatabase());
+            if (spawned != null && !spawned.isEmpty()) {
+                manager.getAssetDatabase().addAssetDirectoryIfNotExists(asset.absolutePath, AssetType.PREFAB);
+            }
+        } else if (asset.type == AssetType.MESH_3D) {
+            UISoundPlayer.play(UISound.SPAWN);
+            manager.getSceneManager().spawnEntityFromAsset(asset);
+            Entity newlySpawned = manager.getSelectedEntity();
+            if (newlySpawned != null) {
+                EditorCommands.EntitySpawnCommand cmd = new EditorCommands.EntitySpawnCommand(manager, newlySpawned);
+                manager.getCommandHistory().executeCommand(cmd);
+            }
+        } else if (asset.type == AssetType.TEXTURE) {
+            UISoundPlayer.play(UISound.CLICK);
+            Entity selected = manager.getSelectedEntity();
+            if (selected != null) {
+                Material mat = selected.getComponent(Material.class);
+                if (mat != null) {
+                    try {
+                        Field field = Material.class.getDeclaredField("textureAssetPath");
+                        EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(mat, field, mat.textureAssetPath, asset.absolutePath, "TEXTURE");
                         manager.getCommandHistory().executeCommand(cmd);
-                    }
-                } else if (asset.type == AssetType.TEXTURE) {
-                    UISoundPlayer.play(UISound.CLICK);
-                    Entity selected = manager.getSelectedEntity();
-                    if (selected != null) {
-                        Material mat = selected.getComponent(Material.class);
-                        if (mat != null) {
-                            try {
-                                Field field = Material.class.getDeclaredField("textureAssetPath");
-                                EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(mat, field, mat.textureAssetPath, asset.absolutePath, "TEXTURE");
-                                manager.getCommandHistory().executeCommand(cmd);
-                            } catch (Exception e) {
-                                e.printStackTrace();
-                            }
-                        }
-                    }
-                } else if (asset.type == AssetType.SCENE) {
-                    // Scene loads swap entities only; the project asset registry is left untouched
-                    UISoundPlayer.play(UISound.SPAWN);
-                    manager.getSceneManager().loadSceneFromFile(asset.absolutePath, manager.getAssetDatabase());
-                } else if (asset.type == AssetType.SCRIPT) {
-                    UISoundPlayer.play(UISound.CLICK);
-                    Entity selected = manager.getSelectedEntity();
-                    if (selected != null) {
-                        ScriptComponent sc = selected.getComponent(ScriptComponent.class);
-                        String oldPath = (sc != null) ? sc.scriptAssetPath : null;
-                        String oldName = (sc != null) ? sc.scriptName : null;
-                        EditorCommands.ScriptAssignCommand cmd = new EditorCommands.ScriptAssignCommand(selected, oldPath, oldName, asset.absolutePath, asset.name);
-                        manager.getCommandHistory().executeCommand(cmd);
-                        InspectorPanel.resetScroll();
+                    } catch (Exception e) {
+                        e.printStackTrace();
                     }
                 }
-                break;
             }
-            cardX += AssetBrowserPanel.CARD_PITCH;
+        } else if (asset.type == AssetType.SCENE) {
+            // Scene loads swap entities only; the project asset registry is left untouched
+            UISoundPlayer.play(UISound.SPAWN);
+            manager.getSceneManager().loadSceneFromFile(asset.absolutePath, manager.getAssetDatabase());
+        } else if (asset.type == AssetType.SCRIPT) {
+            UISoundPlayer.play(UISound.CLICK);
+            Entity selected = manager.getSelectedEntity();
+            if (selected != null) {
+                ScriptComponent sc = selected.getComponent(ScriptComponent.class);
+                String oldPath = (sc != null) ? sc.scriptAssetPath : null;
+                String oldName = (sc != null) ? sc.scriptName : null;
+                EditorCommands.ScriptAssignCommand cmd = new EditorCommands.ScriptAssignCommand(selected, oldPath, oldName, asset.absolutePath, asset.name);
+                manager.getCommandHistory().executeCommand(cmd);
+                InspectorPanel.resetScroll();
+            }
         }
     }
 
-    private static boolean inCard(float ndcX, float ndcY, float cardX) {
-        return ndcX >= cardX && ndcX <= cardX + AssetBrowserPanel.CARD_W && ndcY >= AssetBrowserPanel.CARD_Y0 && ndcY <= AssetBrowserPanel.CARD_Y1;
+    private static boolean draggingScrollbar = false;
+    private static float scrollbarGrabOffset = 0.0f;
+
+    /** Mouse wheel over the Asset Browser: smooth scroll, same rate as the Inspector. */
+    public static boolean handleScroll(double yOffset) {
+        AssetBrowserPanel.scroll((float) -yOffset * 0.18f);
+        return true;
+    }
+
+    /** Cursor move in Asset Browser design space; drives an active scrollbar drag. */
+    public static boolean processDrag(float ndcY) {
+        if (!draggingScrollbar) return false;
+        AssetBrowserPanel.setThumbTop(ndcY + scrollbarGrabOffset);
+        return true;
+    }
+
+    public static void onMouseRelease() {
+        draggingScrollbar = false;
     }
 }

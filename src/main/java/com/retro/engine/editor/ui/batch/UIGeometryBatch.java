@@ -26,6 +26,7 @@ public class UIGeometryBatch {
         private boolean transformSuspended = false;
         private float mapSx = 1.0f, mapSy = 1.0f, mapTx = 0.0f, mapTy = 0.0f;
         private float clipX0, clipY0, clipX1, clipY1;
+        private float savedClipY0, savedClipY1;
         private float textScale = 1.0f;
 
         // Triangle assembly + Sutherland-Hodgman scratch (VERTEX_STRIDE floats per vertex, zero per-frame allocation)
@@ -98,6 +99,22 @@ public class UIGeometryBatch {
             this.triVerts = 0;
             this.mapSx = 1.0f; this.mapSy = 1.0f; this.mapTx = 0.0f; this.mapTy = 0.0f;
             this.textScale = 1.0f;
+        }
+
+        /**
+         * Narrows the active clip rect to design-space Y band [dy0, dy1] (intersected with the panel rect) until
+         * {@link #popClipY()}. Clipping only exists while a panel mapping is active, so this is a no-op otherwise.
+         */
+        public void pushClipY(float dy0, float dy1) {
+            savedClipY0 = clipY0; savedClipY1 = clipY1;
+            if (!mapped) return;
+            float a = mapY(dy0), b = mapY(dy1);
+            clipY0 = Math.max(clipY0, Math.min(a, b));
+            clipY1 = Math.min(clipY1, Math.max(a, b));
+        }
+
+        public void popClipY() {
+            clipY0 = savedClipY0; clipY1 = savedClipY1;
         }
 
         public boolean isMapped() { return mapped; }
