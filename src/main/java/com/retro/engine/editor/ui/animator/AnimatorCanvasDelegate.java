@@ -4,6 +4,8 @@ import com.retro.engine.animation.state.AnimatorController;
 import com.retro.engine.animation.state.AnimatorState;
 import com.retro.engine.animation.state.AnimatorTransition;
 import com.retro.engine.animation.state.BlendTree;
+import com.retro.engine.assets.AssetMeta;
+import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
@@ -11,6 +13,7 @@ import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.panels.MenuItem;
 import com.retro.engine.editor.ui.theme.EditorTheme;
+import com.retro.engine.scene.components.media.AnimatorComponent;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -537,6 +540,17 @@ public class AnimatorCanvasDelegate {
             if (selected != null && controller.getEntryState() != selected) {
                 final String selectedName = selected.name;
                 items.add(new MenuItem("Set '" + selectedName + "' as Entry State", () -> setEntryState(controller, selectedName)));
+            }
+            AnimatorComponent animator = manager.getSelectedAnimator();
+            if (animator != null && animator.controller == controller) {
+                if (animator.recordedPose != null && !animator.recordedPose.getTracks().isEmpty()) {
+                    items.add(new MenuItem("Export Recorded Pose (.ranim)", manager::exportRecordedClip));
+                }
+                for (AssetMeta asset : manager.getAssetDirectory()) {
+                    if (asset.type == AssetType.ANIMATION && !animator.clipAssetPaths.contains(asset.absolutePath)) {
+                        items.add(new MenuItem("Add Clip '" + asset.name + "'", () -> manager.addClipAsset(asset)));
+                    }
+                }
             }
             items.add(new MenuItem("Reset View", AnimatorCanvasDelegate::resetView));
         }

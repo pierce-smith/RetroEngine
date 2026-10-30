@@ -1,14 +1,18 @@
 package com.retro.engine.animation;
 
 import com.retro.engine.animation.clips.AnimationClip;
+import com.retro.engine.animation.clips.AnimationClipIO;
 import com.retro.engine.animation.clips.KeyframeTrack;
 import com.retro.engine.animation.skeleton.Skeleton;
 import com.retro.engine.animation.state.AnimatorController;
 import com.retro.engine.animation.state.AnimatorState;
 import com.retro.engine.animation.state.BlendTree;
+import com.retro.engine.assets.importers.MeshImporter;
 import com.retro.engine.scene.components.media.AnimatorComponent;
 import com.retro.engine.scene.world.SceneWorld.PlayState;
 
+import java.io.File;
+import java.io.IOException;
 import java.util.List;
 
 /**
@@ -19,9 +23,10 @@ import java.util.List;
 public class AnimationSystem {
 
     // Pre-allocated scratchpad matrices and vectors for zero per-frame JVM allocations
-    private final float[][] worldBoneTransforms = new float[AnimatorComponent.MAX_BONES][16];
-    private final float[][] localBoneTransforms = new float[AnimatorComponent.MAX_BONES][16];
-    private final boolean[] worldResolved = new boolean[AnimatorComponent.MAX_BONES];
+    // Sized to the whole skeleton (grown on demand): bones past the 64-slot GPU palette still carry their children
+    private float[][] worldBoneTransforms = new float[AnimatorComponent.MAX_BONES][16];
+    private float[][] localBoneTransforms = new float[AnimatorComponent.MAX_BONES][16];
+    private final float[] preLocalScratch = new float[16];
 
     private final float[] posScratchA = new float[3];
     private final float[] quatScratchA = new float[4];
@@ -106,32 +111,46 @@ public class AnimationSystem {
 
     /**
      * Overwrites the full 64-matrix palette with the skeleton's bind pose (world bind * inverse bind
-     * offset, which is identity for a consistently rigged mesh). Slots beyond the skeleton's bone count
+     * offset, which is identity for a consistently rigged mesh), with any editor pose edits
+     * ({@link AnimatorComponent#editPoseLocal}) replacing their bones' bind transforms. Slots beyond the skeleton's bone count
      * are set to identity so no stale keyframe matrices survive. The palette is re-streamed to the GPU
      * bone uniforms every frame, so the next frame renders the rest pose.
      */
     public void resetToBindPose(AnimatorComponent animator) {
         if (animator == null) return;
         Skeleton skeleton = animator.skeleton;
-        int boneCount = (skeleton != null) ? Math.min(skeleton.getBoneCount(), AnimatorComponent.MAX_BONES) : 0;
+        int jointCount = (skeleton != null) ? skeleton.getBoneCount() : 0;
+        ensureCapacity(jointCount);
 
-        for (int i = 0; i < boneCount; i++) {
+        for (int i = 0; i < jointCount; i++) {
             Skeleton.BoneNode bone = skeleton.getBone(i);
             if (bone != null) {
-                System.arraycopy(bone.localBindTransform, 0, localBoneTransforms[i], 0, 16);
+                System.arraycopy(restPose(animator, bone, i), 0, localBoneTransforms[i], 0, 16);
             } else {
                 setIdentity(localBoneTransforms[i]);
             }
         }
-        if (boneCount > 0) {
-            evaluateHierarchyAndPalette(animator, skeleton, boneCount);
+        if (jointCount > 0) {
+            evaluateHierarchyAndPalette(animator, skeleton, jointCount);
         }
         for (int i = 0; i < AnimatorComponent.MAX_BONES; i++) {
-            if (i >= boneCount || skeleton.getBone(i) == null) setIdentity(animator.bonePaletteMatrices[i]);
+            if (i >= jointCount || skeleton.getBone(i) == null) setIdentity(animator.bonePaletteMatrices[i]);
         }
 
         animator.bindPoseApplied = true;
         animator.setDirty(true);
+    }
+
+    /** A bone's rest local pose: the animator's editor pose edit if any (getLocalPose), else the bind pose. */
+    private static float[] restPose(AnimatorComponent animator, Skeleton.BoneNode bone, int index) {
+        float[] local = (index < AnimatorComponent.MAX_BONES) ? animator.getLocalPose(index) : null;
+        return (local != null) ? local : bone.localBindTransform;
+    }
+
+    private void ensureCapacity(int jointCount) {
+        if (jointCount <= localBoneTransforms.length) return;
+        localBoneTransforms = new float[jointCount][16];
+        worldBoneTransforms = new float[jointCount][16];
     }
 
     private void applyBindPoseOnce(AnimatorComponent animator) {
@@ -168,7 +187,8 @@ public class AnimationSystem {
         Skeleton skeleton = animator.skeleton;
         if (skeleton == null) return;
 
-        int boneCount = Math.min(skeleton.getBoneCount(), AnimatorComponent.MAX_BONES);
+        int jointCount = skeleton.getBoneCount();
+        ensureCapacity(jointCount);
 
         // 1. Controller State Machine Execution
         if (animator.controller != null) {
@@ -193,26 +213,28 @@ public class AnimationSystem {
             float[] weightsA = currentState.blendTree != null ? currentState.blendTree.evaluateWeights(controller) : null;
             float[] weightsB = (blendTarget && targetState.blendTree != null) ? targetState.blendTree.evaluateWeights(controller) : null;
 
-            for (int i = 0; i < boneCount; i++) {
+            for (int i = 0; i < jointCount; i++) {
                 Skeleton.BoneNode bone = skeleton.getBone(i);
                 if (bone == null) continue;
                 float[] localScratch = localBoneTransforms[i];
 
-                boolean sampledA = sampleStatePose(currentState, weightsA, stateTimeA, bone, posScratchA, quatScratchA, scaleScratchA);
+                // Bones a motion has no track for hold the rest pose: the editor pose edit if any, else the bind pose
+                float[] rest = restPose(animator, bone, i);
+                boolean sampledA = sampleStatePose(currentState, weightsA, stateTimeA, bone, rest, posScratchA, quatScratchA, scaleScratchA);
 
                 if (!blendTarget) {
                     if (sampledA) {
                         composeTRS(posScratchA, quatScratchA, scaleScratchA, localScratch);
                     } else {
-                        System.arraycopy(bone.localBindTransform, 0, localScratch, 0, 16);
+                        System.arraycopy(rest, 0, localScratch, 0, 16);
                     }
                     continue;
                 }
 
                 // Dual-state crossfade blending
-                boolean sampledB = sampleStatePose(targetState, weightsB, stateTimeB, bone, posScratchB, quatScratchB, scaleScratchB);
+                boolean sampledB = sampleStatePose(targetState, weightsB, stateTimeB, bone, rest, posScratchB, quatScratchB, scaleScratchB);
                 if (!sampledA && !sampledB) {
-                    System.arraycopy(bone.localBindTransform, 0, localScratch, 0, 16);
+                    System.arraycopy(rest, 0, localScratch, 0, 16);
                     continue;
                 }
 
@@ -246,7 +268,7 @@ public class AnimationSystem {
             }
             float sampleTime = clip.normalizeTime(animator.playbackTime);
 
-            for (int i = 0; i < boneCount; i++) {
+            for (int i = 0; i < jointCount; i++) {
                 Skeleton.BoneNode bone = skeleton.getBone(i);
                 if (bone == null) continue;
                 float[] localScratch = localBoneTransforms[i];
@@ -258,14 +280,79 @@ public class AnimationSystem {
                     track.sampleScale(sampleTime, scaleBlended);
                     composeTRS(posBlended, quatBlended, scaleBlended, localScratch);
                 } else {
-                    System.arraycopy(bone.localBindTransform, 0, localScratch, 0, 16);
+                    System.arraycopy(restPose(animator, bone, i), 0, localScratch, 0, 16);
                 }
             }
         }
 
-        evaluateHierarchyAndPalette(animator, skeleton, boneCount);
+        evaluateHierarchyAndPalette(animator, skeleton, jointCount);
         animator.bindPoseApplied = false;
         animator.setDirty(true);
+    }
+
+    /**
+     * Makes {@code clip} playable from {@code controller}: returns the state already playing it, else re-points the
+     * single-clip state of the same name at it (a re-exported clip replaces its old version), else adds a new state
+     * below the existing graph. Sampling is by bone name, so recorded and .ranim clips play like imported ones.
+     */
+    public static AnimatorState assignClipToState(AnimatorController controller, AnimationClip clip) {
+        if (controller == null || clip == null || clip.name == null) return null;
+        for (AnimatorState state : controller.getStates().values()) {
+            if (state.clip == clip) return state;
+        }
+        AnimatorState state = controller.getState(clip.name);
+        if (state != null && state.blendTree == null) {
+            state.clip = clip;
+            return state;
+        }
+
+        float x = -0.20f, y = 0.65f;
+        boolean any = false;
+        for (AnimatorState existing : controller.getStates().values()) {
+            if (!any || existing.graphY - 0.25f < y) {
+                y = existing.graphY - 0.25f;
+                x = existing.graphX;
+            }
+            any = true;
+        }
+        state = new AnimatorState(controller.uniqueStateName(clip.name), clip).setGraphPos(x, y);
+        controller.addState(state);
+        return state;
+    }
+
+    /**
+     * Restores an animator's authored clips onto its (freshly rebuilt) controller: the recorded pose, every assigned
+     * .ranim clip, and the entry state saved with the scene.
+     */
+    public static void installAuthoredClips(AnimatorComponent animator) {
+        if (animator == null || animator.controller == null) return;
+        AnimatorController controller = animator.controller;
+        if (animator.recordedPose != null && !animator.recordedPose.getTracks().isEmpty()) {
+            assignClipToState(controller, animator.recordedPose);
+        }
+        for (String path : animator.clipAssetPaths) {
+            AnimationClip clip = loadClipAsset(path);
+            if (clip != null) assignClipToState(controller, clip);
+        }
+        String entry = animator.takeSavedEntryState();
+        if (entry != null && controller.setEntryState(entry)) controller.resetToEntryState();
+    }
+
+    /** Loads a .ranim clip, resolving project-relative or moved paths like mesh assets; null (logged) on failure. */
+    public static AnimationClip loadClipAsset(String path) {
+        if (path == null || path.isBlank()) return null;
+        File file = new File(path);
+        if (!file.isFile()) file = MeshImporter.resolveModelFile(path);
+        if (file == null || !file.isFile()) {
+            System.err.println("[AnimationSystem] Animation clip not found: " + path);
+            return null;
+        }
+        try {
+            return AnimationClipIO.load(file);
+        } catch (IOException e) {
+            System.err.println("[AnimationSystem] Failed to load animation clip " + path + ": " + e.getMessage());
+            return null;
+        }
     }
 
     private static void syncActiveClip(AnimatorComponent animator, AnimatorState state) {
@@ -281,15 +368,16 @@ public class AnimationSystem {
      * Blend tree motions are phase-synchronised and accumulated with incremental normalised
      * LERP/SLERP: each motion i is folded in with factor w_i / (w_0 + ... + w_i).
      *
-     * @return false if no motion had a track for this bone (outputs then hold the decomposed bind pose)
+     * @param rest the bone's rest local transform, used for motions without a track for it
+     * @return false if no motion had a track for this bone (outputs then hold the decomposed rest pose)
      */
-    private boolean sampleStatePose(AnimatorState state, float[] blendWeights, float stateTime, Skeleton.BoneNode bone,
+    private boolean sampleStatePose(AnimatorState state, float[] blendWeights, float stateTime, Skeleton.BoneNode bone, float[] rest,
                                     float[] outPos, float[] outQuat, float[] outScale) {
         BlendTree tree = state.blendTree;
         if (tree == null) {
             KeyframeTrack track = state.clip.getTrack(bone.name);
             if (track == null) {
-                decomposeBind(bone, outPos, outQuat, outScale);
+                decomposeTRS(rest, outPos, outQuat, outScale);
                 return false;
             }
             float sampleTime = state.getClipSampleTime(stateTime);
@@ -319,7 +407,7 @@ public class AnimationSystem {
                 track.sampleScale(sampleTime, scaleMotion);
                 anyTrack = true;
             } else {
-                decomposeBind(bone, posMotion, quatMotion, scaleMotion);
+                decomposeTRS(rest, posMotion, quatMotion, scaleMotion);
             }
 
             accumulated += w;
@@ -336,15 +424,14 @@ public class AnimationSystem {
         }
 
         if (accumulated <= 0.0f) {
-            decomposeBind(bone, outPos, outQuat, outScale);
+            decomposeTRS(rest, outPos, outQuat, outScale);
             return false;
         }
         return anyTrack;
     }
 
-    /** Decomposes a bone's bind matrix into translation, rotation quaternion, and axis scale. */
-    private static void decomposeBind(Skeleton.BoneNode bone, float[] pos, float[] quat, float[] scale) {
-        float[] m = bone.localBindTransform;
+    /** Decomposes a column-major TRS matrix into translation, rotation quaternion (x, y, z, w), and axis scale. */
+    public static void decomposeTRS(float[] m, float[] pos, float[] quat, float[] scale) {
         pos[0] = m[12]; pos[1] = m[13]; pos[2] = m[14];
 
         float sx = (float) Math.sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
@@ -397,32 +484,32 @@ public class AnimationSystem {
     }
 
     /**
-     * Resolves world transforms parent-first, then writes world * offset into the palette.
-     * Bone indices are not guaranteed to be topologically ordered (bones without skin weights are
-     * appended late by SkeletonImporter), so each bone resolves its parent chain on demand.
+     * Forward kinematics over the whole skeleton in parent-first order ({@link Skeleton#getEvaluationOrder()}):
+     * world[i] = world[parent] * preTransform * local[i] (identity in place of world[parent] for a root), then
+     * palette[i] = world[i] * offset[i] for the bones that fit the GPU palette. Each parent's world is final before
+     * any child reads it, so a posed upper arm moves the forearm, hand and fingers in the same pass.
      */
-    private void evaluateHierarchyAndPalette(AnimatorComponent animator, Skeleton skeleton, int boneCount) {
-        for (int i = 0; i < boneCount; i++) worldResolved[i] = false;
-
-        for (int i = 0; i < boneCount; i++) {
+    private void evaluateHierarchyAndPalette(AnimatorComponent animator, Skeleton skeleton, int jointCount) {
+        for (int i : skeleton.getEvaluationOrder()) {
+            if (i >= jointCount) continue;
             Skeleton.BoneNode bone = skeleton.getBone(i);
             if (bone == null) continue;
-            resolveWorldTransform(skeleton, i, boneCount);
-            multiply4x4(worldBoneTransforms[i], bone.offsetMatrix, animator.bonePaletteMatrices[i]);
-        }
-    }
 
-    private void resolveWorldTransform(Skeleton skeleton, int boneIndex, int boneCount) {
-        if (worldResolved[boneIndex]) return;
-        worldResolved[boneIndex] = true; // set before recursing so a malformed parent cycle cannot recurse forever
-
-        Skeleton.BoneNode bone = skeleton.getBone(boneIndex);
-        float[] worldMat = worldBoneTransforms[boneIndex];
-        if (bone != null && bone.parentId >= 0 && bone.parentId < boneCount) {
-            resolveWorldTransform(skeleton, bone.parentId, boneCount);
-            multiply4x4(worldBoneTransforms[bone.parentId], localBoneTransforms[boneIndex], worldMat);
-        } else {
-            System.arraycopy(localBoneTransforms[boneIndex], 0, worldMat, 0, 16);
+            float[] local = localBoneTransforms[i];
+            if (bone.hasPreTransform) {
+                // Folded non-bone ancestors (FBX pivots, armature nodes) sit between the parent bone and this bone's local
+                multiply4x4(bone.preTransform, local, preLocalScratch);
+                local = preLocalScratch;
+            }
+            int parent = skeleton.getEvaluationParent(i);
+            if (parent >= 0 && parent < jointCount) {
+                multiply4x4(worldBoneTransforms[parent], local, worldBoneTransforms[i]);
+            } else {
+                System.arraycopy(local, 0, worldBoneTransforms[i], 0, 16);
+            }
+            if (i < AnimatorComponent.MAX_BONES) {
+                multiply4x4(worldBoneTransforms[i], bone.offsetMatrix, animator.bonePaletteMatrices[i]);
+            }
         }
     }
 

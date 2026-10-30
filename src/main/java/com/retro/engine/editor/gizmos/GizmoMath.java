@@ -1,7 +1,9 @@
 package com.retro.engine.editor.gizmos;
 
+import com.retro.engine.animation.AnimationSystem;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ViewportCamera;
+import com.retro.engine.scene.components.media.AnimatorComponent;
 import com.retro.engine.scene.components.rendering.MeshFilter;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.world.SceneWorld;
@@ -123,6 +125,49 @@ public class GizmoMath {
         out[0] = cy * cz * sx;                   out[1] = -cy * szs * sx;                  out[2] = sys * sx;
         out[3] = (cx * szs + sxs * sys * cz) * sy; out[4] = (cx * cz - sxs * sys * szs) * sy; out[5] = -sxs * cy * sy;
         out[6] = (sxs * szs - cx * sys * cz) * sz; out[7] = (sxs * cz + cx * sys * szs) * sz; out[8] = cx * cy * sz;
+    }
+
+    /** Column-major 4x4 model matrix of a world transform (same as {@link #computeModelBasis} plus translation). */
+    public static void computeModelMatrix(SceneWorld.WorldTransform wt, float[] out) {
+        float[] basis = new float[9];
+        computeModelBasis(wt.rx(), wt.ry(), wt.rz(), wt.sx(), wt.sy(), wt.sz(), basis);
+        for (int col = 0; col < 3; col++) {
+            out[col * 4] = basis[col * 3];
+            out[col * 4 + 1] = basis[col * 3 + 1];
+            out[col * 4 + 2] = basis[col * 3 + 2];
+            out[col * 4 + 3] = 0.0f;
+        }
+        out[12] = wt.px(); out[13] = wt.py(); out[14] = wt.pz(); out[15] = 1.0f;
+    }
+
+    /**
+     * World matrix of bone {@code boneIndex} in its animator's current palette (entity model * bone model transform), or
+     * the entity's model matrix alone for {@code boneIndex} -1 (the space root bones are posed in). False if unavailable.
+     */
+    public static boolean computeBoneWorldMatrix(Entity entity, int boneIndex, SceneWorld sceneManager, float[] out) {
+        if (entity == null || sceneManager == null) return false;
+        computeModelMatrix(sceneManager.getComputedWorldTransform(entity), out);
+        if (boneIndex < 0) return true;
+        AnimatorComponent animator = entity.getComponent(AnimatorComponent.class);
+        if (animator == null || animator.skeleton == null) return false;
+        float[] bone = new float[16];
+        if (!animator.skeleton.computeBoneModelTransform(boneIndex, animator.bonePaletteMatrices, bone)) return false;
+        float[] model = out.clone();
+        AnimationSystem.multiply4x4(model, bone, out);
+        return true;
+    }
+
+    /** World-space unit vector pointing from the scene back toward the viewer (the view matrix's +Z row). */
+    public static float[] viewBackAxis(ViewportCamera cameraController, float camPitch, float camYaw) {
+        if (cameraController != null) {
+            float[] v = VIEW_SCRATCH.get();
+            cameraController.computeViewMatrix(v);
+            return new float[] { v[2], v[6], v[10] };
+        }
+        float radYaw = (float) Math.toRadians(camYaw), radPitch = (float) Math.toRadians(camPitch);
+        float cy = (float) Math.cos(radYaw), sy = (float) Math.sin(radYaw);
+        float cp = (float) Math.cos(radPitch), sp = (float) Math.sin(radPitch);
+        return new float[] { sy * cp, -sp, cy * cp };
     }
 
     /**

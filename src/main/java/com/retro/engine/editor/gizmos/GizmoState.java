@@ -1,15 +1,21 @@
 package com.retro.engine.editor.gizmos;
 
+import com.retro.engine.animation.AnimationSystem;
+import com.retro.engine.animation.skeleton.Skeleton;
 import com.retro.engine.editor.EditorWorkspace;
+import com.retro.engine.editor.commands.EditorCommands;
 import com.retro.engine.editor.EditorWorkspace.GizmoAxis;
 import com.retro.engine.editor.EditorWorkspace.GizmoMode;
 import com.retro.engine.editor.ui.dock.DockPanel;
 import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.overlays.OverlaySystem;
 import com.retro.engine.editor.ui.panels.ViewportPanel;
+import com.retro.engine.scene.components.media.AnimatorComponent;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.world.SceneWorld;
 import com.retro.engine.scene.components.transform.Transform;
+
+import java.util.Arrays;
 
 /**
  * Delegate managing 3D transform gizmo modes, active selection axes, transform drag start vectors,
@@ -41,7 +47,36 @@ public class GizmoState {
     public GizmoAxis getActiveAxis() { return activeGizmoAxis; }
     public void setActiveAxis(GizmoAxis axis) {
         this.activeGizmoAxis = axis;
-        if (axis == GizmoAxis.NONE) anchorFrozen = false;
+        if (axis == GizmoAxis.NONE) {
+            anchorFrozen = false;
+            boneDragEntity = null;
+        }
+    }
+
+    // Bone drag in flight: the posed entity and bone, and the bone's local pose at drag start (undo + change detection)
+    private Entity boneDragEntity = null;
+    private int boneDragIndex = -1;
+    private final float[] boneDragStartLocal = new float[16];
+    private boolean boneDragStartActive = false;
+    private final float[] boneDragLocal = new float[16];
+    private final float[] boneMatrixScratch = new float[16];
+
+    /** True while a gizmo drag is posing a skeleton bone rather than moving an entity. */
+    public boolean isBoneDragActive() { return boneDragEntity != null && activeGizmoAxis != GizmoAxis.NONE; }
+
+    /** Where the gizmo is drawn: the selected bone's joint while bone editing, else {@link #getGizmoAnchor(Entity, SceneWorld)}. */
+    public float[] getGizmoAnchor(EditorWorkspace manager) {
+        Entity selected = manager.getSelectedEntity();
+        if (manager.isBoneEditActive()) {
+            float[] joint = jointWorldPosition(selected, manager.getSelectedBoneIndex(), manager.getSceneManager());
+            if (joint != null) return joint;
+        }
+        return getGizmoAnchor(selected, manager.getSceneManager());
+    }
+
+    private float[] jointWorldPosition(Entity entity, int boneIndex, SceneWorld sceneManager) {
+        if (!GizmoMath.computeBoneWorldMatrix(entity, boneIndex, sceneManager, boneMatrixScratch)) return null;
+        return new float[] { boneMatrixScratch[12], boneMatrixScratch[13], boneMatrixScratch[14] };
     }
 
     // During a rotate drag the anchor is pinned to its drag-start offset from the pivot: the world-bounds base moves as
@@ -156,6 +191,10 @@ public class GizmoState {
             Entity selected = manager.getSelectedEntity();
             GizmoAxis axis = GizmoInteractor.axisForPickId(pickId, currentGizmoMode);
             Transform tc = (selected != null) ? selected.getTransform() : null;
+            if (axis != GizmoAxis.NONE && viewportPressHeld && manager.isBoneEditActive()) {
+                startBoneDrag(selected, manager.getSelectedBoneIndex(), axis);
+                return;
+            }
             if (axis != GizmoAxis.NONE && tc != null && viewportPressHeld) {
                 SceneWorld sceneManager = manager.getSceneManager();
                 anchorFrozen = false;
@@ -173,6 +212,57 @@ public class GizmoState {
             return;
         }
         manager.selectEntity(ViewportPanel.resolvePick(pickId, manager.getSceneEntities()));
+    }
+
+    private void startBoneDrag(Entity entity, int boneIndex, GizmoAxis axis) {
+        AnimatorComponent animator = entity.getComponent(AnimatorComponent.class);
+        float[] local = (animator != null) ? animator.getLocalPose(boneIndex) : null;
+        if (local == null) return;
+        System.arraycopy(local, 0, boneDragStartLocal, 0, 16);
+        boneDragStartActive = animator.editPoseActive[boneIndex];
+        boneDragEntity = entity;
+        boneDragIndex = boneIndex;
+        anchorFrozen = false; // Rotating and scaling a bone leave its joint in place
+        this.activeGizmoAxis = axis;
+        GizmoInteractor.startBoneDrag(local);
+    }
+
+    /** Applies one mouse move to the dragged bone's edit pose and rebuilds the palette so the mesh deforms live. */
+    private boolean dragBone(double deltaX, double deltaY, double refX, double refY, EditorWorkspace manager) {
+        AnimatorComponent animator = boneDragEntity.getComponent(AnimatorComponent.class);
+        Skeleton.BoneNode bone = (animator != null && animator.skeleton != null) ? animator.skeleton.getBone(boneDragIndex) : null;
+        if (bone == null) return false;
+        SceneWorld sceneManager = manager.getSceneManager();
+        float[] joint = jointWorldPosition(boneDragEntity, boneDragIndex, sceneManager);
+        int parent = (bone.parentId >= 0 && bone.parentId < animator.skeleton.getBoneCount()) ? bone.parentId : -1;
+        if (joint == null || !GizmoMath.computeBoneWorldMatrix(boneDragEntity, parent, sceneManager, boneMatrixScratch)) return false;
+        if (bone.hasPreTransform) {
+            // The bone's local is posed in its parent frame times the folded non-bone nodes above it
+            float[] parentWorld = boneMatrixScratch.clone();
+            AnimationSystem.multiply4x4(parentWorld, bone.preTransform, boneMatrixScratch);
+        }
+
+        return GizmoInteractor.applyBoneDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, animator,
+                boneDragIndex, boneMatrixScratch, joint[0], joint[1], joint[2], manager.getCameraController(),
+                camPanX, camPanY, camZoom, camPitch, camYaw, sceneManager, boneDragLocal);
+    }
+
+    /**
+     * Left-button release ending a bone drag: an actual change becomes one undoable pose edit, and the bone's new pose
+     * is keyed into the animator's recorded pose.
+     */
+    public void finishBoneDrag(EditorWorkspace manager) {
+        Entity entity = boneDragEntity;
+        int boneIndex = boneDragIndex;
+        setActiveAxis(GizmoAxis.NONE);
+        AnimatorComponent animator = (entity != null) ? entity.getComponent(AnimatorComponent.class) : null;
+        float[] local = (animator != null) ? animator.getLocalPose(boneIndex) : null;
+        if (local == null) return;
+        if (Arrays.equals(local, boneDragStartLocal) && animator.editPoseActive[boneIndex] == boneDragStartActive) return;
+
+        manager.getCommandHistory().executeCommand(new EditorCommands.BonePoseCommand(manager.getSceneManager(), animator, boneIndex,
+                boneDragStartLocal.clone(), boneDragStartActive, local.clone(), animator.editPoseActive[boneIndex]));
+        manager.recordBoneKeyframe(entity, boneIndex);
     }
 
     /** Left-button release anywhere: a gizmo pick still in flight resolves without starting a drag. */
@@ -206,6 +296,9 @@ public class GizmoState {
             this.lastOrbitTime = System.currentTimeMillis();
         }
 
+        if (isBoneDragActive()) {
+            return dragBone(deltaX, deltaY, refX, refY, manager);
+        }
         if (activeGizmoAxis != GizmoAxis.NONE && manager.getSelectedEntity() != null) {
             float[] anchor = getGizmoAnchor(manager.getSelectedEntity(), manager.getSceneManager());
             return GizmoInteractor.handleGizmoDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, manager.getSelectedEntity(), anchor[0], anchor[1], anchor[2], manager.getCameraController(), camPanX, camPanY, camZoom, camPitch, camYaw);

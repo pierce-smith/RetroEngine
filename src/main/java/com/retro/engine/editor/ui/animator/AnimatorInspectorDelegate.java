@@ -9,6 +9,7 @@ import com.retro.engine.animation.state.BlendTree;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.theme.EditorTheme;
+import com.retro.engine.scene.components.media.AnimatorComponent;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -20,7 +21,9 @@ import java.util.List;
  * and a draggable playhead synced to the controller's playback time.
  *
  * The playhead seeks the controller when the inspected state is the one currently playing;
- * for any other state it scrubs a local preview time that only drives this view.
+ * for any other state it scrubs a local preview time that only drives this view. On the selected animator's
+ * recorded clip (while EDITING) it is the record playhead instead: it sets the time 'K' / drag-release keys land
+ * at, and the timeline runs past the last key so new keys can be placed later in time.
  */
 public class AnimatorInspectorDelegate {
 
@@ -38,6 +41,9 @@ public class AnimatorInspectorDelegate {
     private static final float LABEL_X1 = 0.705f;
     private static final float TL_X0 = 0.718f, TL_X1 = 0.972f;
     private static final float DIAMOND_H = 0.010f;
+
+    // Record timeline: at least this long, and this far past the last key
+    private static final float RECORD_MIN_LENGTH = 2.0f, RECORD_TAIL = 1.0f;
 
     private static final float MIN_TICK_GAP = 0.010f;
     private static final float MIN_LABEL_GAP = 0.07f;
@@ -104,13 +110,23 @@ public class AnimatorInspectorDelegate {
         return (fps > 0.0f && fps <= 240.0f) ? fps : 30.0f;
     }
 
+    /** True when the dope sheet shows {@code clip} as {@code recorder}'s record timeline. */
+    private static boolean isRecording(AnimationClip clip, AnimatorComponent recorder) {
+        return recorder != null && clip != null && clip == recorder.recordedPose;
+    }
+
+    private static float recordTimelineLength(AnimationClip clip, AnimatorComponent recorder) {
+        return Math.max(Math.max(RECORD_MIN_LENGTH, clip.durationSeconds + RECORD_TAIL), recorder.recordTime);
+    }
+
     private static float timeToX(float t, float duration) {
         return TL_X0 + (t / duration) * (TL_X1 - TL_X0);
     }
 
     // --- Rendering ---
 
-    public static void renderInspectorSidebar(UIGeometryBatch.Buffer buffer, AnimatorController controller, String selectedStateName, AnimatorTransition transition) {
+    public static void renderInspectorSidebar(UIGeometryBatch.Buffer buffer, AnimatorController controller, String selectedStateName,
+                                              AnimatorTransition transition, AnimatorComponent recorder) {
         UIGeometryBatch.addQuad(buffer, PANEL_X0, PANEL_Y0, PANEL_X1, PANEL_Y1, EditorTheme.SURFACE, 1.0f);
 
         AnimatorState state = resolveInspectedState(controller, selectedStateName);
@@ -119,7 +135,7 @@ public class AnimatorInspectorDelegate {
             centeredTextIn(buffer, "SELECT A STATE NODE IN THE GRAPH", PANEL_X0, PANEL_X1, 0.24f, 0.72f, EditorTheme.TEXT_DISABLED);
         } else {
             renderStateDetails(buffer, controller, state);
-            renderDopeSheet(buffer, controller, state);
+            renderDopeSheet(buffer, controller, state, recorder);
         }
 
         // Header
@@ -230,7 +246,7 @@ public class AnimatorInspectorDelegate {
         UIGeometryBatch.addBoundedText(buffer, title, CX0 + 0.008f, textTop(mid, 0.75f), CX1 - 0.008f, 0.75f, EditorTheme.TEXT, 1.0f);
     }
 
-    private static void renderDopeSheet(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorState state) {
+    private static void renderDopeSheet(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorState state, AnimatorComponent recorder) {
         AnimationClip clip = displayClip(state, controller);
         float headerMid = (DOPE_HEADER_Y0 + DOPE_TOP) * 0.5f;
 
@@ -243,20 +259,22 @@ public class AnimatorInspectorDelegate {
             return;
         }
 
-        float duration = clip.durationSeconds;
+        boolean recording = isRecording(clip, recorder);
+        float duration = recording ? recordTimelineLength(clip, recorder) : clip.durationSeconds;
         float fps = frameRate(clip);
-        float playTime = Math.max(0.0f, Math.min(duration, playheadTime(state, clip, controller)));
-        boolean live = isLive(state, controller);
+        float playTime = Math.max(0.0f, Math.min(duration, recording ? recorder.recordTime : playheadTime(state, clip, controller)));
+        boolean live = recording || isLive(state, controller);
 
-        // Header readout: [PREVIEW]  0.45 / 2.00s
+        // Header readout: [PREVIEW | REC]  0.45 / 2.00s (record mode shows the recorded clip's length)
         textScratch.setLength(0);
         AnimatorParametersDelegate.appendFixed2(textScratch, playTime);
         textScratch.append(" / ");
-        AnimatorParametersDelegate.appendFixed2(textScratch, duration);
+        AnimatorParametersDelegate.appendFixed2(textScratch, clip.durationSeconds);
         textScratch.append('s');
         float readoutX0 = CX1 - 0.008f - UIGeometryBatch.textWidth(buffer, textScratch, 0.68f);
         UIGeometryBatch.addBoundedText(buffer, textScratch, readoutX0, textTop(headerMid, 0.68f), CX1, 0.68f, live ? EditorTheme.TEXT : EditorTheme.TEXT_MUTED, 1.0f);
-        if (!live) statusPill(buffer, "PREVIEW", readoutX0 - 0.008f, headerMid, EditorTheme.GRAPHITE);
+        if (recording) statusPill(buffer, "REC", readoutX0 - 0.008f, headerMid, EditorTheme.PLAYHEAD);
+        else if (!live) statusPill(buffer, "PREVIEW", readoutX0 - 0.008f, headerMid, EditorTheme.GRAPHITE);
 
         // Track area backgrounds
         UIGeometryBatch.addQuad(buffer, TL_X0 - 0.008f, TRACK_BOTTOM, CX1, TRACK_TOP, EditorTheme.SURFACE_SUNKEN, 1.0f);
@@ -473,6 +491,16 @@ public class AnimatorInspectorDelegate {
         AnimatorState state = resolveInspectedState(controller, manager.getSelectedStateName());
         AnimationClip clip = displayClip(state, controller);
         if (clip == null || clip.durationSeconds <= 0.0f) return false;
+
+        AnimatorComponent recorder = manager.getRecordingAnimator();
+        if (isRecording(clip, recorder)) {
+            // Record playhead: frame-snapped time where the next keys land
+            float length = recordTimelineLength(clip, recorder);
+            float t = Math.max(0.0f, Math.min(length, (ndcX - TL_X0) / (TL_X1 - TL_X0) * length));
+            float fps = frameRate(clip);
+            manager.setRecordTime(Math.round(t * fps) / fps);
+            return true;
+        }
 
         float duration = clip.durationSeconds;
         float t = (ndcX - TL_X0) / (TL_X1 - TL_X0) * duration;

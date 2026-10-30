@@ -32,6 +32,9 @@ public class HotkeyRouter {
     private boolean dDownLastFrame = false;
     private boolean deleteKeyPressedLastFrame = false;
     private boolean graveKeyPressedLastFrame = false;
+    private boolean kKeyPressedLastFrame = false;
+    private boolean commaPressedLastFrame = false;
+    private boolean periodPressedLastFrame = false;
 
     public void processInput(WindowHost window, EditorWorkspace editorManager, ViewportCamera cameraController, float deltaTime) {
         if (window == null || editorManager == null) return;
@@ -93,6 +96,23 @@ public class HotkeyRouter {
         }
 
         if (window.isKeyDown(GLFW_KEY_F) && cameraController != null) cameraController.reset();
+
+        // K: key the selected bone's current pose into its animator's recorded-pose track buffer
+        boolean isK = window.isKeyDown(GLFW_KEY_K);
+        if (isK && !kKeyPressedLastFrame && !isCtrlDown && editorManager.isBoneEditActive()) {
+            if (editorManager.recordSelectedBoneKeyframe()) UISoundPlayer.play(UISound.TOGGLE);
+        }
+        kKeyPressedLastFrame = isK;
+
+        // , / . : step the record playhead one frame back / forward (keys land there; keyed bones follow the clip)
+        boolean isComma = window.isKeyDown(GLFW_KEY_COMMA);
+        boolean isPeriod = window.isKeyDown(GLFW_KEY_PERIOD);
+        if (!isCtrlDown && editorManager.getRecordingAnimator() != null) {
+            if (isComma && !commaPressedLastFrame) editorManager.stepRecordFrame(-1);
+            if (isPeriod && !periodPressedLastFrame) editorManager.stepRecordFrame(1);
+        }
+        commaPressedLastFrame = isComma;
+        periodPressedLastFrame = isPeriod;
 
         // Cmd+Z / Ctrl+Z: Undo | Cmd+Shift+Z / Ctrl+Shift+Z: Redo
         if (undoChord) {

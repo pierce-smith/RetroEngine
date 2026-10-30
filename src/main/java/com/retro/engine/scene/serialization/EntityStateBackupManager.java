@@ -616,6 +616,7 @@ public class EntityStateBackupManager {
                 cloneAnim.playbackTime = origAnim.playbackTime;
                 cloneAnim.playbackSpeed = origAnim.playbackSpeed;
                 cloneAnim.isPlaying = origAnim.isPlaying;
+                cloneAnim.copyEditPoseFrom(origAnim);
                 cloned.addComponent(cloneAnim);
             }
 

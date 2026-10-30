@@ -70,6 +70,7 @@ final class ComponentBinaryCodec {
     void collectStrings(Entity entity, StringTable table) {
         table.add(entity.name);
         for (Component comp : entity.getAllComponents()) {
+            comp.onBeforeSerialize();
             for (ComponentSchema.Property p : ComponentSchema.of(comp.getClass()).serializedProperties()) {
                 if (!p.isPersistedIn(prefab, version)) continue;
                 if (p.kind == ComponentSchema.ValueKind.ASSET_PATH) {
@@ -118,6 +119,11 @@ final class ComponentBinaryCodec {
                     dos.writeUTF(entry.getValue() != null ? entry.getValue() : "");
                 }
             }
+            case BYTES -> {
+                byte[] bytes = (value != null) ? (byte[]) value : new byte[0];
+                dos.writeInt(bytes.length);
+                dos.write(bytes);
+            }
             case UNSUPPORTED -> throw new IllegalStateException("Unsupported field " + p.name());
         }
     }
@@ -138,7 +144,8 @@ final class ComponentBinaryCodec {
         int compCount = dis.readInt();
         for (int j = 0; j < compCount; j++) {
             ComponentSchema schema = ComponentSchema.forSerializedName(dis.readUTF());
-            if (schema == null || !schema.isPersistent()) continue;
+            // Files older than a component's first persisted field wrote it without payload: rebuild it as runtime-only
+            if (schema == null || !schema.isPersistent() || !schema.hasPropertiesPersistedIn(prefab, version)) continue;
 
             Component comp = findUnpopulated(entity, schema.type(), populated);
             boolean created = comp == null;
@@ -190,6 +197,13 @@ final class ComponentBinaryCodec {
                     }
                     int count = dis.readInt();
                     for (int k = 0; k < count; k++) map.put(dis.readUTF(), dis.readUTF());
+                }
+                case BYTES -> {
+                    int length = dis.readInt();
+                    if (length < 0) throw new IOException("Corrupt byte field " + p.name());
+                    byte[] bytes = new byte[length];
+                    dis.readFully(bytes);
+                    p.set(comp, bytes);
                 }
                 case UNSUPPORTED -> throw new IllegalStateException("Unsupported field " + p.name());
             }

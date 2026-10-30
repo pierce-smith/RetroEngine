@@ -2,6 +2,7 @@ package com.retro.engine.assets.importers;
 
 import com.retro.engine.core.EngineContext;
 
+import com.retro.engine.animation.skeleton.Skeleton;
 import com.retro.engine.scene.components.media.AnimatorComponent;
 import org.lwjgl.assimp.*;
 
@@ -9,18 +10,17 @@ import java.io.File;
 import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import static org.lwjgl.assimp.Assimp.*;
 
 /**
  * High-performance Assimp model importer enforcing:
  * 1. 22-float vertex stride: [PX, PY, PZ, NX, NY, NZ, R, G, B, A, U1, V1, U2, V2, TX, TY, TZ, BX, BY, BZ, LM_SCALE, LM_BIAS],
- *    extended to a 30-float skinned stride with [BONE_IDX_0..3, BONE_WT_0..3] when the scene contains bones and animations.
- *    Bone indices follow SkeletonImporter's first-seen bone order so they address AnimatorComponent palettes directly.
- *    Rigged scenes without animation clips are baked as static 22-float geometry in bind pose.
+ *    extended to a 30-float skinned stride with [BONE_IDX_0..3, BONE_WT_0..3] when the scene contains bones.
+ *    Bone indices are the skeleton indices of SkeletonImporter.buildSkeleton, so they address AnimatorComponent palettes
+ *    directly; meshes without skin weights are rigidly bound to their nearest bone ancestor. Skinned vertices are
+ *    baked in bind pose, so a rig with or without clips draws where the static path would put it.
  * 2. Static geometry walks the AINode hierarchy and bakes each sub-mesh's global node matrix into positions,
  *    normals, and tangent frames, so multi-part vehicles and props assemble correctly.
  * 3. Vertices are read straight from Assimp's native buffers into primitive float arrays; the full-resolution
@@ -51,12 +51,9 @@ public class MeshImporter {
         AIScene scene = null;
         try {
             scene = aiImportFile(filePath,
-                    aiProcess_Triangulate |
-                    aiProcess_SortByPType |
+                    SkeletonImporter.STRUCTURE_FLAGS |
                     aiProcess_GenSmoothNormals |
                     aiProcess_CalcTangentSpace |
-                    aiProcess_JoinIdenticalVertices |
-                    aiProcess_LimitBoneWeights |
                     aiProcess_FlipUVs);
 
             if (scene == null) {
@@ -70,24 +67,37 @@ public class MeshImporter {
                         break;
                     }
                 }
-                // Without animation clips the bone palette never leaves identity, so a skinned buffer would draw
-                // every part in its own mesh-local space. Bake those rigs as static geometry in bind pose instead.
-                boolean skinned = hasBones && scene.mNumAnimations() > 0;
-                Map<String, Integer> boneNameToIndex = new HashMap<>();
+                // Rigs without clips are skinned too, so editor pose edits and recorded keys deform them
+                boolean skinned = hasBones;
+                Skeleton skeleton = null;
 
                 List<MeshInstance> instances = new ArrayList<>();
                 if (skinned) {
-                    // Skinned vertices stay in mesh space; the bone palette carries each part's placement. Meshes are
-                    // walked in scene order so bone indices match SkeletonImporter.
+                    // Skinned vertices are baked into their bind-pose model-space positions (as the static path would
+                    // place them) and the skeleton's offsets are inverse bind worlds, so the bind palette is identity.
+                    // Bone IDs are the indices of the skeleton SkeletonImporter builds from the same scene structure.
+                    skeleton = SkeletonImporter.buildSkeleton(scene, file.getName());
+                    float[][] bindWorld = skeleton.computeBindWorlds();
+                    RigidBinding[] rigid = bindBonelessMeshes(scene, skeleton, file.getName());
                     for (int i = 0; i < numMeshes; i++) {
-                        MeshInstance inst = new MeshInstance(AIMesh.create(scene.mMeshes().get(i)), null);
+                        RigidBinding binding = rigid[i];
+                        AIMesh mesh = AIMesh.create(scene.mMeshes().get(i));
+                        float[] matrix = (binding != null) ? binding.matrix : bindPoseMatrix(mesh, skeleton, bindWorld);
+                        MeshInstance inst = new MeshInstance(mesh, matrix);
                         inst.boneIds = new int[inst.numVertices * MeshBufferData.MAX_BONE_INFLUENCES];
                         inst.boneWeights = new float[inst.numVertices * MeshBufferData.MAX_BONE_INFLUENCES];
-                        gatherBoneInfluences(inst.mesh, boneNameToIndex, inst.boneIds, inst.boneWeights);
+                        if (binding == null) {
+                            gatherBoneInfluences(inst.mesh, skeleton, inst.boneIds, inst.boneWeights);
+                        } else if (binding.boneIndex >= 0) {
+                            for (int v = 0; v < inst.numVertices; v++) {
+                                inst.boneIds[v * MeshBufferData.MAX_BONE_INFLUENCES] = binding.boneIndex;
+                                inst.boneWeights[v * MeshBufferData.MAX_BONE_INFLUENCES] = 1.0f;
+                            }
+                        }
                         instances.add(inst);
                     }
                 } else if (scene.mRootNode() != null) {
-                    float unitScale = fbxUnitScaleToMeters(scene, file.getName());
+                    float unitScale = SkeletonImporter.fbxUnitScaleToMeters(scene, file.getName());
                     float[] root = identityMatrix();
                     root[0] = root[5] = root[10] = unitScale;
                     collectNodeInstances(scene, scene.mRootNode(), root, instances);
@@ -103,7 +113,7 @@ public class MeshImporter {
                 if (data != null) {
                     System.out.println("[MeshImporter] Successfully loaded 3D mesh " + file.getName() + " with " + data.vertexCount
                             + " vertices from " + instances.size() + " sub-meshes (" + source.stride + "-float stride"
-                            + (skinned ? ", " + boneNameToIndex.size() + " bones" : hasBones ? ", static bind pose" : "") + ").");
+                            + (skinned ? ", " + skeleton.getBoneCount() + " bones" : "") + ").");
                     return data;
                 }
             }
@@ -141,26 +151,6 @@ public class MeshImporter {
         for (int i = 0; i < numChildren && node.mChildren() != null; i++) {
             collectNodeInstances(scene, AINode.create(node.mChildren().get(i)), global, out);
         }
-    }
-
-    /**
-     * FBX scenes are usually authored in centimeters (UnitScaleFactor 1) with a compensating 100x node scale. Baking
-     * node matrices pulls that scale into the vertices, so convert FBX units to meters. Other formats are unitless.
-     */
-    private static float fbxUnitScaleToMeters(AIScene scene, String fileName) {
-        if (!fileName.toLowerCase().endsWith(".fbx")) return 1.0f;
-        AIMetaData meta = scene.mMetaData();
-        if (meta == null) return 1.0f;
-        for (int i = 0; i < meta.mNumProperties(); i++) {
-            if (!"UnitScaleFactor".equals(meta.mKeys().get(i).dataString())) continue;
-            AIMetaDataEntry entry = meta.mValues().get(i);
-            double unit;
-            if (entry.mType() == AI_FLOAT) unit = entry.mData(4).getFloat(0);
-            else if (entry.mType() == AI_DOUBLE) unit = entry.mData(8).getDouble(0);
-            else return 1.0f;
-            return unit > 0.0 && Double.isFinite(unit) ? (float) (unit / 100.0) : 1.0f;
-        }
-        return 1.0f;
     }
 
     private static float[] identityMatrix() {
@@ -389,20 +379,20 @@ public class MeshImporter {
 
     /**
      * Collects the strongest MAX_BONE_INFLUENCES (bone, weight) pairs per vertex and renormalizes them to sum to 1.
-     * Bone indices are assigned in first-seen order across meshes, matching SkeletonImporter's skeleton layout.
+     * Bone IDs are the bone's index in {@code skeleton}; influences on bones past the GPU palette are dropped.
      */
-    private static void gatherBoneInfluences(AIMesh mesh, Map<String, Integer> boneNameToIndex, int[] boneIds, float[] boneWeights) {
+    private static void gatherBoneInfluences(AIMesh mesh, Skeleton skeleton, int[] boneIds, float[] boneWeights) {
         final int maxInf = MeshBufferData.MAX_BONE_INFLUENCES;
         int numVertices = mesh.mNumVertices();
         int numBones = mesh.mNumBones();
+        boolean dropped = false;
 
         for (int b = 0; b < numBones; b++) {
             AIBone bone = AIBone.create(mesh.mBones().get(b));
-            String boneName = bone.mName().dataString();
-            Integer boneIndex = boneNameToIndex.get(boneName);
-            if (boneIndex == null) {
-                boneIndex = boneNameToIndex.size();
-                boneNameToIndex.put(boneName, boneIndex);
+            int boneIndex = skeleton.getBoneIndex(bone.mName().dataString());
+            if (boneIndex < 0 || boneIndex >= AnimatorComponent.MAX_BONES) {
+                dropped |= bone.mNumWeights() > 0;
+                continue;
             }
 
             AIVertexWeight.Buffer weights = bone.mWeights();
@@ -426,26 +416,98 @@ public class MeshImporter {
             }
         }
 
-        if (boneNameToIndex.size() > AnimatorComponent.MAX_BONES) {
-            System.err.println("[MeshImporter] Skeleton has " + boneNameToIndex.size() + " bones; only the first "
+        if (dropped) {
+            System.err.println("[MeshImporter] Skeleton has " + skeleton.getBoneCount() + " bones; only the first "
                     + AnimatorComponent.MAX_BONES + " fit the GPU palette. Out-of-range influences are dropped.");
         }
 
         for (int v = 0; v < numVertices; v++) {
             int base = v * maxInf;
             float total = 0.0f;
-            for (int s = base; s < base + maxInf; s++) {
-                if (boneIds[s] >= AnimatorComponent.MAX_BONES) {
-                    boneIds[s] = 0;
-                    boneWeights[s] = 0.0f;
-                }
-                total += boneWeights[s];
-            }
+            for (int s = base; s < base + maxInf; s++) total += boneWeights[s];
             if (total > 0.0f) {
                 float inv = 1.0f / total;
                 for (int s = base; s < base + maxInf; s++) boneWeights[s] *= inv;
             }
         }
+    }
+
+    /**
+     * The row-major matrix that bakes a skinned mesh's vertices into bind-pose model space: the palette Assimp's data
+     * gives its first bone at bind, bind world * that mesh's own offset for the bone. Assimp stores offsets per mesh
+     * (inverse bone bind * the mesh's node), so this also places each mesh by its own node, not the first mesh's.
+     */
+    private static float[] bindPoseMatrix(AIMesh mesh, Skeleton skeleton, float[][] bindWorld) {
+        for (int b = 0; b < mesh.mNumBones(); b++) {
+            AIBone bone = AIBone.create(mesh.mBones().get(b));
+            int index = skeleton.getBoneIndex(bone.mName().dataString());
+            if (index < 0) continue;
+            float[] bind = new float[16];
+            Skeleton.multiply(bindWorld[index], SkeletonImporter.convertMatrix(bone.mOffsetMatrix()), bind);
+            return transpose(bind);
+        }
+        return null;
+    }
+
+    /** How a mesh without skin weights is placed in a skinned buffer: a baked matrix plus an optional rigid bone. */
+    private record RigidBinding(float[] matrix, int boneIndex) {}
+
+    /**
+     * A mesh without skin weights (a prop parented under a hand bone, or a static part beside the rig) is baked at its
+     * node's bind-pose placement and rigidly bound (weight 1) to its nearest bone ancestor, so it follows that bone;
+     * with no bone ancestor it stays put. The bind palette is identity, so no inverse is needed.
+     * Returns one entry per scene mesh, null for meshes that carry skin weights.
+     */
+    private static RigidBinding[] bindBonelessMeshes(AIScene scene, Skeleton skeleton, String fileName) {
+        int numMeshes = scene.mNumMeshes();
+        RigidBinding[] out = new RigidBinding[numMeshes];
+        boolean any = false;
+        for (int i = 0; i < numMeshes; i++) any |= AIMesh.create(scene.mMeshes().get(i)).mNumBones() == 0;
+        if (!any || scene.mRootNode() == null) return out;
+
+        // The root's transform (and the FBX unit scale) is the starting placement, as for the skeleton's top-level bones
+        AINode root = scene.mRootNode();
+        bindNodeMeshes(scene, root, SkeletonImporter.sceneRootTransform(scene, fileName), -1, skeleton, out, true);
+        return out;
+    }
+
+    /**
+     * {@code parentGlobal} is the node's parent placement (column-major; for the root, the root's own placement);
+     * the first node referencing a mesh wins.
+     */
+    private static void bindNodeMeshes(AIScene scene, AINode node, float[] parentGlobal, int boneAncestor, Skeleton skeleton,
+                                       RigidBinding[] out, boolean isRoot) {
+        float[] global = parentGlobal;
+        if (!isRoot) {
+            global = new float[16];
+            Skeleton.multiply(parentGlobal, SkeletonImporter.convertMatrix(node.mTransformation()), global);
+        }
+        int boneIndex = skeleton.getBoneIndex(node.mName().dataString());
+        if (boneIndex >= 0) boneAncestor = boneIndex;
+
+        IntBuffer meshIndices = node.mMeshes();
+        for (int i = 0; i < node.mNumMeshes() && meshIndices != null; i++) {
+            int meshIndex = meshIndices.get(i);
+            if (meshIndex < 0 || meshIndex >= out.length || out[meshIndex] != null) continue;
+            if (AIMesh.create(scene.mMeshes().get(meshIndex)).mNumBones() > 0) continue;
+
+            int rigidBone = (boneAncestor >= 0 && boneAncestor < AnimatorComponent.MAX_BONES) ? boneAncestor : -1;
+            out[meshIndex] = new RigidBinding(transpose(global), rigidBone);
+        }
+
+        int numChildren = node.mNumChildren();
+        for (int i = 0; i < numChildren && node.mChildren() != null; i++) {
+            bindNodeMeshes(scene, AINode.create(node.mChildren().get(i)), global, boneAncestor, skeleton, out, false);
+        }
+    }
+
+    /** Column-major <-> row-major (MeshInstance matrices are row-major). */
+    private static float[] transpose(float[] m) {
+        float[] t = new float[16];
+        for (int row = 0; row < 4; row++) {
+            for (int col = 0; col < 4; col++) t[row * 4 + col] = m[col * 4 + row];
+        }
+        return t;
     }
 
     public static File resolveModelFile(String filePath) {

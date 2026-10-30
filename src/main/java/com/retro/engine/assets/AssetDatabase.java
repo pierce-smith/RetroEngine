@@ -653,6 +653,7 @@ public class AssetDatabase {
             case "rscene", "scene" -> AssetType.SCENE;
             case "java" -> AssetType.SCRIPT;
             case "rmat" -> AssetType.MATERIAL;
+            case "ranim" -> AssetType.ANIMATION;
             default -> AssetType.UNKNOWN;
         };
     }

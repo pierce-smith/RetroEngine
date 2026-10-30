@@ -14,6 +14,9 @@ import java.lang.annotation.Target;
 public interface Component {
     String getComponentName();
 
+    /** Called before a serializer reads this component's persisted fields, so derived state can be encoded into them. */
+    default void onBeforeSerialize() {}
+
     /** Called after a deserializer has populated this component's fields and attached it to its owner. */
     default void onDeserialized(Entity owner) {}
 

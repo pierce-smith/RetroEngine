@@ -52,7 +52,7 @@ public final class ComponentSchema {
     public enum Control { ASSET, TOGGLE, CHOICE, NUMBER, STRING, READ_ONLY }
 
     /** Binary encoding of a persisted property. */
-    public enum ValueKind { FLOAT, INT, BOOLEAN, ENUM, ASSET_PATH, STRING, STRING_MAP, UNSUPPORTED }
+    public enum ValueKind { FLOAT, INT, BOOLEAN, ENUM, ASSET_PATH, STRING, STRING_MAP, BYTES, UNSUPPORTED }
 
     public static final class Property {
         public final Field field;
@@ -167,6 +167,14 @@ public final class ComponentSchema {
     /** Components without persisted properties are runtime-only and are rebuilt by systems rather than loaded. */
     public boolean isPersistent() { return !serializedProperties.isEmpty() && constructor != null; }
 
+    /** True when some property is part of the binary layout for this format profile and version. */
+    public boolean hasPropertiesPersistedIn(boolean prefab, int version) {
+        for (Property p : serializedProperties) {
+            if (p.isPersistedIn(prefab, version)) return true;
+        }
+        return false;
+    }
+
     public Component newInstance() {
         try {
             return (Component) constructor.newInstance();
@@ -208,6 +216,7 @@ public final class ComponentSchema {
         if (t.isEnum()) return ValueKind.ENUM;
         if (t == String.class) return meta.type() == PropertyType.ASSET_PICKER ? ValueKind.ASSET_PATH : ValueKind.STRING;
         if (Map.class.isAssignableFrom(t)) return ValueKind.STRING_MAP;
+        if (t == byte[].class) return ValueKind.BYTES;
         return ValueKind.UNSUPPORTED;
     }
 }

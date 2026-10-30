@@ -22,12 +22,28 @@ public class Skeleton {
         // Inverse bind pose matrix (Offset matrix) bringing mesh space vertices into bone local space
         public final float[] offsetMatrix = new float[16];
 
+        // Static transform of the non-bone scene nodes between the parent bone (or the scene root) and this bone, e.g.
+        // FBX pivot helpers or an armature node: world = parentWorld * preTransform * local. Identity for most rigs.
+        public final float[] preTransform = new float[16];
+        public boolean hasPreTransform = false;
+
         public BoneNode(int id, String name, int parentId) {
             this.id = id;
             this.name = name;
             this.parentId = parentId;
             setIdentity(this.localBindTransform);
             setIdentity(this.offsetMatrix);
+            setIdentity(this.preTransform);
+        }
+
+        /** Sets {@link #preTransform}; an identity matrix keeps the hierarchy fast path. */
+        public void setPreTransform(float[] m) {
+            boolean identity = true;
+            for (int i = 0; i < 16; i++) {
+                if (Math.abs(m[i] - ((i % 5 == 0) ? 1.0f : 0.0f)) > 1e-6f) identity = false;
+            }
+            if (identity) setIdentity(preTransform); else System.arraycopy(m, 0, preTransform, 0, 16);
+            hasPreTransform = !identity;
         }
 
         private static void setIdentity(float[] m) {
@@ -75,6 +91,161 @@ public class Skeleton {
 
     public List<BoneNode> getBones() {
         return bones;
+    }
+
+    /**
+     * Bind-pose skinning palette for every bone (boneWorld * offset, column-major). Unlike the runtime palette this
+     * covers bones past the GPU's 64-bone limit.
+     */
+    public float[][] computeBindPalette() {
+        float[][] world = computeBindWorlds();
+        float[][] palette = new float[world.length][16];
+        for (int i = 0; i < world.length; i++) multiply(world[i], bones.get(i).offsetMatrix, palette[i]);
+        return palette;
+    }
+
+    /** Every bone's bind-pose world transform (parent world * preTransform * local bind), evaluated parent-first. */
+    public float[][] computeBindWorlds() {
+        int n = bones.size();
+        float[][] world = new float[n][16];
+        float[] local = new float[16];
+        for (int i : getEvaluationOrder()) {
+            BoneNode bone = bones.get(i);
+            float[] l = bone.localBindTransform;
+            if (bone.hasPreTransform) {
+                multiply(bone.preTransform, bone.localBindTransform, local);
+                l = local;
+            }
+            int parent = getEvaluationParent(i);
+            if (parent >= 0) multiply(world[parent], l, world[i]); else System.arraycopy(l, 0, world[i], 0, 16);
+        }
+        return world;
+    }
+
+    // Parent-first evaluation order, rebuilt whenever a bone is added or re-parented (parentId is a public field)
+    private int[] evalOrder = new int[0];
+    private int[] evalParent = new int[0];
+    private int[] evalParentSnapshot = new int[0];
+
+    /**
+     * Bone indices ordered so every bone comes after its parent. Bone indices themselves are not parent-first (skinned
+     * bones are numbered before the animated-only nodes that may parent them), so hierarchy passes must walk this
+     * order: world[i] = world[parent] * preTransform * local[i] then sees the parent's world already updated for this
+     * frame, and an edit to an upper arm carries down the forearm, hand and fingers.
+     */
+    public int[] getEvaluationOrder() {
+        int n = bones.size();
+        boolean stale = evalParentSnapshot.length != n;
+        for (int i = 0; i < n && !stale; i++) stale = evalParentSnapshot[i] != bones.get(i).parentId;
+        if (stale) rebuildEvaluationOrder();
+        return evalOrder;
+    }
+
+    /**
+     * The parent bone used when evaluating {@code index} in {@link #getEvaluationOrder()}: its parentId, or -1 when
+     * that is out of range or part of a parent cycle (the bone is then evaluated as a root).
+     */
+    public int getEvaluationParent(int index) {
+        getEvaluationOrder();
+        return (index >= 0 && index < evalParent.length) ? evalParent[index] : -1;
+    }
+
+    private void rebuildEvaluationOrder() {
+        int n = bones.size();
+        int[] order = new int[n];
+        int[] parent = new int[n];
+        int[] snapshot = new int[n];
+        byte[] state = new byte[n]; // 0 unvisited, 1 on the current parent chain, 2 placed
+        int[] chain = new int[n];
+        int count = 0;
+        for (int i = 0; i < n; i++) snapshot[i] = bones.get(i).parentId;
+        for (int start = 0; start < n; start++) {
+            // Climb to the first placed ancestor (or a root), then place the chain top-down
+            int depth = 0;
+            int b = start;
+            while (b >= 0 && state[b] == 0) {
+                state[b] = 1;
+                chain[depth++] = b;
+                int p = snapshot[b];
+                if (p < 0 || p >= n || p == b) {
+                    parent[b] = -1;
+                    break;
+                }
+                if (state[p] == 1) {
+                    parent[b] = -1; // parent cycle: break it here
+                    break;
+                }
+                parent[b] = p;
+                b = p;
+            }
+            for (int d = depth - 1; d >= 0; d--) {
+                state[chain[d]] = 2;
+                order[count++] = chain[d];
+            }
+        }
+        evalOrder = order;
+        evalParent = parent;
+        evalParentSnapshot = snapshot;
+    }
+
+    /** Inverse of a column-major affine matrix, or null when singular. */
+    public static float[] invertAffine(float[] m) {
+        float a = m[0], b = m[4], c = m[8], d = m[1], e = m[5], f = m[9], g = m[2], h = m[6], k = m[10];
+        float A = e * k - f * h, B = f * g - d * k, C = d * h - e * g;
+        float det = a * A + b * B + c * C;
+        if (Math.abs(det) < 1e-12f) return null;
+        float inv = 1.0f / det;
+        float[] r = new float[16];
+        r[0] = A * inv;  r[4] = (c * h - b * k) * inv; r[8] = (b * f - c * e) * inv;
+        r[1] = B * inv;  r[5] = (a * k - c * g) * inv; r[9] = (c * d - a * f) * inv;
+        r[2] = C * inv;  r[6] = (b * g - a * h) * inv; r[10] = (a * e - b * d) * inv;
+        r[12] = -(r[0] * m[12] + r[4] * m[13] + r[8] * m[14]);
+        r[13] = -(r[1] * m[12] + r[5] * m[13] + r[9] * m[14]);
+        r[14] = -(r[2] * m[12] + r[6] * m[13] + r[10] * m[14]);
+        r[15] = 1.0f;
+        return r;
+    }
+
+    /** Column-major 4x4 product out = a * b ({@code out} must not alias an input). */
+    public static void multiply(float[] a, float[] b, float[] out) {
+        for (int col = 0; col < 4; col++) {
+            for (int row = 0; row < 4; row++) {
+                out[col * 4 + row] = a[row] * b[col * 4] + a[4 + row] * b[col * 4 + 1] + a[8 + row] * b[col * 4 + 2] + a[12 + row] * b[col * 4 + 3];
+            }
+        }
+    }
+
+    /**
+     * Writes bone {@code boneIndex}'s full model-space transform (column-major 4x4) under a skinning palette into
+     * {@code out}: palette * offset^-1, since palette entries are boneWorld * offset. Returns false (out untouched) for
+     * an unknown bone or a singular offset matrix.
+     */
+    public boolean computeBoneModelTransform(int boneIndex, float[][] palette, float[] out) {
+        BoneNode bone = getBone(boneIndex);
+        if (bone == null || boneIndex >= palette.length) return false;
+        float[] o = bone.offsetMatrix;
+        // Affine inverse [R | t]^-1 = [R^-1 | -R^-1 t], R^-1 = adjugate / det (column-major)
+        float a = o[0], b = o[4], c = o[8], d = o[1], e = o[5], f = o[9], g = o[2], h = o[6], k = o[10];
+        float A = e * k - f * h, B = f * g - d * k, C = d * h - e * g;
+        float det = a * A + b * B + c * C;
+        if (Math.abs(det) < 1e-12f) return false;
+        float inv = 1.0f / det;
+        float[] r = new float[16];
+        r[0] = A * inv;                 r[4] = (c * h - b * k) * inv; r[8] = (b * f - c * e) * inv;
+        r[1] = B * inv;                 r[5] = (a * k - c * g) * inv; r[9] = (c * d - a * f) * inv;
+        r[2] = C * inv;                 r[6] = (b * g - a * h) * inv; r[10] = (a * e - b * d) * inv;
+        r[12] = -(r[0] * o[12] + r[4] * o[13] + r[8] * o[14]);
+        r[13] = -(r[1] * o[12] + r[5] * o[13] + r[9] * o[14]);
+        r[14] = -(r[2] * o[12] + r[6] * o[13] + r[10] * o[14]);
+        r[15] = 1.0f;
+
+        float[] p = palette[boneIndex];
+        for (int col = 0; col < 4; col++) {
+            for (int row = 0; row < 4; row++) {
+                out[col * 4 + row] = p[row] * r[col * 4] + p[4 + row] * r[col * 4 + 1] + p[8 + row] * r[col * 4 + 2] + p[12 + row] * r[col * 4 + 3];
+            }
+        }
+        return true;
     }
 
     /**

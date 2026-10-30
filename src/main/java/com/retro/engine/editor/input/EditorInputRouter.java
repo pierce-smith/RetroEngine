@@ -213,6 +213,11 @@ public class EditorInputRouter {
                 }
             }
 
+            if (button == 0 && gizmoStateController.isBoneDragActive()) {
+                gizmoStateController.finishBoneDrag(workspace);
+                return true;
+            }
+
             if (button == 0 && gizmoStateController.getActiveAxis() != EditorWorkspace.GizmoAxis.NONE && workspace.getSelectedEntity() != null) {
                 Entity selected = workspace.getSelectedEntity();
                 Transform tc = selected.getTransform();

@@ -1,5 +1,6 @@
 package com.retro.engine.scene.entity;
 
+import com.retro.engine.animation.AnimationSystem;
 import com.retro.engine.animation.clips.AnimationClip;
 import com.retro.engine.animation.state.AnimatorController;
 import com.retro.engine.animation.state.AnimatorState;
@@ -137,6 +138,7 @@ public class EntitySpawner {
             copyAnim.controller = origAnim.controller;
             copyAnim.currentClip = origAnim.currentClip;
             copyAnim.activeClipName = origAnim.activeClipName;
+            copyAnim.copyEditPoseFrom(origAnim);
             copy.addComponent(copyAnim);
         }
 
@@ -194,7 +196,7 @@ public class EntitySpawner {
                     entity.addComponent(animator);
                 }
                 if (hasBones) {
-                    animator.skeleton = result.skeleton();
+                    animator.bindSkeleton(result.skeleton());
                 }
 
                 AnimatorController controller = animator.controller;
@@ -229,6 +231,8 @@ public class EntitySpawner {
                         animator.isPlaying = true;
                     }
                 }
+                // Recorded / exported clips and the saved entry state (scene loads restore these after the rebuild)
+                AnimationSystem.installAuthoredClips(animator);
             }
         } catch (Exception e) {
             System.err.println("[EntitySpawner] Skeletal animation check failed for " + meshPath + ": " + e.getMessage());

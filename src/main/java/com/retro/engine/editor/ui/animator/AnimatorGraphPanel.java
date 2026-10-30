@@ -4,6 +4,7 @@ import com.retro.engine.animation.state.AnimatorController;
 import com.retro.engine.animation.state.AnimatorTransition;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
+import com.retro.engine.scene.components.media.AnimatorComponent;
 
 /**
  * AnimatorGraphPanel Facade: Orchestrates rendering and event dispatching across
@@ -36,7 +37,7 @@ public class AnimatorGraphPanel {
         AnimatorParametersDelegate.renderParametersSidebar(buffer, controller);
 
         // 3. Inspector Sidebar
-        AnimatorInspectorDelegate.renderInspectorSidebar(buffer, controller, selectedStateName, selectedTransition);
+        AnimatorInspectorDelegate.renderInspectorSidebar(buffer, controller, selectedStateName, selectedTransition, null);
     }
 
     // --- Per-section entry points: each section is an independently dockable panel ---
@@ -49,8 +50,10 @@ public class AnimatorGraphPanel {
         AnimatorParametersDelegate.renderParametersSidebar(buffer, controller);
     }
 
-    public static void renderInspector(UIGeometryBatch.Buffer buffer, AnimatorController controller, String selectedStateName, AnimatorTransition selectedTransition) {
-        AnimatorInspectorDelegate.renderInspectorSidebar(buffer, controller, selectedStateName, selectedTransition);
+    /** {@code recorder}: the animator whose recorded clip the dope sheet edits as a record timeline (null when not EDITING). */
+    public static void renderInspector(UIGeometryBatch.Buffer buffer, AnimatorController controller, String selectedStateName,
+                                       AnimatorTransition selectedTransition, AnimatorComponent recorder) {
+        AnimatorInspectorDelegate.renderInspectorSidebar(buffer, controller, selectedStateName, selectedTransition, recorder);
     }
 
     public static boolean handleCanvasClick(float ndcX, float ndcY, int button, int action, EditorWorkspace manager) {

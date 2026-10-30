@@ -229,16 +229,17 @@ public class SceneWorld {
     }
 
     /**
-     * Animators are not serialized, so after a scene load rigged meshes would otherwise sit unanimated
-     * until selected in the editor. Rebuild their skeleton/controller from the mesh asset and arm the
-     * Entry State at frame 0 in the bind pose; the clip starts when Play is pressed.
+     * Skeletons and controllers are not serialized (only the authored pose data is), so after a scene load rigged
+     * meshes would otherwise sit unanimated until selected in the editor. Rebuild their skeleton/controller from the
+     * mesh asset and arm the Entry State at frame 0 in the bind pose; the clip starts when Play is pressed.
      */
     private void attachAndArmAnimators() {
         for (int i = 0; i < sceneEntities.size(); i++) {
             Entity e = sceneEntities.get(i);
             if (e == null) continue;
             String meshPath = e.getMeshAssetPath();
-            if (e.getComponent(AnimatorComponent.class) == null && meshPath != null && !meshPath.trim().isEmpty()) {
+            AnimatorComponent loaded = e.getComponent(AnimatorComponent.class);
+            if ((loaded == null || loaded.skeleton == null) && meshPath != null && !meshPath.trim().isEmpty()) {
                 EntitySpawner.attachAnimatorIfRigged(e, meshPath);
             }
             AnimatorComponent animator = e.getComponent(AnimatorComponent.class);
@@ -300,6 +301,15 @@ public class SceneWorld {
         }
 
         applyPendingSceneLoad();
+    }
+
+    /**
+     * Rebuilds an animator's bone palette from its rest pose and editor pose edits right away, so the skinned mesh
+     * deforms in the same frame a bone is edited. Only while EDITING: playing and paused palettes belong to playback.
+     */
+    public void refreshEditPose(AnimatorComponent animator) {
+        if (animator == null || getPlayState() != PlayState.EDITING) return;
+        animationEngine.resetToBindPose(animator);
     }
 
     /** Queues a scene transition; the load runs after the current frame's physics, script, and animation ticks. */

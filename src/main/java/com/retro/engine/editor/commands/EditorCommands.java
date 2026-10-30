@@ -4,8 +4,10 @@ import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.components.*;
 import com.retro.engine.scene.components.gameplay.ScriptComponent;
+import com.retro.engine.scene.components.media.AnimatorComponent;
 import com.retro.engine.scene.components.media.AudioSource;
 import com.retro.engine.scene.components.transform.Transform;
+import com.retro.engine.scene.world.SceneWorld;
 import com.retro.engine.scripting.ScriptEngine;
 
 import java.lang.reflect.Field;
@@ -135,6 +137,43 @@ public class EditorCommands {
         @Override
         public String getName() {
             return "Reparent Entity '" + (child != null ? child.name : "null") + "'";
+        }
+    }
+
+    /** Gizmo edit of one skeleton bone's local pose; undo restores the previous edit pose (or the bind pose). */
+    public static class BonePoseCommand implements ICommand {
+        private final SceneWorld sceneWorld;
+        private final AnimatorComponent animator;
+        private final int boneIndex;
+        private final float[] oldLocal, newLocal;
+        private final boolean oldActive, newActive;
+
+        public BonePoseCommand(SceneWorld sceneWorld, AnimatorComponent animator, int boneIndex,
+                               float[] oldLocal, boolean oldActive, float[] newLocal, boolean newActive) {
+            this.sceneWorld = sceneWorld;
+            this.animator = animator;
+            this.boneIndex = boneIndex;
+            this.oldLocal = oldLocal; this.oldActive = oldActive;
+            this.newLocal = newLocal; this.newActive = newActive;
+        }
+
+        @Override
+        public void execute() { apply(newLocal, newActive); }
+
+        @Override
+        public void undo() { apply(oldLocal, oldActive); }
+
+        private void apply(float[] local, boolean active) {
+            if (animator == null) return;
+            if (active) animator.setEditPose(boneIndex, local);
+            else animator.clearEditPose(boneIndex);
+            animator.bindPoseApplied = false; // Re-posed on the next EDITING tick even if the refresh below is skipped
+            if (sceneWorld != null) sceneWorld.refreshEditPose(animator);
+        }
+
+        @Override
+        public String getName() {
+            return "Pose Bone";
         }
     }
 

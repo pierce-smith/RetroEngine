@@ -1,12 +1,17 @@
 package com.retro.engine.editor;
 
+import com.retro.engine.animation.AnimationSystem;
+import com.retro.engine.animation.clips.AnimationClip;
+import com.retro.engine.animation.clips.AnimationClipIO;
 import com.retro.engine.animation.skeleton.Skeleton;
 import com.retro.engine.animation.state.AnimatorController;
 import com.retro.engine.animation.state.AnimatorState;
 import com.retro.engine.animation.state.AnimatorTransition;
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
+import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.commands.CommandStack;
+import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.editor.gizmos.ColliderDebugRenderer;
 import com.retro.engine.editor.gizmos.GizmoRenderer;
 import com.retro.engine.editor.gizmos.GizmoState;
@@ -139,7 +144,7 @@ public class EditorWorkspace {
         Entity selected = sceneManager.getSelectedEntity();
         if (selected != null) {
             AnimatorComponent animator = selected.getComponent(AnimatorComponent.class);
-            if (animator == null && selected.getMeshAssetPath() != null && !selected.getMeshAssetPath().trim().isEmpty()) {
+            if ((animator == null || animator.skeleton == null) && selected.getMeshAssetPath() != null && !selected.getMeshAssetPath().trim().isEmpty()) {
                 EntitySpawner.attachAnimatorIfRigged(selected, selected.getMeshAssetPath());
                 animator = selected.getComponent(AnimatorComponent.class);
             }
@@ -235,6 +240,121 @@ public class EditorWorkspace {
     public Skeleton.BoneNode getSelectedBone() {
         int index = getSelectedBoneIndex();
         return (index >= 0) ? skeletonOf(sceneManager.getSelectedEntity()).getBone(index) : null;
+    }
+
+    /** True when the gizmo poses the selected bone instead of moving the entity: a bone is selected and the scene is EDITING. */
+    public boolean isBoneEditActive() {
+        return sceneManager.getPlayState() == PlayState.EDITING && getSelectedBoneIndex() >= 0;
+    }
+
+    /** Keys the selected bone's current pose (the 'K' hotkey); false when no bone is selected. */
+    public boolean recordSelectedBoneKeyframe() {
+        return recordBoneKeyframe(getSelectedEntity(), getSelectedBoneIndex());
+    }
+
+    /**
+     * Records bone {@code boneIndex}'s current local position / rotation / scale (its edit pose, else its bind pose) as a
+     * keyframe at the animator's record time in its recorded-pose track buffer.
+     */
+    public boolean recordBoneKeyframe(Entity entity, int boneIndex) {
+        AnimatorComponent animator = (entity != null) ? entity.getComponent(AnimatorComponent.class) : null;
+        Skeleton.BoneNode bone = (animator != null && animator.skeleton != null) ? animator.skeleton.getBone(boneIndex) : null;
+        float[] local = (bone != null) ? animator.getLocalPose(boneIndex) : null;
+        if (local == null) return false;
+
+        float[] pos = new float[3], quat = new float[4], scale = new float[3];
+        AnimationSystem.decomposeTRS(local, pos, quat, scale);
+        animator.recordKeyframe(bone, pos, quat, scale);
+        // The recorded clip is a regular controller state, so it shows on the dope sheet and can be the Play entry
+        AnimationSystem.assignClipToState(animator.controller, animator.recordedPose);
+        EngineConsolePanel.log(EngineConsolePanel.LogLevel.INFO,
+                "[Animation] Keyed bone '" + bone.name + "' on '" + entity.name + "' at " + formatSeconds(animator.recordTime) + "s.");
+        return true;
+    }
+
+    /** The selected entity's animator once its skeleton is bound, or null. */
+    public AnimatorComponent getSelectedAnimator() {
+        Entity selected = sceneManager.getSelectedEntity();
+        AnimatorComponent animator = (selected != null) ? selected.getComponent(AnimatorComponent.class) : null;
+        return (animator != null && animator.skeleton != null) ? animator : null;
+    }
+
+    /** The animator whose record playhead the dope sheet and the , / . keys drive: the selected one, while EDITING. */
+    public AnimatorComponent getRecordingAnimator() {
+        return (sceneManager.getPlayState() == PlayState.EDITING) ? getSelectedAnimator() : null;
+    }
+
+    /**
+     * Moves the record playhead (where 'K' and drag-release keys land) and poses the keyed bones at that time, so the
+     * viewport shows the recorded motion there and new edits start from it.
+     */
+    public void setRecordTime(float seconds) {
+        AnimatorComponent animator = getRecordingAnimator();
+        if (animator == null) return;
+        animator.recordTime = Math.max(0.0f, seconds);
+        animator.applyRecordedPose(animator.recordTime);
+        sceneManager.refreshEditPose(animator);
+    }
+
+    /** Steps the record playhead by whole frames at the recorded clip's frame rate. */
+    public void stepRecordFrame(int frames) {
+        AnimatorComponent animator = getRecordingAnimator();
+        if (animator == null) return;
+        float fps = recordFrameRate(animator);
+        setRecordTime((Math.round(animator.recordTime * fps) + frames) / fps);
+    }
+
+    public static float recordFrameRate(AnimatorComponent animator) {
+        float fps = (animator != null && animator.recordedPose != null) ? animator.recordedPose.ticksPerSecond : 30.0f;
+        return (fps > 0.0f && fps <= 240.0f) ? fps : 30.0f;
+    }
+
+    /**
+     * Exports the selected animator's recorded pose to Assets/Animations/<name>.ranim (name prompted) and assigns the
+     * exported clip to a controller state of that name, so it can be wired into the graph and played.
+     */
+    public void exportRecordedClip() {
+        AnimatorComponent animator = getSelectedAnimator();
+        if (animator == null || animator.recordedPose == null || animator.recordedPose.getTracks().isEmpty()) {
+            EngineConsolePanel.log(EngineConsolePanel.LogLevel.WARN, "[Animation] Nothing recorded to export: key a bone with K first.");
+            return;
+        }
+        String input = NativeFileDialog.promptInput("Export Animation Clip", "Clip name:", "NewClip");
+        if (input == null || input.isBlank()) return;
+        String name = input.trim().replaceAll("[^A-Za-z0-9 _.-]", "_");
+        if (name.equalsIgnoreCase(AnimatorComponent.RECORDED_CLIP_NAME)) name = name + " Clip";
+
+        String assetsRoot = hasActiveProject() ? assetDirectoryManager.getProjectAssetsPath() : "Assets";
+        java.io.File file = new java.io.File(new java.io.File(assetsRoot, "Animations"), name + AnimationClipIO.EXTENSION).getAbsoluteFile();
+        if (!animator.exportRecordedClip(file.getPath())) {
+            EngineConsolePanel.log(EngineConsolePanel.LogLevel.ERROR, "[Animation] Failed to export clip to " + file.getPath());
+            return;
+        }
+        assetDirectoryManager.addAssetDirectoryIfNotExists(file.getPath(), AssetType.ANIMATION);
+        assignClipAsset(animator, file.getPath());
+        EngineConsolePanel.log(EngineConsolePanel.LogLevel.INFO, "[Animation] Exported '" + name + "' to " + file.getPath());
+    }
+
+    /** Assigns a .ranim asset to the selected animator's controller as a state (added from the graph's context menu). */
+    public void addClipAsset(AssetMeta asset) {
+        AnimatorComponent animator = getSelectedAnimator();
+        if (animator == null || asset == null || asset.absolutePath == null) return;
+        if (assignClipAsset(animator, asset.absolutePath)) {
+            EngineConsolePanel.log(EngineConsolePanel.LogLevel.INFO, "[Animation] Added clip '" + asset.name + "' to the animator.");
+        }
+    }
+
+    private boolean assignClipAsset(AnimatorComponent animator, String path) {
+        AnimationClip clip = AnimationSystem.loadClipAsset(path);
+        if (clip == null || animator.controller == null) return false;
+        if (!animator.clipAssetPaths.contains(path)) animator.clipAssetPaths.add(path);
+        AnimatorState state = AnimationSystem.assignClipToState(animator.controller, clip);
+        if (state != null) setSelectedStateName(state.name);
+        return true;
+    }
+
+    private static String formatSeconds(float seconds) {
+        return String.format(java.util.Locale.ROOT, "%.3f", seconds);
     }
 
     private static Skeleton skeletonOf(Entity entity) {
@@ -371,7 +491,7 @@ public class EditorWorkspace {
                 }
 
                 if (selected != null && overlayManager.getActiveModal() == ModalState.NONE) {
-                    float[] anchor = gizmoStateController.getGizmoAnchor(selected, sceneManager);
+                    float[] anchor = gizmoStateController.getGizmoAnchor(this);
                     GizmoSystem.render3DGizmosAtWorldPosition(
                         uiGeometryBuffer, anchor[0], anchor[1], anchor[2], gizmoStateController.getGizmoMode(),
                         gizmoStateController.getActiveAxis(), cameraController, gizmoStateController.getCamPanX(),
@@ -388,7 +508,7 @@ public class EditorWorkspace {
             case INSPECTOR -> InspectorPanel.render(uiContext, sceneManager.getSelectedEntity(), getSelectedBone(), assetDirectoryManager.getAssetDirectory());
             case ANIMATOR -> AnimatorGraphPanel.renderCanvas(uiGeometryBuffer, getActiveAnimatorController(), selectedStateName);
             case ANIMATOR_PARAMETERS -> AnimatorGraphPanel.renderParameters(uiGeometryBuffer, getActiveAnimatorController());
-            case ANIMATOR_INSPECTOR -> AnimatorGraphPanel.renderInspector(uiGeometryBuffer, getActiveAnimatorController(), selectedStateName, selectedTransition);
+            case ANIMATOR_INSPECTOR -> AnimatorGraphPanel.renderInspector(uiGeometryBuffer, getActiveAnimatorController(), selectedStateName, selectedTransition, getRecordingAnimator());
             case ASSETS -> AssetBrowserPanel.render(uiContext, assetDirectoryManager.getAssetDirectory(), assetDirectoryManager.getCurrentFolderPath(), assetDirectoryManager.getActiveProjectPath());
             case CONSOLE -> EngineConsolePanel.renderConsole(uiGeometryBuffer);
         }
