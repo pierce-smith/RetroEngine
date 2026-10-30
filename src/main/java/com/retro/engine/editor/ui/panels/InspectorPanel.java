@@ -1,5 +1,6 @@
 package com.retro.engine.editor.ui.panels;
 
+import com.retro.engine.animation.skeleton.Skeleton;
 import com.retro.engine.scene.components.ComponentSchema;
 import com.retro.engine.scene.components.ComponentSchema.Control;
 import com.retro.engine.editor.ui.panels.InspectorProperty.PropertyType;
@@ -181,7 +182,14 @@ public class InspectorPanel {
         return fields;
     }
 
+    // Entity header text; carries the Viewport-selected bone without adding rows that InspectorInputDelegate hit-tests
+    private static final StringBuilder headerSb = new StringBuilder(64);
+
     public static void render(UIContext ui, Entity selectedEntity, List<AssetMeta> assetDirectory) {
+        render(ui, selectedEntity, null, assetDirectory);
+    }
+
+    public static void render(UIContext ui, Entity selectedEntity, Skeleton.BoneNode selectedBone, List<AssetMeta> assetDirectory) {
         UIGeometryBatch.Buffer buffer = ui.geometry();
         UIGeometryBatch.addQuad(buffer, 0.55f, -0.5f, 1.0f, 1.0f, EditorTheme.SURFACE, 1.0f);
         activeWellVisible = false;
@@ -194,7 +202,11 @@ public class InspectorPanel {
         }
 
         // Entity header
-        UIGeometryBatch.addTruncatedText(buffer, selectedEntity.name, LABEL_X, 0.833f, PREFAB_X0 - 0.012f, 1.1f, EditorTheme.TEXT, 1.0f);
+        headerSb.setLength(0);
+        headerSb.append(selectedEntity.name);
+        if (selectedBone != null) headerSb.append(" / BONE ").append(selectedBone.id).append(": ").append(selectedBone.name);
+        UIGeometryBatch.addTruncatedText(buffer, headerSb, LABEL_X, 0.833f, PREFAB_X0 - 0.012f, 1.1f,
+                selectedBone != null ? EditorTheme.ACCENT : EditorTheme.TEXT, 1.0f);
         UIGeometryBatch.addRoundedCard(buffer, PREFAB_X0, PREFAB_Y0, PREFAB_X1, PREFAB_Y1, EditorTheme.RADIUS, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
         centeredTextIn(buffer, "+ PREFAB", PREFAB_X0, PREFAB_X1, (PREFAB_Y0 + PREFAB_Y1) * 0.5f, 0.8f, EditorTheme.TEXT);
         UIGeometryBatch.addQuad(buffer, LABEL_X, 0.785f, VALUE_X1, 0.785f + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);

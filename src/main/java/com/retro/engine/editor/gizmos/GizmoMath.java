@@ -55,6 +55,19 @@ public class GizmoMath {
         return new float[] { uiX, uiY };
     }
 
+    /** View-space depth of a world point along the camera's forward axis (same view as projectWorldToNdc); <= 0 is behind it. */
+    public static float viewDepth(float wx, float wy, float wz, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
+        if (cameraController != null) {
+            float[] v = VIEW_SCRATCH.get();
+            cameraController.computeViewMatrix(v);
+            return -(v[2] * wx + v[6] * wy + v[10] * wz + v[14]);
+        }
+        float radYaw = (float) Math.toRadians(camYaw), radPitch = (float) Math.toRadians(camPitch);
+        float cy = (float) Math.cos(radYaw), sy = (float) Math.sin(radYaw);
+        float cp = (float) Math.cos(radPitch), sp = (float) Math.sin(radPitch);
+        return -(sy * cp * wx - sp * wy + cy * cp * wz + camZoom);
+    }
+
     public static float[] projectWorldToNdc(float wx, float wy, float wz, EditorWorkspace manager) {
         if (manager == null) return new float[] { 0.0f, 0.0f };
         return projectWorldToNdc(wx, wy, wz, manager.getCameraController(), 0.0f, 0.25f, -5.0f, 0.0f, 0.0f);

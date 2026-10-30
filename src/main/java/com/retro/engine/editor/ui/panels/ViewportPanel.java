@@ -5,6 +5,8 @@ import com.retro.engine.editor.EditorWorkspace.WorkspaceTab;
 import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.render.SceneRenderPipeline;
 import com.retro.engine.editor.EditorWorkspace.GizmoMode;
+import com.retro.engine.editor.gizmos.GizmoInteractor;
+import com.retro.engine.editor.gizmos.GizmoRenderer;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.dock.DockPanel;
 import com.retro.engine.editor.ui.dock.DockSpace;
@@ -38,6 +40,10 @@ public class ViewportPanel {
     private static final Map<Entity, Integer> pickIds = new WeakHashMap<>();
     private static final Map<Integer, WeakReference<Entity>> pickEntities = new HashMap<>();
     private static int nextPickId = 1;
+    // Stable skeleton slots for joint pick IDs (the 16-bit overlay ID only fits GizmoRenderer.BONE_PICK_MAX_SLOTS of them)
+    private static final Map<Entity, Integer> boneSlots = new WeakHashMap<>();
+    @SuppressWarnings("unchecked")
+    private static final WeakReference<Entity>[] boneSlotEntities = new WeakReference[GizmoRenderer.BONE_PICK_MAX_SLOTS];
     private static float pendingU = -1.0f, pendingV = -1.0f;
     private static IntConsumer pendingCallback = null;
     private static int pendingFrames = 0;
@@ -159,6 +165,35 @@ public class ViewportPanel {
         WeakReference<Entity> ref = pickEntities.get(pickId);
         Entity entity = (ref != null) ? ref.get() : null;
         if (ref != null && entity == null) pickEntities.remove(pickId);
+        return (entity != null && sceneEntities != null && sceneEntities.contains(entity)) ? entity : null;
+    }
+
+    /**
+     * Stable skeleton slot for {@code entity}'s joint pick IDs, or -1 when every slot is held by an entity still in the
+     * scene. Slots of collected entities or entities no longer in {@code sceneEntities} are reclaimed.
+     */
+    public static int bonePickSlotFor(Entity entity, List<Entity> sceneEntities) {
+        if (entity == null) return -1;
+        Integer slot = boneSlots.get(entity);
+        if (slot != null) return slot;
+        for (int s = 0; s < boneSlotEntities.length; s++) {
+            WeakReference<Entity> ref = boneSlotEntities[s];
+            Entity holder = (ref != null) ? ref.get() : null;
+            if (holder != null && sceneEntities != null && sceneEntities.contains(holder)) continue;
+            if (holder != null) boneSlots.remove(holder);
+            boneSlotEntities[s] = new WeakReference<>(entity);
+            boneSlots.put(entity, s);
+            return s;
+        }
+        return -1;
+    }
+
+    /** Entity whose skeleton joint was drawn with {@code pickId}, or null for non-joint IDs or entities no longer in the scene. */
+    public static Entity resolveBonePick(int pickId, List<Entity> sceneEntities) {
+        int slot = GizmoInteractor.boneSlotForPickId(pickId);
+        if (slot < 0) return null;
+        WeakReference<Entity> ref = boneSlotEntities[slot];
+        Entity entity = (ref != null) ? ref.get() : null;
         return (entity != null && sceneEntities != null && sceneEntities.contains(entity)) ? entity : null;
     }
 

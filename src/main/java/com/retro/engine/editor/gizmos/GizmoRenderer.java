@@ -1,10 +1,14 @@
 package com.retro.engine.editor.gizmos;
 
+import com.retro.engine.animation.skeleton.Skeleton;
 import com.retro.engine.editor.EditorWorkspace.GizmoAxis;
 import com.retro.engine.editor.EditorWorkspace.GizmoMode;
 import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
+import com.retro.engine.editor.ui.panels.ViewportPanel;
 import com.retro.engine.rhi.IRenderBackend;
+import com.retro.engine.scene.components.media.AnimatorComponent;
+import com.retro.engine.scene.components.rendering.MeshFilter;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.world.SceneWorld;
 import com.retro.engine.scene.components.transform.Transform;
@@ -21,6 +25,25 @@ public class GizmoRenderer {
     public static final int PICK_ID_AXIS_Y = 0xFFFE0002;
     public static final int PICK_ID_AXIS_Z = 0xFFFE0003;
     public static final int PICK_ID_CENTER = 0xFFFE0004;
+
+    // Skeleton joint pick IDs: PICK_OVERLAY_ID_BASE | BONE_PICK_FLAG | slot << 6 | bone index (AnimatorComponent.MAX_BONES = 64)
+    public static final int BONE_PICK_FLAG = 0x8000;
+    public static final int BONE_PICK_SLOT_SHIFT = 6;
+    public static final int BONE_PICK_INDEX_MASK = (1 << BONE_PICK_SLOT_SHIFT) - 1;
+    public static final int BONE_PICK_MAX_SLOTS = BONE_PICK_FLAG >> BONE_PICK_SLOT_SHIFT;
+
+    private static final float JOINT_SIZE = 0.012f;
+    private static final float SELECTED_JOINT_SIZE = 0.02f;
+    private static final float BONE_SEGMENT_THICKNESS = 0.003f;
+    private static final float JOINT_PICK_PX = 12.0f;
+    private static final float JOINT_MIN_DEPTH = 0.05f;
+
+    // Per-skeleton scratch: model-space joints, then their design-space projections (zero per-frame allocations)
+    private static final float[] jointModel = new float[AnimatorComponent.MAX_BONES * 3];
+    private static final float[] jointX = new float[AnimatorComponent.MAX_BONES];
+    private static final float[] jointY = new float[AnimatorComponent.MAX_BONES];
+    private static final boolean[] jointVisible = new boolean[AnimatorComponent.MAX_BONES];
+    private static final float[] basisScratch = new float[9];
 
     // Pick-only hitbox sizes in window pixels; the visual strokes stay ~2-4 px
     private static final float PICK_STROKE_PX = 12.0f;
@@ -113,6 +136,98 @@ public class GizmoRenderer {
             pickVertices[pickFloats++] = src[o + 1];
             pickVertices[pickFloats++] = idLow;
         }
+    }
+
+    /** Overlay pick ID of joint {@code boneIndex} in the skeleton holding pick slot {@code slot}. */
+    public static int bonePickId(int slot, int boneIndex) {
+        return IRenderBackend.PICK_OVERLAY_ID_BASE | BONE_PICK_FLAG | (slot << BONE_PICK_SLOT_SHIFT) | (boneIndex & BONE_PICK_INDEX_MASK);
+    }
+
+    /**
+     * Draws the bone segments and joints of every entity with an animated skeleton in its current pose, and captures each
+     * joint as pick geometry carrying its own {@link #bonePickId}. The selected entity's skeleton is drawn last (and its
+     * selected joint last of all) so it wins the pick where skeletons overlap; call before the transform gizmo so the
+     * gizmo handles still win over joints.
+     */
+    public static void renderSkeletons(UIGeometryBatch.Buffer buffer, List<Entity> sceneEntities, SceneWorld sceneManager,
+                                       Entity selectedEntity, int selectedBoneIndex, ViewportCamera cameraController,
+                                       float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
+        if (buffer == null || sceneEntities == null || sceneManager == null) return;
+        for (int i = 0, n = sceneEntities.size(); i < n; i++) {
+            Entity entity = sceneEntities.get(i);
+            if (entity == null || entity == selectedEntity) continue;
+            renderSkeleton(buffer, entity, sceneEntities, sceneManager, false, -1, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+        }
+        if (selectedEntity != null) {
+            renderSkeleton(buffer, selectedEntity, sceneEntities, sceneManager, true, selectedBoneIndex, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+        }
+    }
+
+    private static void renderSkeleton(UIGeometryBatch.Buffer buffer, Entity entity, List<Entity> sceneEntities, SceneWorld sceneManager,
+                                       boolean isSelected, int selectedBoneIndex, ViewportCamera cameraController,
+                                       float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
+        AnimatorComponent animator = entity.getComponent(AnimatorComponent.class);
+        Skeleton skeleton = (animator != null) ? animator.skeleton : null;
+        if (skeleton == null) return;
+        MeshFilter mf = entity.getComponent(MeshFilter.class);
+        if (mf != null && !mf.isVisible) return;
+
+        int count = skeleton.computeJointModelPositions(animator.bonePaletteMatrices, jointModel);
+        if (count == 0) return;
+
+        // Joints go through the same model matrix the skinned mesh renders with (model * palette * vertex)
+        SceneWorld.WorldTransform wt = sceneManager.getComputedWorldTransform(entity);
+        float[] m = basisScratch;
+        GizmoMath.computeModelBasis(wt.rx(), wt.ry(), wt.rz(), wt.sx(), wt.sy(), wt.sz(), m);
+        for (int b = 0; b < count; b++) {
+            float lx = jointModel[b * 3], ly = jointModel[b * 3 + 1], lz = jointModel[b * 3 + 2];
+            float wx = wt.px() + m[0] * lx + m[3] * ly + m[6] * lz;
+            float wy = wt.py() + m[1] * lx + m[4] * ly + m[7] * lz;
+            float wz = wt.pz() + m[2] * lx + m[5] * ly + m[8] * lz;
+            jointVisible[b] = GizmoMath.viewDepth(wx, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw) > JOINT_MIN_DEPTH;
+            if (!jointVisible[b]) continue;
+            float[] p = GizmoMath.projectWorldToNdc(wx, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+            jointX[b] = p[0];
+            jointY[b] = p[1];
+        }
+
+        float segR = isSelected ? 0.35f : 0.60f, segG = isSelected ? 0.80f : 0.60f, segB = isSelected ? 1.00f : 0.65f;
+        float segA = isSelected ? 0.95f : 0.45f;
+        for (int b = 0; b < count; b++) {
+            Skeleton.BoneNode bone = skeleton.getBone(b);
+            int parent = (bone != null) ? bone.parentId : -1;
+            if (parent < 0 || parent >= count || !jointVisible[b] || !jointVisible[parent]) continue;
+            UIGeometryBatch.addLineSegment(buffer, jointX[parent], jointY[parent], jointX[b], jointY[b], BONE_SEGMENT_THICKNESS, segR, segG, segB, segA);
+        }
+
+        int slot = ViewportPanel.bonePickSlotFor(entity, sceneEntities);
+        float jointA = isSelected ? 1.0f : 0.6f;
+        for (int b = 0; b < count; b++) {
+            if (b == selectedBoneIndex || !isJointOnViewport(b)) continue;
+            addJointSquare(buffer, jointX[b], jointY[b], JOINT_SIZE, 0.90f, 0.95f, 1.00f, jointA);
+            if (slot >= 0) capturePickSquare(buffer, jointX[b], jointY[b], JOINT_PICK_PX, bonePickId(slot, b));
+        }
+
+        if (selectedBoneIndex >= 0 && selectedBoneIndex < count && isJointOnViewport(selectedBoneIndex)) {
+            float cx = jointX[selectedBoneIndex], cy = jointY[selectedBoneIndex];
+            addJointSquare(buffer, cx, cy, SELECTED_JOINT_SIZE, 1.0f, 0.75f, 0.15f, 1.0f);
+            if (slot >= 0) capturePickSquare(buffer, cx, cy, JOINT_PICK_PX, bonePickId(slot, selectedBoneIndex));
+            Skeleton.BoneNode bone = skeleton.getBone(selectedBoneIndex);
+            if (bone != null && bone.name != null) {
+                UIGeometryBatch.addBoundedText(buffer, bone.name, cx + 0.015f, cy + 0.025f, cx + 0.20f, 0.9f, 1.0f, 0.75f, 0.15f, 1.0f);
+            }
+        }
+    }
+
+    /** In front of the camera and inside the Scene design rect below the toolbar (same idea as the gizmo's own cull). */
+    private static boolean isJointOnViewport(int b) {
+        return jointVisible[b] && jointX[b] >= -0.55f && jointX[b] <= 0.55f && jointY[b] >= -0.50f && jointY[b] <= 0.78f;
+    }
+
+    /** Joint square {@code size} design units tall and the same width on screen. */
+    private static void addJointSquare(UIGeometryBatch.Buffer buffer, float cx, float cy, float size, float r, float g, float b, float a) {
+        float hy = size * 0.5f, hx = UIGeometryBatch.squareWidth(buffer, size) * 0.5f;
+        UIGeometryBatch.addQuad(buffer, cx - hx, cy - hy, cx + hx, cy + hy, r, g, b, a);
     }
 
     public static void render3DGizmos(UIGeometryBatch.Buffer buffer, Entity entity, GizmoMode mode, GizmoAxis activeAxis, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {

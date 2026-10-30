@@ -1,5 +1,6 @@
 package com.retro.engine.editor;
 
+import com.retro.engine.animation.skeleton.Skeleton;
 import com.retro.engine.animation.state.AnimatorController;
 import com.retro.engine.animation.state.AnimatorState;
 import com.retro.engine.animation.state.AnimatorTransition;
@@ -7,6 +8,7 @@ import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.editor.commands.CommandStack;
 import com.retro.engine.editor.gizmos.ColliderDebugRenderer;
+import com.retro.engine.editor.gizmos.GizmoRenderer;
 import com.retro.engine.editor.gizmos.GizmoState;
 import com.retro.engine.editor.gizmos.GizmoSystem;
 import com.retro.engine.editor.ui.UIContext;
@@ -53,6 +55,10 @@ public class EditorWorkspace {
     private AnimatorController activeAnimatorController = null;
     private String selectedStateName = "Idle";
     private AnimatorTransition selectedTransition = null;
+
+    // Bone picked in the Viewport; only meaningful while its entity is still the selected entity
+    private Entity selectedBoneEntity = null;
+    private int selectedBoneIndex = -1;
 
     private ViewportCamera cameraController;
     private long windowHandle = 0L;
@@ -193,7 +199,47 @@ public class EditorWorkspace {
     public void setCameraPreviewTexture(long textureHandle) { this.cameraPreviewTexture = textureHandle; }
     public void selectEntity(Entity entity) {
         sceneManager.selectEntity(entity);
+        clearBoneSelection();
         InspectorPanel.resetScroll();
+    }
+
+    /** Selects {@code entity} (if it is not already selected) and the joint {@code boneIndex} of its skeleton. */
+    public void selectBone(Entity entity, int boneIndex) {
+        if (entity == null) {
+            selectEntity(null);
+            return;
+        }
+        if (sceneManager.getSelectedEntity() != entity) selectEntity(entity);
+        this.selectedBoneEntity = entity;
+        this.selectedBoneIndex = boneIndex;
+    }
+
+    public void clearBoneSelection() {
+        this.selectedBoneEntity = null;
+        this.selectedBoneIndex = -1;
+    }
+
+    /**
+     * Selected bone index in the selected entity's skeleton, or -1. Selection changes that bypass {@link #selectEntity}
+     * (hierarchy, undo, deletion) invalidate it here rather than leaving a stale bone on another entity.
+     */
+    public int getSelectedBoneIndex() {
+        Entity selected = sceneManager.getSelectedEntity();
+        if (selected == null || selected != selectedBoneEntity) return -1;
+        Skeleton skeleton = skeletonOf(selected);
+        int boneCount = (skeleton != null) ? Math.min(skeleton.getBoneCount(), AnimatorComponent.MAX_BONES) : 0;
+        return (selectedBoneIndex >= 0 && selectedBoneIndex < boneCount) ? selectedBoneIndex : -1;
+    }
+
+    /** The selected bone of the selected entity's skeleton, or null. */
+    public Skeleton.BoneNode getSelectedBone() {
+        int index = getSelectedBoneIndex();
+        return (index >= 0) ? skeletonOf(sceneManager.getSelectedEntity()).getBone(index) : null;
+    }
+
+    private static Skeleton skeletonOf(Entity entity) {
+        AnimatorComponent animator = (entity != null) ? entity.getComponent(AnimatorComponent.class) : null;
+        return (animator != null) ? animator.skeleton : null;
     }
 
     // --- Active Project ---
@@ -203,6 +249,7 @@ public class EditorWorkspace {
     /** Unbinds the active project (flushing its manifest) and resets the scene; the launcher takes over the UI. */
     public void closeProject() {
         sceneManager.newScene();
+        clearBoneSelection();
         commandHistory.clear();
         overlayManager.closeModal();
         overlayManager.closeContextMenu();
@@ -314,6 +361,15 @@ public class EditorWorkspace {
                 );
 
                 Entity selected = sceneManager.getSelectedEntity();
+                // Bones are an authoring aid: hidden while the simulation runs, shown in edit mode and while paused
+                if (sceneManager.getPlayState() != PlayState.SIMULATING && overlayManager.getActiveModal() == ModalState.NONE) {
+                    GizmoRenderer.renderSkeletons(
+                        uiGeometryBuffer, sceneManager.getSceneEntities(), sceneManager, selected, getSelectedBoneIndex(),
+                        cameraController, gizmoStateController.getCamPanX(), gizmoStateController.getCamPanY(),
+                        gizmoStateController.getCamZoom(), gizmoStateController.getCamPitch(), gizmoStateController.getCamYaw()
+                    );
+                }
+
                 if (selected != null && overlayManager.getActiveModal() == ModalState.NONE) {
                     float[] anchor = gizmoStateController.getGizmoAnchor(selected, sceneManager);
                     GizmoSystem.render3DGizmosAtWorldPosition(
@@ -329,7 +385,7 @@ public class EditorWorkspace {
                 EngineConsolePanel.renderProfilerHUD(uiGeometryBuffer, lastDeltaTime);
             }
             case HIERARCHY -> HierarchyPanel.render(uiContext, sceneManager.getSceneEntities());
-            case INSPECTOR -> InspectorPanel.render(uiContext, sceneManager.getSelectedEntity(), assetDirectoryManager.getAssetDirectory());
+            case INSPECTOR -> InspectorPanel.render(uiContext, sceneManager.getSelectedEntity(), getSelectedBone(), assetDirectoryManager.getAssetDirectory());
             case ANIMATOR -> AnimatorGraphPanel.renderCanvas(uiGeometryBuffer, getActiveAnimatorController(), selectedStateName);
             case ANIMATOR_PARAMETERS -> AnimatorGraphPanel.renderParameters(uiGeometryBuffer, getActiveAnimatorController());
             case ANIMATOR_INSPECTOR -> AnimatorGraphPanel.renderInspector(uiGeometryBuffer, getActiveAnimatorController(), selectedStateName, selectedTransition);
@@ -356,5 +412,6 @@ public class EditorWorkspace {
         }
         cameraController = null;
         activeAnimatorController = null;
+        clearBoneSelection();
     }
 }

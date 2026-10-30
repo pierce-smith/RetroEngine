@@ -135,13 +135,22 @@ public class GizmoState {
     public void processViewportGizmoClick(double refX, double refY, EditorWorkspace manager) {
         if (manager == null) return;
         viewportPressHeld = true;
-        // One pixel-exact GPU Color-ID pick resolves the press: gizmo handles are drawn over every mesh in the pick pass,
-        // so a handle pixel starts a drag; anything else selects that entity (the background PICK_ID_NONE deselects)
+        // One pixel-exact GPU Color-ID pick resolves the press: gizmo handles and skeleton joints are drawn over every mesh
+        // in the pick pass, so a handle pixel starts a drag and a joint selects that bone; anything else selects that
+        // entity (the background PICK_ID_NONE deselects)
         ViewportPanel.requestPickAtDesign(manager.getDockSpace(), (float) (refX / 640.0 - 1.0), (float) (1.0 - refY / 360.0),
                 pickId -> resolveViewportPick(pickId, manager));
     }
 
     private void resolveViewportPick(int pickId, EditorWorkspace manager) {
+        if (GizmoInteractor.isBonePickId(pickId)) {
+            // A skeleton joint selects its entity and that bone; a joint whose entity has left the scene falls through
+            Entity owner = ViewportPanel.resolveBonePick(pickId, manager.getSceneEntities());
+            if (owner != null) {
+                manager.selectBone(owner, GizmoInteractor.boneIndexForPickId(pickId));
+                return;
+            }
+        }
         if (GizmoInteractor.isGizmoPickId(pickId)) {
             // Clicking a handle never changes the selection
             Entity selected = manager.getSelectedEntity();

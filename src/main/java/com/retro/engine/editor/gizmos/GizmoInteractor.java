@@ -84,7 +84,22 @@ public class GizmoInteractor {
 
     /** True for any pick value in the gizmo handle range, including handles inactive in the current mode. */
     public static boolean isGizmoPickId(int pickId) {
-        return (pickId & 0xFFFF0000) == IRenderBackend.PICK_OVERLAY_ID_BASE;
+        return (pickId & 0xFFFF0000) == IRenderBackend.PICK_OVERLAY_ID_BASE && !isBonePickId(pickId);
+    }
+
+    /** True for a skeleton joint drawn by {@link GizmoRenderer#renderSkeletons} (see {@link GizmoRenderer#bonePickId}). */
+    public static boolean isBonePickId(int pickId) {
+        return (pickId & (0xFFFF0000 | GizmoRenderer.BONE_PICK_FLAG)) == (IRenderBackend.PICK_OVERLAY_ID_BASE | GizmoRenderer.BONE_PICK_FLAG);
+    }
+
+    /** Bone index of a joint pick value, or -1 when {@code pickId} is not a joint. */
+    public static int boneIndexForPickId(int pickId) {
+        return isBonePickId(pickId) ? (pickId & GizmoRenderer.BONE_PICK_INDEX_MASK) : -1;
+    }
+
+    /** Skeleton pick slot (see ViewportPanel#bonePickSlotFor) of a joint pick value, or -1 when it is not a joint. */
+    public static int boneSlotForPickId(int pickId) {
+        return isBonePickId(pickId) ? ((pickId >>> GizmoRenderer.BONE_PICK_SLOT_SHIFT) & (GizmoRenderer.BONE_PICK_MAX_SLOTS - 1)) : -1;
     }
 
     public static boolean handleGizmoDrag(double deltaX, double deltaY, double refX, double refY, GizmoAxis activeGizmoAxis, GizmoMode currentGizmoMode, Entity selectedEntity, float wx, float wy, float wz, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
