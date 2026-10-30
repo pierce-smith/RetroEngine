@@ -42,15 +42,15 @@ struct SpotLight {
 // Must stay byte-identical to the LightBuffer in blinn_phong.frag (and the other blinn_phong vertex shader)
 layout(std140, set = 0, binding = 0) uniform LightBuffer {
     DirectionalLight dirLight;
-    PointLight pointLights;
-    SpotLight spotLights;
-    vec4 numLights;   // x = numDir, y = numPoint, z = numSpot, w = shadowMapBias
-    vec4 viewPos;     // xyz = camera position, w = groundY
-    mat4 view;        // byte offset 176
-    mat4 proj;        // byte offset 240
-    mat4 lightSpaceMatrix; // byte offset 304: directional shadow map view-projection
-    mat4 previewViewProj;  // byte offset 368: selected Camera entity's view-projection (picture-in-picture pass)
-    vec4 previewViewPos;   // byte offset 432: xyz = that camera's world position (448 bytes total)
+    PointLight pointLights[32]; // byte offset 32: SceneLights.MAX_POINT_LIGHTS
+    SpotLight spotLights[8];    // byte offset 1568: SceneLights.MAX_SPOT_LIGHTS
+    vec4 numLights;   // byte offset 2080: x = directional (1.0 = active), y = point count, z = spot count, w = shadowMapBias
+    vec4 viewPos;     // byte offset 2096: xyz = camera position, w = groundY
+    mat4 view;        // byte offset 2112
+    mat4 proj;        // byte offset 2176
+    mat4 lightSpaceMatrix; // byte offset 2240: directional shadow map view-projection
+    mat4 previewViewProj;  // byte offset 2304: selected Camera entity's view-projection (picture-in-picture pass)
+    vec4 previewViewPos;   // byte offset 2368: xyz = that camera's world position (2384 bytes total)
 } u_Lights;
 
 // 128 bytes: must stay byte-identical to the block in blinn_phong.vert

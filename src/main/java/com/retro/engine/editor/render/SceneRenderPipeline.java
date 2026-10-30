@@ -16,6 +16,7 @@ import com.retro.engine.rhi.DirectionalShadowFrustum;
 import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.rhi.RenderCommand;
 import com.retro.engine.rhi.RenderQueue;
+import com.retro.engine.rhi.SceneLights;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.world.SceneWorld;
 import com.retro.engine.scene.world.SceneWorld.WorldTransform;
@@ -40,41 +41,9 @@ import java.util.List;
  */
 public class SceneRenderPipeline {
 
-    public record LightDescriptor(
-            int lightType,
-            float posX, float posY, float posZ,
-            float dirX, float dirY, float dirZ,
-            float r, float g, float b,
-            float intensity
-    ) {}
-
-    public static class MutableLightDescriptor {
-        public int lightType;
-        public float posX, posY, posZ;
-        public float dirX, dirY, dirZ;
-        public float r, g, b;
-        public float intensity;
-        public boolean active = false;
-
-        public void set(int lightType, float posX, float posY, float posZ,
-                        float dirX, float dirY, float dirZ,
-                        float r, float g, float b, float intensity) {
-            this.lightType = lightType;
-            this.posX = posX; this.posY = posY; this.posZ = posZ;
-            this.dirX = dirX; this.dirY = dirY; this.dirZ = dirZ;
-            this.r = r; this.g = g; this.b = b;
-            this.intensity = intensity;
-            this.active = true;
-        }
-
-        public void reset() {
-            this.active = false;
-        }
-    }
-
     public static class RenderSceneSnapshot {
-        public LightDescriptor activeLight = null;
-        public final MutableLightDescriptor pooledLight = new MutableLightDescriptor();
+        // First Directional, Point and Spot light found in the scene; the lit shaders evaluate all three together
+        public final SceneLights lights = new SceneLights();
         // Sorted, flat draw list handed to the backend; owns the fitted shadow light-space matrix
         public final RenderQueue renderQueue = new RenderQueue();
         public boolean gridVisible = true;
@@ -99,8 +68,7 @@ public class SceneRenderPipeline {
         public final float[] cameraEye = new float[3];
 
         public void reset() {
-            activeLight = null;
-            pooledLight.reset();
+            lights.reset();
             renderQueue.clear();
             gridVisible = true;
             gridVertices = null;
@@ -134,10 +102,9 @@ public class SceneRenderPipeline {
     private static final float[] rotX = new float[9], rotY = new float[9], rotZ = new float[9], rotYX = new float[9], rot = new float[9];
     private final float[] previewView = new float[16], previewProj = new float[16];
 
-    // Shadow map frustum fitted around every queued draw. The direction persists across frames like the backends' light
-    // state (and starts at their default), so a scene without a Light keeps shadowing from the last one.
+    // Shadow map frustum fitted around every queued draw. It follows the Directional light; without one it uses the
+    // backends' default sun direction (only the directional slot samples the shadow map).
     private final DirectionalShadowFrustum shadowFrustum = new DirectionalShadowFrustum();
-    private float shadowLightDirX = -0.5f, shadowLightDirY = -1.0f, shadowLightDirZ = -0.5f;
 
     // Editor camera view-space depth row (view z = dot(row, p) + w) and range used to quantize sort-key depth
     private float depthRowX, depthRowY, depthRowZ, depthRowW;
@@ -186,7 +153,7 @@ public class SceneRenderPipeline {
             // Indexed loops: the entity list is random-access, and for-each would allocate an iterator per pass
             int entityCount = entities.size();
 
-            // 1. Scan and pass active Light component state to snapshot using pooled light descriptor
+            // 1. Collect up to 1 Directional, MAX_POINT_LIGHTS Point and MAX_SPOT_LIGHTS Spot lights into the snapshot's pooled lights
             for (int ei = 0; ei < entityCount; ei++) {
                 Entity entity = entities.get(ei);
                 Light light = entity.getComponent(Light.class);
@@ -206,17 +173,16 @@ public class SceneRenderPipeline {
                     float dirZ = (float) (-Math.cos(radYaw) * Math.cos(radPitch));
 
                     int lightType = switch (light.type) {
-                        case DIRECTIONAL -> 0;
-                        case POINT -> 1;
-                        case SPOT -> 2;
+                        case DIRECTIONAL -> SceneLights.DIRECTIONAL;
+                        case POINT -> SceneLights.POINT;
+                        case SPOT -> SceneLights.SPOT;
                     };
 
-                    snapshot.pooledLight.set(
-                            lightType, posX, posY, posZ, dirX, dirY, dirZ,
-                            light.r, light.g, light.b, light.intensity
-                    );
-                    shadowLightDirX = dirX; shadowLightDirY = dirY; shadowLightDirZ = dirZ;
-                    break;
+                    // Lights beyond a type's capacity are ignored
+                    SceneLights.Light slot = snapshot.lights.add(lightType);
+                    if (slot == null) continue;
+                    slot.set(posX, posY, posZ, dirX, dirY, dirZ, light.r, light.g, light.b, light.intensity);
+                    if (snapshot.lights.isFull()) break;
                 }
             }
 
@@ -330,7 +296,12 @@ public class SceneRenderPipeline {
             }
         }
 
-        shadowFrustum.build(shadowLightDirX, shadowLightDirY, shadowLightDirZ, queue.lightSpaceMatrix);
+        SceneLights.Light sun = snapshot.lights.directional();
+        if (snapshot.lights.hasDirectional()) {
+            shadowFrustum.build(sun.dirX, sun.dirY, sun.dirZ, queue.lightSpaceMatrix);
+        } else {
+            shadowFrustum.build(SceneLights.DEFAULT_SUN_DIR_X, SceneLights.DEFAULT_SUN_DIR_Y, SceneLights.DEFAULT_SUN_DIR_Z, queue.lightSpaceMatrix);
+        }
         queue.sort();
 
         // Every live entity has marked its assets; evict what deleted entities or an unloaded scene left behind
@@ -379,21 +350,7 @@ public class SceneRenderPipeline {
     public void submitFrame(RenderSceneSnapshot snapshot, IRenderBackend rhi) {
         if (snapshot == null || rhi == null) return;
 
-        if (snapshot.pooledLight.active) {
-            MutableLightDescriptor l = snapshot.pooledLight;
-            rhi.setSceneLight(
-                    l.lightType, l.posX, l.posY, l.posZ,
-                    l.dirX, l.dirY, l.dirZ,
-                    l.r, l.g, l.b, l.intensity
-            );
-        } else if (snapshot.activeLight != null) {
-            LightDescriptor l = snapshot.activeLight;
-            rhi.setSceneLight(
-                    l.lightType(), l.posX(), l.posY(), l.posZ(),
-                    l.dirX(), l.dirY(), l.dirZ(),
-                    l.r(), l.g(), l.b(), l.intensity()
-            );
-        }
+        rhi.setSceneLights(snapshot.lights);
 
         rhi.setCameraView(snapshot.cameraViewActive ? snapshot.cameraView : null,
                 snapshot.cameraEye[0], snapshot.cameraEye[1], snapshot.cameraEye[2]);

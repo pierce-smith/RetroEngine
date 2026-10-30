@@ -2,6 +2,7 @@ package com.retro.engine.backend.metal;
 
 import com.retro.engine.rhi.DirectionalShadowFrustum;
 import com.retro.engine.rhi.RenderCommand;
+import com.retro.engine.rhi.SceneLights;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.libffi.FFICIF;
@@ -77,10 +78,7 @@ public class MetalPassEncoder {
     private float sceneAspect = 0.0f; // 0 = fall back to framebuffer aspect
 
     // Per-frame light and editor camera state shared by the editor and camera preview scene passes
-    private int lightType;
-    private float lightPosX, lightPosY, lightPosZ;
-    private float lightDirX, lightDirY, lightDirZ;
-    private float lightR, lightG, lightB, lightIntensity;
+    private SceneLights lights;
     private final float[] editorViewProj = new float[16];
     private final float[] editorCamPos = new float[3];
 
@@ -147,9 +145,7 @@ public class MetalPassEncoder {
             RenderCommand[] commands, MetalDrawBuffers draws, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw,
             float[] explicitView, float[] explicitEye,
             float[] previewViewProj, float[] previewCamPos,
-            int lightType, float lightPosX, float lightPosY, float lightPosZ,
-            float lightDirX, float lightDirY, float lightDirZ,
-            float lightR, float lightG, float lightB, float lightIntensity) {
+            SceneLights lights) {
 
         send = device.getObjcMsgSend();
 
@@ -185,11 +181,9 @@ public class MetalPassEncoder {
         encodeShadowMapPass(commandBuffer, pipeline, texture, resourceCache, streamer, entityCount,
                 pBufferContents, currentSlotOffset, defaultResourceId);
 
-        this.lightType = lightType;
-        this.lightPosX = lightPosX; this.lightPosY = lightPosY; this.lightPosZ = lightPosZ;
-        this.lightDirX = lightDirX; this.lightDirY = lightDirY; this.lightDirZ = lightDirZ;
-        this.lightR = lightR; this.lightG = lightG; this.lightB = lightB;
-        this.lightIntensity = lightIntensity;
+        // Point and spot arrays are shared by every lit draw in both scene passes, so they are written once per frame
+        this.lights = lights;
+        streamer.writeLightBlock(pBufferContents, lights);
 
         // The offscreen image is stretched over the docked Scene tile, so project with that tile's aspect
         float aspect = sceneAspect > 0.0f ? sceneAspect
@@ -306,20 +300,7 @@ public class MetalPassEncoder {
                 FloatBuffer fbModel = MemoryUtil.memFloatBuffer(baseAddr + 64L, 16);
                 fbModel.clear(); fbModel.put(modelMat);
 
-                MemoryUtil.memPutFloat(baseAddr + 128L, lightDirX);
-                MemoryUtil.memPutFloat(baseAddr + 132L, lightDirY);
-                MemoryUtil.memPutFloat(baseAddr + 136L, lightDirZ);
-                MemoryUtil.memPutFloat(baseAddr + 140L, lightIntensity);
-
-                MemoryUtil.memPutFloat(baseAddr + 144L, lightPosX);
-                MemoryUtil.memPutFloat(baseAddr + 148L, lightPosY);
-                MemoryUtil.memPutFloat(baseAddr + 152L, lightPosZ);
-                MemoryUtil.memPutFloat(baseAddr + 156L, (float) lightType);
-
-                MemoryUtil.memPutFloat(baseAddr + 160L, lightR);
-                MemoryUtil.memPutFloat(baseAddr + 164L, lightG);
-                MemoryUtil.memPutFloat(baseAddr + 168L, lightB);
-                MemoryUtil.memPutFloat(baseAddr + 172L, 1.0f);
+                streamer.writeDrawLights(baseAddr, lights);
 
                 MemoryUtil.memPutFloat(baseAddr + 176L, 0.35f);
                 MemoryUtil.memPutFloat(baseAddr + 180L, 0.35f);

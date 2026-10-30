@@ -4,6 +4,7 @@ import com.retro.engine.rhi.DirectionalShadowFrustum;
 import com.retro.engine.rhi.HandleRegistry;
 import com.retro.engine.rhi.RenderCommand;
 import com.retro.engine.rhi.RenderQueue;
+import com.retro.engine.rhi.SceneLights;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.MemoryStack;
@@ -45,12 +46,22 @@ public class VulkanGpuCache {
     public static final int SHADOW_MAP_SIZE = DirectionalShadowFrustum.SHADOW_MAP_SIZE;
     public static final int SHADOW_MAP_FORMAT = VK_FORMAT_D32_SFLOAT;
 
-    // LightBuffer (binding 0) std140 layout: lightSpaceMatrix at byte 304, camera preview view-projection at 368 and
-    // its world position at 432, 448 bytes total
-    public static final int LIGHT_UBO_LIGHT_SPACE_FLOAT_INDEX = 76;
-    public static final int LIGHT_UBO_PREVIEW_VIEW_PROJ_FLOAT_INDEX = 92;
-    public static final int LIGHT_UBO_PREVIEW_VIEW_POS_FLOAT_INDEX = 108;
-    public static final long LIGHT_UBO_SIZE = 448L;
+    // LightBuffer (binding 0) std140 layout as float indices: dirLight at 0, pointLights[MAX_POINT_LIGHTS] (12 floats
+    // each) at 8, spotLights[MAX_SPOT_LIGHTS] (16 floats each) at 392, then numLights, viewPos, view, proj,
+    // lightSpaceMatrix, previewViewProj and previewViewPos. 2384 bytes total.
+    public static final int LIGHT_UBO_POINT_LIGHTS_FLOAT_INDEX = 8;
+    public static final int LIGHT_UBO_POINT_LIGHT_FLOATS = 12;
+    public static final int LIGHT_UBO_SPOT_LIGHTS_FLOAT_INDEX = LIGHT_UBO_POINT_LIGHTS_FLOAT_INDEX + SceneLights.MAX_POINT_LIGHTS * LIGHT_UBO_POINT_LIGHT_FLOATS;
+    public static final int LIGHT_UBO_SPOT_LIGHT_FLOATS = 16;
+    public static final int LIGHT_UBO_NUM_LIGHTS_FLOAT_INDEX = LIGHT_UBO_SPOT_LIGHTS_FLOAT_INDEX + SceneLights.MAX_SPOT_LIGHTS * LIGHT_UBO_SPOT_LIGHT_FLOATS;
+    public static final int LIGHT_UBO_VIEW_POS_FLOAT_INDEX = LIGHT_UBO_NUM_LIGHTS_FLOAT_INDEX + 4;
+    public static final int LIGHT_UBO_VIEW_FLOAT_INDEX = LIGHT_UBO_VIEW_POS_FLOAT_INDEX + 4;
+    public static final int LIGHT_UBO_PROJ_FLOAT_INDEX = LIGHT_UBO_VIEW_FLOAT_INDEX + 16;
+    public static final int LIGHT_UBO_LIGHT_SPACE_FLOAT_INDEX = LIGHT_UBO_PROJ_FLOAT_INDEX + 16;
+    public static final int LIGHT_UBO_PREVIEW_VIEW_PROJ_FLOAT_INDEX = LIGHT_UBO_LIGHT_SPACE_FLOAT_INDEX + 16;
+    public static final int LIGHT_UBO_PREVIEW_VIEW_POS_FLOAT_INDEX = LIGHT_UBO_PREVIEW_VIEW_PROJ_FLOAT_INDEX + 16;
+    public static final int LIGHT_UBO_FLOATS = LIGHT_UBO_PREVIEW_VIEW_POS_FLOAT_INDEX + 4;
+    public static final long LIGHT_UBO_SIZE = LIGHT_UBO_FLOATS * 4L;
 
     // Set 0 bindings shared by every 3D pipeline (see blinn_phong.vert/.frag, blinn_phong_skinned.vert, shadow_depth.frag)
     public static final int BINDING_LIGHT_UBO = 0;
@@ -907,7 +918,7 @@ public class VulkanGpuCache {
         if (device == null || device.getLogicalDevice() == null) return null;
 
         VkDevice vkDevice = device.getLogicalDevice();
-        long bufferSize = 512L;
+        long bufferSize = LIGHT_UBO_SIZE;
 
         try (MemoryStack stack = stackPush()) {
             VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack)
@@ -946,7 +957,7 @@ public class VulkanGpuCache {
                 vkFreeMemory(vkDevice, memory, null);
                 return null;
             }
-            FloatBuffer floatBuf = pData.getFloatBuffer(0, 128);
+            FloatBuffer floatBuf = pData.getFloatBuffer(0, LIGHT_UBO_FLOATS);
             floatBuf.put(new float[]{-0.5f, -1.0f, -0.5f, 0.0f, 1.0f, 0.95f, 0.85f, 1.2f});
             vkUnmapMemory(vkDevice, memory);
 
@@ -955,9 +966,7 @@ public class VulkanGpuCache {
         }
     }
 
-    public void updateLightUniformBuffer(VulkanDevice device, int lightType, float posX, float posY, float posZ,
-                                        float dirX, float dirY, float dirZ,
-                                        float r, float g, float b, float intensity,
+    public void updateLightUniformBuffer(VulkanDevice device, SceneLights lights,
                                         float camX, float camY, float camZ, float groundY,
                                         float[] viewMatrix, float[] projMatrix, float[] lightSpaceMatrix,
                                         float[] previewViewProj, float previewX, float previewY, float previewZ) {
@@ -968,32 +977,50 @@ public class VulkanGpuCache {
 
         try (MemoryStack stack = stackPush()) {
             PointerBuffer pData = stack.mallocPointer(1);
-            if (vkMapMemory(vkDevice, buf.memoryHandle, 0, 512L, 0, pData) == VK_SUCCESS) {
-                FloatBuffer floatBuf = pData.getFloatBuffer(0, 128);
+            if (vkMapMemory(vkDevice, buf.memoryHandle, 0, LIGHT_UBO_SIZE, 0, pData) == VK_SUCCESS) {
+                FloatBuffer floatBuf = pData.getFloatBuffer(0, LIGHT_UBO_FLOATS);
 
-                float numDir = (lightType == 0) ? 1.0f : 0.0f;
-                float numPoint = (lightType == 1) ? 1.0f : 0.0f;
-                float numSpot = (lightType == 2) ? 1.0f : 0.0f;
+                // Only the first pointCount / spotCount array entries are written; the shader loops stop at those counts
+                boolean hasDir = lights.hasDirectional();
+                SceneLights.Light dir = lights.directional();
+                floatBuf.put(0, dir.dirX); floatBuf.put(1, dir.dirY); floatBuf.put(2, dir.dirZ); floatBuf.put(3, 0.0f);
+                if (hasDir) {
+                    putLightColor(floatBuf, 4, dir);
+                } else {
+                    floatBuf.put(4, 0.0f); floatBuf.put(5, 0.0f); floatBuf.put(6, 0.0f); floatBuf.put(7, 0.0f);
+                }
 
-                floatBuf.put(0, dirX); floatBuf.put(1, dirY); floatBuf.put(2, dirZ); floatBuf.put(3, 0.0f);
-                floatBuf.put(4, r);    floatBuf.put(5, g);    floatBuf.put(6, b);    floatBuf.put(7, intensity);
+                int pointCount = lights.pointCount();
+                for (int i = 0; i < pointCount; i++) {
+                    SceneLights.Light point = lights.point(i);
+                    int base = LIGHT_UBO_POINT_LIGHTS_FLOAT_INDEX + i * LIGHT_UBO_POINT_LIGHT_FLOATS;
+                    floatBuf.put(base, point.posX); floatBuf.put(base + 1, point.posY); floatBuf.put(base + 2, point.posZ); floatBuf.put(base + 3, 0.0f);
+                    putLightColor(floatBuf, base + 4, point);
+                    floatBuf.put(base + 8, 1.0f); floatBuf.put(base + 9, 0.09f); floatBuf.put(base + 10, 0.032f); floatBuf.put(base + 11, 0.0f);
+                }
 
-                floatBuf.put(8, posX); floatBuf.put(9, posY); floatBuf.put(10, posZ); floatBuf.put(11, 0.0f);
-                floatBuf.put(12, r);   floatBuf.put(13, g);   floatBuf.put(14, b);    floatBuf.put(15, intensity);
-                floatBuf.put(16, 1.0f);floatBuf.put(17, 0.09f);floatBuf.put(18, 0.032f);floatBuf.put(19, 0.0f);
+                int spotCount = lights.spotCount();
+                for (int i = 0; i < spotCount; i++) {
+                    SceneLights.Light spot = lights.spot(i);
+                    int base = LIGHT_UBO_SPOT_LIGHTS_FLOAT_INDEX + i * LIGHT_UBO_SPOT_LIGHT_FLOATS;
+                    floatBuf.put(base, spot.posX); floatBuf.put(base + 1, spot.posY); floatBuf.put(base + 2, spot.posZ); floatBuf.put(base + 3, 0.93f);
+                    floatBuf.put(base + 4, spot.dirX); floatBuf.put(base + 5, spot.dirY); floatBuf.put(base + 6, spot.dirZ); floatBuf.put(base + 7, 0.82f);
+                    putLightColor(floatBuf, base + 8, spot);
+                    floatBuf.put(base + 12, 1.0f); floatBuf.put(base + 13, 0.09f); floatBuf.put(base + 14, 0.032f); floatBuf.put(base + 15, 0.0f);
+                }
 
-                floatBuf.put(20, posX); floatBuf.put(21, posY); floatBuf.put(22, posZ); floatBuf.put(23, 0.93f);
-                floatBuf.put(24, dirX); floatBuf.put(25, dirY); floatBuf.put(26, dirZ); floatBuf.put(27, 0.82f);
-                floatBuf.put(28, r);    floatBuf.put(29, g);    floatBuf.put(30, b);    floatBuf.put(31, intensity);
-                floatBuf.put(32, 1.0f); floatBuf.put(33, 0.09f);floatBuf.put(34, 0.032f);floatBuf.put(35, 0.0f);
+                int counts = LIGHT_UBO_NUM_LIGHTS_FLOAT_INDEX;
+                floatBuf.put(counts, hasDir ? 1.0f : 0.0f);
+                floatBuf.put(counts + 1, pointCount);
+                floatBuf.put(counts + 2, spotCount);
+                floatBuf.put(counts + 3, DirectionalShadowFrustum.SHADOW_BIAS);
 
-                floatBuf.put(36, numDir); floatBuf.put(37, numPoint); floatBuf.put(38, numSpot); floatBuf.put(39, DirectionalShadowFrustum.SHADOW_BIAS);
+                int viewPos = LIGHT_UBO_VIEW_POS_FLOAT_INDEX;
+                floatBuf.put(viewPos, camX); floatBuf.put(viewPos + 1, camY); floatBuf.put(viewPos + 2, camZ); floatBuf.put(viewPos + 3, groundY);
 
-                floatBuf.put(40, camX); floatBuf.put(41, camY); floatBuf.put(42, camZ); floatBuf.put(43, groundY);
-
-                // Camera matrices live here (byte offset 176) rather than in push constants, which carry material slots
-                putMatrixOrIdentity(floatBuf, 44, viewMatrix);
-                putMatrixOrIdentity(floatBuf, 60, projMatrix);
+                // Camera matrices live here rather than in push constants, which carry material slots
+                putMatrixOrIdentity(floatBuf, LIGHT_UBO_VIEW_FLOAT_INDEX, viewMatrix);
+                putMatrixOrIdentity(floatBuf, LIGHT_UBO_PROJ_FLOAT_INDEX, projMatrix);
                 putMatrixOrIdentity(floatBuf, LIGHT_UBO_LIGHT_SPACE_FLOAT_INDEX, lightSpaceMatrix);
                 putMatrixOrIdentity(floatBuf, LIGHT_UBO_PREVIEW_VIEW_PROJ_FLOAT_INDEX, previewViewProj);
                 int pos = LIGHT_UBO_PREVIEW_VIEW_POS_FLOAT_INDEX;
@@ -1002,6 +1029,11 @@ public class VulkanGpuCache {
                 vkUnmapMemory(vkDevice, buf.memoryHandle);
             }
         }
+    }
+
+    private static void putLightColor(FloatBuffer dst, int index, SceneLights.Light light) {
+        dst.put(index, light.r); dst.put(index + 1, light.g);
+        dst.put(index + 2, light.b); dst.put(index + 3, light.intensity);
     }
 
     private static void putMatrixOrIdentity(FloatBuffer dst, int index, float[] matrix) {

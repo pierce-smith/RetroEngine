@@ -33,15 +33,15 @@ struct SpotLight {
 
 layout(std140, set = 0, binding = 0) uniform LightBuffer {
     DirectionalLight dirLight;
-    PointLight pointLights;
-    SpotLight spotLights;
-    vec4 numLights;   // x = numDir, y = numPoint, z = numSpot, w = shadow map slope bias
-    vec4 viewPos;     // xyz = camera position, w = groundY
-    mat4 view;        // byte offset 176
-    mat4 proj;        // byte offset 240
-    mat4 lightSpaceMatrix; // byte offset 304: directional shadow map view-projection
-    mat4 previewViewProj;  // byte offset 368: selected Camera entity's view-projection (picture-in-picture pass)
-    vec4 previewViewPos;   // byte offset 432: xyz = that camera's world position (448 bytes total)
+    PointLight pointLights[32]; // byte offset 32: SceneLights.MAX_POINT_LIGHTS
+    SpotLight spotLights[8];    // byte offset 1568: SceneLights.MAX_SPOT_LIGHTS
+    vec4 numLights;   // byte offset 2080: x = directional (1.0 = active), y = point count, z = spot count, w = shadow map slope bias
+    vec4 viewPos;     // byte offset 2096: xyz = camera position, w = groundY
+    mat4 view;        // byte offset 2112
+    mat4 proj;        // byte offset 2176
+    mat4 lightSpaceMatrix; // byte offset 2240: directional shadow map view-projection
+    mat4 previewViewProj;  // byte offset 2304: selected Camera entity's view-projection (picture-in-picture pass)
+    vec4 previewViewPos;   // byte offset 2368: xyz = that camera's world position (2384 bytes total)
 } u_Lights;
 
 // Shared linear/repeat sampler for every material channel
@@ -119,6 +119,18 @@ vec3 computeShadingNormal(vec3 N) {
     return normalize(mat3(T, B, N) * tangentNormal);
 }
 
+// Adds one light's Lambert diffuse and Blinn-Phong specular. Specular is gated on the lit hemisphere so back faces
+// never pick up highlights.
+void accumulateLight(vec3 N, vec3 V, vec3 L, vec3 radiance, float specularStrength, float shininess,
+                     inout vec3 diffuse, inout vec3 specular) {
+    float diff = max(dot(N, L), 0.0);
+    diffuse += diff * radiance;
+    if (diff > 0.0 && specularStrength > 0.0) {
+        vec3 H = normalize(L + V);
+        specular += pow(max(dot(N, H), 0.0), shininess) * specularStrength * radiance;
+    }
+}
+
 void main() {
     // Dynamic Ground Shadow Blob Pass (PassFlags == 1.0)
     if (u_PushConstants.params.x > 0.5) {
@@ -160,59 +172,48 @@ void main() {
     vec3 eyePos = (u_PushConstants.texIndices2.z == 1) ? u_Lights.previewViewPos.xyz : u_Lights.viewPos.xyz;
     vec3 V = normalize(eyePos - vFragPos);
 
-    vec3 L = vec3(0.0, 1.0, 0.0);
-    float attenuation = 1.0;
-    float shadow = 1.0;
-    vec3 lightColor = vec3(1.0, 1.0, 1.0);
-    float intensity = 1.0;
-    bool hasLight = false;
+    // Every active light accumulates into the same diffuse/specular sums in this single forward pass
+    vec3 diffuse = vec3(0.0);
+    vec3 specular = vec3(0.0);
 
-    if (u_Lights.numLights.z > 0.5) {
-        // Spot Light
-        vec3 lightVector = u_Lights.spotLights.position.xyz - vFragPos;
+    if (u_Lights.numLights.x > 0.5) {
+        // Directional Light: both biases use the geometric normal so normal-map detail never causes acne
+        vec3 L = normalize(-u_Lights.dirLight.direction.xyz);
+        float shadow = computeDirectionalShadow(vFragPos, geomN, clamp(dot(geomN, L), 0.0, 1.0));
+        vec3 radiance = u_Lights.dirLight.color.rgb * u_Lights.dirLight.color.a * shadow;
+        accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
+    }
+
+    int pointCount = min(int(u_Lights.numLights.y), 32);
+    for (int i = 0; i < pointCount; i++) {
+        // Point Light
+        PointLight light = u_Lights.pointLights[i];
+        vec3 lightVector = light.position.xyz - vFragPos;
         float dist = length(lightVector);
-        L = normalize(lightVector);
-        attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
+        vec3 L = normalize(lightVector);
+        float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
+        vec3 radiance = light.color.rgb * light.color.a * attenuation;
+        accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
+    }
 
-        vec3 spotDir = normalize(-u_Lights.spotLights.direction.xyz);
+    int spotCount = min(int(u_Lights.numLights.z), 8);
+    for (int i = 0; i < spotCount; i++) {
+        // Spot Light
+        SpotLight light = u_Lights.spotLights[i];
+        vec3 lightVector = light.position.xyz - vFragPos;
+        float dist = length(lightVector);
+        vec3 L = normalize(lightVector);
+        float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
+
+        vec3 spotDir = normalize(-light.direction.xyz);
         float theta = dot(L, spotDir);
-        float innerCutoff = u_Lights.spotLights.position.w > 0.0 ? u_Lights.spotLights.position.w : 0.93;
-        float outerCutoff = u_Lights.spotLights.direction.w > 0.0 ? u_Lights.spotLights.direction.w : 0.82;
+        float innerCutoff = light.position.w > 0.0 ? light.position.w : 0.93;
+        float outerCutoff = light.direction.w > 0.0 ? light.direction.w : 0.82;
         float spotIntensity = clamp((theta - outerCutoff) / max(innerCutoff - outerCutoff, 0.0001), 0.0, 1.0);
         attenuation *= spotIntensity;
 
-        lightColor = u_Lights.spotLights.color.rgb;
-        intensity = u_Lights.spotLights.color.a;
-        hasLight = true;
-    } else if (u_Lights.numLights.y > 0.5) {
-        // Point Light
-        vec3 lightVector = u_Lights.pointLights.position.xyz - vFragPos;
-        float dist = length(lightVector);
-        L = normalize(lightVector);
-        attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
-
-        lightColor = u_Lights.pointLights.color.rgb;
-        intensity = u_Lights.pointLights.color.a;
-        hasLight = true;
-    } else if (u_Lights.numLights.x > 0.5) {
-        // Directional Light: both biases use the geometric normal so normal-map detail never causes acne
-        L = normalize(-u_Lights.dirLight.direction.xyz);
-        shadow = computeDirectionalShadow(vFragPos, geomN, clamp(dot(geomN, L), 0.0, 1.0));
-        lightColor = u_Lights.dirLight.color.rgb;
-        intensity = u_Lights.dirLight.color.a;
-        hasLight = true;
-    }
-
-    vec3 radiance = lightColor * intensity * attenuation * shadow;
-
-    float diff = max(dot(N, L), 0.0);
-    vec3 diffuse = diff * radiance;
-
-    // Blinn-Phong specular, gated on the lit hemisphere so back faces never pick up highlights
-    vec3 specular = vec3(0.0);
-    if (hasLight && diff > 0.0 && specularStrength > 0.0) {
-        vec3 H = normalize(L + V);
-        specular = pow(max(dot(N, H), 0.0), shininess) * specularStrength * radiance;
+        vec3 radiance = light.color.rgb * light.color.a * attenuation;
+        accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
     }
 
     vec3 ambient = max(u_Lights.dirLight.color.rgb * 0.35, vec3(0.35, 0.35, 0.38)) * lightmap;

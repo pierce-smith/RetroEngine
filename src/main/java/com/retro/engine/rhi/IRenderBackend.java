@@ -20,9 +20,11 @@ public interface IRenderBackend {
     /** Perspective parameters for the scene camera (editor default 50 deg / 0.1 / 500; Play mode uses the Main Camera's). */
     default void setCameraProjection(float fovDeg, float near, float far) {}
     
-    default void setSceneLight(int lightType, float posX, float posY, float posZ, 
-                              float dirX, float dirY, float dirZ, 
-                              float r, float g, float b, float intensity) {}
+    /**
+     * Active Directional, Point and Spot lights for the lit scene passes. An empty set falls back to the backend's
+     * default sun. The set is copied, never retained.
+     */
+    default void setSceneLights(SceneLights lights) {}
 
     /**
      * Screen-space NDC rect the offscreen scene image is composited into (the docked Scene tile),

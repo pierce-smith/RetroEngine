@@ -7,13 +7,30 @@ using namespace metal;
 // decodes to PICK_ID_NONE (0) and MetalBackend undoes the XOR on readback. The albedo alpha cutout matches
 // shadow_depth.metal so cut-out foliage is transparent to picks exactly where it renders transparent.
 
+// Must stay byte-identical to the light structs in blinn_phong.metal
+struct PointLight {
+    float4 position;          // xyz = position
+    float4 color;             // rgb = color, a = intensity
+};
+
+struct SpotLight {
+    float4 position;          // xyz = position
+    float4 direction;         // xyz = direction
+    float4 color;             // rgb = color, a = intensity
+};
+
+struct LocalLights {
+    PointLight pointLights[32]; // 0
+    SpotLight spotLights[8];    // 1024 (1408 bytes total)
+};
+
 // Must stay byte-identical to the struct in blinn_phong.metal (offsets locked to MetalUniformStream.OFFSET_*)
 struct Uniforms {
     float4x4 mvp;
     float4x4 model;
-    float4 lightDirIntensity;
-    float4 lightPosType;
-    float4 lightColor;
+    float4 dirLight;
+    float4 numLights;
+    float4 dirLightColor;
     float4 ambientColor;
     float4 fogColorDensity;
     float4 matParams;
@@ -25,6 +42,7 @@ struct Uniforms {
     float4 surface;
     float4 viewPos;
     uint pickId;
+    constant LocalLights* localLights;
 };
 
 // Must stay byte-identical to the struct in blinn_phong.metal

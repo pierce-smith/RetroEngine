@@ -1,5 +1,6 @@
 package com.retro.engine.backend.metal;
 
+import com.retro.engine.rhi.SceneLights;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.FloatBuffer;
@@ -29,15 +30,23 @@ public class MetalUniformStream {
     public static final int SLOT_BASE_PREVIEW_ENTITIES = SLOT_BASE_PREVIEW_SHADOW_BLOBS + 64;
     public static final int SLOT_BASE_PICK_ENTITIES = SLOT_BASE_PREVIEW_ENTITIES + MAX_ENTITIES_PER_FRAME;
     public static final int SLOTS_PER_FRAME = SLOT_BASE_PICK_ENTITIES + MAX_ENTITIES_PER_FRAME;
-    private static final long FRAME_SLOT_SIZE = UNIFORM_STRIDE * SLOTS_PER_FRAME;
+    // One LocalLights block (blinn_phong.metal) per frame follows the uniform slots: point and spot light arrays are
+    // written once per frame and every lit draw references them through Uniforms.localLights
+    public static final long LIGHT_BLOCK_POINT_STRIDE = 32L;  // position, color (a = intensity)
+    public static final long LIGHT_BLOCK_SPOT_STRIDE = 48L;   // position, direction, color (a = intensity)
+    public static final long LIGHT_BLOCK_SPOTS_OFFSET = LIGHT_BLOCK_POINT_STRIDE * SceneLights.MAX_POINT_LIGHTS;
+    // 1408-byte LocalLights struct rounded up to keep the frame regions 256-byte aligned
+    public static final long LIGHT_BLOCK_SIZE = 1536L;
+    private static final long LIGHT_BLOCK_FRAME_OFFSET = UNIFORM_STRIDE * SLOTS_PER_FRAME;
+    private static final long FRAME_SLOT_SIZE = LIGHT_BLOCK_FRAME_OFFSET + LIGHT_BLOCK_SIZE;
     private static final long TOTAL_RING_BUFFER_SIZE = FRAME_SLOT_SIZE * RING_SLOTS;
 
     // Locked Byte Offsets for MSL Uniforms Struct
     public static final long OFFSET_MVP = 0L;
     public static final long OFFSET_MODEL = 64L;
-    public static final long OFFSET_LIGHT_DIR = 128L;
-    public static final long OFFSET_LIGHT_POS = 144L;
-    public static final long OFFSET_LIGHT_COLOR = 160L;
+    public static final long OFFSET_DIR_LIGHT = 128L;        // xyz = direction, w = intensity
+    public static final long OFFSET_NUM_LIGHTS = 144L;       // x = directional (1.0 = active), y = point count, z = spot count
+    public static final long OFFSET_DIR_LIGHT_COLOR = 160L;  // rgb = color
     public static final long OFFSET_AMBIENT = 176L;
     public static final long OFFSET_FOG = 192L;
     public static final long OFFSET_MAT_PARAMS = 208L;
@@ -49,6 +58,7 @@ public class MetalUniformStream {
     public static final long OFFSET_SURFACE = 304L;
     public static final long OFFSET_VIEW_POS = 320L;
     public static final long OFFSET_PICK_ID = 336L;
+    public static final long OFFSET_LOCAL_LIGHTS = 344L;      // gpuAddress of the frame's LocalLights block
 
     // materialMask bits: which DrawArgs texture channels the fragment stage samples
     public static final int MATERIAL_ALBEDO = 1;
@@ -156,6 +166,53 @@ public class MetalUniformStream {
     public void writeLightSpaceMatrix(long baseAddr) {
         FloatBuffer fb = MemoryUtil.memFloatBuffer(baseAddr + OFFSET_LIGHT_SPACE, 16);
         fb.put(matLightSpace);
+    }
+
+    /**
+     * Writes the Point and Spot light arrays into the current frame's LocalLights block. Call once per frame, before the
+     * lit draws that reference it through {@link #writeDrawLights}. Only the first pointCount / spotCount entries are
+     * written; the shader loops stop at those counts.
+     */
+    public void writeLightBlock(long pBufferContents, SceneLights lights) {
+        long block = pBufferContents + getCurrentSlotOffset() + LIGHT_BLOCK_FRAME_OFFSET;
+        for (int i = 0; i < lights.pointCount(); i++) {
+            SceneLights.Light point = lights.point(i);
+            long addr = block + LIGHT_BLOCK_POINT_STRIDE * i;
+            putFloat4(addr, point.posX, point.posY, point.posZ, 0.0f);
+            putFloat4(addr + 16L, point.r, point.g, point.b, point.intensity);
+        }
+        for (int i = 0; i < lights.spotCount(); i++) {
+            SceneLights.Light spot = lights.spot(i);
+            long addr = block + LIGHT_BLOCK_SPOTS_OFFSET + LIGHT_BLOCK_SPOT_STRIDE * i;
+            putFloat4(addr, spot.posX, spot.posY, spot.posZ, 0.0f);
+            putFloat4(addr + 16L, spot.dirX, spot.dirY, spot.dirZ, 0.0f);
+            putFloat4(addr + 32L, spot.r, spot.g, spot.b, spot.intensity);
+        }
+    }
+
+    /**
+     * Writes the directional light, the numLights counts and the current frame's LocalLights address into the uniform
+     * slot at baseAddr. An absent directional light is zeroed; the lit shader skips it through numLights.x.
+     */
+    public void writeDrawLights(long baseAddr, SceneLights lights) {
+        boolean hasDir = lights.hasDirectional();
+        SceneLights.Light dir = lights.directional();
+
+        putFloat4(baseAddr + OFFSET_DIR_LIGHT, dir.dirX, dir.dirY, dir.dirZ, hasDir ? dir.intensity : 0.0f);
+        putFloat4(baseAddr + OFFSET_NUM_LIGHTS, hasDir ? 1.0f : 0.0f, lights.pointCount(), lights.spotCount(), 0.0f);
+        if (hasDir) {
+            putFloat4(baseAddr + OFFSET_DIR_LIGHT_COLOR, dir.r, dir.g, dir.b, dir.intensity);
+        } else {
+            putFloat4(baseAddr + OFFSET_DIR_LIGHT_COLOR, 0.0f, 0.0f, 0.0f, 0.0f);
+        }
+        MemoryUtil.memPutLong(baseAddr + OFFSET_LOCAL_LIGHTS, streamingUniformAddress + getCurrentSlotOffset() + LIGHT_BLOCK_FRAME_OFFSET);
+    }
+
+    private static void putFloat4(long addr, float x, float y, float z, float w) {
+        MemoryUtil.memPutFloat(addr, x);
+        MemoryUtil.memPutFloat(addr + 4L, y);
+        MemoryUtil.memPutFloat(addr + 8L, z);
+        MemoryUtil.memPutFloat(addr + 12L, w);
     }
 
     /** lightSpace * model for the shadow map depth pass; also leaves the model matrix in getModelMatrix(). */

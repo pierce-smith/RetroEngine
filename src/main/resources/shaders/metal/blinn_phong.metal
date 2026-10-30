@@ -8,13 +8,31 @@ using namespace metal;
 // Every draw reads its resources from a Metal 3 argument buffer table bound once per encoder at buffer(0);
 // the draw's [[base_instance]] selects its DrawArgs entry, so draws issue no per-draw binding calls.
 
-// Byte offsets are locked to MetalUniformStream.OFFSET_*; shadow_depth.metal declares the same struct.
+// Per-frame local light block, written once per frame by MetalUniformStream.writeLightBlock and referenced from every
+// draw's Uniforms.localLights. Array sizes are SceneLights.MAX_POINT_LIGHTS / MAX_SPOT_LIGHTS.
+struct PointLight {
+    float4 position;          // xyz = position
+    float4 color;             // rgb = color, a = intensity
+};
+
+struct SpotLight {
+    float4 position;          // xyz = position
+    float4 direction;         // xyz = direction
+    float4 color;             // rgb = color, a = intensity
+};
+
+struct LocalLights {
+    PointLight pointLights[32]; // 0
+    SpotLight spotLights[8];    // 1024 (1408 bytes total)
+};
+
+// Byte offsets are locked to MetalUniformStream.OFFSET_*; shadow_depth.metal and entity_id.metal declare the same struct.
 struct Uniforms {
     float4x4 mvp;             // 0
     float4x4 model;           // 64
-    float4 lightDirIntensity; // 128: xyz = lightDir, w = intensity
-    float4 lightPosType;      // 144: xyz = lightPos, w = lightType (0 = DIR, 1 = POINT, 2 = SPOT)
-    float4 lightColor;        // 160: rgb = lightColor
+    float4 dirLight;          // 128: directional light xyz = direction, w = intensity
+    float4 numLights;         // 144: x = directional (1.0 = active), y = point count, z = spot count
+    float4 dirLightColor;     // 160: rgb = directional light color
     float4 ambientColor;      // 176: rgb = ambient
     float4 fogColorDensity;   // 192: rgb = fogColor, w = fogDensity
     float4 matParams;         // 208: x = reflectStrength, y = shadowOpacity, z = shadowMapBias
@@ -26,6 +44,7 @@ struct Uniforms {
     float4 surface;           // 304: x = specularStrength, y = roughness, z = normalStrength, w = emissiveIntensity
     float4 viewPos;           // 320: xyz = camera world position
     uint pickId;              // 336: Color-ID pick value (read only by entity_id.metal)
+    constant LocalLights* localLights; // 344: gpuAddress of this frame's LocalLights block (352 bytes total)
 };
 
 // 64-byte argument buffer entry written by MetalPassEncoder (MetalUniformStream.DRAW_ARGS_*).
@@ -181,6 +200,18 @@ vertex VertexOut vertexMain(uint vertexID [[vertex_id]],
     return out;
 }
 
+// Adds one light's Lambert diffuse and Blinn-Phong specular. Specular is gated on the lit hemisphere so back faces
+// never pick up highlights.
+static void accumulateLight(float3 N, float3 V, float3 L, float3 radiance, float specularStrength, float shininess,
+                            thread float3& diffuse, thread float3& specular) {
+    float diff = max(dot(N, L), 0.0);
+    diffuse += diff * radiance;
+    if (diff > 0.0 && specularStrength > 0.0) {
+        float3 H = normalize(L + V);
+        specular += pow(max(dot(N, H), 0.0), shininess) * specularStrength * radiance;
+    }
+}
+
 fragment float4 fragmentMain(VertexOut in [[stage_in]],
                              constant DrawArgs* draws [[buffer(0)]],
                              sampler smp [[sampler(0)]],
@@ -272,43 +303,52 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
 
     float3 V = normalize(uniforms.viewPos.xyz - in.worldPos);
 
-    int lightType = int(uniforms.lightPosType.w);
-    float3 L;
-    float attenuation = 1.0;
-    float shadow = 1.0;
+    // Every active light accumulates into the same diffuse/specular sums in this single forward pass
+    float3 numLights = uniforms.numLights.xyz;
+    float3 diffuse = float3(0.0);
+    float3 specular = float3(0.0);
 
-    if (lightType == 0) {
-        // Both biases use the geometric normal so normal-map detail never causes acne
-        L = normalize(-uniforms.lightDirIntensity.xyz);
-        shadow = computeDirectionalShadow(in.worldPos, geomN, uniforms.lightSpace, clamp(dot(geomN, L), 0.0, 1.0),
-                                          uniforms.matParams.z, shadowMap, shadowSmp);
-    } else {
-        float3 lightPos = uniforms.lightPosType.xyz;
-        float3 lightVector = lightPos - in.worldPos;
-        float dist = length(lightVector);
-        L = normalize(lightVector);
-        attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
-
-        if (lightType == 2) {
-            float3 spotDir = normalize(-uniforms.lightDirIntensity.xyz);
-            float theta = dot(L, spotDir);
-            float innerCutoff = 0.93;
-            float outerCutoff = 0.82;
-            float spotIntensity = clamp((theta - outerCutoff) / (innerCutoff - outerCutoff), 0.0, 1.0);
-            attenuation *= spotIntensity;
-        }
+    if (numLights.x > 0.5) {
+        // Directional Light: both biases use the geometric normal so normal-map detail never causes acne
+        float3 L = normalize(-uniforms.dirLight.xyz);
+        float shadow = computeDirectionalShadow(in.worldPos, geomN, uniforms.lightSpace, clamp(dot(geomN, L), 0.0, 1.0),
+                                                uniforms.matParams.z, shadowMap, shadowSmp);
+        float3 radiance = uniforms.dirLightColor.rgb * uniforms.dirLight.w * shadow;
+        accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
     }
 
-    float3 radiance = uniforms.lightColor.rgb * uniforms.lightDirIntensity.w * attenuation * shadow;
+    constant LocalLights& localLights = *uniforms.localLights;
 
-    float diff = max(dot(N, L), 0.0);
-    float3 diffuse = diff * radiance;
+    int pointCount = min(int(numLights.y), 32);
+    for (int i = 0; i < pointCount; i++) {
+        // Point Light
+        constant PointLight& light = localLights.pointLights[i];
+        float3 lightVector = light.position.xyz - in.worldPos;
+        float dist = length(lightVector);
+        float3 L = normalize(lightVector);
+        float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
+        float3 radiance = light.color.rgb * light.color.a * attenuation;
+        accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
+    }
 
-    // Blinn-Phong specular, gated on the lit hemisphere so back faces never pick up highlights
-    float3 specular = float3(0.0);
-    if (diff > 0.0 && specularStrength > 0.0) {
-        float3 H = normalize(L + V);
-        specular = pow(max(dot(N, H), 0.0), shininess) * specularStrength * radiance;
+    int spotCount = min(int(numLights.z), 8);
+    for (int i = 0; i < spotCount; i++) {
+        // Spot Light
+        constant SpotLight& light = localLights.spotLights[i];
+        float3 lightVector = light.position.xyz - in.worldPos;
+        float dist = length(lightVector);
+        float3 L = normalize(lightVector);
+        float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
+
+        float3 spotDir = normalize(-light.direction.xyz);
+        float theta = dot(L, spotDir);
+        float innerCutoff = 0.93;
+        float outerCutoff = 0.82;
+        float spotIntensity = clamp((theta - outerCutoff) / (innerCutoff - outerCutoff), 0.0, 1.0);
+        attenuation *= spotIntensity;
+
+        float3 radiance = light.color.rgb * light.color.a * attenuation;
+        accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
     }
 
     float3 ambient = max(uniforms.ambientColor.rgb, float3(0.35, 0.35, 0.38)) * lightmap;

@@ -4,6 +4,7 @@ import com.retro.engine.rhi.BufferDesc;
 import com.retro.engine.rhi.GraphicsAPI;
 import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.rhi.RenderQueue;
+import com.retro.engine.rhi.SceneLights;
 import com.retro.engine.rhi.TextureDesc;
 import com.retro.engine.rhi.ViewportSpec;
 import org.lwjgl.PointerBuffer;
@@ -68,11 +69,8 @@ public class VulkanBackend implements IRenderBackend {
     private float camPitch = 0.0f;
     private float camYaw = 0.0f;
 
-    private int activeLightType = 0;
-    private float activeLightPosX = 0.0f, activeLightPosY = 5.0f, activeLightPosZ = 0.0f;
-    private float activeLightDirX = -0.5f, activeLightDirY = -1.0f, activeLightDirZ = -0.5f;
-    private float activeLightR = 1.0f, activeLightG = 0.95f, activeLightB = 0.85f;
-    private float activeLightIntensity = 1.2f;
+    private final SceneLights sceneLights = new SceneLights();
+    { sceneLights.setDefaultSun(); }
 
     // Submitted queue (resolved into drawBuffers at beginFrame, then read while recording); null = no scene draws
     private RenderQueue submittedQueue = null;
@@ -177,11 +175,7 @@ public class VulkanBackend implements IRenderBackend {
 
         gpuCache.updateLightUniformBuffer(
                 deviceManager,
-                activeLightType,
-                activeLightPosX, activeLightPosY, activeLightPosZ,
-                activeLightDirX, activeLightDirY, activeLightDirZ,
-                activeLightR, activeLightG, activeLightB,
-                activeLightIntensity,
+                sceneLights,
                 cameraEye[0], cameraEye[1], cameraEye[2],
                 0.0f,
                 viewMatrix,
@@ -474,12 +468,12 @@ public class VulkanBackend implements IRenderBackend {
     }
 
     @Override
-    public void setSceneLight(int type, float posX, float posY, float posZ, float dirX, float dirY, float dirZ, float r, float g, float b, float intensity) {
-        this.activeLightType = type;
-        this.activeLightPosX = posX; this.activeLightPosY = posY; this.activeLightPosZ = posZ;
-        this.activeLightDirX = dirX; this.activeLightDirY = dirY; this.activeLightDirZ = dirZ;
-        this.activeLightR = r; this.activeLightG = g; this.activeLightB = b;
-        this.activeLightIntensity = intensity;
+    public void setSceneLights(SceneLights lights) {
+        if (lights == null || lights.isEmpty()) {
+            sceneLights.setDefaultSun();
+        } else {
+            sceneLights.copyFrom(lights);
+        }
     }
 
     @Override
