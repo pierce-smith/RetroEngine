@@ -36,6 +36,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import static org.lwjgl.glfw.GLFW.*;
+
 /**
  * Dynamic reflection-driven input delegate for InspectorPanel UI controls.
  */
@@ -47,6 +49,10 @@ public class InspectorInputDelegate {
 
     public static void processInspectorClick(float ndcX, float ndcY, EditorWorkspace manager) {
         if (manager == null) return;
+        // Clicking inside the focused field keeps typing; anywhere else is focus loss, which commits
+        if (InspectorPanel.isOverActiveField(ndcX, ndcY)) return;
+        commitInlineEdit(manager);
+
         Entity selected = manager.getSelectedEntity();
         if (selected == null || ndcX < 0.55f) return;
 
@@ -156,6 +162,10 @@ public class InspectorInputDelegate {
                                     manager.getCommandHistory().executeCommand(cmd);
                                     return;
                                 }
+                                if (ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.FIELD_X1) {
+                                    beginInlineEdit(sc, fName, null, fieldType, prop, label, valStr, valStr);
+                                    return;
+                                }
                             }
                             curY -= InspectorPanel.ROW_ADVANCE;
                         } else if (fieldType.isEnum()) {
@@ -179,14 +189,7 @@ public class InspectorInputDelegate {
                             curY -= InspectorPanel.ROW_ADVANCE;
                         } else if (fieldType == String.class) {
                             if (inRow && ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.VALUE_X1) {
-                                UISoundPlayer.play(UISound.OPEN_MODAL);
-                                String input = NativeFileDialog.promptInput("Edit " + label, label + ":", valStr);
-                                if (input != null && !input.equals(valStr)) {
-                                    EditorCommands.ScriptPropertyOverrideCommand cmd = new EditorCommands.ScriptPropertyOverrideCommand(sc, fName, valStr, input);
-                                    manager.getCommandHistory().executeCommand(cmd);
-                                } else {
-                                    UISoundPlayer.play(UISound.CLOSE_MODAL);
-                                }
+                                beginInlineEdit(sc, fName, null, fieldType, prop, label, valStr, valStr);
                                 return;
                             }
                             curY -= InspectorPanel.ROW_ADVANCE;
@@ -265,17 +268,14 @@ public class InspectorInputDelegate {
                     execute(manager, comp, field, currentVal, newVal, label);
                     return true;
                 }
+                if (ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.FIELD_X1) {
+                    beginInlineEdit(comp, field.getName(), field, field.getType(), prop, label, val, Float.toString(currentVal));
+                    return true;
+                }
             }
             case STRING -> {
                 if (ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.VALUE_X1) {
-                    UISoundPlayer.play(UISound.OPEN_MODAL);
-                    String current = (val != null) ? (String) val : "";
-                    String input = NativeFileDialog.promptInput("Edit " + label, label + ":", current);
-                    if (input != null && !input.equals(current)) {
-                        execute(manager, comp, field, val, input, label);
-                    } else {
-                        UISoundPlayer.play(UISound.CLOSE_MODAL);
-                    }
+                    beginInlineEdit(comp, field.getName(), field, String.class, prop, label, val, (val != null) ? (String) val : "");
                     return true;
                 }
             }
@@ -286,6 +286,119 @@ public class InspectorInputDelegate {
 
     private static void execute(EditorWorkspace manager, Component comp, Field field, Object oldVal, Object newVal, String label) {
         manager.getCommandHistory().executeCommand(new EditorCommands.ModifyPropertyCommand(comp, field, oldVal, newVal, label));
+    }
+
+    // --- Inline text field editing (focus/buffer state lives in InspectorPanel) ---
+
+    /** Component field being edited; null for user script fields, which commit as property overrides. */
+    private static Field editField;
+    private static Class<?> editType;
+    private static InspectorProperty editMeta;
+    private static String editLabel;
+    private static Object editOldValue;
+
+    public static boolean isEditingText() {
+        return InspectorPanel.isEditing();
+    }
+
+    private static void beginInlineEdit(Component comp, String key, Field field, Class<?> type, InspectorProperty meta,
+                                        String label, Object oldValue, String initialText) {
+        UISoundPlayer.play(UISound.CLICK);
+        editField = field;
+        editType = type;
+        editMeta = meta;
+        editLabel = label;
+        editOldValue = oldValue;
+        InspectorPanel.beginInlineEdit(comp, key, initialText);
+    }
+
+    /** Key events while a field is focused: Enter commits, Escape cancels, Backspace deletes. */
+    public static void handleKey(int key, int action, EditorWorkspace manager) {
+        if (!InspectorPanel.isEditing() || action == GLFW_RELEASE) return;
+        switch (key) {
+            case GLFW_KEY_ENTER, GLFW_KEY_KP_ENTER -> commitInlineEdit(manager);
+            case GLFW_KEY_ESCAPE -> cancelInlineEdit();
+            case GLFW_KEY_BACKSPACE -> InspectorPanel.backspaceInline();
+            default -> {}
+        }
+    }
+
+    /** Typed characters while a field is focused; numeric fields accept digits, '-', and '.' (non-integer only). */
+    public static void handleChar(int codepoint) {
+        if (!InspectorPanel.isEditing()) return;
+        if (editType == String.class) {
+            if (codepoint >= 32 && codepoint != 127) InspectorPanel.typeInline(codepoint);
+            return;
+        }
+        boolean isInt = editType == int.class || editType == Integer.class;
+        if ((codepoint >= '0' && codepoint <= '9') || codepoint == '-' || (codepoint == '.' && !isInt)) {
+            InspectorPanel.typeInline(codepoint);
+        }
+    }
+
+    public static void cancelInlineEdit() {
+        if (!InspectorPanel.isEditing()) return;
+        clearInlineEdit();
+    }
+
+    /** Parses the buffer to the field type and commits it as an undoable command; invalid input reverts. */
+    public static void commitInlineEdit(EditorWorkspace manager) {
+        if (!InspectorPanel.isEditing()) return;
+        Component comp = InspectorPanel.getActiveComponent();
+        String key = InspectorPanel.getActivePropertyKey();
+        String text = InspectorPanel.getActiveInputBuffer().toString();
+        Field field = editField;
+        Class<?> type = editType;
+        InspectorProperty meta = editMeta;
+        String label = editLabel;
+        Object oldValue = editOldValue;
+        clearInlineEdit();
+
+        // The edited component must still belong to the selection (it may have been removed mid-edit)
+        Entity selected = (manager != null) ? manager.getSelectedEntity() : null;
+        if (selected == null || !selected.getAllComponents().contains(comp)) return;
+
+        if (field == null && comp instanceof ScriptComponent sc) {
+            // Script fields: clamp only when the annotation declares a range other than its 0..100 default
+            boolean clamp = meta != null && (meta.min() != 0.0f || meta.max() != 100.0f);
+            Object parsed = parseInlineValue(text, type, meta, clamp);
+            String oldStr = (String) oldValue;
+            if (parsed == null || parsed.toString().equals(oldStr)) return;
+            manager.getCommandHistory().executeCommand(new EditorCommands.ScriptPropertyOverrideCommand(sc, key, oldStr, parsed.toString()));
+        } else if (field != null) {
+            Object parsed = parseInlineValue(text, type, meta, true);
+            if (parsed == null || parsed.equals(oldValue)) return;
+            execute(manager, comp, field, oldValue, parsed, label);
+        }
+    }
+
+    private static void clearInlineEdit() {
+        editField = null;
+        editType = null;
+        editMeta = null;
+        editLabel = null;
+        editOldValue = null;
+        InspectorPanel.endInlineEdit();
+    }
+
+    /** Returns the boxed value for {@code type}, clamped to meta's [min, max] when requested, or null if unparseable. */
+    private static Object parseInlineValue(String text, Class<?> type, InspectorProperty meta, boolean clamp) {
+        if (type == String.class) return text;
+        clamp &= meta != null;
+        try {
+            String s = text.trim();
+            if (type == int.class || type == Integer.class) {
+                int v = Integer.parseInt(s);
+                return clamp ? Math.max((int) Math.ceil(meta.min()), Math.min((int) Math.floor(meta.max()), v)) : v;
+            }
+            double v = Double.parseDouble(s);
+            if (!Double.isFinite(v)) return null;
+            if (clamp) v = Math.max(meta.min(), Math.min(meta.max(), v));
+            if (type == double.class || type == Double.class) return v;
+            return (float) v;
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static AssetType parseAssetType(String typeStr) {

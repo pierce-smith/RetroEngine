@@ -82,6 +82,63 @@ public class InspectorPanel {
     public static void scroll(float delta) { scrollOffset = Math.max(0.0f, Math.min(maxScroll, scrollOffset + delta)); }
     public static void resetScroll() { scrollOffset = 0.0f; }
 
+    // Inline text field focus: the property (keyed by field name within its owning component) being typed into.
+    // Driven by InspectorInputDelegate; the focused value well's rect is recorded each frame for focus hit-testing.
+    private static Component activeComponent = null;
+    private static String activePropertyKey = null;
+    private static final StringBuilder activeInputBuffer = new StringBuilder(64);
+    private static boolean activeSelectAll = false;
+    private static boolean activeWellVisible = false;
+    private static float activeWellX0, activeWellY0, activeWellX1, activeWellY1;
+
+    public static boolean isEditing() { return activePropertyKey != null; }
+    public static Component getActiveComponent() { return activeComponent; }
+    public static String getActivePropertyKey() { return activePropertyKey; }
+    public static CharSequence getActiveInputBuffer() { return activeInputBuffer; }
+
+    public static boolean isActiveField(Component comp, String key) {
+        return activePropertyKey != null && comp == activeComponent && activePropertyKey.equals(key);
+    }
+
+    /** Focuses a value well; the initial text starts fully selected, so the first keystroke replaces it. */
+    public static void beginInlineEdit(Component comp, String key, String initialText) {
+        activeComponent = comp;
+        activePropertyKey = key;
+        activeInputBuffer.setLength(0);
+        if (initialText != null) activeInputBuffer.append(initialText);
+        activeSelectAll = activeInputBuffer.length() > 0;
+        activeWellVisible = false;
+    }
+
+    public static void endInlineEdit() {
+        activeComponent = null;
+        activePropertyKey = null;
+        activeInputBuffer.setLength(0);
+        activeSelectAll = false;
+        activeWellVisible = false;
+    }
+
+    public static void typeInline(int codepoint) {
+        if (activeSelectAll) activeInputBuffer.setLength(0);
+        activeSelectAll = false;
+        activeInputBuffer.appendCodePoint(codepoint);
+    }
+
+    public static void backspaceInline() {
+        if (activeSelectAll) {
+            activeInputBuffer.setLength(0);
+        } else if (activeInputBuffer.length() > 0) {
+            activeInputBuffer.setLength(activeInputBuffer.offsetByCodePoints(activeInputBuffer.length(), -1));
+        }
+        activeSelectAll = false;
+    }
+
+    /** True when (ndcX, ndcY) lies on the focused value well as drawn last frame. */
+    public static boolean isOverActiveField(float ndcX, float ndcY) {
+        return isEditing() && activeWellVisible
+                && ndcX >= activeWellX0 && ndcX <= activeWellX1 && ndcY >= activeWellY0 && ndcY <= activeWellY1;
+    }
+
     public static boolean isRowVisible(float drawY) {
         return drawY + CTRL_ABOVE <= VIEW_TOP && drawY - CTRL_BELOW >= VIEW_BOTTOM;
     }
@@ -127,6 +184,7 @@ public class InspectorPanel {
     public static void render(UIContext ui, Entity selectedEntity, List<AssetMeta> assetDirectory) {
         UIGeometryBatch.Buffer buffer = ui.geometry();
         UIGeometryBatch.addQuad(buffer, 0.55f, -0.5f, 1.0f, 1.0f, EditorTheme.SURFACE, 1.0f);
+        activeWellVisible = false;
 
         if (selectedEntity == null) {
             resetScroll();
@@ -197,11 +255,13 @@ public class InspectorPanel {
                                 return ax == 0 ? vectorGroupName(label) : "";
                             });
 
+                            boolean editing = isActiveField(comp, field.getName());
                             rowLabel(buffer, display, midY);
-                            well(buffer, VALUE_X0, FIELD_X1, drawY);
+                            if (editing) activeWell(buffer, VALUE_X0, FIELD_X1, drawY);
+                            else well(buffer, VALUE_X0, FIELD_X1, drawY);
 
                             float textX = VALUE_X0 + 0.008f;
-                            if (isColor) {
+                            if (isColor && !editing) {
                                 float range = prop.max() - prop.min();
                                 float t = range > 0.0f ? Math.max(0.0f, Math.min(1.0f, (floatVal - prop.min()) / range)) : 0.0f;
                                 float inset = 0.004f;
@@ -214,19 +274,28 @@ public class InspectorPanel {
                                 textX = axisBadge(buffer, axis, VALUE_X0 + 0.005f, drawY) + 0.008f;
                             }
 
-                            strBuilder.setLength(0);
-                            appendFloat(strBuilder, floatVal, isColor ? 2 : 1);
-                            UIGeometryBatch.addTruncatedText(buffer, strBuilder, textX, textTop(midY, VALUE_TEXT), FIELD_X1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+                            if (editing) {
+                                renderInputText(buffer, textX, FIELD_X1 - 0.006f, midY);
+                            } else {
+                                strBuilder.setLength(0);
+                                appendFloat(strBuilder, floatVal, isColor ? 2 : 1);
+                                UIGeometryBatch.addTruncatedText(buffer, strBuilder, textX, textTop(midY, VALUE_TEXT), FIELD_X1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+                            }
 
                             renderStepper(buffer, drawY, midY);
                         }
                     } else if (p.control == Control.STRING) {
                         if (isVisible) {
-                            String strVal = (val != null) ? (String) val : "";
                             rowLabel(buffer, label, midY);
-                            well(buffer, VALUE_X0, VALUE_X1, drawY);
-                            UIGeometryBatch.addTruncatedText(buffer, strVal, VALUE_X0 + 0.008f, textTop(midY, VALUE_TEXT),
-                                    VALUE_X1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+                            if (isActiveField(comp, field.getName())) {
+                                activeWell(buffer, VALUE_X0, VALUE_X1, drawY);
+                                renderInputText(buffer, VALUE_X0 + 0.008f, VALUE_X1 - 0.006f, midY);
+                            } else {
+                                String strVal = (val != null) ? (String) val : "";
+                                well(buffer, VALUE_X0, VALUE_X1, drawY);
+                                UIGeometryBatch.addTruncatedText(buffer, strVal, VALUE_X0 + 0.008f, textTop(midY, VALUE_TEXT),
+                                        VALUE_X1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+                            }
                         }
                     } else {
                         if (isVisible) {
@@ -287,13 +356,18 @@ public class InspectorPanel {
                             curY -= ROW_ADVANCE;
                         } else if (fieldType == float.class || fieldType == Float.class || fieldType == double.class || fieldType == Double.class || fieldType == int.class || fieldType == Integer.class) {
                             if (isVisible) {
-                                float floatVal = 0.0f;
-                                try { floatVal = Float.parseFloat(valStr); } catch (Exception ignored) {}
                                 rowLabel(buffer, label, midY);
-                                well(buffer, VALUE_X0, FIELD_X1, drawY);
-                                strBuilder.setLength(0);
-                                appendFloat(strBuilder, floatVal, 1);
-                                UIGeometryBatch.addTruncatedText(buffer, strBuilder, VALUE_X0 + 0.008f, textTop(midY, VALUE_TEXT), FIELD_X1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+                                if (isActiveField(sc, fName)) {
+                                    activeWell(buffer, VALUE_X0, FIELD_X1, drawY);
+                                    renderInputText(buffer, VALUE_X0 + 0.008f, FIELD_X1 - 0.006f, midY);
+                                } else {
+                                    float floatVal = 0.0f;
+                                    try { floatVal = Float.parseFloat(valStr); } catch (Exception ignored) {}
+                                    well(buffer, VALUE_X0, FIELD_X1, drawY);
+                                    strBuilder.setLength(0);
+                                    appendFloat(strBuilder, floatVal, 1);
+                                    UIGeometryBatch.addTruncatedText(buffer, strBuilder, VALUE_X0 + 0.008f, textTop(midY, VALUE_TEXT), FIELD_X1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+                                }
                                 renderStepper(buffer, drawY, midY);
                             }
                             curY -= ROW_ADVANCE;
@@ -306,9 +380,14 @@ public class InspectorPanel {
                         } else if (fieldType == String.class) {
                             if (isVisible) {
                                 rowLabel(buffer, label, midY);
-                                well(buffer, VALUE_X0, VALUE_X1, drawY);
-                                UIGeometryBatch.addTruncatedText(buffer, valStr, VALUE_X0 + 0.008f, textTop(midY, VALUE_TEXT),
-                                        VALUE_X1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+                                if (isActiveField(sc, fName)) {
+                                    activeWell(buffer, VALUE_X0, VALUE_X1, drawY);
+                                    renderInputText(buffer, VALUE_X0 + 0.008f, VALUE_X1 - 0.006f, midY);
+                                } else {
+                                    well(buffer, VALUE_X0, VALUE_X1, drawY);
+                                    UIGeometryBatch.addTruncatedText(buffer, valStr, VALUE_X0 + 0.008f, textTop(midY, VALUE_TEXT),
+                                            VALUE_X1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+                                }
                             }
                             curY -= ROW_ADVANCE;
                         } else {
@@ -400,6 +479,34 @@ public class InspectorPanel {
     private static void well(UIGeometryBatch.Buffer buffer, float x0, float x1, float drawY) {
         UIGeometryBatch.addRoundedCard(buffer, x0, drawY - CTRL_BELOW, x1, drawY + CTRL_ABOVE, EditorTheme.RADIUS_SMALL,
                 EditorTheme.SURFACE_SUNKEN, EditorTheme.BORDER, 1.0f);
+    }
+
+    /** Focused value well (accent ring); records its rect so clicks inside it keep focus. */
+    private static void activeWell(UIGeometryBatch.Buffer buffer, float x0, float x1, float drawY) {
+        float y0 = drawY - CTRL_BELOW, y1 = drawY + CTRL_ABOVE;
+        UIGeometryBatch.addRoundedCard(buffer, x0, y0, x1, y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_SUNKEN, EditorTheme.ACCENT, 1.0f);
+        activeWellX0 = x0;
+        activeWellY0 = y0;
+        activeWellX1 = x1;
+        activeWellY1 = y1;
+        activeWellVisible = true;
+    }
+
+    /** Inline input text: tail-clipped so the end stays visible, with a selection highlight or blinking caret. */
+    private static void renderInputText(UIGeometryBatch.Buffer buffer, float x0, float x1, float midY) {
+        CharSequence visible = activeInputBuffer;
+        float caretW = 0.002f;
+        while (visible.length() > 0 && UIGeometryBatch.textWidth(buffer, visible, VALUE_TEXT) > x1 - x0 - caretW) {
+            visible = visible.subSequence(1, visible.length());
+        }
+        float w = UIGeometryBatch.textWidth(buffer, visible, VALUE_TEXT);
+        if (activeSelectAll) {
+            UIGeometryBatch.addQuad(buffer, x0 - 0.002f, midY - 0.011f, x0 + w + 0.002f, midY + 0.011f, EditorTheme.ACCENT, 0.4f);
+        }
+        UIGeometryBatch.addBoundedText(buffer, visible, x0, textTop(midY, VALUE_TEXT), x1 + 0.001f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+        if (!activeSelectAll && (System.nanoTime() / 500_000_000L) % 2 == 0) {
+            UIGeometryBatch.addQuad(buffer, x0 + w, midY - 0.010f, x0 + w + caretW, midY + 0.010f, EditorTheme.TEXT, 1.0f);
+        }
     }
 
     private static void button(UIGeometryBatch.Buffer buffer, String text, float x0, float x1, float drawY, int fill) {

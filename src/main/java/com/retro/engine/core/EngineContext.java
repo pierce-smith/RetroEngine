@@ -5,6 +5,7 @@ import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.input.EditorInputRouter;
 import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.input.HotkeyRouter;
+import com.retro.engine.editor.input.InspectorInputDelegate;
 import com.retro.engine.editor.render.SceneRenderPipeline;
 import com.retro.engine.editor.ui.panels.ViewportPanel;
 import com.retro.engine.rhi.IRenderBackend;
@@ -138,6 +139,11 @@ public class EngineContext {
                     cameraController.onCursorPos(x, y, isShiftDown, isAltDown);
                 }
             });
+
+            // Inline Inspector text fields own the keyboard while focused
+            window.setOnKeyListener((key, action, mods) -> InspectorInputDelegate.handleKey(key, action, editorManager));
+            window.setCharListener(InspectorInputDelegate::handleChar);
+            window.setTextInputCapture(InspectorInputDelegate::isEditingText);
 
             window.setOnScrollListener((xoffset, yoffset) -> {
                 if (selectionController != null) {

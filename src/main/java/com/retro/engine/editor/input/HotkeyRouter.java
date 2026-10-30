@@ -37,6 +37,12 @@ public class HotkeyRouter {
         // Snapping is DEFAULT (!isCtrlDown). Holding Cmd/Ctrl disables snapping for free movement.
         GizmoInteractor.setSnapEnabled(!isCtrlDown);
 
+        // A focused Inspector text field owns the keyboard: no hotkeys (Backspace would delete the entity), no fly camera
+        if (InspectorInputDelegate.isEditingText()) {
+            if (cameraController != null) cameraController.update(deltaTime, false, false, false, false, false, false);
+            return;
+        }
+
         boolean is1 = window.isKeyDown(GLFW_KEY_1);
         boolean is2 = window.isKeyDown(GLFW_KEY_2);
         boolean is3 = window.isKeyDown(GLFW_KEY_3);

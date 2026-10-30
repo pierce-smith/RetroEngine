@@ -106,6 +106,10 @@ public class EditorInputRouter {
         PanelRegion region = PanelRegion.getRegionAt(ndcX, ndcY, overlayManager, workspace.getDockSpace());
 
         if (action == 1) { // Press
+            // Pressing outside the Inspector is focus loss for an inline text field: commit it
+            if (workspace.getDockSpace().panelAt(ndcX, ndcY) != DockPanel.INSPECTOR) {
+                InspectorInputDelegate.commitInlineEdit(workspace);
+            }
             if (button == 1) {
                 workspace.getDockSpace().cancelDrag();
                 overlayManager.onRightClickPress(

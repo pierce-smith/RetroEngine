@@ -10,6 +10,7 @@ import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BiConsumer;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 import static org.lwjgl.glfw.GLFW.*;
@@ -72,6 +73,11 @@ public class WindowHost {
         void onKeyPress(int key, int action);
     }
 
+    @FunctionalInterface
+    public interface CharListener {
+        void onChar(int codepoint);
+    }
+
     private long windowHandle = NULL;
     private int width;
     private int height;
@@ -98,6 +104,9 @@ public class WindowHost {
 
     private KeyListener keyListener;
     private KeyPressListener keyPressListener;
+    private CharListener charListener;
+    // True while an editor text field owns the keyboard, so Escape cancels the edit instead of closing the window
+    private BooleanSupplier textInputCapture;
 
     public WindowHost(int width, int height, String title) {
         this.width = width;
@@ -174,6 +183,14 @@ public class WindowHost {
         this.keyPressListener = listener;
     }
 
+    public void setCharListener(CharListener listener) {
+        this.charListener = listener;
+    }
+
+    public void setTextInputCapture(BooleanSupplier capture) {
+        this.textInputCapture = capture;
+    }
+
     public boolean create() {
         GLFWErrorCallback.createPrint(System.err).set();
         if (!glfwInit()) {
@@ -194,7 +211,9 @@ public class WindowHost {
         glfwSetKeyCallback(windowHandle, (window, key, scancode, action, mods) -> {
             if (action == GLFW_PRESS) {
                 if (key == GLFW_KEY_ESCAPE) {
-                    glfwSetWindowShouldClose(window, true);
+                    if (textInputCapture == null || !textInputCapture.getAsBoolean()) {
+                        glfwSetWindowShouldClose(window, true);
+                    }
                 } else if (key == GLFW_KEY_F11 || (key == GLFW_KEY_ENTER && (mods & GLFW_MOD_ALT) != 0)) {
                     toggleFullscreen();
                 }
@@ -204,6 +223,13 @@ public class WindowHost {
             }
             if (keyPressListener != null) {
                 keyPressListener.onKeyPress(key, action);
+            }
+        });
+
+        // Character Callback (Unicode text input, after keyboard layout and modifiers are applied)
+        glfwSetCharCallback(windowHandle, (window, codepoint) -> {
+            if (charListener != null) {
+                charListener.onChar(codepoint);
             }
         });
 
@@ -348,12 +374,15 @@ public class WindowHost {
         this.singleScrollListener = null;
         this.keyListener = null;
         this.keyPressListener = null;
+        this.charListener = null;
+        this.textInputCapture = null;
     }
 
     public void destroy() {
         unbindAllListeners();
         if (windowHandle != NULL) {
             glfwSetKeyCallback(windowHandle, null);
+            glfwSetCharCallback(windowHandle, null);
             glfwSetWindowSizeCallback(windowHandle, null);
             glfwSetFramebufferSizeCallback(windowHandle, null);
             glfwSetDropCallback(windowHandle, null);
