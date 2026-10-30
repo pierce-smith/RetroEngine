@@ -232,6 +232,8 @@ public class EngineContext {
     public boolean isRuntimeOnlyMode() { return runtimeOnlyMode; }
 
     public WindowHost getWindow() { return window; }
+    /** Null in headless mode (no GLFW). */
+    public GamepadManager getGamepadManager() { return window != null ? window.getGamepadManager() : null; }
     public EditorWorkspace getEditorManager() { return editorManager; }
     public ViewportCamera getCameraController() { return cameraController; }
     public HotkeyRouter getHotkeyHandler() { return hotkeyHandler; }

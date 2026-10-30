@@ -108,6 +108,8 @@ public class WindowHost {
     // True while an editor text field owns the keyboard, so Escape cancels the edit instead of closing the window
     private BooleanSupplier textInputCapture;
 
+    private GamepadManager gamepadManager;
+
     public WindowHost(int width, int height, String title) {
         this.width = width;
         this.height = height;
@@ -206,6 +208,8 @@ public class WindowHost {
             System.err.println("[GLFW] Failed to create GLFW window!");
             return false;
         }
+
+        gamepadManager = new GamepadManager();
 
         // Key Callback
         glfwSetKeyCallback(windowHandle, (window, key, scancode, action, mods) -> {
@@ -308,6 +312,9 @@ public class WindowHost {
 
     public void pollEvents() {
         glfwPollEvents();
+        if (gamepadManager != null) {
+            gamepadManager.update();
+        }
     }
 
     public boolean shouldClose() {
@@ -318,6 +325,14 @@ public class WindowHost {
         if (windowHandle == NULL) return false;
         return glfwGetKey(windowHandle, key) == GLFW_PRESS;
     }
+
+    /** False while another application has keyboard focus; joysticks keep reporting input regardless. */
+    public boolean isFocused() {
+        if (windowHandle == NULL) return false;
+        return glfwGetWindowAttrib(windowHandle, GLFW_FOCUSED) == GLFW_TRUE;
+    }
+
+    public GamepadManager getGamepadManager() { return gamepadManager; }
 
     public long getNativeHandle() { return windowHandle; }
     public long getWindowHandle() { return windowHandle; }
@@ -380,6 +395,10 @@ public class WindowHost {
 
     public void destroy() {
         unbindAllListeners();
+        if (gamepadManager != null) {
+            gamepadManager.destroy();
+            gamepadManager = null;
+        }
         if (windowHandle != NULL) {
             glfwSetKeyCallback(windowHandle, null);
             glfwSetCharCallback(windowHandle, null);

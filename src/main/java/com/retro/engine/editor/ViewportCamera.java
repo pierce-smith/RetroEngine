@@ -1,5 +1,7 @@
 package com.retro.engine.editor;
 
+import com.retro.engine.core.GamepadManager;
+
 /**
  * ViewportCamera provides Unity-style camera navigation in the 3D Viewport:
  * - Camera WASDQE flight navigation executes ONLY when Right Mouse Button (RMB) or Middle Mouse Button (MMB) is held.
@@ -10,6 +12,11 @@ package com.retro.engine.editor;
  * - Pan (X / Y): Middle Mouse Drag OR Shift + Right Mouse Drag
  * - Zoom (In / Out): Mouse Scroll Wheel
  * - Focus / Reset: 'F' Key
+ * Gamepad (no button hold required):
+ * - Left Stick: Strafe (X) / Forward-Backward flight (Y), same axes as WASD
+ * - Right Stick: Orbit (Yaw & Pitch)
+ * - Right / Left Trigger: Analog Zoom In / Out
+ * - Right / Left Bumper: Elevation Up / Down
  */
 public class ViewportCamera {
 
@@ -64,6 +71,28 @@ public class ViewportCamera {
 
             clamp();
         }
+    }
+
+    public void applyGamepad(GamepadManager pad, float deltaTime) {
+        if (playLocked || pad == null || !pad.isConnected()) return;
+        float speed = 3.5f * deltaTime;
+
+        // Left Stick: strafe like A/D, forward/back like W/S (stick Y is +1 when pushed down)
+        panX -= pad.getAxis(GamepadManager.AXIS_LEFT_X) * speed;
+        zoom -= pad.getAxis(GamepadManager.AXIS_LEFT_Y) * speed * 4.0f;
+
+        // Right Stick: orbit; pushing up pitches up, matching an upward mouse drag
+        yaw += pad.getAxis(GamepadManager.AXIS_RIGHT_X) * 120.0f * deltaTime;
+        pitch -= pad.getAxis(GamepadManager.AXIS_RIGHT_Y) * 90.0f * deltaTime;
+
+        // Triggers: analog zoom in (RT) / out (LT)
+        zoom += (pad.getTrigger(GamepadManager.AXIS_RIGHT_TRIGGER) - pad.getTrigger(GamepadManager.AXIS_LEFT_TRIGGER)) * speed * 4.0f;
+
+        // Bumpers: elevation like Q/E
+        if (pad.isButtonPressed(GamepadManager.BUTTON_RIGHT_BUMPER)) panY += speed;
+        if (pad.isButtonPressed(GamepadManager.BUTTON_LEFT_BUMPER)) panY -= speed;
+
+        clamp();
     }
 
     public void onMouseButton(int button, int action, double x, double y) {

@@ -1,5 +1,6 @@
 package com.retro.engine.scripting;
 
+import com.retro.engine.core.GamepadManager;
 import com.retro.engine.core.WindowHost;
 import java.util.HashSet;
 import java.util.Set;
@@ -37,6 +38,11 @@ public class Input {
             } catch (Exception ignored) {}
         }
         return activeKeys.contains(keyCode);
+    }
+
+    /** Active gamepad of the bound window, or null when headless / unbound. */
+    public static GamepadManager getGamepad() {
+        return boundWindow != null ? boundWindow.getGamepadManager() : null;
     }
 
     public static boolean isKeyPressed(int keyCode) {

@@ -4,6 +4,7 @@ import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.audio.UISoundPlayer;
 import com.retro.engine.editor.audio.UISoundPlayer.UISound;
+import com.retro.engine.core.GamepadManager;
 import com.retro.engine.core.WindowHost;
 import com.retro.engine.editor.gizmos.GizmoInteractor;
 import com.retro.engine.editor.ui.panels.EngineConsolePanel;
@@ -17,6 +18,7 @@ import static org.lwjgl.glfw.GLFW.*;
 /**
  * Encapsulates keyboard hotkeys, debouncing, gizmo snap modifiers,
  * engine console shortcuts, and viewport camera controls.
+ * Gamepad shortcuts: R3 = camera reset (F), D-Pad Left / Up / Right = Translate / Rotate / Scale gizmo.
  */
 public class HotkeyRouter {
 
@@ -162,5 +164,23 @@ public class HotkeyRouter {
         if (cameraController != null) {
             cameraController.update(deltaTime, isW, isS, isA, isD, isQ, isE);
         }
+
+        // Joysticks report input even while another app is focused; only drive the editor when we have focus
+        GamepadManager pad = window.getGamepadManager();
+        if (pad != null && pad.isConnected() && window.isFocused()) {
+            processGamepad(pad, editorManager, cameraController, deltaTime);
+        }
+    }
+
+    private void processGamepad(GamepadManager pad, EditorWorkspace editorManager, ViewportCamera cameraController, float deltaTime) {
+        if (cameraController == null || cameraController.isPlayLocked()) return;
+
+        if (pad.isButtonJustPressed(GamepadManager.BUTTON_RIGHT_STICK)) cameraController.reset();
+
+        if (pad.isButtonJustPressed(GamepadManager.BUTTON_DPAD_LEFT)) editorManager.getGizmoStateController().setGizmoMode(EditorWorkspace.GizmoMode.TRANSLATE);
+        if (pad.isButtonJustPressed(GamepadManager.BUTTON_DPAD_UP)) editorManager.getGizmoStateController().setGizmoMode(EditorWorkspace.GizmoMode.ROTATE);
+        if (pad.isButtonJustPressed(GamepadManager.BUTTON_DPAD_RIGHT)) editorManager.getGizmoStateController().setGizmoMode(EditorWorkspace.GizmoMode.SCALE);
+
+        cameraController.applyGamepad(pad, deltaTime);
     }
 }

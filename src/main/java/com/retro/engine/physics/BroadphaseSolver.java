@@ -510,7 +510,8 @@ public class BroadphaseSolver {
             float tmin = Math.max(Math.max(Math.min(t1, t2), Math.min(t3, t4)), Math.min(t5, t6));
             float tmax = Math.min(Math.min(Math.max(t1, t2), Math.max(t3, t4)), Math.max(t5, t6));
 
-            if (tmax >= tmin && tmin >= 0.0f && tmin <= maxDistance) {
+            // Node bounds only gate traversal: a ray starting inside a node (tmin < 0) can still hit its children
+            if (tmax >= Math.max(tmin, 0.0f) && tmin <= maxDistance) {
                 if (node.isLeaf()) {
                     PhysicsSystem.PhysicsBody body = node.body;
                     if (body != null && (excludeEntity == null || body.entity != excludeEntity)) {
