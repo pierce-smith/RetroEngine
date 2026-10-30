@@ -107,6 +107,18 @@ public interface IRenderBackend {
      */
     default int queryPick(float u, float v) { return PICK_UNAVAILABLE; }
 
+    /** High half of every pick-overlay ID; entity pick IDs are positive, so the two ranges never collide. */
+    int PICK_OVERLAY_ID_BASE = 0xFFFE0000;
+    /** Floats per pick-overlay vertex: x, y (scene-tile NDC, +y up), overlay ID low 16 bits (an exact float). */
+    int PICK_OVERLAY_VERTEX_FLOATS = 3;
+
+    /**
+     * Screen-space triangles (e.g. transform gizmo handles) drawn last in the Color-ID pass with depth testing off, so
+     * they win over any mesh beneath them. Each writes {@code PICK_OVERLAY_ID_BASE | low16}. A null array or zero count
+     * draws nothing. The array is copied, never retained.
+     */
+    default void setPickOverlay(float[] vertices, int vertexCount) {}
+
     void beginFrame();
     void endFrame();
     void present();

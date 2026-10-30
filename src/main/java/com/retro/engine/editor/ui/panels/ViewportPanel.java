@@ -212,6 +212,25 @@ public class ViewportPanel {
         pendingFrames = 0;
     }
 
+    /**
+     * Converts gizmo pick triangles captured in window NDC (x, y, id per vertex) into the Scene tile's own NDC for
+     * {@link IRenderBackend#setPickOverlay}, reusing {@code out} when it is large enough. The pick target covers exactly
+     * that tile, so every handle pixel lands on the texel the probe reads for the same cursor position.
+     */
+    public static float[] buildGizmoPickOverlay(float[] screenVerts, int vertexCount,
+                                                float sceneMinX, float sceneMinY, float sceneMaxX, float sceneMaxY, float[] out) {
+        int floats = vertexCount * IRenderBackend.PICK_OVERLAY_VERTEX_FLOATS;
+        if (out == null || out.length < floats) out = new float[Math.max(floats, out != null ? out.length * 2 : 0)];
+        float w = sceneMaxX - sceneMinX, h = sceneMaxY - sceneMinY;
+        if (w <= 0.0f || h <= 0.0f) return out;
+        for (int o = 0; o < floats; o += IRenderBackend.PICK_OVERLAY_VERTEX_FLOATS) {
+            out[o] = (screenVerts[o] - sceneMinX) / w * 2.0f - 1.0f;
+            out[o + 1] = (screenVerts[o + 1] - sceneMinY) / h * 2.0f - 1.0f;
+            out[o + 2] = screenVerts[o + 2];
+        }
+        return out;
+    }
+
     /** Once per submitted frame: resolves a pending click, then aims the probe (pending click first, else the cursor). */
     public static void updatePicking(IRenderBackend rhi) {
         pickBackend = rhi;

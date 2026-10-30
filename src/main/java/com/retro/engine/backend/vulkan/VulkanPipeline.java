@@ -1,5 +1,6 @@
 package com.retro.engine.backend.vulkan;
 
+import com.retro.engine.rhi.IRenderBackend;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -65,6 +66,8 @@ public class VulkanPipeline {
     // Color-ID picking pipelines (static 88 B and skinned 120 B strides) writing into PICK_ID_FORMAT
     private long graphicsPipelinePick = 0L;
     private long graphicsPipelinePickSkinned = 0L;
+    // Screen-space pick overlay (gizmo handles) drawn last in the pick pass, depth testing off
+    private long graphicsPipelinePickOverlay = 0L;
 
     private long descriptorSetLayoutGrid = 0L;
     private long pipelineLayoutGrid = 0L;
@@ -539,6 +542,67 @@ public class VulkanPipeline {
                 VulkanShaderLoader.destroyShaderModule(vkDevice, vertUIModule);
                 VulkanShaderLoader.destroyShaderModule(vkDevice, fragUIModule);
             }
+
+            // 4. Color-ID Pick Overlay Pipeline (12-Byte Stride, R8G8B8A8_UINT + D32)
+            graphicsPipelinePickOverlay = createPickOverlayPipeline(vkDevice, cacheHandle);
+            if (graphicsPipelinePickOverlay != 0L) {
+                System.out.println("[VulkanPipeline] Created Color-ID Pick Overlay VkPipeline [0x" + Long.toHexString(graphicsPipelinePickOverlay) + "].");
+            }
+        }
+    }
+
+    /**
+     * Pick overlay pipeline: pick_overlay.vert/.frag write {@code PICK_OVERLAY_ID_BASE | id} for screen-space triangles
+     * (x, y, id floats) into the PICK_ID_FORMAT attachment. Depth testing is off so handles win over meshes beneath them;
+     * the D32 format only matches the pick pass's depth attachment.
+     */
+    private long createPickOverlayPipeline(VkDevice vkDevice, long cacheHandle) {
+        long vertModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/pick_overlay.vert.spv");
+        long fragModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/pick_overlay.frag.spv");
+        if (vertModule == 0L || fragModule == 0L) {
+            VulkanShaderLoader.destroyShaderModule(vkDevice, vertModule);
+            VulkanShaderLoader.destroyShaderModule(vkDevice, fragModule);
+            return 0L;
+        }
+
+        try (MemoryStack stack = stackPush()) {
+            VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(2, stack);
+            stages.get(0).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_VERTEX_BIT).module(vertModule).pName(stack.UTF8("main"));
+            stages.get(1).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_FRAGMENT_BIT).module(fragModule).pName(stack.UTF8("main"));
+
+            VkVertexInputBindingDescription.Buffer binding = VkVertexInputBindingDescription.calloc(1, stack)
+                    .binding(0).stride(IRenderBackend.PICK_OVERLAY_VERTEX_FLOATS * Float.BYTES).inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
+            VkVertexInputAttributeDescription.Buffer attributes = VkVertexInputAttributeDescription.calloc(2, stack);
+            attributes.get(0).binding(0).location(0).format(VK_FORMAT_R32G32_SFLOAT).offset(0);  // scene-tile NDC
+            attributes.get(1).binding(0).location(1).format(VK_FORMAT_R32_SFLOAT).offset(8);     // overlay ID low 16 bits
+
+            VkPipelineVertexInputStateCreateInfo vertexInput = VkPipelineVertexInputStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO).pVertexBindingDescriptions(binding).pVertexAttributeDescriptions(attributes);
+            VkPipelineInputAssemblyStateCreateInfo inputAssembly = VkPipelineInputAssemblyStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO).topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST).primitiveRestartEnable(false);
+            VkPipelineViewportStateCreateInfo viewportState = VkPipelineViewportStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO).viewportCount(1).scissorCount(1);
+            VkPipelineRasterizationStateCreateInfo rasterizer = VkPipelineRasterizationStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO).polygonMode(VK_POLYGON_MODE_FILL).lineWidth(1.0f).cullMode(VK_CULL_MODE_NONE).frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);
+            VkPipelineMultisampleStateCreateInfo multisampling = VkPipelineMultisampleStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO).rasterizationSamples(VK_SAMPLE_COUNT_1_BIT);
+            VkPipelineDepthStencilStateCreateInfo depthStencil = VkPipelineDepthStencilStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO).depthTestEnable(false).depthWriteEnable(false).depthCompareOp(VK_COMPARE_OP_ALWAYS);
+
+            // Integer attachments cannot blend
+            VkPipelineColorBlendAttachmentState.Buffer colorBlendAttachment = VkPipelineColorBlendAttachmentState.calloc(1, stack)
+                    .colorWriteMask(VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT)
+                    .blendEnable(false);
+            VkPipelineColorBlendStateCreateInfo colorBlending = VkPipelineColorBlendStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO).pAttachments(colorBlendAttachment);
+            VkPipelineDynamicStateCreateInfo dynamicState = VkPipelineDynamicStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO).pDynamicStates(stack.ints(VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR));
+
+            VkPipelineRenderingCreateInfo renderingCreateInfo = VkPipelineRenderingCreateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO)
+                    .pColorAttachmentFormats(stack.ints(PICK_ID_FORMAT))
+                    .depthAttachmentFormat(VK_FORMAT_D32_SFLOAT);
+
+            VkGraphicsPipelineCreateInfo.Buffer pipelineInfo = VkGraphicsPipelineCreateInfo.calloc(1, stack)
+                    .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO).pNext(renderingCreateInfo.address()).pStages(stages).pVertexInputState(vertexInput).pInputAssemblyState(inputAssembly).pViewportState(viewportState).pRasterizationState(rasterizer).pMultisampleState(multisampling).pDepthStencilState(depthStencil).pColorBlendState(colorBlending).pDynamicState(dynamicState).layout(pipelineLayoutUI).renderPass(VK_NULL_HANDLE).subpass(0);
+
+            LongBuffer pPipeline = stack.mallocLong(1);
+            long pipeline = vkCreateGraphicsPipelines(vkDevice, cacheHandle, pipelineInfo, null, pPipeline) == VK_SUCCESS ? pPipeline.get(0) : 0L;
+            VulkanShaderLoader.destroyShaderModule(vkDevice, vertModule);
+            VulkanShaderLoader.destroyShaderModule(vkDevice, fragModule);
+            return pipeline;
         }
     }
 
@@ -651,6 +715,7 @@ public class VulkanPipeline {
     public long getGraphicsPipelineShadowDepthSkinned() { return graphicsPipelineShadowDepthSkinned; }
     public long getGraphicsPipelinePick() { return graphicsPipelinePick; }
     public long getGraphicsPipelinePickSkinned() { return graphicsPipelinePickSkinned; }
+    public long getGraphicsPipelinePickOverlay() { return graphicsPipelinePickOverlay; }
 
     public long getDescriptorSetLayoutGrid() { return descriptorSetLayoutGrid; }
     public long getPipelineLayoutGrid() { return pipelineLayoutGrid; }
@@ -678,6 +743,7 @@ public class VulkanPipeline {
         if (graphicsPipelineShadowDepthSkinned != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineShadowDepthSkinned, null); graphicsPipelineShadowDepthSkinned = 0L; }
         if (graphicsPipelinePick != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelinePick, null); graphicsPipelinePick = 0L; }
         if (graphicsPipelinePickSkinned != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelinePickSkinned, null); graphicsPipelinePickSkinned = 0L; }
+        if (graphicsPipelinePickOverlay != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelinePickOverlay, null); graphicsPipelinePickOverlay = 0L; }
         if (pipelineLayout3D != 0L) { vkDestroyPipelineLayout(vkDevice, pipelineLayout3D, null); pipelineLayout3D = 0L; }
         if (descriptorSetLayout3D != 0L) { vkDestroyDescriptorSetLayout(vkDevice, descriptorSetLayout3D, null); descriptorSetLayout3D = 0L; }
 

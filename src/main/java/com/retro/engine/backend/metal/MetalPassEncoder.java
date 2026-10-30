@@ -204,7 +204,7 @@ public class MetalPassEncoder {
 
         // PASS 1B: Color-ID picking from the editor camera, with the probed texel blitted back for the host
         if (pickTarget != null && pickTarget.getOffscreenColorTexture() != 0L && pickReadbackBuffer != 0L && pipeline.getPipelineStatePick() != 0L) {
-            encodePickPass(commandBuffer, pipeline, texture, streamer, entityCount, pBufferContents, currentSlotOffset, defaultResourceId);
+            encodePickPass(commandBuffer, pipeline, texture, resourceCache, streamer, entityCount, pBufferContents, currentSlotOffset, defaultResourceId);
         }
 
         // PASS 2: Selected Camera entity's view for the picture-in-picture preview (game view: no editor grid)
@@ -388,10 +388,11 @@ public class MetalPassEncoder {
     }
 
     /**
-     * Renders every pickable queued mesh's ID into the pick target with the editor view-projection, then blits the
-     * single probed texel into the shared readback buffer. The cleared background decodes to PICK_ID_NONE (see entity_id.metal).
+     * Renders every pickable queued mesh's ID into the pick target with the editor view-projection, then the screen-space
+     * pick overlay (gizmo handles) on top, then blits the single probed texel into the shared readback buffer.
+     * The cleared background decodes to PICK_ID_NONE (see entity_id.metal).
      */
-    private void encodePickPass(long commandBuffer, MetalPipeline pipeline, MetalTexture texture, MetalUniformStream streamer,
+    private void encodePickPass(long commandBuffer, MetalPipeline pipeline, MetalTexture texture, MetalGpuCache resourceCache, MetalUniformStream streamer,
                                 int entityCount, long pBufferContents, long currentSlotOffset,
                                 long defaultResourceId) {
         long pickPassDesc = invokePPP(renderPassDescClass(), SEL_RENDER_PASS_DESCRIPTOR, send);
@@ -434,6 +435,16 @@ public class MetalPassEncoder {
                         streamer.getBonePaletteAddress(draws.skinnedSlot[i]), i, defaultResourceId);
                 drawEntity(i, slot);
             }
+        }
+
+        // Overlay handles ignore depth so a gizmo drawn over a mesh owns those pixels
+        long overlayBuffer = resourceCache.getPickOverlayVertexBuffer();
+        int overlayCount = resourceCache.getPickOverlayVertexCount();
+        if (overlayBuffer != 0L && overlayCount > 0 && pipeline.getPipelineStatePickOverlay() != 0L) {
+            bindPipeline(pipeline.getPipelineStatePickOverlay());
+            bindDepthStencil(pipeline.getDepthStencilStateUI());
+            bindVertexBuffer(overlayBuffer, 0L, 0);
+            invokePPPPPP(encoderPick, SEL_DRAW_PRIMITIVES, MTL_PRIMITIVE_TRIANGLE, 0L, (long) overlayCount, send);
         }
 
         invokePPP(encoderPick, SEL_END_ENCODING, send);

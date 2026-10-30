@@ -1,5 +1,6 @@
 package com.retro.engine.editor.render;
 
+import com.retro.engine.editor.gizmos.GizmoRenderer;
 import com.retro.engine.assets.AssetStreamer;
 import com.retro.engine.assets.importers.MeshBufferData;
 import com.retro.engine.assets.importers.MeshImporter;
@@ -53,6 +54,9 @@ public class SceneRenderPipeline {
         public int uiVertexCount = 0;
         // Owned storage for the merged [game UI | editor UI] stream, so each snapshot's vertices outlive the next extract
         public float[] uiMergeScratch = new float[0];
+        // Gizmo handle triangles for the Color-ID pass (IRenderBackend pick-overlay layout, scene-tile NDC)
+        public float[] gizmoPickVertices = new float[0];
+        public int gizmoPickVertexCount = 0;
         public int totalDrawCalls = 0;
         public int totalActiveVertices = 0;
         // Docked Scene tile (screen NDC) the offscreen 3D image is composited into; empty when hidden
@@ -254,6 +258,7 @@ public class SceneRenderPipeline {
 
                     totalActiveVertices += drawn.vertexCount;
                     entityDrawCalls++;
+                    mc.cacheDrawnBounds(meshPath, drawn.localBounds());
 
                     // 0L handles (headless/null backends) are still queued so entity counts stay consistent
                     RenderCommand cmd = queue.add();
@@ -315,6 +320,7 @@ public class SceneRenderPipeline {
         editorManager.setCameraPreviewTexture(previewActive ? cameraPreviewTexture : 0L);
         // Building the editor UI also lays out the dock, so the Scene tile read below is this frame's
         boolean standalone = ViewportPanel.isStandaloneFullscreen();
+        GizmoRenderer.beginPickCapture();
         float[] editorUi = standalone ? null : editorManager.getUiVertices();
         int editorUiVertexCount = standalone ? 0 : editorManager.getUiVertexCount();
 
@@ -332,6 +338,10 @@ public class SceneRenderPipeline {
             snapshot.sceneMinX = snapshot.sceneMinY = snapshot.sceneMaxX = snapshot.sceneMaxY = 0.0f;
         }
         snapshot.sceneAspect = ViewportPanel.getSceneAspect(editorManager.getDockSpace());
+        snapshot.gizmoPickVertices = ViewportPanel.buildGizmoPickOverlay(GizmoRenderer.getPickVertices(), GizmoRenderer.getPickVertexCount(),
+                snapshot.sceneMinX, snapshot.sceneMinY, snapshot.sceneMaxX, snapshot.sceneMaxY, snapshot.gizmoPickVertices);
+        snapshot.gizmoPickVertexCount = (snapshot.sceneMaxX > snapshot.sceneMinX && snapshot.sceneMaxY > snapshot.sceneMinY)
+                ? GizmoRenderer.getPickVertexCount() : 0;
         composeUiStream(snapshot, editorManager, camera, standalone, editorUi, editorUiVertexCount);
 
         if (snapshot.gridVisible) {
@@ -356,6 +366,7 @@ public class SceneRenderPipeline {
                 snapshot.cameraEye[0], snapshot.cameraEye[1], snapshot.cameraEye[2]);
         rhi.submitRenderQueue(snapshot.renderQueue);
 
+        rhi.setPickOverlay(snapshot.gizmoPickVertices, snapshot.gizmoPickVertexCount);
         ViewportPanel.updatePicking(rhi);
         rhi.setSceneViewport(snapshot.sceneMinX, snapshot.sceneMinY, snapshot.sceneMaxX, snapshot.sceneMaxY, snapshot.sceneAspect);
         rhi.setCameraPreview(snapshot.cameraPreviewActive, snapshot.cameraPreviewViewProj,

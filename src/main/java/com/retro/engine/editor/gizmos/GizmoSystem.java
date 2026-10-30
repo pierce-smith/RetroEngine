@@ -12,7 +12,7 @@ import java.util.List;
 
 /**
  * Modularized GizmoSystem acting as a Backwards-Compatible Delegation Bridge.
- * Forwards calls to GizmoMath (projections), GizmoInteractor (raycasting & dragging),
+ * Forwards calls to GizmoMath (projections), GizmoInteractor (Color-ID axis mapping & dragging),
  * and GizmoRenderer (immediate-mode UI vector batching).
  */
 public class GizmoSystem {
@@ -29,20 +29,8 @@ public class GizmoSystem {
         return GizmoMath.projectWorldToNdc(wx, wy, wz, manager);
     }
 
-    public static GizmoAxis pickGizmoAxis(double refX, double refY, Entity selectedEntity, float wx, float wy, float wz, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw, GizmoMode currentGizmoMode) {
-        return GizmoInteractor.pickGizmoAxis(refX, refY, selectedEntity, wx, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw, currentGizmoMode);
-    }
-
-    public static GizmoAxis pickGizmoAxis(double refX, double refY, Entity selectedEntity, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw, GizmoMode currentGizmoMode) {
-        return GizmoInteractor.pickGizmoAxis(refX, refY, selectedEntity, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw, currentGizmoMode);
-    }
-
-    public static GizmoAxis pickGizmoAxis(double refX, double refY, Entity selectedEntity, SceneWorld sceneManager, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw, GizmoMode currentGizmoMode) {
-        return GizmoInteractor.pickGizmoAxis(refX, refY, selectedEntity, sceneManager, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw, currentGizmoMode);
-    }
-
-    public static GizmoAxis pickGizmoAxis(double refX, double refY, Entity selectedEntity, EditorWorkspace manager, GizmoMode currentGizmoMode) {
-        return GizmoInteractor.pickGizmoAxis(refX, refY, selectedEntity, manager, currentGizmoMode);
+    public static GizmoAxis axisForPickId(int pickId, GizmoMode currentGizmoMode) {
+        return GizmoInteractor.axisForPickId(pickId, currentGizmoMode);
     }
 
     public static boolean handleGizmoDrag(double deltaX, double deltaY, double refX, double refY, GizmoAxis activeGizmoAxis, GizmoMode currentGizmoMode, Entity selectedEntity, float wx, float wy, float wz, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {

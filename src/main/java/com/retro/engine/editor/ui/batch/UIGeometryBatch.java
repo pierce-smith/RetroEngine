@@ -56,6 +56,11 @@ public class UIGeometryBatch {
             this.size = 0;
         }
 
+        /** Discards everything emitted after float offset {@code newSize} (geometry captured for another use, e.g. picking). */
+        public void truncate(int newSize) {
+            if (newSize >= 0 && newSize < size) this.size = newSize;
+        }
+
         /** Window size in pixels that this buffer's NDC geometry is displayed at. */
         public void setWindowSize(int width, int height) {
             if (width > 0 && height > 0) {

@@ -1,5 +1,6 @@
 package com.retro.engine.backend.vulkan;
 
+import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.rhi.DirectionalShadowFrustum;
 import com.retro.engine.rhi.HandleRegistry;
 import com.retro.engine.rhi.RenderCommand;
@@ -164,6 +165,7 @@ public class VulkanGpuCache {
     private final VulkanTextureRegistry textureRegistry = new VulkanTextureRegistry();
     private final VulkanUploadRing uploadRing = new VulkanUploadRing();
     private final VulkanRingBuffer uiRingBuffer = new VulkanRingBuffer();
+    private final VulkanRingBuffer pickOverlayRingBuffer = new VulkanRingBuffer();
     private final VulkanRingBuffer gridRingBuffer = new VulkanRingBuffer();
 
     // Opaque handle tables for registered assets; written from any thread, resolved lock-free during recording
@@ -209,6 +211,8 @@ public class VulkanGpuCache {
 
     public long getUiVertexBuffer() { return uiRingBuffer.getCurrentBufferHandle(); }
     public int getUiVertexCount() { return uiRingBuffer.getVertexCount(); }
+    public long getPickOverlayVertexBuffer() { return pickOverlayRingBuffer.getCurrentBufferHandle(); }
+    public int getPickOverlayVertexCount() { return pickOverlayRingBuffer.getVertexCount(); }
 
     public long getGridVertexBuffer() { return gridRingBuffer.getCurrentBufferHandle(); }
     public int getGridVertexCount() { return gridRingBuffer.getVertexCount(); }
@@ -236,6 +240,10 @@ public class VulkanGpuCache {
 
     public void updateUiMesh(VulkanDevice device, float[] vertices, int count) {
         uiRingBuffer.updateBuffer(device, vertices, count, 8, deferredDisposalQueue, totalFrameCount);
+    }
+
+    public void updatePickOverlay(VulkanDevice device, float[] vertices, int count) {
+        pickOverlayRingBuffer.updateBuffer(device, vertices, count, IRenderBackend.PICK_OVERLAY_VERTEX_FLOATS, deferredDisposalQueue, totalFrameCount);
     }
 
     public void updateGridMesh(VulkanDevice device, float[] vertices, int count) {
@@ -1077,6 +1085,7 @@ public class VulkanGpuCache {
         textureRegistry.cleanup(vkDevice);
         destroyShadowMap(vkDevice);
         uiRingBuffer.cleanup(vkDevice);
+        pickOverlayRingBuffer.cleanup(vkDevice);
         gridRingBuffer.cleanup(vkDevice);
 
         meshHandles.clear(buf -> {

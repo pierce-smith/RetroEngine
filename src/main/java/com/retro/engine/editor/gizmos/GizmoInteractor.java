@@ -4,12 +4,13 @@ import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.EditorWorkspace.GizmoAxis;
 import com.retro.engine.editor.EditorWorkspace.GizmoMode;
 import com.retro.engine.editor.ViewportCamera;
+import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.world.SceneWorld;
 import com.retro.engine.scene.components.transform.Transform;
 
 /**
- * Single-Responsibility Interactor Delegate for 3D Gizmo Raycasting / Axis Picking,
+ * Single-Responsibility Interactor Delegate for 3D Gizmo GPU Color-ID Axis Picking,
  * Screen-to-World Mouse Displacement Deltas, and Grid / Angle / Scale Snapping.
  */
 public class GizmoInteractor {
@@ -50,6 +51,10 @@ public class GizmoInteractor {
         isRotateStart = true;
     }
 
+    private static float snapTranslation(float offset) {
+        return snapEnabled ? Math.round(offset / gridSnapSize) * gridSnapSize : offset;
+    }
+
     public static void startDrag(Transform tc) {
         if (tc != null) {
             startPx = tc.posX; startPy = tc.posY; startPz = tc.posZ;
@@ -63,52 +68,23 @@ public class GizmoInteractor {
         startDrag(tc);
     }
 
-    public static GizmoAxis pickGizmoAxis(double refX, double refY, Entity selectedEntity, float wx, float wy, float wz, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw, GizmoMode currentGizmoMode) {
-        if (selectedEntity == null) return GizmoAxis.NONE;
-
-        float[] p0 = GizmoMath.projectWorldToNdc(wx, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
-        double cx = ((p0[0] + 1.0) / 2.0) * 1280.0;
-        double cy = ((1.0 - p0[1]) / 2.0) * 720.0;
-
-        float[] pX = GizmoMath.projectWorldToNdc(wx + 1.0f, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
-        float[] pY = GizmoMath.projectWorldToNdc(wx, wy + 1.0f, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
-        float[] pZ = GizmoMath.projectWorldToNdc(wx, wy, wz + 1.0f, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
-
-        double xx = ((pX[0] + 1.0) / 2.0) * 1280.0, xy = ((1.0 - pX[1]) / 2.0) * 720.0;
-        double yx = ((pY[0] + 1.0) / 2.0) * 1280.0, yy = ((1.0 - pY[1]) / 2.0) * 720.0;
-        double zx = ((pZ[0] + 1.0) / 2.0) * 1280.0, zy = ((1.0 - pZ[1]) / 2.0) * 720.0;
-
-        double distX = GizmoMath.pointToSegmentDistance(refX, refY, cx, cy, xx, xy);
-        double distY = GizmoMath.pointToSegmentDistance(refX, refY, cx, cy, yx, yy);
-        double distZ = GizmoMath.pointToSegmentDistance(refX, refY, cx, cy, zx, zy);
-
-        double threshold = 35.0;
-        if (distX < threshold && distX <= distY && distX <= distZ) return GizmoAxis.X;
-        if (distY < threshold && distY <= distX && distY <= distZ) return GizmoAxis.Y;
-        if (distZ < threshold && distZ <= distX && distZ <= distY) return GizmoAxis.Z;
-
-        return GizmoAxis.NONE;
+    /**
+     * Maps a GPU Color-ID pick value to the gizmo handle drawn at that pixel (see {@link GizmoRenderer} PICK_ID_*).
+     * Anything else (meshes, background, an unavailable readback) is {@link GizmoAxis#NONE}. Rotate has no center handle.
+     */
+    public static GizmoAxis axisForPickId(int pickId, GizmoMode currentGizmoMode) {
+        return switch (pickId) {
+            case GizmoRenderer.PICK_ID_AXIS_X -> GizmoAxis.X;
+            case GizmoRenderer.PICK_ID_AXIS_Y -> GizmoAxis.Y;
+            case GizmoRenderer.PICK_ID_AXIS_Z -> GizmoAxis.Z;
+            case GizmoRenderer.PICK_ID_CENTER -> currentGizmoMode == GizmoMode.ROTATE ? GizmoAxis.NONE : GizmoAxis.CENTER;
+            default -> GizmoAxis.NONE;
+        };
     }
 
-    public static GizmoAxis pickGizmoAxis(double refX, double refY, Entity selectedEntity, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw, GizmoMode currentGizmoMode) {
-        if (selectedEntity == null) return GizmoAxis.NONE;
-        Transform tc = selectedEntity.getTransform();
-        if (tc == null) return GizmoAxis.NONE;
-        return pickGizmoAxis(refX, refY, selectedEntity, tc.posX, tc.posY, tc.posZ, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw, currentGizmoMode);
-    }
-
-    public static GizmoAxis pickGizmoAxis(double refX, double refY, Entity selectedEntity, SceneWorld sceneManager, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw, GizmoMode currentGizmoMode) {
-        if (selectedEntity == null) return GizmoAxis.NONE;
-        if (sceneManager != null) {
-            SceneWorld.WorldTransform wt = sceneManager.getComputedWorldTransform(selectedEntity);
-            return pickGizmoAxis(refX, refY, selectedEntity, wt.px(), wt.py(), wt.pz(), cameraController, camPanX, camPanY, camZoom, camPitch, camYaw, currentGizmoMode);
-        }
-        return pickGizmoAxis(refX, refY, selectedEntity, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw, currentGizmoMode);
-    }
-
-    public static GizmoAxis pickGizmoAxis(double refX, double refY, Entity selectedEntity, EditorWorkspace manager, GizmoMode currentGizmoMode) {
-        if (manager == null) return GizmoAxis.NONE;
-        return pickGizmoAxis(refX, refY, selectedEntity, manager.getSceneManager(), manager.getCameraController(), 0.0f, 0.25f, -5.0f, 0.0f, 0.0f, currentGizmoMode);
+    /** True for any pick value in the gizmo handle range, including handles inactive in the current mode. */
+    public static boolean isGizmoPickId(int pickId) {
+        return (pickId & 0xFFFF0000) == IRenderBackend.PICK_OVERLAY_ID_BASE;
     }
 
     public static boolean handleGizmoDrag(double deltaX, double deltaY, double refX, double refY, GizmoAxis activeGizmoAxis, GizmoMode currentGizmoMode, Entity selectedEntity, float wx, float wy, float wz, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
@@ -142,7 +118,17 @@ public class GizmoInteractor {
             float moveY = (ndcDx * uYX + ndcDy * uYY) * 10.0f;
             float moveZ = (ndcDx * uZX + ndcDy * uZY) * 10.0f;
 
-            if (activeGizmoAxis == GizmoAxis.X) {
+            if (activeGizmoAxis == GizmoAxis.CENTER) {
+                // Free move in the camera's view plane: the design-NDC mouse delta unprojected at the gizmo's depth
+                float[] d = GizmoMath.screenPlaneDelta(wx, wy, wz, ndcDx, ndcDy,
+                        cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+                accumDragX += d[0];
+                accumDragY += d[1];
+                accumDragZ += d[2];
+                tc.posX = startPx + snapTranslation((float) accumDragX);
+                tc.posY = startPy + snapTranslation((float) accumDragY);
+                tc.posZ = startPz + snapTranslation((float) accumDragZ);
+            } else if (activeGizmoAxis == GizmoAxis.X) {
                 accumDragX += moveX;
                 if (snapEnabled) tc.posX = startPx + Math.round((float) accumDragX / gridSnapSize) * gridSnapSize;
                 else tc.posX = startPx + (float) accumDragX;
@@ -158,7 +144,15 @@ public class GizmoInteractor {
             return true;
         } else if (currentGizmoMode == GizmoMode.SCALE) {
             float ds = (float) (deltaX - deltaY) * 0.01f;
-            if (activeGizmoAxis == GizmoAxis.X) {
+            if (activeGizmoAxis == GizmoAxis.CENTER) {
+                // Uniform scale: every axis keeps its proportion to the drag-start scale
+                accumDragX += ds;
+                float factor = snapEnabled ? 1.0f + Math.round((float) accumDragX / scaleSnapStep) * scaleSnapStep : 1.0f + (float) accumDragX;
+                factor = Math.max(0.01f, factor);
+                tc.scaleX = Math.max(0.01f, startSx * factor);
+                tc.scaleY = Math.max(0.01f, startSy * factor);
+                tc.scaleZ = Math.max(0.01f, startSz * factor);
+            } else if (activeGizmoAxis == GizmoAxis.X) {
                 accumDragX += ds;
                 if (snapEnabled) tc.scaleX = Math.max(0.01f, startSx + Math.round((float) accumDragX / scaleSnapStep) * scaleSnapStep);
                 else tc.scaleX = Math.max(0.01f, startSx + (float) accumDragX);
@@ -173,6 +167,7 @@ public class GizmoInteractor {
             }
             return true;
         } else if (currentGizmoMode == GizmoMode.ROTATE) {
+            if (activeGizmoAxis == GizmoAxis.CENTER) return false;
             float[] p0 = GizmoMath.projectWorldToNdc(wx, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
             float ndcX = (float) (refX / 1280.0 * 2.0 - 1.0);
             float ndcY = (float) (1.0 - refY / 720.0 * 2.0);
@@ -183,6 +178,9 @@ public class GizmoInteractor {
                 return true;
             }
             double angleDelta = Math.toDegrees(currentAngle - lastRotateAngle);
+            // atan2 wraps at +-180 deg: take the short way round instead of a full-turn jump in the stored angle
+            if (angleDelta > 180.0) angleDelta -= 360.0;
+            else if (angleDelta < -180.0) angleDelta += 360.0;
             lastRotateAngle = currentAngle;
 
             if (activeGizmoAxis == GizmoAxis.X) {
@@ -213,8 +211,8 @@ public class GizmoInteractor {
     public static boolean handleGizmoDrag(double deltaX, double deltaY, double refX, double refY, GizmoAxis activeGizmoAxis, GizmoMode currentGizmoMode, Entity selectedEntity, SceneWorld sceneManager, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
         if (selectedEntity == null) return false;
         if (sceneManager != null) {
-            SceneWorld.WorldTransform wt = sceneManager.getComputedWorldTransform(selectedEntity);
-            return handleGizmoDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, selectedEntity, wt.px(), wt.py(), wt.pz(), cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+            float[] anchor = GizmoMath.computeGizmoAnchor(selectedEntity, sceneManager);
+            return handleGizmoDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, selectedEntity, anchor[0], anchor[1], anchor[2], cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
         }
         return handleGizmoDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, selectedEntity, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
     }

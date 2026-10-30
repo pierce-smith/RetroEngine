@@ -110,3 +110,25 @@ fragment uint4 pickFragmentMain(PickVertexOut in [[stage_in]],
     uint id = args.uniforms->pickId;
     return uint4(id & 0xFFu, (id >> 8) & 0xFFu, (id >> 16) & 0xFFu, (id >> 24) ^ 1u);
 }
+
+// Pick overlay: screen-space handle triangles (transform gizmo) drawn after the meshes with depth testing off.
+// 3-float stride: xy = scene-tile NDC, z = low 16 bits of the overlay ID (an exact float), OR'd onto 0xFFFE0000
+// (IRenderBackend.PICK_OVERLAY_ID_BASE). Same alpha XOR 1 packing as pickFragmentMain.
+struct PickOverlayVertexOut {
+    float4 position [[position]];
+    uint pickId [[flat]];
+};
+
+vertex PickOverlayVertexOut pickOverlayVertexMain(uint vertexID [[vertex_id]],
+                                                  constant float* vertices [[buffer(0)]]) {
+    uint idx = vertexID * 3;
+    PickOverlayVertexOut out;
+    out.position = float4(vertices[idx], vertices[idx+1], 0.0, 1.0);
+    out.pickId = 0xFFFE0000u | (uint(vertices[idx+2]) & 0xFFFFu);
+    return out;
+}
+
+fragment uint4 pickOverlayFragmentMain(PickOverlayVertexOut in [[stage_in]]) {
+    uint id = in.pickId;
+    return uint4(id & 0xFFu, (id >> 8) & 0xFFu, (id >> 16) & 0xFFu, (id >> 24) ^ 1u);
+}

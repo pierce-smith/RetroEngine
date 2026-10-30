@@ -232,6 +232,11 @@ public class MetalBackend implements IRenderBackend {
         resourceCache.updateUiMesh(metalDevice, vertices, count);
     }
 
+    @Override
+    public void setPickOverlay(float[] vertices, int vertexCount) {
+        resourceCache.updatePickOverlay(metalDevice, vertices, vertexCount);
+    }
+
     @Override public void clearSceneQueue() { drawBuffers.count = 0; }
 
     /**

@@ -40,6 +40,20 @@ public class MeshFilter implements Component {
         this.gpuHandleEpoch = epoch;
     }
 
+    // Runtime-only local AABB of the last drawn geometry for this path (the editor gizmo plants itself on its base)
+    private transient float[] drawnLocalBounds;
+    private transient String drawnBoundsKey;
+
+    public void cacheDrawnBounds(String path, float[] localBounds) {
+        this.drawnBoundsKey = path;
+        this.drawnLocalBounds = localBounds;
+    }
+
+    /** Local {minX, minY, minZ, maxX, maxY, maxZ} of the drawn mesh, or null until the current mesh has rendered. */
+    public float[] getDrawnLocalBounds() {
+        return (drawnLocalBounds != null && meshAssetPath != null && meshAssetPath.equals(drawnBoundsKey)) ? drawnLocalBounds : null;
+    }
+
     public MeshFilter() {}
 
     public MeshFilter(String meshAssetPath) {

@@ -46,7 +46,6 @@ bin/
 *.rpack
 *.rscene
 *.bin
-*.metallib
 Thumbs.db
 
 ### Ignore engine asset metadata sidecars

@@ -487,6 +487,11 @@ public class VulkanBackend implements IRenderBackend {
     }
 
     @Override
+    public void setPickOverlay(float[] vertices, int vertexCount) {
+        gpuCache.updatePickOverlay(deviceManager, vertices, vertexCount);
+    }
+
+    @Override
     public boolean setUiFontAtlas(long textureHandle) {
         if (gpuCache.getTexture(textureHandle) == null) return false;
         gpuCache.setUiFontTexture(textureHandle);

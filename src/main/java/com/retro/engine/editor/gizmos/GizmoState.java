@@ -3,7 +3,6 @@ package com.retro.engine.editor.gizmos;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.EditorWorkspace.GizmoAxis;
 import com.retro.engine.editor.EditorWorkspace.GizmoMode;
-import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.ui.dock.DockPanel;
 import com.retro.engine.editor.ui.dock.DockSpace;
 import com.retro.engine.editor.ui.overlays.OverlaySystem;
@@ -30,6 +29,8 @@ public class GizmoState {
 
     private double lastMouseX = 0.0;
     private double lastMouseY = 0.0;
+    // Left button held since a viewport press; a pick readback resolving after release must not start a drag
+    private boolean viewportPressHeld = false;
 
     private boolean show3DGrid = true;
     private float[] cached3DGridVertices = null;
@@ -38,7 +39,24 @@ public class GizmoState {
     public void setGizmoMode(GizmoMode mode) { this.currentGizmoMode = mode; }
 
     public GizmoAxis getActiveAxis() { return activeGizmoAxis; }
-    public void setActiveAxis(GizmoAxis axis) { this.activeGizmoAxis = axis; }
+    public void setActiveAxis(GizmoAxis axis) {
+        this.activeGizmoAxis = axis;
+        if (axis == GizmoAxis.NONE) anchorFrozen = false;
+    }
+
+    // During a rotate drag the anchor is pinned to its drag-start offset from the pivot: the world-bounds base moves as
+    // the mesh turns, and the rotate angle is measured around the anchor, so a live anchor feeds back into the rotation
+    private boolean anchorFrozen = false;
+    private float frozenOffX, frozenOffY, frozenOffZ;
+
+    /** Where the gizmo is drawn and dragged from: the mesh base ({@link GizmoMath#computeGizmoAnchor}), pinned while rotating. */
+    public float[] getGizmoAnchor(Entity entity, SceneWorld sceneManager) {
+        if (anchorFrozen && activeGizmoAxis != GizmoAxis.NONE && entity != null && sceneManager != null) {
+            SceneWorld.WorldTransform wt = sceneManager.getComputedWorldTransform(entity);
+            return new float[] { wt.px() + frozenOffX, wt.py() + frozenOffY, wt.pz() + frozenOffZ };
+        }
+        return GizmoMath.computeGizmoAnchor(entity, sceneManager);
+    }
 
     public float getDragStartPx() { return dragStartPx; }
     public float getDragStartPy() { return dragStartPy; }
@@ -116,24 +134,41 @@ public class GizmoState {
 
     public void processViewportGizmoClick(double refX, double refY, EditorWorkspace manager) {
         if (manager == null) return;
-        Entity selected = manager.getSelectedEntity();
-        ViewportCamera cameraController = manager.getCameraController();
-
-        if (selected != null) {
-            SceneWorld.WorldTransform wt = manager.getSceneManager().getComputedWorldTransform(selected);
-            this.activeGizmoAxis = GizmoSystem.pickGizmoAxis(refX, refY, selected, wt.px(), wt.py(), wt.pz(), cameraController, camPanX, camPanY, camZoom, camPitch, camYaw, currentGizmoMode);
-            if (this.activeGizmoAxis != GizmoAxis.NONE) {
-                Transform tc = selected.getTransform();
-                if (tc != null) {
-                    captureDragStart(tc);
-                }
-                return;
-            }
-        }
-
-        // Pixel-exact GPU Color-ID pick: the background (PICK_ID_NONE) deselects
+        viewportPressHeld = true;
+        // One pixel-exact GPU Color-ID pick resolves the press: gizmo handles are drawn over every mesh in the pick pass,
+        // so a handle pixel starts a drag; anything else selects that entity (the background PICK_ID_NONE deselects)
         ViewportPanel.requestPickAtDesign(manager.getDockSpace(), (float) (refX / 640.0 - 1.0), (float) (1.0 - refY / 360.0),
-                pickId -> manager.selectEntity(ViewportPanel.resolvePick(pickId, manager.getSceneEntities())));
+                pickId -> resolveViewportPick(pickId, manager));
+    }
+
+    private void resolveViewportPick(int pickId, EditorWorkspace manager) {
+        if (GizmoInteractor.isGizmoPickId(pickId)) {
+            // Clicking a handle never changes the selection
+            Entity selected = manager.getSelectedEntity();
+            GizmoAxis axis = GizmoInteractor.axisForPickId(pickId, currentGizmoMode);
+            Transform tc = (selected != null) ? selected.getTransform() : null;
+            if (axis != GizmoAxis.NONE && tc != null && viewportPressHeld) {
+                SceneWorld sceneManager = manager.getSceneManager();
+                anchorFrozen = false;
+                if (currentGizmoMode == GizmoMode.ROTATE && sceneManager != null) {
+                    float[] anchor = GizmoMath.computeGizmoAnchor(selected, sceneManager);
+                    SceneWorld.WorldTransform wt = sceneManager.getComputedWorldTransform(selected);
+                    frozenOffX = anchor[0] - wt.px();
+                    frozenOffY = anchor[1] - wt.py();
+                    frozenOffZ = anchor[2] - wt.pz();
+                    anchorFrozen = true;
+                }
+                this.activeGizmoAxis = axis;
+                captureDragStart(tc);
+            }
+            return;
+        }
+        manager.selectEntity(ViewportPanel.resolvePick(pickId, manager.getSceneEntities()));
+    }
+
+    /** Left-button release anywhere: a gizmo pick still in flight resolves without starting a drag. */
+    public void onPrimaryRelease() {
+        viewportPressHeld = false;
     }
 
     public boolean onCursorPos(double rawX, double rawY, EditorWorkspace manager, OverlaySystem overlayManager) {
@@ -163,8 +198,8 @@ public class GizmoState {
         }
 
         if (activeGizmoAxis != GizmoAxis.NONE && manager.getSelectedEntity() != null) {
-            SceneWorld.WorldTransform wt = manager.getSceneManager().getComputedWorldTransform(manager.getSelectedEntity());
-            return GizmoInteractor.handleGizmoDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, manager.getSelectedEntity(), wt.px(), wt.py(), wt.pz(), manager.getCameraController(), camPanX, camPanY, camZoom, camPitch, camYaw);
+            float[] anchor = getGizmoAnchor(manager.getSelectedEntity(), manager.getSceneManager());
+            return GizmoInteractor.handleGizmoDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, manager.getSelectedEntity(), anchor[0], anchor[1], anchor[2], manager.getCameraController(), camPanX, camPanY, camZoom, camPitch, camYaw);
         }
         return false;
     }

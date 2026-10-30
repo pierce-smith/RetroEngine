@@ -36,7 +36,7 @@ import java.util.List;
 public class EditorWorkspace {
 
     public enum GizmoMode { TRANSLATE, ROTATE, SCALE }
-    public enum GizmoAxis { NONE, X, Y, Z }
+    public enum GizmoAxis { NONE, X, Y, Z, CENTER }
     public enum DropdownMenu { NONE, FILE, EDIT, ENTITY, VIEW }
     public enum ModalState { NONE, ASSET_PICKER, PARENT_PICKER, BUILD_EXPORTER }
     public enum WorkspaceTab { SCENE_3D, ANIMATOR }
@@ -315,9 +315,9 @@ public class EditorWorkspace {
 
                 Entity selected = sceneManager.getSelectedEntity();
                 if (selected != null && overlayManager.getActiveModal() == ModalState.NONE) {
-                    SceneWorld.WorldTransform wt = sceneManager.getComputedWorldTransform(selected);
+                    float[] anchor = gizmoStateController.getGizmoAnchor(selected, sceneManager);
                     GizmoSystem.render3DGizmosAtWorldPosition(
-                        uiGeometryBuffer, wt.px(), wt.py(), wt.pz(), gizmoStateController.getGizmoMode(),
+                        uiGeometryBuffer, anchor[0], anchor[1], anchor[2], gizmoStateController.getGizmoMode(),
                         gizmoStateController.getActiveAxis(), cameraController, gizmoStateController.getCamPanX(),
                         gizmoStateController.getCamPanY(), gizmoStateController.getCamZoom(),
                         gizmoStateController.getCamPitch(), gizmoStateController.getCamYaw()

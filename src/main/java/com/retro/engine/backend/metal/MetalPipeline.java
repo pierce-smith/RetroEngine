@@ -49,6 +49,7 @@ public class MetalPipeline {
     private long pipelineStateShadowMap = 0L;
     private long depthStencilStateShadowMap = 0L;
     private long pipelineStatePick = 0L;
+    private long pipelineStatePickOverlay = 0L;
 
     private long pipelineStateUI = 0L;
     private long depthStencilStateUI = 0L;
@@ -87,6 +88,8 @@ public class MetalPipeline {
         // Picking is optional: a missing entity_id library only disables GPU picks
         long vertPick = libPick != 0L ? newFunction(device, libPick, "pickVertexMain") : 0L;
         long fragPick = libPick != 0L ? newFunction(device, libPick, "pickFragmentMain") : 0L;
+        long vertPickOverlay = libPick != 0L ? newFunction(device, libPick, "pickOverlayVertexMain") : 0L;
+        long fragPickOverlay = libPick != 0L ? newFunction(device, libPick, "pickOverlayFragmentMain") : 0L;
         // Functions retain their library; pipeline states retain what they need from the functions
         device.release(libLit);
         device.release(libShadow);
@@ -103,8 +106,10 @@ public class MetalPipeline {
         pipelineStateUI = createPipeline(device, "2D UI", vertUI, fragUI, Blend.UI, 0L);
         // 5. Color-ID picking: unblended RGBA8Uint + Depth32Float
         pipelineStatePick = createPipeline(device, "color-ID picking", vertPick, fragPick, Blend.NONE, MTL_PIXEL_FORMAT_RGBA8_UINT, MTL_PIXEL_FORMAT_DEPTH32_FLOAT);
+        // 6. Color-ID pick overlay (gizmo handles): same targets, drawn with the always-pass UI depth state
+        pipelineStatePickOverlay = createPipeline(device, "color-ID pick overlay", vertPickOverlay, fragPickOverlay, Blend.NONE, MTL_PIXEL_FORMAT_RGBA8_UINT, MTL_PIXEL_FORMAT_DEPTH32_FLOAT);
 
-        for (long fn : new long[] { vertLit, fragLit, vertShadow, fragShadow, vertUI, fragUI, vertComp, fragComp, vertPick, fragPick }) {
+        for (long fn : new long[] { vertLit, fragLit, vertShadow, fragShadow, vertUI, fragUI, vertComp, fragComp, vertPick, fragPick, vertPickOverlay, fragPickOverlay }) {
             device.release(fn);
         }
 
@@ -273,6 +278,7 @@ public class MetalPipeline {
     public long getPipelineStateShadowMap() { return pipelineStateShadowMap; }
     public long getDepthStencilStateShadowMap() { return depthStencilStateShadowMap; }
     public long getPipelineStatePick() { return pipelineStatePick; }
+    public long getPipelineStatePickOverlay() { return pipelineStatePickOverlay; }
     public long getPipelineStateUI() { return pipelineStateUI; }
     public long getDepthStencilStateUI() { return depthStencilStateUI; }
 }

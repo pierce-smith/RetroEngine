@@ -420,6 +420,16 @@ public class VulkanPassEncoder {
             }
         }
 
+        // Screen-space overlay (gizmo handles) last with depth testing off, so a handle drawn over a mesh owns those pixels
+        long overlayPipeline = pipelineManager.getGraphicsPipelinePickOverlay();
+        long overlayVbo = gpuCache.getPickOverlayVertexBuffer();
+        int overlayCount = gpuCache.getPickOverlayVertexCount();
+        if (overlayPipeline != 0L && overlayVbo != 0L && overlayCount > 0) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayPipeline);
+            vkCmdBindVertexBuffers(cmd, 0, stack.longs(overlayVbo), stack.longs(0L));
+            vkCmdDraw(cmd, overlayCount, 1, 0, 0);
+        }
+
         vkCmdEndRendering(cmd);
 
         imageBarrier(cmd, stack, target.getOffscreenImage(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -701,21 +711,14 @@ public class VulkanPassEncoder {
         float cy = (float) Math.cos(radY), sy_s = (float) Math.sin(radY);
         float cz = (float) Math.cos(radZ), sz_s = (float) Math.sin(radZ);
 
-        float m00 = cy * cz * sx;
-        float m01 = (cx * sz_s + sx_s * sy_s * cz) * sx;
-        float m02 = (sx_s * sz_s - cx * sy_s * cz) * sx;
+        // Column-major R * S, matching MetalUniformStream.createModelMatrix: each column (a local axis) takes its own scale
+        float r00 = cy * cz,                         r01 = cx * sz_s + sx_s * sy_s * cz,    r02 = sx_s * sz_s - cx * sy_s * cz;
+        float r10 = -cy * sz_s,                      r11 = cx * cz - sx_s * sy_s * sz_s,    r12 = sx_s * cz + cx * sy_s * sz_s;
+        float r20 = sy_s,                            r21 = -sx_s * cy,                       r22 = cx * cy;
 
-        float m10 = -cy * sz_s * sy;
-        float m11 = (cx * cz - sx_s * sy_s * sz_s) * sy;
-        float m12 = (sx_s * cz + cx * sy_s * sz_s) * sy;
-
-        float m20 = sy_s * sz;
-        float m21 = -sx_s * cy * sz;
-        float m22 = cx * cy * sz;
-
-        outMatrix[0] = m00;  outMatrix[1] = m10;  outMatrix[2] = m20;  outMatrix[3] = 0.0f;
-        outMatrix[4] = m01;  outMatrix[5] = m11;  outMatrix[6] = m21;  outMatrix[7] = 0.0f;
-        outMatrix[8] = m02;  outMatrix[9] = m12;  outMatrix[10] = m22; outMatrix[11] = 0.0f;
+        outMatrix[0] = r00 * sx;  outMatrix[1] = r10 * sx;  outMatrix[2] = r20 * sx;  outMatrix[3] = 0.0f;
+        outMatrix[4] = r01 * sy;  outMatrix[5] = r11 * sy;  outMatrix[6] = r21 * sy;  outMatrix[7] = 0.0f;
+        outMatrix[8] = r02 * sz;  outMatrix[9] = r12 * sz;  outMatrix[10] = r22 * sz; outMatrix[11] = 0.0f;
         outMatrix[12] = px;  outMatrix[13] = py;  outMatrix[14] = pz;  outMatrix[15] = 1.0f;
     }
 

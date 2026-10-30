@@ -2,6 +2,7 @@ package com.retro.engine.backend.metal;
 
 import com.retro.engine.rhi.DirectionalShadowFrustum;
 import com.retro.engine.rhi.HandleRegistry;
+import com.retro.engine.rhi.IRenderBackend;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.ByteBuffer;
@@ -73,6 +74,7 @@ public class MetalGpuCache {
     private final MetalTextureRegistry textureRegistry = new MetalTextureRegistry();
     private final MetalRingBuffer gridRingBuffer = new MetalRingBuffer();
     private final MetalRingBuffer uiRingBuffer = new MetalRingBuffer();
+    private final MetalRingBuffer pickOverlayRingBuffer = new MetalRingBuffer();
 
     private long viewportQuadBuffer = 0L;
     private float quadMinX = -0.55f, quadMinY = -0.50f, quadMaxX = 0.55f, quadMaxY = 0.88f;
@@ -148,6 +150,14 @@ public class MetalGpuCache {
 
     public int getUiVertexCount() {
         return uiRingBuffer.getVertexCount();
+    }
+
+    public long getPickOverlayVertexBuffer() {
+        return pickOverlayRingBuffer.getCurrentBufferHandle();
+    }
+
+    public int getPickOverlayVertexCount() {
+        return pickOverlayRingBuffer.getVertexCount();
     }
 
     public long getViewportQuadBuffer() {
@@ -263,6 +273,10 @@ public class MetalGpuCache {
         uiRingBuffer.updateBuffer(metalDevice, vertices, count, 8, this);
     }
 
+    public void updatePickOverlay(MetalDevice metalDevice, float[] vertices, int count) {
+        pickOverlayRingBuffer.updateBuffer(metalDevice, vertices, count, IRenderBackend.PICK_OVERLAY_VERTEX_FLOATS, this);
+    }
+
     /** Uploads a static VBO once (or returns the live handle for assetKey). Thread-safe. */
     public long registerMesh(MetalDevice metalDevice, String assetKey, float[] vertices, int vertexCount) {
         return registerMesh(metalDevice, assetKey, vertices, vertexCount, null, 0);
@@ -374,6 +388,7 @@ public class MetalGpuCache {
             if (shadowSamplerState != 0L) { invokePPP(shadowSamplerState, selRelease, send); shadowSamplerState = 0L; }
             gridRingBuffer.cleanup(metalDevice);
             uiRingBuffer.cleanup(metalDevice);
+            pickOverlayRingBuffer.cleanup(metalDevice);
             if (viewportQuadBuffer != 0L) { invokePPP(viewportQuadBuffer, selRelease, send); viewportQuadBuffer = 0L; }
             if (groundQuadBuffer != 0L) { invokePPP(groundQuadBuffer, selRelease, send); groundQuadBuffer = 0L; groundQuadAddress = 0L; }
 
