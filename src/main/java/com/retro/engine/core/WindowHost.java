@@ -103,6 +103,8 @@ public class WindowHost {
     private SingleScrollListener singleScrollListener;
 
     private KeyListener keyListener;
+    // OS-reported modifier flags on each key's most recent press; polled modifier state can latch
+    private final int[] keyPressMods = new int[GLFW_KEY_LAST + 1];
     private KeyPressListener keyPressListener;
     private CharListener charListener;
     // True while an editor text field owns the keyboard, so Escape cancels the edit instead of closing the window
@@ -213,6 +215,9 @@ public class WindowHost {
 
         // Key Callback
         glfwSetKeyCallback(windowHandle, (window, key, scancode, action, mods) -> {
+            if (action == GLFW_PRESS && key >= 0 && key <= GLFW_KEY_LAST) {
+                keyPressMods[key] = mods;
+            }
             if (action == GLFW_PRESS) {
                 if (key == GLFW_KEY_ESCAPE) {
                     if (textInputCapture == null || !textInputCapture.getAsBoolean()) {
@@ -324,6 +329,12 @@ public class WindowHost {
     public boolean isKeyDown(int key) {
         if (windowHandle == NULL) return false;
         return glfwGetKey(windowHandle, key) == GLFW_PRESS;
+    }
+
+    /** Modifier bits (GLFW_MOD_*) the OS reported when {@code key} was last pressed. */
+    public int getKeyPressMods(int key) {
+        if (key < 0 || key > GLFW_KEY_LAST) return 0;
+        return keyPressMods[key];
     }
 
     /** False while another application has keyboard focus; joysticks keep reporting input regardless. */

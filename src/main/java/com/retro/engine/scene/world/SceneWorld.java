@@ -541,9 +541,8 @@ public class SceneWorld {
         List<Entity> loadedEntities = (data != null && data.entities() != null) ? data.entities() : new ArrayList<>();
         clearRegistryAndRebind(loadedEntities);
         attachAndArmAnimators();
-        if (!sceneEntities.isEmpty()) {
-            selectEntity(sceneEntities.get(0));
-        }
+        // A freshly loaded scene starts with nothing selected (rebind may have matched a stale selection by id)
+        selectEntity((Entity) null);
         return data;
     }
 }

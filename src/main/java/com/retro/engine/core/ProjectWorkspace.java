@@ -260,7 +260,7 @@ public final class ProjectWorkspace {
         Entity light = new Entity("light_1", "DirectionalLight", null);
         light.addComponent(new Light());
         Transform lt = light.getComponent(Transform.class);
-        if (lt != null) { lt.posY = 5.0f; lt.rotX = -50.0f; lt.rotY = 30.0f; }
+        if (lt != null) { lt.posY = 5.0f; lt.rotX = 45.0f; lt.rotY = 30.0f; }
         entities.add(light);
 
         File sceneFile = new File(projectDir, STARTER_SCENE);

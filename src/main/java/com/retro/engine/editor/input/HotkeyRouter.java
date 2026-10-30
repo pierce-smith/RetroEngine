@@ -11,6 +11,7 @@ import com.retro.engine.editor.ui.panels.EngineConsolePanel;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.editor.commands.EditorCommands;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
+import com.retro.engine.scene.world.SceneWorld.PlayState;
 
 
 import static org.lwjgl.glfw.GLFW.*;
@@ -22,10 +23,13 @@ import static org.lwjgl.glfw.GLFW.*;
  */
 public class HotkeyRouter {
 
-    private boolean saveKeyPressedLastFrame = false;
-    private boolean loadKeyPressedLastFrame = false;
-    private boolean undoKeyPressedLastFrame = false;
-    private boolean duplicateKeyPressedLastFrame = false;
+    private static final int CHORD_MODS = GLFW_MOD_CONTROL | GLFW_MOD_SUPER;
+
+    // Raw key-down state from the previous frame, used to edge-trigger Ctrl/Cmd chords
+    private boolean sDownLastFrame = false;
+    private boolean oDownLastFrame = false;
+    private boolean zDownLastFrame = false;
+    private boolean dDownLastFrame = false;
     private boolean deleteKeyPressedLastFrame = false;
     private boolean graveKeyPressedLastFrame = false;
 
@@ -39,6 +43,25 @@ public class HotkeyRouter {
         // Snapping is DEFAULT (!isCtrlDown). Holding Cmd/Ctrl disables snapping for free movement.
         GizmoInteractor.setSnapEnabled(!isCtrlDown);
 
+        // Chords fire only on the frame the letter goes down, and only if the OS reported Ctrl/Cmd on that press.
+        // Polled modifier state can latch (e.g. a key-up swallowed by a native dialog), so a bare S/D held for
+        // movement must never read as Save/Duplicate.
+        boolean isSDown = window.isKeyDown(GLFW_KEY_S);
+        boolean isODown = window.isKeyDown(GLFW_KEY_O);
+        boolean isZDown = window.isKeyDown(GLFW_KEY_Z);
+        boolean isDDown = window.isKeyDown(GLFW_KEY_D);
+        boolean saveChord = isChordPressed(window, GLFW_KEY_S, isSDown, sDownLastFrame);
+        boolean openChord = isChordPressed(window, GLFW_KEY_O, isODown, oDownLastFrame);
+        boolean undoChord = isChordPressed(window, GLFW_KEY_Z, isZDown, zDownLastFrame);
+        boolean duplicateChord = isChordPressed(window, GLFW_KEY_D, isDDown, dDownLastFrame);
+        sDownLastFrame = isSDown;
+        oDownLastFrame = isODown;
+        zDownLastFrame = isZDown;
+        dDownLastFrame = isDDown;
+
+        // Scene-editing commands are disabled outside EDITING so gameplay keys can't save, open, duplicate, or delete
+        boolean isEditing = editorManager.getPlayState() == PlayState.EDITING;
+
         // A focused Inspector text field owns the keyboard: no hotkeys (Backspace would delete the entity), no fly camera
         if (InspectorInputDelegate.isEditingText()) {
             if (cameraController != null) cameraController.update(deltaTime, false, false, false, false, false, false);
@@ -49,14 +72,12 @@ public class HotkeyRouter {
         boolean is2 = window.isKeyDown(GLFW_KEY_2);
         boolean is3 = window.isKeyDown(GLFW_KEY_3);
         boolean isW = window.isKeyDown(GLFW_KEY_W);
-        boolean isS = window.isKeyDown(GLFW_KEY_S);
+        boolean isS = isSDown;
         boolean isA = window.isKeyDown(GLFW_KEY_A);
-        boolean isD = window.isKeyDown(GLFW_KEY_D);
+        boolean isD = isDDown;
         boolean isQ = window.isKeyDown(GLFW_KEY_Q);
         boolean isE = window.isKeyDown(GLFW_KEY_E);
         boolean isR = window.isKeyDown(GLFW_KEY_R);
-        boolean isO = window.isKeyDown(GLFW_KEY_O);
-        boolean isZ = window.isKeyDown(GLFW_KEY_Z);
         boolean isGrave = window.isKeyDown(GLFW_KEY_GRAVE_ACCENT); // Tilde key (~)
         boolean isDelete = window.isKeyDown(GLFW_KEY_DELETE) || window.isKeyDown(GLFW_KEY_BACKSPACE);
 
@@ -74,72 +95,50 @@ public class HotkeyRouter {
         if (window.isKeyDown(GLFW_KEY_F) && cameraController != null) cameraController.reset();
 
         // Cmd+Z / Ctrl+Z: Undo | Cmd+Shift+Z / Ctrl+Shift+Z: Redo
-        if (isCtrlDown && isZ) {
-            if (!undoKeyPressedLastFrame) {
-                if (isShiftDown) {
-                    editorManager.getCommandHistory().redo();
-                } else {
-                    editorManager.getCommandHistory().undo();
-                }
-                UISoundPlayer.play(UISound.TOGGLE);
-                undoKeyPressedLastFrame = true;
+        if (undoChord) {
+            if (isShiftDown) {
+                editorManager.getCommandHistory().redo();
+            } else {
+                editorManager.getCommandHistory().undo();
             }
-        } else {
-            undoKeyPressedLastFrame = false;
+            UISoundPlayer.play(UISound.TOGGLE);
         }
 
         // Cmd+S / Ctrl+S: Save Scene
-        if (isCtrlDown && isS) {
-            if (!saveKeyPressedLastFrame) {
-                UISoundPlayer.play(UISound.OPEN_MODAL);
-                editorManager.getSceneManager().promptSaveSceneWithNativeDialog(
-                    editorManager.getAssetDatabase().getMutableAssetDirectory(),
-                    editorManager.getAssetDatabase()
-                );
-                saveKeyPressedLastFrame = true;
-            }
-        } else {
-            saveKeyPressedLastFrame = false;
+        if (isEditing && saveChord) {
+            UISoundPlayer.play(UISound.OPEN_MODAL);
+            editorManager.getSceneManager().promptSaveSceneWithNativeDialog(
+                editorManager.getAssetDatabase().getMutableAssetDirectory(),
+                editorManager.getAssetDatabase()
+            );
         }
 
         // Cmd+O / Ctrl+O: Load Scene
-        if (isCtrlDown && isO) {
-            if (!loadKeyPressedLastFrame) {
-                UISoundPlayer.play(UISound.OPEN_MODAL);
-                String defaultDir = editorManager.getProjectScenesDir();
-                String importedPath = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.rscene)", "rscene");
-                if (importedPath != null && !importedPath.trim().isEmpty()) {
-                    UISoundPlayer.play(UISound.SPAWN);
-                    editorManager.getSceneManager().loadSceneFromFile(importedPath, editorManager.getAssetDatabase());
-                } else {
-                    UISoundPlayer.play(UISound.CLOSE_MODAL);
-                }
-                loadKeyPressedLastFrame = true;
+        if (isEditing && openChord) {
+            UISoundPlayer.play(UISound.OPEN_MODAL);
+            String defaultDir = editorManager.getProjectScenesDir();
+            String importedPath = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.rscene)", "rscene");
+            if (importedPath != null && !importedPath.trim().isEmpty()) {
+                UISoundPlayer.play(UISound.SPAWN);
+                editorManager.getSceneManager().loadSceneFromFile(importedPath, editorManager.getAssetDatabase());
+            } else {
+                UISoundPlayer.play(UISound.CLOSE_MODAL);
             }
-        } else {
-            loadKeyPressedLastFrame = false;
         }
 
         // Cmd+D / Ctrl+D: Duplicate Selected Entity
-        if (isCtrlDown && isD) {
-            if (!duplicateKeyPressedLastFrame) {
-                if (editorManager.getSelectedEntity() != null) {
-                    editorManager.getSceneManager().duplicateSelectedEntity();
-                    Entity newlySpawned = editorManager.getSelectedEntity();
-                    if (newlySpawned != null) {
-                        EditorCommands.EntitySpawnCommand cmd = new EditorCommands.EntitySpawnCommand(editorManager, newlySpawned);
-                        editorManager.getCommandHistory().executeCommand(cmd);
-                    }
-                    UISoundPlayer.play(UISound.DUPLICATE);
-                }
-                duplicateKeyPressedLastFrame = true;
+        if (isEditing && duplicateChord && editorManager.getSelectedEntity() != null) {
+            editorManager.getSceneManager().duplicateSelectedEntity();
+            Entity newlySpawned = editorManager.getSelectedEntity();
+            if (newlySpawned != null) {
+                EditorCommands.EntitySpawnCommand cmd = new EditorCommands.EntitySpawnCommand(editorManager, newlySpawned);
+                editorManager.getCommandHistory().executeCommand(cmd);
             }
-        } else {
-            duplicateKeyPressedLastFrame = false;
+            UISoundPlayer.play(UISound.DUPLICATE);
         }
 
         // Delete / Backspace: Remove Selected Entity
-        if (isDelete) {
+        if (isEditing && isDelete) {
             if (!deleteKeyPressedLastFrame) {
                 Entity selected = editorManager.getSelectedEntity();
                 if (selected != null) {
@@ -170,6 +169,10 @@ public class HotkeyRouter {
         if (pad != null && pad.isConnected() && window.isFocused()) {
             processGamepad(pad, editorManager, cameraController, deltaTime);
         }
+    }
+
+    private static boolean isChordPressed(WindowHost window, int key, boolean isDown, boolean wasDown) {
+        return isDown && !wasDown && (window.getKeyPressMods(key) & CHORD_MODS) != 0;
     }
 
     private void processGamepad(GamepadManager pad, EditorWorkspace editorManager, ViewportCamera cameraController, float deltaTime) {
