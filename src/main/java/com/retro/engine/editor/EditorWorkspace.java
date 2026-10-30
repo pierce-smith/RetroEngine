@@ -505,7 +505,7 @@ public class EditorWorkspace {
                 EngineConsolePanel.renderProfilerHUD(uiGeometryBuffer, lastDeltaTime);
             }
             case HIERARCHY -> HierarchyPanel.render(uiContext, sceneManager.getSceneEntities());
-            case INSPECTOR -> InspectorPanel.render(uiContext, sceneManager.getSelectedEntity(), getSelectedBone(), assetDirectoryManager.getAssetDirectory());
+            case INSPECTOR -> InspectorPanel.render(uiContext, sceneManager.getSelectedEntity(), getSelectedBone(), getSelectedBoneIndex(), assetDirectoryManager.getAssetDirectory());
             case ANIMATOR -> AnimatorGraphPanel.renderCanvas(uiGeometryBuffer, getActiveAnimatorController(), selectedStateName);
             case ANIMATOR_PARAMETERS -> AnimatorGraphPanel.renderParameters(uiGeometryBuffer, getActiveAnimatorController());
             case ANIMATOR_INSPECTOR -> AnimatorGraphPanel.renderInspector(uiGeometryBuffer, getActiveAnimatorController(), selectedStateName, selectedTransition, getRecordingAnimator());

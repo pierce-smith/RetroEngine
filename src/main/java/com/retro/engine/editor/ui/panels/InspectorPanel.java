@@ -1,5 +1,6 @@
 package com.retro.engine.editor.ui.panels;
 
+import com.retro.engine.animation.AnimationSystem;
 import com.retro.engine.animation.skeleton.Skeleton;
 import com.retro.engine.scene.components.ComponentSchema;
 import com.retro.engine.scene.components.ComponentSchema.Control;
@@ -9,6 +10,7 @@ import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.theme.EditorTheme;
 import com.retro.engine.scene.components.Component;
 import com.retro.engine.scene.components.gameplay.ScriptComponent;
+import com.retro.engine.scene.components.media.AnimatorComponent;
 import com.retro.engine.scene.components.transform.Transform;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scripting.EntityScript;
@@ -18,6 +20,7 @@ import com.retro.engine.assets.AssetMeta;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -182,14 +185,90 @@ public class InspectorPanel {
         return fields;
     }
 
-    // Entity header text; carries the Viewport-selected bone without adding rows that InspectorInputDelegate hit-tests
+    // Entity header text; names the Viewport-selected bone shown in the BONE TRANSFORM section
     private static final StringBuilder headerSb = new StringBuilder(64);
 
-    public static void render(UIContext ui, Entity selectedEntity, List<AssetMeta> assetDirectory) {
-        render(ui, selectedEntity, null, assetDirectory);
+    // --- Bone Transform section: the selected bone's local pose as POSITION / ROTATION (degrees) / SCALE rows ---
+    public static final int BONE_ROW_COUNT = 9;
+    public static final String BONE_KEY_PREFIX = "bone:";
+    private static final String[] BONE_ROW_KEYS = new String[BONE_ROW_COUNT];
+    static {
+        for (int i = 0; i < BONE_ROW_COUNT; i++) BONE_ROW_KEYS[i] = BONE_KEY_PREFIX + i;
     }
 
-    public static void render(UIContext ui, Entity selectedEntity, Skeleton.BoneNode selectedBone, List<AssetMeta> assetDirectory) {
+    // Euler angles are not unique, so the last values the user set are shown for as long as the bone keeps the matrix
+    // they produced; otherwise re-decomposing after every edit could flip axes (e.g. Y past 90 degrees) under the cursor.
+    private static AnimatorComponent eulerCacheAnimator = null;
+    private static int eulerCacheBone = -1;
+    private static final float[] eulerCacheLocal = new float[16];
+    private static final float[] eulerCacheTrs = new float[BONE_ROW_COUNT];
+    private static final float[] boneTrsScratch = new float[BONE_ROW_COUNT];
+
+    /** Inline-edit key of bone row {@code row} (0-2 position, 3-5 rotation, 6-8 scale). */
+    public static String boneRowKey(int row) { return BONE_ROW_KEYS[row]; }
+
+    /** Height of the BONE TRANSFORM section, which pushes the component list down while a bone is selected. */
+    public static float boneSectionHeight() {
+        return HEADER_ADVANCE + BONE_ROW_COUNT * ROW_ADVANCE + COMPONENT_GAP;
+    }
+
+    /** Vertical step and clamp of bone rows: position (units), rotation (degrees), scale. */
+    public static float boneRowStep(int row) {
+        return row < 3 ? 0.01f : (row < 6 ? 1.0f : 0.01f);
+    }
+
+    /** Fills {@code outTrs} with bone {@code boneIndex}'s local pose as pos xyz, Euler xyz in degrees, scale xyz. */
+    public static boolean readBoneTrs(AnimatorComponent animator, int boneIndex, float[] outTrs) {
+        float[] local = (animator != null) ? animator.getLocalPose(boneIndex) : null;
+        if (local == null) return false;
+        if (animator == eulerCacheAnimator && boneIndex == eulerCacheBone && Arrays.equals(local, eulerCacheLocal)) {
+            System.arraycopy(eulerCacheTrs, 0, outTrs, 0, BONE_ROW_COUNT);
+            return true;
+        }
+        float[] pos = new float[3], quat = new float[4], scale = new float[3];
+        AnimationSystem.decomposeTRS(local, pos, quat, scale);
+        outTrs[0] = pos[0]; outTrs[1] = pos[1]; outTrs[2] = pos[2];
+        quatToEulerDegrees(quat, outTrs, 3);
+        outTrs[6] = scale[0]; outTrs[7] = scale[1]; outTrs[8] = scale[2];
+        return true;
+    }
+
+    /** Recomposes pos / Euler-degrees / scale into a column-major local matrix and remembers the Euler values for display. */
+    public static void composeBoneTrs(AnimatorComponent animator, int boneIndex, float[] trs, float[] outLocal) {
+        float[] quat = new float[4];
+        eulerDegreesToQuat(trs[3], trs[4], trs[5], quat);
+        AnimationSystem.composeTRS(new float[] {trs[0], trs[1], trs[2]}, quat, new float[] {trs[6], trs[7], trs[8]}, outLocal);
+        eulerCacheAnimator = animator;
+        eulerCacheBone = boneIndex;
+        System.arraycopy(outLocal, 0, eulerCacheLocal, 0, 16);
+        System.arraycopy(trs, 0, eulerCacheTrs, 0, BONE_ROW_COUNT);
+    }
+
+    /** XYZ Euler (Blender's default order: R = Rz * Ry * Rx) in degrees to a quaternion (x, y, z, w). */
+    private static void eulerDegreesToQuat(float xDeg, float yDeg, float zDeg, float[] q) {
+        double hx = Math.toRadians(xDeg) * 0.5, hy = Math.toRadians(yDeg) * 0.5, hz = Math.toRadians(zDeg) * 0.5;
+        double cx = Math.cos(hx), sx = Math.sin(hx), cy = Math.cos(hy), sy = Math.sin(hy), cz = Math.cos(hz), sz = Math.sin(hz);
+        q[0] = (float) (sx * cy * cz - cx * sy * sz);
+        q[1] = (float) (cx * sy * cz + sx * cy * sz);
+        q[2] = (float) (cx * cy * sz - sx * sy * cz);
+        q[3] = (float) (cx * cy * cz + sx * sy * sz);
+    }
+
+    /** Inverse of {@link #eulerDegreesToQuat}; writes x, y, z degrees at {@code out[off..off+2]}. */
+    private static void quatToEulerDegrees(float[] q, float[] out, int off) {
+        double x = q[0], y = q[1], z = q[2], w = q[3];
+        double sinP = 2.0 * (w * y - z * x);
+        out[off] = (float) Math.toDegrees(Math.atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y)));
+        out[off + 1] = (float) Math.toDegrees(Math.abs(sinP) >= 1.0 ? Math.copySign(Math.PI / 2.0, sinP) : Math.asin(sinP));
+        out[off + 2] = (float) Math.toDegrees(Math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z)));
+    }
+
+    public static void render(UIContext ui, Entity selectedEntity, List<AssetMeta> assetDirectory) {
+        render(ui, selectedEntity, null, -1, assetDirectory);
+    }
+
+    public static void render(UIContext ui, Entity selectedEntity, Skeleton.BoneNode selectedBone, int selectedBoneIndex,
+                              List<AssetMeta> assetDirectory) {
         UIGeometryBatch.Buffer buffer = ui.geometry();
         UIGeometryBatch.addQuad(buffer, 0.55f, -0.5f, 1.0f, 1.0f, EditorTheme.SURFACE, 1.0f);
         activeWellVisible = false;
@@ -212,6 +291,11 @@ public class InspectorPanel {
         UIGeometryBatch.addQuad(buffer, LABEL_X, 0.785f, VALUE_X1, 0.785f + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
 
         float curY = CONTENT_TOP;
+
+        AnimatorComponent boneAnimator = (selectedBone != null) ? selectedEntity.getComponent(AnimatorComponent.class) : null;
+        if (boneAnimator != null && readBoneTrs(boneAnimator, selectedBoneIndex, boneTrsScratch)) {
+            curY = renderBoneSection(buffer, boneAnimator, curY);
+        }
 
         for (Component comp : selectedEntity.getAllComponents()) {
             float drawHeaderY = curY + scrollOffset;
@@ -438,6 +522,36 @@ public class InspectorPanel {
             float thumbTopY = VIEW_TOP - (scrollOffset / maxScroll) * (trackH - thumbHeight);
             UIGeometryBatch.addPill(buffer, 0.984f, thumbTopY - thumbHeight, 0.993f, thumbTopY, EditorTheme.GRAPHITE, 0.85f);
         }
+    }
+
+    /** Draws the BONE TRANSFORM rows from {@link #boneTrsScratch}; returns curY below the section. */
+    private static float renderBoneSection(UIGeometryBatch.Buffer buffer, AnimatorComponent animator, float curY) {
+        float drawHeaderY = curY + scrollOffset;
+        if (isRowVisible(drawHeaderY)) renderSectionHeader(buffer, "Bone Transform", drawHeaderY, false);
+        curY -= HEADER_ADVANCE;
+
+        for (int row = 0; row < BONE_ROW_COUNT; row++) {
+            float drawY = curY + scrollOffset;
+            curY -= ROW_ADVANCE;
+            if (!isRowVisible(drawY)) continue;
+            float midY = drawY - (CTRL_BELOW - CTRL_ABOVE) * 0.5f;
+            int axis = row % 3;
+            if (axis == 0) rowLabel(buffer, row == 0 ? "POSITION" : (row == 3 ? "ROTATION" : "SCALE"), midY);
+
+            boolean editing = isActiveField(animator, BONE_ROW_KEYS[row]);
+            if (editing) activeWell(buffer, VALUE_X0, FIELD_X1, drawY);
+            else well(buffer, VALUE_X0, FIELD_X1, drawY);
+            float textX = axisBadge(buffer, axis, VALUE_X0 + 0.005f, drawY) + 0.008f;
+            if (editing) {
+                renderInputText(buffer, textX, FIELD_X1 - 0.006f, midY);
+            } else {
+                strBuilder.setLength(0);
+                appendFloat(strBuilder, boneTrsScratch[row], row < 3 || row >= 6 ? 2 : 1);
+                UIGeometryBatch.addTruncatedText(buffer, strBuilder, textX, textTop(midY, VALUE_TEXT), FIELD_X1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+            }
+            renderStepper(buffer, drawY, midY);
+        }
+        return curY - COMPONENT_GAP;
     }
 
     /** Vertical advance of one property row; shared with InspectorInputDelegate hit-testing. */

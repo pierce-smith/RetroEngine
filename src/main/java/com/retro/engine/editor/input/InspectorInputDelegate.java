@@ -15,6 +15,7 @@ import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.scene.components.gameplay.CharacterControllerComponent;
 import com.retro.engine.scene.components.gameplay.ScriptComponent;
 import com.retro.engine.scene.components.gameplay.VehicleControllerComponent;
+import com.retro.engine.scene.components.media.AnimatorComponent;
 import com.retro.engine.scene.components.media.AudioSource;
 import com.retro.engine.scene.components.physics.BoxCollider;
 import com.retro.engine.scene.components.physics.CapsuleCollider;
@@ -68,6 +69,13 @@ public class InspectorInputDelegate {
 
         float scrollOffset = InspectorPanel.getScrollOffset();
         float curY = InspectorPanel.CONTENT_TOP;
+
+        // BONE TRANSFORM section (drawn above the components while a Viewport bone is selected)
+        AnimatorComponent boneAnimator = boneSectionAnimator(manager, selected);
+        if (boneAnimator != null) {
+            if (processBoneRowClick(ndcX, ndcY, curY + scrollOffset, manager, selected, boneAnimator)) return;
+            curY -= InspectorPanel.boneSectionHeight();
+        }
 
         for (Component comp : selected.getAllComponents()) {
             if (comp == null) continue;
@@ -284,6 +292,101 @@ public class InspectorInputDelegate {
         return false;
     }
 
+    // --- Bone Transform rows ---
+
+    // Label scrub drag on a bone row: horizontal motion from the press point changes the value live
+    private static final float BONE_SCRUB_STEPS_PER_NDC = 250.0f;
+    private static AnimatorComponent boneDragAnimator = null;
+    private static Entity boneDragEntity = null;
+    private static int boneDragIndex = -1, boneDragRow = -1;
+    private static float boneDragStartX, boneDragStartValue;
+    private static float[] boneDragStartLocal = null;
+    private static boolean boneDragStartActive = false;
+
+    /** Animator whose selected bone the Inspector shows a BONE TRANSFORM section for (the same test the panel draws with). */
+    private static AnimatorComponent boneSectionAnimator(EditorWorkspace manager, Entity selected) {
+        int boneIndex = manager.getSelectedBoneIndex();
+        AnimatorComponent animator = (boneIndex >= 0) ? selected.getComponent(AnimatorComponent.class) : null;
+        return (animator != null && animator.getLocalPose(boneIndex) != null) ? animator : null;
+    }
+
+    /** Clicks inside the BONE TRANSFORM section starting at {@code drawHeaderY}; returns true when consumed. */
+    private static boolean processBoneRowClick(float ndcX, float ndcY, float drawHeaderY, EditorWorkspace manager,
+                                               Entity selected, AnimatorComponent animator) {
+        float rowY = drawHeaderY - InspectorPanel.HEADER_ADVANCE;
+        for (int row = 0; row < InspectorPanel.BONE_ROW_COUNT; row++, rowY -= InspectorPanel.ROW_ADVANCE) {
+            if (!InspectorPanel.isRowVisible(rowY) || ndcY < rowY - InspectorPanel.CTRL_BELOW || ndcY > rowY + InspectorPanel.CTRL_ABOVE) continue;
+            // Edit poses only drive the mesh while EDITING; in play mode the clip owns the bones
+            if (!manager.isBoneEditActive()) return true;
+
+            int boneIndex = manager.getSelectedBoneIndex();
+            float[] trs = new float[InspectorPanel.BONE_ROW_COUNT];
+            if (!InspectorPanel.readBoneTrs(animator, boneIndex, trs)) return true;
+            float step = InspectorPanel.boneRowStep(row);
+
+            float delta = 0.0f;
+            if (ndcX >= InspectorPanel.DEC_X0 && ndcX < InspectorPanel.DEC_X1) delta = -step;
+            else if (ndcX >= InspectorPanel.INC_X0 && ndcX <= InspectorPanel.INC_X1) delta = step;
+            if (delta != 0.0f) {
+                UISoundPlayer.play(UISound.CLICK);
+                commitBoneValue(manager, selected, animator, boneIndex, row, trs[row] + delta);
+                return true;
+            }
+            if (ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.FIELD_X1) {
+                beginInlineEdit(animator, InspectorPanel.boneRowKey(row), null, float.class, null, null, null, Float.toString(trs[row]));
+                editBoneRow = row;
+                editBoneIndex = boneIndex;
+                return true;
+            }
+            if (ndcX >= InspectorPanel.LABEL_X && ndcX < InspectorPanel.VALUE_X0) {
+                float[] local = animator.getLocalPose(boneIndex);
+                boneDragAnimator = animator;
+                boneDragEntity = selected;
+                boneDragIndex = boneIndex;
+                boneDragRow = row;
+                boneDragStartX = ndcX;
+                boneDragStartValue = trs[row];
+                boneDragStartLocal = local.clone();
+                boneDragStartActive = animator.editPoseActive[boneIndex];
+                return true;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /** Sets one TRS component of a bone's local pose and re-poses the Viewport mesh (no undo entry). */
+    private static boolean applyBoneValue(EditorWorkspace manager, AnimatorComponent animator, int boneIndex, int row, float value) {
+        float[] trs = new float[InspectorPanel.BONE_ROW_COUNT];
+        if (!Float.isFinite(value) || !InspectorPanel.readBoneTrs(animator, boneIndex, trs)) return false;
+        // A zero scale collapses the matrix and loses its rotation, so keep scale strictly positive
+        trs[row] = (row >= 6) ? Math.max(0.001f, value) : value;
+        float[] local = new float[16];
+        InspectorPanel.composeBoneTrs(animator, boneIndex, trs, local);
+        animator.setEditPose(boneIndex, local);
+        animator.bindPoseApplied = false;
+        manager.getSceneManager().refreshEditPose(animator);
+        animator.setDirty(true);
+        return true;
+    }
+
+    /** One undoable bone value edit, keyed into the recorded pose like a gizmo drag release. */
+    private static void commitBoneValue(EditorWorkspace manager, Entity entity, AnimatorComponent animator, int boneIndex, int row, float value) {
+        float[] oldLocal = animator.getLocalPose(boneIndex).clone();
+        boolean oldActive = animator.editPoseActive[boneIndex];
+        if (!applyBoneValue(manager, animator, boneIndex, row, value)) return;
+        pushBonePose(manager, entity, animator, boneIndex, oldLocal, oldActive);
+    }
+
+    private static void pushBonePose(EditorWorkspace manager, Entity entity, AnimatorComponent animator, int boneIndex,
+                                     float[] oldLocal, boolean oldActive) {
+        float[] newLocal = animator.getLocalPose(boneIndex);
+        if (newLocal == null || (Arrays.equals(newLocal, oldLocal) && animator.editPoseActive[boneIndex] == oldActive)) return;
+        manager.getCommandHistory().executeCommand(new EditorCommands.BonePoseCommand(manager.getSceneManager(), animator, boneIndex,
+                oldLocal, oldActive, newLocal.clone(), animator.editPoseActive[boneIndex]));
+        manager.recordBoneKeyframe(entity, boneIndex);
+    }
+
     private static void execute(EditorWorkspace manager, Component comp, Field field, Object oldVal, Object newVal, String label) {
         manager.getCommandHistory().executeCommand(new EditorCommands.ModifyPropertyCommand(comp, field, oldVal, newVal, label));
     }
@@ -296,6 +399,8 @@ public class InspectorInputDelegate {
     private static InspectorProperty editMeta;
     private static String editLabel;
     private static Object editOldValue;
+    /** Bone row (and bone) being typed into, or -1 when the focused field is a component / script field. */
+    private static int editBoneRow = -1, editBoneIndex = -1;
 
     public static boolean isEditingText() {
         return InspectorPanel.isEditing();
@@ -352,13 +457,21 @@ public class InspectorInputDelegate {
         InspectorProperty meta = editMeta;
         String label = editLabel;
         Object oldValue = editOldValue;
+        int boneRow = editBoneRow, boneIndex = editBoneIndex;
         clearInlineEdit();
 
         // The edited component must still belong to the selection (it may have been removed mid-edit)
         Entity selected = (manager != null) ? manager.getSelectedEntity() : null;
         if (selected == null || !selected.getAllComponents().contains(comp)) return;
 
-        if (field == null && comp instanceof ScriptComponent sc) {
+        if (boneRow >= 0) {
+            // The bone must still be the selected one and the scene still EDITING
+            if (!(comp instanceof AnimatorComponent animator) || manager.getSelectedBoneIndex() != boneIndex || !manager.isBoneEditActive()) return;
+            Object parsed = parseInlineValue(text, float.class, null, false);
+            float[] trs = new float[InspectorPanel.BONE_ROW_COUNT];
+            if (parsed == null || !InspectorPanel.readBoneTrs(animator, boneIndex, trs) || (Float) parsed == trs[boneRow]) return;
+            commitBoneValue(manager, selected, animator, boneIndex, boneRow, (Float) parsed);
+        } else if (field == null && comp instanceof ScriptComponent sc) {
             // Script fields: clamp only when the annotation declares a range other than its 0..100 default
             boolean clamp = meta != null && (meta.min() != 0.0f || meta.max() != 100.0f);
             Object parsed = parseInlineValue(text, type, meta, clamp);
@@ -378,6 +491,8 @@ public class InspectorInputDelegate {
         editMeta = null;
         editLabel = null;
         editOldValue = null;
+        editBoneRow = -1;
+        editBoneIndex = -1;
         InspectorPanel.endInlineEdit();
     }
 
@@ -428,13 +543,29 @@ public class InspectorInputDelegate {
     }
 
     public static void processInspectorDrag(float ndcX, float ndcY, EditorWorkspace manager) {
+        if (boneDragAnimator != null && manager != null) {
+            if (manager.getSelectedBoneIndex() != boneDragIndex || !manager.isBoneEditActive()) return;
+            float value = boneDragStartValue + (ndcX - boneDragStartX) * BONE_SCRUB_STEPS_PER_NDC * InspectorPanel.boneRowStep(boneDragRow);
+            applyBoneValue(manager, boneDragAnimator, boneDragIndex, boneDragRow, value);
+            return;
+        }
         if (!isDraggingSlider || draggingComponent == null || draggingFieldName == null) return;
     }
 
-    public static void onMouseRelease() {
+    public static void onMouseRelease(EditorWorkspace manager) {
         isDraggingSlider = false;
         draggingFieldName = null;
         draggingComponent = null;
+
+        // A finished bone scrub becomes one undoable pose edit (and key), like a gizmo drag
+        if (boneDragAnimator != null && manager != null) {
+            pushBonePose(manager, boneDragEntity, boneDragAnimator, boneDragIndex, boneDragStartLocal, boneDragStartActive);
+        }
+        boneDragAnimator = null;
+        boneDragEntity = null;
+        boneDragIndex = -1;
+        boneDragRow = -1;
+        boneDragStartLocal = null;
     }
 
     public static void promptImportAssetForDirectory(EditorWorkspace manager) {

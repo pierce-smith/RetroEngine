@@ -179,7 +179,7 @@ public class EditorInputRouter {
             return dispatchToPanel(panel, ndcX, ndcY, button, action);
         } else if (action == 0) { // Release
             if (button == 0) gizmoStateController.onPrimaryRelease();
-            InspectorInputDelegate.onMouseRelease();
+            InspectorInputDelegate.onMouseRelease(workspace);
             AssetBrowserInputDelegate.onMouseRelease();
             if (button == 1) {
                 overlayManager.onRightClickRelease(
