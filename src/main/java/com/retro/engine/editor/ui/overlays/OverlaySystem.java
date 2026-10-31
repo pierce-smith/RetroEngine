@@ -1,6 +1,6 @@
 package com.retro.engine.editor.ui.overlays;
 
-import com.retro.engine.editor.input.InspectorInputDelegate;
+import com.retro.engine.editor.input.AssetBrowserInputDelegate;
 import com.retro.engine.editor.ui.batch.PanelRegion;
 import com.retro.engine.editor.ui.dock.DockPanel;
 import com.retro.engine.editor.ui.dock.DockSpace;
@@ -212,24 +212,7 @@ public class OverlaySystem {
 
         if (region == PanelRegion.ASSET_DIRECTORY) {
             String activePath = manager.getAssetDatabase().getCurrentFolderPath();
-            List<AssetMeta> allDirectoryAssets = manager.getAssetDatabase().getAssetDirectory();
-            AssetMeta targetAsset = null;
-
-            List<AssetMeta> visibleAssets = (allDirectoryAssets != null) ? allDirectoryAssets.stream()
-                    .filter(a -> a.parentFolderPath != null && a.parentFolderPath.equalsIgnoreCase(activePath))
-                    .toList() : List.of();
-
-            float cardX = -0.95f;
-            if (!activePath.isEmpty()) cardX += 0.36f;
-
-            for (AssetMeta asset : visibleAssets) {
-                if (cardX + 0.35f > 0.95f) break;
-                if (ndcX >= cardX && ndcX <= cardX + 0.32f && ndcY >= -0.92f && ndcY <= -0.55f) {
-                    targetAsset = asset;
-                    break;
-                }
-                cardX += 0.36f;
-            }
+            AssetMeta targetAsset = AssetBrowserInputDelegate.assetAt(ndcX, ndcY, manager);
 
             if (targetAsset != null) {
                 final AssetMeta finalAsset = targetAsset;
@@ -238,38 +221,31 @@ public class OverlaySystem {
                     final String childPath = activePath.isEmpty() ? folderName : activePath + "/" + folderName;
                     items.add(new MenuItem("Open Folder '" + folderName + "'", () -> manager.getAssetDatabase().setCurrentFolderPath(childPath)));
                     items.add(new MenuItem("Rename Folder", () -> manager.getAssetDatabase().promptRenameFolder(finalAsset)));
+                    items.add(new MenuItem(AssetBrowserInputDelegate.revealLabel(), () -> AssetBrowserInputDelegate.revealInFileManager(finalAsset)));
                     items.add(new MenuItem("Delete Folder", () -> manager.getAssetDatabase().deleteFolder(finalAsset)));
                 } else {
                     if (targetAsset.type == AssetType.PREFAB) {
                         items.add(new MenuItem("Spawn Prefab Entity", () -> spawnPrefabFromAsset(manager, finalAsset)));
                         items.add(new MenuItem("Rename Prefab", () -> manager.getAssetDatabase().promptRenameAsset(finalAsset)));
-                        items.add(new MenuItem("Delete Asset", () -> manager.getAssetDatabase().removeAssetFromDirectory(finalAsset)));
                     } else if (targetAsset.type == AssetType.MESH_3D) {
                         items.add(new MenuItem("Spawn Mesh Entity", () -> spawnEntityFromAsset(manager, finalAsset)));
                         items.add(new MenuItem("Rename Asset", () -> manager.getAssetDatabase().promptRenameAsset(finalAsset)));
-                        items.add(new MenuItem("Delete Asset", () -> manager.getAssetDatabase().removeAssetFromDirectory(finalAsset)));
                     } else if (targetAsset.type == AssetType.TEXTURE) {
                         items.add(new MenuItem("Link Texture to Selected", () -> assignTextureToSelectedEntity(manager, finalAsset)));
                         items.add(new MenuItem("Rename Asset", () -> manager.getAssetDatabase().promptRenameAsset(finalAsset)));
-                        items.add(new MenuItem("Delete Asset", () -> manager.getAssetDatabase().removeAssetFromDirectory(finalAsset)));
                     } else if (targetAsset.type == AssetType.SCRIPT) {
                         items.add(new MenuItem("Link Script to Selected", () -> assignScriptToSelectedEntity(manager, finalAsset)));
                         items.add(new MenuItem("Rename Asset", () -> manager.getAssetDatabase().promptRenameAsset(finalAsset)));
-                        items.add(new MenuItem("Delete Asset", () -> manager.getAssetDatabase().removeAssetFromDirectory(finalAsset)));
                     } else {
                         if (targetAsset.type == AssetType.SCENE) {
                             items.add(new MenuItem("Open Scene", () -> manager.getSceneManager().loadSceneFromFile(finalAsset.absolutePath, manager.getAssetDatabase())));
                         }
                         items.add(new MenuItem("Rename Asset", () -> manager.getAssetDatabase().promptRenameAsset(finalAsset)));
-                        items.add(new MenuItem("Delete Asset", () -> manager.getAssetDatabase().removeAssetFromDirectory(finalAsset)));
                     }
+                    AssetBrowserInputDelegate.addFileMenuItems(items, finalAsset, manager);
                 }
             } else {
-                items.add(new MenuItem("+ New Folder", () -> manager.getAssetDatabase().createNewFolder()));
-                items.add(new MenuItem("+ Import Asset...", () -> InspectorInputDelegate.promptImportAssetForDirectory(manager)));
-                if (!manager.getAssetDatabase().getCurrentFolderPath().isEmpty()) {
-                    items.add(new MenuItem(".. Up Level (" + manager.getAssetDatabase().getCurrentFolderPath() + ")", () -> manager.getAssetDatabase().navigateUpFolder()));
-                }
+                items.addAll(AssetBrowserInputDelegate.backgroundMenuItems(manager));
             }
 
         } else if (region == PanelRegion.SCENE_HIERARCHY) {

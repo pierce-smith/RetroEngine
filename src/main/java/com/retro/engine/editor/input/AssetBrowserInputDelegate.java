@@ -12,9 +12,21 @@ import com.retro.engine.editor.audio.UISoundPlayer.UISound;
 import com.retro.engine.editor.ui.panels.AssetBrowserPanel;
 import com.retro.engine.editor.ui.panels.HierarchyPanel;
 import com.retro.engine.editor.commands.EditorCommands;
+import com.retro.engine.editor.dialogs.NativeFileDialog;
+import com.retro.engine.editor.ui.panels.MenuItem;
+import com.retro.engine.assets.AssetDatabase;
+import com.retro.engine.assets.cooker.RpackCooker;
+import com.retro.engine.assets.cooker.RpackCookerCli;
 
+import java.io.File;
+import java.io.IOException;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 public class AssetBrowserInputDelegate {
 
@@ -192,11 +204,7 @@ public class AssetBrowserInputDelegate {
         }
 
         String activePath = manager.getAssetDatabase().getCurrentFolderPath();
-        List<AssetMeta> assetDirectory = manager.getAssetDatabase().getAssetDirectory();
-
-        List<AssetMeta> visibleAssets = (assetDirectory != null) ? assetDirectory.stream()
-                .filter(a -> a.parentFolderPath != null && a.parentFolderPath.equalsIgnoreCase(activePath))
-                .toList() : List.of();
+        List<AssetMeta> visibleAssets = visibleAssets(manager.getAssetDatabase());
 
         boolean hasUpLevel = !activePath.isEmpty();
         if (visibleAssets.isEmpty() && !hasUpLevel) {
@@ -288,5 +296,179 @@ public class AssetBrowserInputDelegate {
     public static void onMouseRelease(EditorWorkspace manager) {
         draggingScrollbar = false;
         processHierarchyRelease(manager);
+    }
+
+    /** Files and folders in the browser's active folder, in grid order (after the Up Level card, when shown). */
+    private static List<AssetMeta> visibleAssets(AssetDatabase db) {
+        String activePath = db.getCurrentFolderPath();
+        List<AssetMeta> assetDirectory = db.getAssetDirectory();
+        return (assetDirectory != null) ? assetDirectory.stream()
+                .filter(a -> a.parentFolderPath != null && a.parentFolderPath.equalsIgnoreCase(activePath))
+                .toList() : List.of();
+    }
+
+    // --- Right-click context menu (OverlaySystem routes the press/release and opens the ContextMenuOverlay) ---
+
+    /**
+     * Asset card under the cursor (design space, scroll applied), or null over empty space, the header, the
+     * scrollbar, or the Up Level card. Uses the same grid as {@link #processAssetDirectoryClick}.
+     */
+    public static AssetMeta assetAt(float ndcX, float ndcY, EditorWorkspace manager) {
+        if (manager == null || AssetBrowserPanel.inScrollbar(ndcX, ndcY)) return null;
+        AssetDatabase db = manager.getAssetDatabase();
+        List<AssetMeta> visibleAssets = visibleAssets(db);
+        boolean hasUpLevel = !db.getCurrentFolderPath().isEmpty();
+
+        int slot = AssetBrowserPanel.slotAt(ndcX, ndcY, visibleAssets.size() + (hasUpLevel ? 1 : 0));
+        if (hasUpLevel) slot--;
+        return (slot >= 0) ? visibleAssets.get(slot) : null;
+    }
+
+    /** Menu for empty Asset Browser space. */
+    public static List<MenuItem> backgroundMenuItems(EditorWorkspace manager) {
+        AssetDatabase db = manager.getAssetDatabase();
+        List<MenuItem> items = new ArrayList<>();
+        items.add(new MenuItem("+ Create Java Script", () -> promptCreateScript(manager)));
+        items.add(new MenuItem("+ New Folder", db::createNewFolder));
+        items.add(new MenuItem("+ Import Asset...", () -> InspectorInputDelegate.promptImportAssetForDirectory(manager)));
+        items.add(new MenuItem("Refresh Browser", db::rescanProjectAssets));
+        if (!db.getCurrentFolderPath().isEmpty()) {
+            items.add(new MenuItem(".. Up Level (" + db.getCurrentFolderPath() + ")", db::navigateUpFolder));
+        }
+        return items;
+    }
+
+    /** Entries shared by every file card, appended after its type-specific actions. */
+    public static void addFileMenuItems(List<MenuItem> items, AssetMeta asset, EditorWorkspace manager) {
+        items.add(new MenuItem(revealLabel(), () -> revealInFileManager(asset)));
+        if (isCookable(asset)) {
+            items.add(new MenuItem("Re-cook Asset", () -> recookAsset(manager, asset)));
+        }
+        items.add(new MenuItem("Delete Asset", () -> manager.getAssetDatabase().removeAssetFromDirectory(asset)));
+    }
+
+    public static String revealLabel() {
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        if (PlatformShortcuts.IS_MAC) return "Show in Finder";
+        return os.contains("win") ? "Show in Explorer" : "Show in File Manager";
+    }
+
+    /** Opens the OS file manager with the asset selected (macOS / Windows) or its containing folder (Linux). */
+    public static void revealInFileManager(AssetMeta asset) {
+        if (asset == null || asset.absolutePath == null) return;
+        File file = new File(asset.absolutePath).getAbsoluteFile();
+        if (!file.exists()) {
+            NativeFileDialog.showError(revealLabel(), "File not found on disk:\n" + file.getPath());
+            return;
+        }
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        ProcessBuilder pb;
+        if (PlatformShortcuts.IS_MAC) {
+            pb = new ProcessBuilder("open", "-R", file.getPath());
+        } else if (os.contains("win")) {
+            pb = new ProcessBuilder("explorer.exe", "/select,", file.getPath());
+        } else {
+            pb = new ProcessBuilder("xdg-open", file.getParentFile().getPath());
+        }
+        try {
+            pb.start();
+        } catch (IOException e) {
+            NativeFileDialog.showError(revealLabel(), "Could not open the file manager: " + e.getMessage());
+        }
+    }
+
+    private static boolean isCookable(AssetMeta asset) {
+        return asset.type == AssetType.MESH_3D || asset.type == AssetType.TEXTURE;
+    }
+
+    /**
+     * Rebuilds the asset's .rpack in the project's Cooked/ mirror (the layout StandaloneExporter and runtime builds
+     * use), keeping its registry UUID. Runs off the main thread since mesh imports can take seconds.
+     */
+    public static void recookAsset(EditorWorkspace manager, AssetMeta asset) {
+        AssetDatabase db = manager.getAssetDatabase();
+        if (!db.hasActiveProject() || asset == null || !isCookable(asset)) return;
+        File assetsRoot = new File(db.getProjectAssetsPath()).getAbsoluteFile();
+        File raw = new File(asset.absolutePath).getAbsoluteFile();
+        if (!raw.toPath().normalize().startsWith(assetsRoot.toPath().normalize())) return;
+        File out = RpackCookerCli.cookedPathFor(assetsRoot, new File(db.getActiveProjectPath(), AssetDatabase.COOKED_DIR), raw);
+        boolean mesh = asset.type == AssetType.MESH_3D;
+        String uuid = asset.uuid;
+
+        Thread worker = new Thread(() -> {
+            out.getParentFile().mkdirs();
+            boolean ok = mesh
+                    ? RpackCooker.cookMeshToRpack(raw.getPath(), out.getPath(), uuid)
+                    : RpackCooker.cookTextureToRpack(raw.getPath(), out.getPath(), uuid);
+            if (ok) {
+                System.out.println("[AssetBrowser] Re-cooked " + asset.name + " -> " + out.getPath());
+            } else {
+                System.err.println("[AssetBrowser] Re-cook failed for " + asset.name);
+            }
+        }, "AssetRecook-" + asset.name);
+        worker.setDaemon(true);
+        worker.start();
+    }
+
+    /** Asks for a class name and writes an EntityScript boilerplate into Assets/Scripts/, then shows that folder. */
+    public static void promptCreateScript(EditorWorkspace manager) {
+        AssetDatabase db = manager.getAssetDatabase();
+        if (!db.hasActiveProject()) return;
+        String input = NativeFileDialog.promptInput("Create Java Script", "Enter script class name:", "NewScript");
+        if (input == null) return;
+        String className = input.trim();
+        if (className.toLowerCase(Locale.ROOT).endsWith(".java")) className = className.substring(0, className.length() - 5);
+        if (!isValidClassName(className)) {
+            NativeFileDialog.showError("Create Java Script", "'" + className + "' is not a valid script class name (letters, digits and _ only, starting with an uppercase letter).");
+            return;
+        }
+
+        File scriptsDir = new File(db.getProjectAssetsPath(), SCRIPTS_FOLDER);
+        File target = new File(scriptsDir, className + ".java");
+        if (target.exists()) {
+            NativeFileDialog.showError("Create Java Script", "A script named " + target.getName() + " already exists.");
+            return;
+        }
+        try {
+            Files.createDirectories(scriptsDir.toPath());
+            Files.writeString(target.toPath(), scriptBoilerplate(className), StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW);
+        } catch (IOException e) {
+            NativeFileDialog.showError("Create Java Script", "Could not write script: " + e.getMessage());
+            return;
+        }
+        UISoundPlayer.play(UISound.SPAWN);
+        db.rescanProjectAssets();
+        db.setCurrentFolderPath(SCRIPTS_FOLDER);
+        System.out.println("[AssetBrowser] Created script Assets/" + SCRIPTS_FOLDER + "/" + target.getName());
+    }
+
+    private static final String SCRIPTS_FOLDER = "Scripts";
+
+    /** Plain Java identifier starting with an uppercase letter (keywords are lowercase, so they can't match). */
+    private static boolean isValidClassName(String name) {
+        if (name.isEmpty() || !Character.isUpperCase(name.charAt(0))) return false;
+        for (char c : name.toCharArray()) {
+            if (!Character.isJavaIdentifierPart(c) || c == '$') return false;
+        }
+        return true;
+    }
+
+    private static String scriptBoilerplate(String className) {
+        return """
+                package com.retro.engine.scripting.user;
+
+                import com.retro.engine.scripting.EntityScript;
+
+                public class %s extends EntityScript {
+
+                    @Override
+                    public void onStart() {
+                    }
+
+                    @Override
+                    public void onUpdate(float deltaTime) {
+                    }
+                }
+                """.formatted(className);
     }
 }
