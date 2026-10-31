@@ -9,7 +9,7 @@ import com.retro.engine.scene.components.Component;
  * y up: the element's center sits at (anchor * canvas size + offset), so anchor (0.5, 0.5) centers it and (0, 1) pins
  * it to the top-left corner. Subclass properties continue the {@link InspectorProperty#order()} sequence at 12.
  */
-public abstract class UIElement implements Component {
+public abstract class UIElement extends Component {
 
     @InspectorProperty(order = 0, label = "VISIBLE", type = PropertyType.TOGGLE)
     public boolean visible = true;

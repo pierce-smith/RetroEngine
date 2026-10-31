@@ -12,7 +12,7 @@ import java.util.Map;
  * Component holding script class path, script asset metadata,
  * active EntityScript instance, and reflected property overrides.
  */
-public class ScriptComponent implements Component {
+public class ScriptComponent extends Component {
 
     @InspectorProperty(order = 0, label = "SCRIPT PATH", type = PropertyType.ASSET_PICKER, assetType = "SCRIPT")
     public String scriptAssetPath;

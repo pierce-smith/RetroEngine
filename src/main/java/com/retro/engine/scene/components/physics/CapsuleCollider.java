@@ -7,7 +7,7 @@ import com.retro.engine.scene.components.Component;
 /**
  * ECS Capsule Collider shape definition.
  */
-public class CapsuleCollider implements Component {
+public class CapsuleCollider extends Component {
 
     @InspectorProperty(order = 0, label = "RADIUS", min = 0.01f, max = 50.0f, step = 0.1f)
     public float radius = 0.5f;

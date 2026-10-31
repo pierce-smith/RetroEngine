@@ -7,7 +7,7 @@ import com.retro.engine.scene.components.Component;
  * Encapsulates 3D position, rotation (degrees), and scale.
  * Hardened with dirty-flag tracking for zero-cost static transform matrix propagation.
  */
-public class Transform implements Component {
+public class Transform extends Component {
 
     @InspectorProperty(order = 0, label = "POS X", min = -1000.0f, max = 1000.0f, step = 0.5f)
     public float posX = 0.0f;

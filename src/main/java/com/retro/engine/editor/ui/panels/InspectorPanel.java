@@ -301,9 +301,13 @@ public class InspectorPanel {
             float drawHeaderY = curY + scrollOffset;
 
             if (isRowVisible(drawHeaderY)) {
-                renderSectionHeader(buffer, comp.getComponentName(), drawHeaderY, isRemovable(comp));
+                renderSectionHeader(buffer, comp.getComponentName(), drawHeaderY, isRemovable(comp), comp.isInspectorCollapsed);
             }
             curY -= HEADER_ADVANCE;
+            if (comp.isInspectorCollapsed) {
+                curY -= COMPONENT_GAP;
+                continue;
+            }
 
             for (ComponentSchema.Property p : ComponentSchema.of(comp.getClass()).inspectorProperties()) {
                 Field field = p.field;
@@ -527,7 +531,7 @@ public class InspectorPanel {
     /** Draws the BONE TRANSFORM rows from {@link #boneTrsScratch}; returns curY below the section. */
     private static float renderBoneSection(UIGeometryBatch.Buffer buffer, AnimatorComponent animator, float curY) {
         float drawHeaderY = curY + scrollOffset;
-        if (isRowVisible(drawHeaderY)) renderSectionHeader(buffer, "Bone Transform", drawHeaderY, false);
+        if (isRowVisible(drawHeaderY)) renderSectionHeader(buffer, "Bone Transform", drawHeaderY, false, false);
         curY -= HEADER_ADVANCE;
 
         for (int row = 0; row < BONE_ROW_COUNT; row++) {
@@ -576,20 +580,30 @@ public class InspectorPanel {
         return comp != null && !(comp instanceof Transform);
     }
 
+    /** True when (ndcX, ndcY) lies on the bar of a section header drawn at drawY (REMOVE button included). */
+    public static boolean isOverSectionHeader(float ndcX, float ndcY, float drawY) {
+        return ndcX >= 0.565f && ndcX <= VALUE_X1 && ndcY >= drawY - CTRL_BELOW && ndcY <= drawY + CTRL_ABOVE + 0.002f;
+    }
+
     /** True when (ndcX, ndcY) lies on the REMOVE button of a section header drawn at drawY. */
     public static boolean isOverRemoveButton(float ndcX, float ndcY, float drawY) {
         return ndcX >= REMOVE_X0 && ndcX <= REMOVE_X1
                 && ndcY >= drawY - CTRL_BELOW + REMOVE_INSET && ndcY <= drawY + CTRL_ABOVE + 0.002f - REMOVE_INSET;
     }
 
-    private static void renderSectionHeader(UIGeometryBatch.Buffer buffer, String name, float drawY, boolean removable) {
+    private static void renderSectionHeader(UIGeometryBatch.Buffer buffer, String name, float drawY, boolean removable, boolean collapsed) {
         float y0 = drawY - CTRL_BELOW, y1 = drawY + CTRL_ABOVE + 0.002f;
         UIGeometryBatch.addRoundedQuad(buffer, 0.565f, y0, VALUE_X1, y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, 1.0f);
 
         float mid = (y0 + y1) * 0.5f;
         float tw = UIGeometryBatch.squareWidth(buffer, 0.012f);
         float tx = LABEL_X;
-        UIGeometryBatch.addTriangle(buffer, tx, mid + 0.005f, tx + tw, mid + 0.005f, tx + tw * 0.5f, mid - 0.006f, EditorTheme.TEXT_MUTED, 1.0f);
+        // Disclosure arrow: pointing down (expanded) or right (collapsed)
+        if (collapsed) {
+            UIGeometryBatch.addTriangle(buffer, tx + tw * 0.15f, mid + 0.0065f, tx + tw * 0.15f, mid - 0.0065f, tx + tw * 0.95f, mid, EditorTheme.TEXT_MUTED, 1.0f);
+        } else {
+            UIGeometryBatch.addTriangle(buffer, tx, mid + 0.005f, tx + tw, mid + 0.005f, tx + tw * 0.5f, mid - 0.006f, EditorTheme.TEXT_MUTED, 1.0f);
+        }
 
         strBuilder.setLength(0);
         strBuilder.append(name);

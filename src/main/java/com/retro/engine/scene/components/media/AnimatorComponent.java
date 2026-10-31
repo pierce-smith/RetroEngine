@@ -37,7 +37,7 @@ import java.util.Map;
  * only the authored data is persisted ({@link #poseData}): editor pose edits and recorded keys by bone name, the record
  * time, assigned .ranim clips, and the entry state.
  */
-public class AnimatorComponent implements Component {
+public class AnimatorComponent extends Component {
 
     public static final int MAX_BONES = 64;
 

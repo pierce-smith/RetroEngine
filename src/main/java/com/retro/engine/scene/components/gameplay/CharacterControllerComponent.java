@@ -7,7 +7,7 @@ import com.retro.engine.scene.components.Component;
 /**
  * ECS component holding Vice City style 3D character controller movement & physics parameters.
  */
-public class CharacterControllerComponent implements Component {
+public class CharacterControllerComponent extends Component {
 
     @InspectorProperty(order = 0, label = "MOVE SPEED", min = 0.1f, max = 50.0f, step = 0.5f)
     public float moveSpeed = 5.0f;

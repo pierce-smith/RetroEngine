@@ -7,7 +7,7 @@ import com.retro.engine.scene.components.Component;
 /**
  * ECS Box Collider shape definition.
  */
-public class BoxCollider implements Component {
+public class BoxCollider extends Component {
 
     @InspectorProperty(order = 0, label = "SIZE X", min = 0.01f, max = 100.0f, step = 0.1f)
     public float sizeX = 1.0f;

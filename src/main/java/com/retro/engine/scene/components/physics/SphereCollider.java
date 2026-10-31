@@ -7,7 +7,7 @@ import com.retro.engine.scene.components.Component;
 /**
  * ECS Sphere Collider shape definition.
  */
-public class SphereCollider implements Component {
+public class SphereCollider extends Component {
 
     @InspectorProperty(order = 0, label = "RADIUS", min = 0.01f, max = 100.0f, step = 0.1f)
     public float radius = 0.5f;

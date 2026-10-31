@@ -7,7 +7,7 @@ import com.retro.engine.scene.components.Component;
 /**
  * ECS component holding 3D rigid body dynamic parameters.
  */
-public class RigidBodyComponent implements Component {
+public class RigidBodyComponent extends Component {
 
     public enum MotionType { STATIC, KINEMATIC, DYNAMIC }
 

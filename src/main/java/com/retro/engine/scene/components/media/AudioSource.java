@@ -19,7 +19,7 @@ import java.nio.ShortBuffer;
  * and hardware audio streaming driver (supporting both .wav and .ogg Vorbis clips).
  * Updated with non-destructive spatial gain calculation and STBVorbis buffer cleanup.
  */
-public class AudioSource implements Component {
+public class AudioSource extends Component {
     public enum PlaybackState { PLAYING, PAUSED, STOPPED }
 
     @InspectorProperty(order = 0, label = "AUDIO CLIP", type = PropertyType.ASSET_PICKER, assetType = "AUDIO")

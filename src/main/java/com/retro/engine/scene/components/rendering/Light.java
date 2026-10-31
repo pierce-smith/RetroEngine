@@ -7,7 +7,7 @@ import com.retro.engine.scene.components.Component;
 /**
  * Defines a directional or point light source in 3D world space.
  */
-public class Light implements Component {
+public class Light extends Component {
     public enum LightType { DIRECTIONAL, POINT, SPOT }
 
     @InspectorProperty(order = 0, label = "TYPE", type = PropertyType.BUTTON_GROUP)

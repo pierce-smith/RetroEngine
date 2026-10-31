@@ -8,7 +8,7 @@ import com.retro.engine.scene.components.ui.UICanvasComponent;
 /**
  * Encapsulates perspective 3D camera properties attached to an Entity.
  */
-public class Camera implements Component {
+public class Camera extends Component {
 
     @InspectorProperty(order = 0, label = "FOV", min = 10.0f, max = 170.0f, step = 5.0f)
     public float fov = 50.0f;

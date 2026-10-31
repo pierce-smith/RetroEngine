@@ -11,7 +11,7 @@ import com.retro.engine.scene.entity.Entity;
  * sharing unified parent transform nodes.
  */
 @Component.LegacyNames("MeshRendererComponent")
-public class MeshFilter implements Component {
+public class MeshFilter extends Component {
 
     @InspectorProperty(order = 0, label = "PRIMARY MESH", type = PropertyType.ASSET_PICKER, assetType = "MESH_3D")
     public String meshAssetPath;

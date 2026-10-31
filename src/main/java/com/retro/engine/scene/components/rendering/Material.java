@@ -9,7 +9,7 @@ import com.retro.engine.scene.components.Component;
  * specular/roughness (R = specular mask, G = roughness multiplier), lightmap/AO (sampled with UV2) and emissive.
  * Exposes Blinn-Phong surface properties for RenderWare-style material rendering.
  */
-public class Material implements Component {
+public class Material extends Component {
 
     // Channel indices for the per-channel path accessors and GPU handle cache
     public static final int CHANNEL_ALBEDO = 0;

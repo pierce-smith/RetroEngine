@@ -89,7 +89,17 @@ public class InspectorInputDelegate {
                 manager.getCommandHistory().executeCommand(cmd);
                 return;
             }
+            // Section header bar: collapse / expand the card
+            if (InspectorPanel.isRowVisible(drawHeaderY) && InspectorPanel.isOverSectionHeader(ndcX, ndcY, drawHeaderY)) {
+                UISoundPlayer.play(UISound.CLICK);
+                comp.isInspectorCollapsed = !comp.isInspectorCollapsed;
+                return;
+            }
             curY -= InspectorPanel.HEADER_ADVANCE;
+            if (comp.isInspectorCollapsed) {
+                curY -= InspectorPanel.COMPONENT_GAP;
+                continue;
+            }
 
             for (ComponentSchema.Property p : ComponentSchema.of(comp.getClass()).inspectorProperties()) {
                 float drawY = curY + scrollOffset;

@@ -9,7 +9,7 @@ import com.retro.engine.scene.components.Component;
  * laid out in this canvas's reference-pixel space. Screen-space overlays render through the primary Camera (attached
  * to the camera's entity or named by its UI CANVAS field); world-space billboards render wherever they are visible.
  */
-public class UICanvasComponent implements Component {
+public class UICanvasComponent extends Component {
 
     public enum RenderMode { SCREEN_SPACE_OVERLAY, WORLD_SPACE_BILLBOARD }
 

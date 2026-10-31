@@ -8,14 +8,22 @@ import com.retro.engine.animation.state.AnimatorState;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.assets.importers.SkeletonImporter;
+import com.retro.engine.scene.components.Component;
+import com.retro.engine.scene.components.ComponentSchema;
 import com.retro.engine.scene.components.media.AnimatorComponent;
 import com.retro.engine.scene.components.media.AudioSource;
 import com.retro.engine.scene.components.rendering.Camera;
 import com.retro.engine.scene.components.rendering.Light;
-import com.retro.engine.scene.components.rendering.Material;
+import com.retro.engine.scene.components.rendering.MeshFilter;
 import com.retro.engine.scene.components.transform.Transform;
 
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public class EntitySpawner {
 
@@ -79,64 +87,36 @@ public class EntitySpawner {
             if (p != null) p.addChildId(copy.id);
         }
 
-        Transform origTc = selectedEntity.getTransform();
+        // The Entity constructor pre-creates Transform / MeshFilter / Material; those are filled in rather than duplicated
+        Set<Component> populated = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Component orig : selectedEntity.getAllComponents()) {
+            if (orig == null) continue;
+            if (orig instanceof AnimatorComponent origAnim) {
+                // Shares the skeleton and imported clips; the controller graph and all instance state are deep copies
+                copy.addComponent(new AnimatorComponent(origAnim));
+                continue;
+            }
+            ComponentSchema schema = ComponentSchema.of(orig.getClass());
+            Component target = findUnpopulated(copy, orig.getClass(), populated);
+            boolean created = target == null;
+            if (created) {
+                if (!schema.isPersistent()) {
+                    System.err.println("[EntitySpawner] Cannot duplicate component " + orig.getClass().getName() + " (no persisted state or no-arg constructor)");
+                    continue;
+                }
+                target = schema.newInstance();
+            }
+            copyProperties(schema, orig, target);
+            if (orig instanceof MeshFilter origMf && target instanceof MeshFilter copyMf) {
+                copyMf.subMeshPaths = (origMf.subMeshPaths != null) ? origMf.subMeshPaths.clone() : null;
+            }
+            populated.add(target);
+            if (created) copy.addComponent(target);
+            target.onDeserialized(copy);
+        }
+
         Transform copyTc = copy.getTransform();
-        if (origTc != null && copyTc != null) {
-            copyTc.posX = origTc.posX + 0.5f; copyTc.posY = origTc.posY; copyTc.posZ = origTc.posZ;
-            copyTc.rotX = origTc.rotX; copyTc.rotY = origTc.rotY; copyTc.rotZ = origTc.rotZ;
-            copyTc.scaleX = origTc.scaleX; copyTc.scaleY = origTc.scaleY; copyTc.scaleZ = origTc.scaleZ;
-        }
-
-        Material origMat = selectedEntity.getComponent(Material.class);
-        if (origMat != null) {
-            Material copyMat = copy.getComponent(Material.class);
-            if (copyMat == null) { copyMat = new Material(); copy.addComponent(copyMat); }
-            copyMat.textureAssetPath = origMat.textureAssetPath;
-            copyMat.normalMapAssetPath = origMat.normalMapAssetPath;
-            copyMat.specularMapAssetPath = origMat.specularMapAssetPath;
-            copyMat.lightmapAssetPath = origMat.lightmapAssetPath;
-            copyMat.emissiveMapAssetPath = origMat.emissiveMapAssetPath;
-            copyMat.textureName = origMat.textureName;
-            copyMat.shaderName = origMat.shaderName;
-            copyMat.reflect = origMat.reflect;
-            copyMat.specularStrength = origMat.specularStrength;
-            copyMat.roughness = origMat.roughness;
-            copyMat.normalStrength = origMat.normalStrength;
-            copyMat.emissiveIntensity = origMat.emissiveIntensity;
-        }
-
-        Light origLc = selectedEntity.getComponent(Light.class);
-        if (origLc != null) {
-            Light copyLc = new Light();
-            copyLc.type = origLc.type; copyLc.intensity = origLc.intensity;
-            copyLc.r = origLc.r; copyLc.g = origLc.g; copyLc.b = origLc.b;
-            copy.addComponent(copyLc);
-        }
-
-        Camera origCc = selectedEntity.getComponent(Camera.class);
-        if (origCc != null) {
-            Camera copyCc = new Camera(origCc.fov, origCc.nearPlane, origCc.farPlane);
-            copyCc.isPrimary = origCc.isPrimary;
-            copy.addComponent(copyCc);
-        }
-
-        AudioSource origAc = selectedEntity.getComponent(AudioSource.class);
-        if (origAc != null) {
-            AudioSource copyAc = new AudioSource(origAc.audioAssetPath);
-            copyAc.setVolume(origAc.volume);
-            copyAc.setPitch(origAc.pitch);
-            copyAc.loop = origAc.loop;
-            copyAc.setDistances(origAc.minDistance, origAc.maxDistance);
-            copyAc.attenuation = origAc.attenuation;
-            copyAc.state = origAc.state;
-            copy.addComponent(copyAc);
-        }
-
-        AnimatorComponent origAnim = selectedEntity.getComponent(AnimatorComponent.class);
-        if (origAnim != null) {
-            // Shares the skeleton and imported clips; the controller graph and all instance state are deep copies
-            copy.addComponent(new AnimatorComponent(origAnim));
-        }
+        if (copyTc != null) copyTc.posX += 0.5f;
 
         sceneEntities.add(copy);
         return copy;
@@ -241,6 +221,30 @@ public class EntitySpawner {
             }
         } catch (Exception e) {
             System.err.println("[EntitySpawner] Skeletal animation check failed for " + meshPath + ": " + e.getMessage());
+        }
+    }
+
+    private static Component findUnpopulated(Entity entity, Class<?> type, Set<Component> populated) {
+        for (Component c : entity.getAllComponents()) {
+            if (c.getClass() == type && !populated.contains(c)) return c;
+        }
+        return null;
+    }
+
+    /** Copies every persisted and inspector-visible property; mutable containers are copied, not shared. */
+    private static void copyProperties(ComponentSchema schema, Component from, Component to) {
+        Set<ComponentSchema.Property> props = new LinkedHashSet<>(schema.serializedProperties());
+        props.addAll(schema.inspectorProperties());
+        for (ComponentSchema.Property p : props) {
+            try {
+                Object value = p.get(from);
+                if (value instanceof Map<?, ?> map) value = new HashMap<>(map);
+                else if (value instanceof byte[] bytes) value = bytes.clone();
+                else if (value instanceof Object[] array) value = array.clone();
+                p.set(to, value);
+            } catch (IllegalAccessException e) {
+                throw new IllegalStateException("Cannot copy " + from.getClass().getName() + "." + p.name(), e);
+            }
         }
     }
 
