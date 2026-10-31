@@ -41,12 +41,4 @@ bin/
 
 ### Mac OS ###
 .DS_Store
-
-### Retro Engine Custom Builds ###
-*.rpack
-*.rscene
-*.bin
 Thumbs.db
-
-### Ignore engine asset metadata sidecars
-*.rmeta

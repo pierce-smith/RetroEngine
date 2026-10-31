@@ -95,7 +95,7 @@ public class CharacterControllerSolver {
         this.sceneEntities = sceneEntities != null ? sceneEntities : List.of();
         boolean jumpKeyDown = Input.isKeyDown(GLFW_KEY_SPACE);
         GamepadManager pad = Input.getGamepad();
-        if ((jumpKeyDown && !prevJumpKeyDown) || (pad != null && pad.isButtonJustPressed(GamepadManager.BUTTON_A))) {
+        if ((jumpKeyDown && !prevJumpKeyDown) || (pad != null && pad.isButtonJustPressed(GamepadManager.BUTTON_X))) {
             jumpRequested = true;
         }
         prevJumpKeyDown = jumpKeyDown;
@@ -128,7 +128,7 @@ public class CharacterControllerSolver {
         if (pad != null && pad.isConnected()) {
             inputRight += pad.getAxis(GamepadManager.AXIS_LEFT_X);
             inputForward -= pad.getAxis(GamepadManager.AXIS_LEFT_Y);
-            sprint |= pad.isButtonPressed(GamepadManager.BUTTON_X);
+            sprint |= pad.isButtonPressed(GamepadManager.BUTTON_A);
             lookX = pad.getAxis(GamepadManager.AXIS_RIGHT_X);
             lookY = pad.getAxis(GamepadManager.AXIS_RIGHT_Y);
         } else {
