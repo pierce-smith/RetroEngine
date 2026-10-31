@@ -350,6 +350,10 @@ public class EditorCommands {
         private final String oldName;
         private final String newPath;
         private final String newName;
+        // Instance mode: reassigns `target`, or attaches a new ScriptComponent when target is null
+        private final boolean instanceMode;
+        private ScriptComponent target;
+        private boolean addedTarget = false;
 
         public ScriptAssignCommand(Entity entity, String oldPath, String oldName, String newPath, String newName) {
             this.entity = entity;
@@ -357,11 +361,35 @@ public class EditorCommands {
             this.oldName = oldName;
             this.newPath = newPath;
             this.newName = newName;
+            this.instanceMode = false;
+        }
+
+        /** Assigns a script to one specific ScriptComponent, or adds another one to the entity when {@code target} is null. */
+        public ScriptAssignCommand(Entity entity, ScriptComponent target, String newPath, String newName) {
+            this.entity = entity;
+            this.target = target;
+            this.oldPath = (target != null) ? target.scriptAssetPath : null;
+            this.oldName = (target != null) ? target.scriptName : null;
+            this.newPath = newPath;
+            this.newName = newName;
+            this.instanceMode = true;
         }
 
         @Override
         public void execute() {
             if (entity == null) return;
+            if (instanceMode) {
+                if (target == null || addedTarget) {
+                    if (target == null) target = new ScriptComponent(newPath, newName);
+                    entity.addComponent(target);
+                    addedTarget = true;
+                } else {
+                    target.scriptAssetPath = newPath;
+                    target.scriptName = newName;
+                    target.activeScriptInstance = null;
+                }
+                return;
+            }
             ScriptComponent sc = entity.getComponent(ScriptComponent.class);
             if (sc == null) {
                 sc = new ScriptComponent(newPath, newName);
@@ -376,6 +404,17 @@ public class EditorCommands {
         @Override
         public void undo() {
             if (entity == null) return;
+            if (instanceMode) {
+                if (target == null) return;
+                if (addedTarget) {
+                    entity.removeComponentInstance(target);
+                } else {
+                    target.scriptAssetPath = oldPath;
+                    target.scriptName = oldName;
+                    target.activeScriptInstance = null;
+                }
+                return;
+            }
             ScriptComponent sc = entity.getComponent(ScriptComponent.class);
             if (sc != null) {
                 if (oldPath == null && oldName == null) {

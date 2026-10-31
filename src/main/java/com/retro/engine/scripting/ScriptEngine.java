@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiConsumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -72,9 +73,10 @@ public class ScriptEngine {
         if (entities == null) return;
         for (Entity entity : entities) {
             if (entity == null) continue;
-            ScriptComponent sc = entity.getComponent(ScriptComponent.class);
-            if (sc != null && sc.enabled && sc.activeScriptInstance == null) {
-                instantiateAndStartScript(entity, sc, sceneWorld);
+            for (ScriptComponent sc : entity.getComponents(ScriptComponent.class)) {
+                if (sc.enabled && sc.activeScriptInstance == null) {
+                    instantiateAndStartScript(entity, sc, sceneWorld);
+                }
             }
         }
     }
@@ -83,8 +85,8 @@ public class ScriptEngine {
         if (entities == null) return;
         for (Entity entity : entities) {
             if (entity == null) continue;
-            ScriptComponent sc = entity.getComponent(ScriptComponent.class);
-            if (sc != null && sc.enabled) {
+            for (ScriptComponent sc : entity.getComponents(ScriptComponent.class)) {
+                if (!sc.enabled) continue;
                 if (sc.activeScriptInstance == null) {
                     instantiateAndStartScript(entity, sc, sceneWorld);
                 }
@@ -106,87 +108,54 @@ public class ScriptEngine {
         for (int i = 0; i < activeBodies.size(); i++) {
             PhysicsSystem.PhysicsBody body = activeBodies.get(i);
             if (body == null || body.entity == null) continue;
-            ScriptComponent sc = body.entity.getComponent(ScriptComponent.class);
-            if (sc != null && sc.enabled && sc.activeScriptInstance != null) {
-                try {
-                    sc.activeScriptInstance.onPhysicsUpdate(fixedDeltaTime);
-                } catch (Exception e) {
-                    System.err.println("[ScriptEngine] Exception during onPhysicsUpdate() on Entity '" + body.entity.name + "': " + e.getMessage());
-                    sc.activeScriptInstance = null;
-                    sc.enabled = false;
+            for (ScriptComponent sc : body.entity.getComponents(ScriptComponent.class)) {
+                if (sc.enabled && sc.activeScriptInstance != null) {
+                    try {
+                        sc.activeScriptInstance.onPhysicsUpdate(fixedDeltaTime);
+                    } catch (Exception e) {
+                        System.err.println("[ScriptEngine] Exception during onPhysicsUpdate() on Entity '" + body.entity.name + "': " + e.getMessage());
+                        sc.activeScriptInstance = null;
+                        sc.enabled = false;
+                    }
                 }
             }
         }
     }
 
     public static void dispatchCollisionEnter(Entity entity, Entity other) {
-        if (entity == null || other == null) return;
-        ScriptComponent sc = entity.getComponent(ScriptComponent.class);
-        if (sc != null && sc.enabled && sc.activeScriptInstance != null) {
-            try {
-                sc.activeScriptInstance.onCollisionEnter(other);
-            } catch (Exception e) {
-                System.err.println("[ScriptEngine] Exception during onCollisionEnter() on Entity '" + entity.name + "': " + e.getMessage());
-            }
-        }
+        dispatchContact(entity, other, "onCollisionEnter", EntityScript::onCollisionEnter);
     }
 
     public static void dispatchCollisionStay(Entity entity, Entity other) {
-        if (entity == null || other == null) return;
-        ScriptComponent sc = entity.getComponent(ScriptComponent.class);
-        if (sc != null && sc.enabled && sc.activeScriptInstance != null) {
-            try {
-                sc.activeScriptInstance.onCollisionStay(other);
-            } catch (Exception e) {
-                System.err.println("[ScriptEngine] Exception during onCollisionStay() on Entity '" + entity.name + "': " + e.getMessage());
-            }
-        }
+        dispatchContact(entity, other, "onCollisionStay", EntityScript::onCollisionStay);
     }
 
     public static void dispatchCollisionExit(Entity entity, Entity other) {
-        if (entity == null || other == null) return;
-        ScriptComponent sc = entity.getComponent(ScriptComponent.class);
-        if (sc != null && sc.enabled && sc.activeScriptInstance != null) {
-            try {
-                sc.activeScriptInstance.onCollisionExit(other);
-            } catch (Exception e) {
-                System.err.println("[ScriptEngine] Exception during onCollisionExit() on Entity '" + entity.name + "': " + e.getMessage());
-            }
-        }
+        dispatchContact(entity, other, "onCollisionExit", EntityScript::onCollisionExit);
     }
 
     public static void dispatchTriggerEnter(Entity entity, Entity other) {
-        if (entity == null || other == null) return;
-        ScriptComponent sc = entity.getComponent(ScriptComponent.class);
-        if (sc != null && sc.enabled && sc.activeScriptInstance != null) {
-            try {
-                sc.activeScriptInstance.onTriggerEnter(other);
-            } catch (Exception e) {
-                System.err.println("[ScriptEngine] Exception during onTriggerEnter() on Entity '" + entity.name + "': " + e.getMessage());
-            }
-        }
+        dispatchContact(entity, other, "onTriggerEnter", EntityScript::onTriggerEnter);
     }
 
     public static void dispatchTriggerStay(Entity entity, Entity other) {
-        if (entity == null || other == null) return;
-        ScriptComponent sc = entity.getComponent(ScriptComponent.class);
-        if (sc != null && sc.enabled && sc.activeScriptInstance != null) {
-            try {
-                sc.activeScriptInstance.onTriggerStay(other);
-            } catch (Exception e) {
-                System.err.println("[ScriptEngine] Exception during onTriggerStay() on Entity '" + entity.name + "': " + e.getMessage());
-            }
-        }
+        dispatchContact(entity, other, "onTriggerStay", EntityScript::onTriggerStay);
     }
 
     public static void dispatchTriggerExit(Entity entity, Entity other) {
+        dispatchContact(entity, other, "onTriggerExit", EntityScript::onTriggerExit);
+    }
+
+    /** Delivers a collision / trigger event to every enabled, running script on {@code entity}. */
+    private static void dispatchContact(Entity entity, Entity other, String callbackName, BiConsumer<EntityScript, Entity> callback) {
         if (entity == null || other == null) return;
-        ScriptComponent sc = entity.getComponent(ScriptComponent.class);
-        if (sc != null && sc.enabled && sc.activeScriptInstance != null) {
-            try {
-                sc.activeScriptInstance.onTriggerExit(other);
-            } catch (Exception e) {
-                System.err.println("[ScriptEngine] Exception during onTriggerExit() on Entity '" + entity.name + "': " + e.getMessage());
+        for (ScriptComponent sc : entity.getComponents(ScriptComponent.class)) {
+            if (sc.enabled && sc.activeScriptInstance != null) {
+                try {
+                    callback.accept(sc.activeScriptInstance, other);
+                } catch (Exception e) {
+                    System.err.println("[ScriptEngine] Exception during " + callbackName + "() on Entity '" + entity.name + "': " + e.getMessage());
+                }
             }
         }
     }
@@ -195,14 +164,15 @@ public class ScriptEngine {
         if (entities == null) return;
         for (Entity entity : entities) {
             if (entity == null) continue;
-            ScriptComponent sc = entity.getComponent(ScriptComponent.class);
-            if (sc != null && sc.activeScriptInstance != null) {
-                try {
-                    sc.activeScriptInstance.onDestroy();
-                } catch (Exception e) {
-                    System.err.println("[ScriptEngine] Exception during onDestroy() on Entity '" + entity.name + "': " + e.getMessage());
+            for (ScriptComponent sc : entity.getComponents(ScriptComponent.class)) {
+                if (sc.activeScriptInstance != null) {
+                    try {
+                        sc.activeScriptInstance.onDestroy();
+                    } catch (Exception e) {
+                        System.err.println("[ScriptEngine] Exception during onDestroy() on Entity '" + entity.name + "': " + e.getMessage());
+                    }
+                    sc.activeScriptInstance = null;
                 }
-                sc.activeScriptInstance = null;
             }
         }
     }

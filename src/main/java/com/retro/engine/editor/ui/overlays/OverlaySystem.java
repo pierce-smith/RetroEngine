@@ -21,6 +21,7 @@ import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.editor.commands.EditorCommands;
+import com.retro.engine.scene.components.Component;
 import com.retro.engine.scene.components.gameplay.ScriptComponent;
 import com.retro.engine.scene.components.rendering.Light;
 import com.retro.engine.scene.components.rendering.Material;
@@ -42,6 +43,7 @@ public class OverlaySystem {
     private ModalState activeModal = ModalState.NONE;
     private AssetType pickerFilterType = AssetType.TEXTURE;
     private String pickerTargetField = null;
+    private Component pickerTargetComponent = null;
     private Entity parentPickerTargetEntity = null;
 
     private boolean contextMenuVisible = false;
@@ -81,14 +83,25 @@ public class OverlaySystem {
      * legacy behaviour of assigning the selected entity's primary texture / mesh.
      */
     public void openAssetPicker(AssetType filterType, String targetFieldName) {
+        openAssetPicker(filterType, targetFieldName, null);
+    }
+
+    /**
+     * Opens the picker for one specific component instance (e.g. one of several ScriptComponents). A null component
+     * on a SCRIPT picker attaches a new ScriptComponent instead of overwriting an existing one.
+     */
+    public void openAssetPicker(AssetType filterType, String targetFieldName, Component targetComponent) {
         this.pickerFilterType = filterType;
         this.pickerTargetField = targetFieldName;
+        this.pickerTargetComponent = targetComponent;
         this.activeModal = ModalState.ASSET_PICKER;
         ModalDialogOverlay.resetPickerScroll();
     }
 
     /** Component field the open asset picker writes to, or null for the primary texture / mesh. */
     public String getPickerTargetField() { return pickerTargetField; }
+    /** Component instance the open asset picker writes to, or null when it is not bound to one. */
+    public Component getPickerTargetComponent() { return pickerTargetComponent; }
     public void openAssetPickerModal(AssetType filterType) { openAssetPicker(filterType); }
 
     public void closeModal() {

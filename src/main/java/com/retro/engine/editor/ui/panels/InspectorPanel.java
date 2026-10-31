@@ -301,7 +301,9 @@ public class InspectorPanel {
             float drawHeaderY = curY + scrollOffset;
 
             if (isRowVisible(drawHeaderY)) {
-                renderSectionHeader(buffer, comp.getComponentName(), drawHeaderY, isRemovable(comp), comp.isInspectorCollapsed);
+                // Each ScriptComponent gets its own card, titled by the script it runs
+                String title = (comp instanceof ScriptComponent sc) ? sc.getInspectorTitle() : comp.getComponentName();
+                renderSectionHeader(buffer, title, drawHeaderY, isRemovable(comp), comp.isInspectorCollapsed);
             }
             curY -= HEADER_ADVANCE;
             if (comp.isInspectorCollapsed) {

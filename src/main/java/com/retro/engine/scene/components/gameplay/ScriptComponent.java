@@ -43,4 +43,15 @@ public class ScriptComponent extends Component {
     public String getComponentName() {
         return "ScriptComponent";
     }
+
+    /** Inspector card title: "Script (ClassName)", or "Script Component" while no script is assigned. */
+    public String getInspectorTitle() {
+        String raw = (scriptName != null && !scriptName.trim().isEmpty()) ? scriptName : scriptAssetPath;
+        if (raw == null || raw.trim().isEmpty()) return "Script Component";
+        String name = raw.trim();
+        int slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
+        if (slash >= 0) name = name.substring(slash + 1);
+        if (name.toLowerCase().endsWith(".java")) name = name.substring(0, name.length() - 5);
+        return "Script (" + name + ")";
+    }
 }

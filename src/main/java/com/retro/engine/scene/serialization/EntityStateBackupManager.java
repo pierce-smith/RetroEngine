@@ -599,10 +599,10 @@ public class EntityStateBackupManager {
                 cloned.addComponent(cloneAc);
             }
 
-            ScriptComponent origSc = orig.getComponent(ScriptComponent.class);
-            if (origSc != null) {
+            for (ScriptComponent origSc : orig.getComponents(ScriptComponent.class)) {
                 ScriptComponent cloneSc = new ScriptComponent(origSc.scriptAssetPath, origSc.scriptName);
                 cloneSc.enabled = origSc.enabled;
+                if (origSc.propertyOverrides != null) cloneSc.propertyOverrides.putAll(origSc.propertyOverrides);
                 cloned.addComponent(cloneSc);
             }
 

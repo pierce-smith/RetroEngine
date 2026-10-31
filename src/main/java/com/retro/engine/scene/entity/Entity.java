@@ -46,6 +46,18 @@ public class Entity {
         return components.removeIf(componentClass::isInstance);
     }
 
+    /** Removes exactly this component instance (by reference), leaving other components of the same type attached. */
+    public boolean removeComponentInstance(Component component) {
+        if (component == null) return false;
+        for (int i = 0; i < components.size(); i++) {
+            if (components.get(i) == component) {
+                components.remove(i);
+                return true;
+            }
+        }
+        return false;
+    }
+
     @SuppressWarnings("unchecked")
     public <T extends Component> T getComponent(Class<T> componentClass) {
         for (int i = 0; i < components.size(); i++) {
@@ -55,6 +67,20 @@ public class Entity {
             }
         }
         return null;
+    }
+
+    /** Every attached component of the given type, in attachment order (empty when there are none). */
+    @SuppressWarnings("unchecked")
+    public <T extends Component> List<T> getComponents(Class<T> componentClass) {
+        List<T> result = new ArrayList<>();
+        if (componentClass == null) return result;
+        for (int i = 0; i < components.size(); i++) {
+            Component c = components.get(i);
+            if (componentClass.isInstance(c)) {
+                result.add((T) c);
+            }
+        }
+        return result;
     }
 
     public List<Component> getAllComponents() {

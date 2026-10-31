@@ -244,13 +244,17 @@ public class InspectorInputDelegate {
                 if (ndcX >= InspectorPanel.PICK_X0 && ndcX <= InspectorPanel.PICK_X1) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     AssetType assetType = parseAssetType(prop.assetType());
-                    manager.getOverlayManager().openAssetPicker(assetType, (comp instanceof Material) ? field.getName() : null);
+                    // Script cards bind the picker to their own instance, so each ScriptComponent is assigned independently
+                    manager.getOverlayManager().openAssetPicker(assetType, (comp instanceof Material) ? field.getName() : null,
+                            (comp instanceof ScriptComponent) ? comp : null);
                     return true;
                 }
                 if (ndcX >= InspectorPanel.IMPORT_X0 && ndcX <= InspectorPanel.IMPORT_X1) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     if (comp instanceof Material && "TEXTURE".equalsIgnoreCase(prop.assetType())) {
                         promptImportTexture(manager, field.getName());
+                    } else if (comp instanceof ScriptComponent sc) {
+                        promptImportScript(manager, sc);
                     } else {
                         promptImportAssetForType(manager, prop.assetType());
                     }
@@ -626,6 +630,11 @@ public class InspectorInputDelegate {
     }
 
     public static void promptImportScript(EditorWorkspace manager) {
+        promptImportScript(manager, null);
+    }
+
+    /** Imports a script and assigns it to {@code target}, or to the entity's first ScriptComponent when target is null. */
+    public static void promptImportScript(EditorWorkspace manager, ScriptComponent target) {
         if (manager == null) return;
         List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
             "Select Script Asset(s)", "", "Java Scripts (*.java)", "java"
@@ -639,10 +648,15 @@ public class InspectorInputDelegate {
             File file = new File(primaryPath);
             Entity selected = manager.getSelectedEntity();
             if (selected != null) {
-                ScriptComponent sc = selected.getComponent(ScriptComponent.class);
-                String oldPath = (sc != null) ? sc.scriptAssetPath : null;
-                String oldName = (sc != null) ? sc.scriptName : null;
-                EditorCommands.ScriptAssignCommand cmd = new EditorCommands.ScriptAssignCommand(selected, oldPath, oldName, primaryPath, file.getName());
+                EditorCommands.ScriptAssignCommand cmd;
+                if (target != null && selected.getComponents(ScriptComponent.class).contains(target)) {
+                    cmd = new EditorCommands.ScriptAssignCommand(selected, target, primaryPath, file.getName());
+                } else {
+                    ScriptComponent sc = selected.getComponent(ScriptComponent.class);
+                    String oldPath = (sc != null) ? sc.scriptAssetPath : null;
+                    String oldName = (sc != null) ? sc.scriptName : null;
+                    cmd = new EditorCommands.ScriptAssignCommand(selected, oldPath, oldName, primaryPath, file.getName());
+                }
                 manager.getCommandHistory().executeCommand(cmd);
                 InspectorPanel.resetScroll();
             }
@@ -757,8 +771,9 @@ public class InspectorInputDelegate {
                 UISoundPlayer.play(UISound.SPAWN);
             }
         }));
+        // Not limited to one per entity: an unbound SCRIPT picker attaches an additional ScriptComponent
         items.add(new MenuItem("+ Script Component", () -> {
-            manager.getOverlayManager().openAssetPicker(AssetType.SCRIPT);
+            manager.getOverlayManager().openAssetPicker(AssetType.SCRIPT, null, null);
         }));
         items.add(new MenuItem("+ Character Controller", () -> {
             if (entity.getComponent(CharacterControllerComponent.class) == null) {

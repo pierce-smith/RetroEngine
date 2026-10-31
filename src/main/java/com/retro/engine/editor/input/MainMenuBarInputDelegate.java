@@ -2,6 +2,7 @@ package com.retro.engine.editor.input;
 
 import com.retro.engine.editor.ui.overlays.ModalDialogOverlay;
 import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.scene.components.Component;
 import com.retro.engine.scene.components.rendering.Material;
 import com.retro.engine.scene.components.gameplay.ScriptComponent;
 import com.retro.engine.editor.EditorWorkspace;
@@ -155,11 +156,8 @@ public class MainMenuBarInputDelegate {
                 } else if (pickerFilterType == AssetType.MESH_3D) {
                     selected.setMeshAssetPath(null);
                 } else if (pickerFilterType == AssetType.SCRIPT) {
-                    ScriptComponent sc = selected.getComponent(ScriptComponent.class);
-                    String oldPath = (sc != null) ? sc.scriptAssetPath : null;
-                    String oldName = (sc != null) ? sc.scriptName : null;
-                    EditorCommands.ScriptAssignCommand cmd = new EditorCommands.ScriptAssignCommand(selected, oldPath, oldName, null, null);
-                    manager.getCommandHistory().executeCommand(cmd);
+                    manager.getCommandHistory().executeCommand(new EditorCommands.ScriptAssignCommand(
+                            selected, pickerTargetScript(manager, selected), null, null));
                     InspectorPanel.resetScroll();
                 }
             }
@@ -185,15 +183,20 @@ public class MainMenuBarInputDelegate {
             } else if (pickerFilterType == AssetType.MESH_3D) {
                 selected.setMeshAssetPath(asset.absolutePath);
             } else if (pickerFilterType == AssetType.SCRIPT) {
-                ScriptComponent sc = selected.getComponent(ScriptComponent.class);
-                String oldPath = (sc != null) ? sc.scriptAssetPath : null;
-                String oldName = (sc != null) ? sc.scriptName : null;
-                EditorCommands.ScriptAssignCommand cmd = new EditorCommands.ScriptAssignCommand(selected, oldPath, oldName, asset.absolutePath, asset.name);
-                manager.getCommandHistory().executeCommand(cmd);
+                // Bound to a script card: reassign that instance; otherwise attach an additional ScriptComponent
+                manager.getCommandHistory().executeCommand(new EditorCommands.ScriptAssignCommand(
+                        selected, pickerTargetScript(manager, selected), asset.absolutePath, asset.name));
                 InspectorPanel.resetScroll();
             }
         }
         manager.getOverlayManager().closeModal();
+    }
+
+    /** ScriptComponent the picker was opened from, if it is still attached to {@code selected}; null means add a new one. */
+    private static ScriptComponent pickerTargetScript(EditorWorkspace manager, Entity selected) {
+        Component target = manager.getOverlayManager().getPickerTargetComponent();
+        if (!(target instanceof ScriptComponent sc)) return null;
+        return selected.getComponents(ScriptComponent.class).contains(sc) ? sc : null;
     }
 
     /**
