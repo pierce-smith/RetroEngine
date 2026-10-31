@@ -12,9 +12,9 @@ import com.retro.engine.rhi.ViewportSpec;
 import org.lwjgl.system.Callback;
 import org.lwjgl.system.CallbackI;
 import org.lwjgl.system.MemoryUtil;
-import org.lwjgl.system.libffi.FFICIF;
 import org.lwjgl.system.macosx.LibSystem;
 
+import java.lang.invoke.MethodHandles;
 import java.util.List;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -156,9 +156,10 @@ public class MetalBackend implements IRenderBackend {
             return false;
         }
 
-        final FFICIF cif = apiCreateCIF(FFI_DEFAULT_ABI, ffi_type_void, ffi_type_pointer, ffi_type_pointer);
+        final Callback.Descriptor descriptor = new Callback.Descriptor(CallbackI.class, MethodHandles.lookup(),
+                apiCreateCIF(FFI_DEFAULT_ABI, ffi_type_void, ffi_type_pointer, ffi_type_pointer));
         CallbackI onCompleted = new CallbackI() {
-            @Override public FFICIF getCallInterface() { return cif; }
+            @Override public Callback.Descriptor getDescriptor() { return descriptor; }
             @Override public void callback(long ret, long args) {
                 // Advance the disposal fence before the permit lets the render thread start another frame
                 resourceCache.onFrameCompleted();
@@ -171,14 +172,14 @@ public class MetalBackend implements IRenderBackend {
         // struct Block_descriptor { unsigned long reserved; unsigned long size; } is packed after the literal.
         final int BLOCK_IS_GLOBAL = 1 << 28;
         completedHandlerBlock = MemoryUtil.nmemCalloc(1, 48);
-        long descriptor = completedHandlerBlock + 32;
+        long blockDescriptor = completedHandlerBlock + 32;
         MemoryUtil.memPutAddress(completedHandlerBlock, nsConcreteGlobalBlock);
         MemoryUtil.memPutInt(completedHandlerBlock + 8, BLOCK_IS_GLOBAL);
         MemoryUtil.memPutInt(completedHandlerBlock + 12, 0);
         MemoryUtil.memPutAddress(completedHandlerBlock + 16, completedHandlerCallback);
-        MemoryUtil.memPutAddress(completedHandlerBlock + 24, descriptor);
-        MemoryUtil.memPutLong(descriptor, 0L);
-        MemoryUtil.memPutLong(descriptor + 8, 32L);
+        MemoryUtil.memPutAddress(completedHandlerBlock + 24, blockDescriptor);
+        MemoryUtil.memPutLong(blockDescriptor, 0L);
+        MemoryUtil.memPutLong(blockDescriptor + 8, 32L);
         return true;
     }
 

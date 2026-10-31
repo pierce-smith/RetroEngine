@@ -155,6 +155,7 @@ public class PhysicsSystem {
         currentTriggerPairs.clear();
         activePairCount = 0;
         accumulator = 0.0f;
+        characterSolver.reset();
 
         if (sceneEntities == null) return;
 
@@ -199,6 +200,7 @@ public class PhysicsSystem {
             }
         }
 
+        characterSolver.beginFrame(sceneEntities);
         accumulator += Math.min(deltaTime, 0.1f);
 
         int steps = 0;
@@ -393,5 +395,6 @@ public class PhysicsSystem {
         previousTriggerPairs.clear();
         currentTriggerPairs.clear();
         activePairCount = 0;
+        characterSolver.reset();
     }
 }

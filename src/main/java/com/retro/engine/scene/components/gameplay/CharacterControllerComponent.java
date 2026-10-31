@@ -27,6 +27,10 @@ public class CharacterControllerComponent extends Component {
     @InspectorProperty(order = 5, label = "GROUNDED", type = PropertyType.TOGGLE)
     public boolean isGrounded = false;
 
+    /** Applied to moveSpeed while sprint (gamepad X / Left Shift) is held. */
+    @InspectorProperty(order = 6, label = "SPRINT MULT", min = 1.0f, max = 4.0f, step = 0.05f, since = 5, prefabSince = 4)
+    public float sprintSpeedMultiplier = 1.75f;
+
     // Runtime state
     public float velocityX = 0.0f;
     public float velocityY = 0.0f;

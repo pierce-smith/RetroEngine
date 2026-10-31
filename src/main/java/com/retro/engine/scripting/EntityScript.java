@@ -253,6 +253,19 @@ public abstract class EntityScript {
     }
 
     // =========================================================================
+    // Controller Haptics
+    // =========================================================================
+
+    /** Rumbles the active gamepad (heavy left motor, light right motor, both 0..1) for {@code duration} seconds. */
+    public void vibrate(float lowFreq, float highFreq, float duration) {
+        Input.vibrate(lowFreq, highFreq, duration);
+    }
+
+    public void stopVibration() {
+        Input.stopVibration();
+    }
+
+    // =========================================================================
     // Scene Management
     // =========================================================================
 

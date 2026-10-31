@@ -53,7 +53,7 @@ public class EntityStateBackupManager {
 
         // CharacterController
         public boolean hasCharacterController;
-        public float charMoveSpeed, charJumpForce, charStepOffset, charSlopeLimit, charGravityMultiplier;
+        public float charMoveSpeed, charJumpForce, charStepOffset, charSlopeLimit, charGravityMultiplier, charSprintSpeedMultiplier;
         public boolean charIsGrounded;
 
         // VehicleController
@@ -161,6 +161,7 @@ public class EntityStateBackupManager {
                 this.charStepOffset = charC.stepOffset;
                 this.charSlopeLimit = charC.slopeLimit;
                 this.charGravityMultiplier = charC.gravityMultiplier;
+                this.charSprintSpeedMultiplier = charC.sprintSpeedMultiplier;
                 this.charIsGrounded = charC.isGrounded;
             }
 
@@ -329,6 +330,7 @@ public class EntityStateBackupManager {
                     charC.stepOffset = this.charStepOffset;
                     charC.slopeLimit = this.charSlopeLimit;
                     charC.gravityMultiplier = this.charGravityMultiplier;
+                    charC.sprintSpeedMultiplier = this.charSprintSpeedMultiplier;
                     charC.isGrounded = this.charIsGrounded;
                 }
             }
@@ -659,6 +661,7 @@ public class EntityStateBackupManager {
                 cloneChar.stepOffset = origChar.stepOffset;
                 cloneChar.slopeLimit = origChar.slopeLimit;
                 cloneChar.gravityMultiplier = origChar.gravityMultiplier;
+                cloneChar.sprintSpeedMultiplier = origChar.sprintSpeedMultiplier;
                 cloneChar.isGrounded = origChar.isGrounded;
                 cloned.addComponent(cloneChar);
             }

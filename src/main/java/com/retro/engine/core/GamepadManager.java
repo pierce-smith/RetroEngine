@@ -2,13 +2,22 @@ package com.retro.engine.core;
 
 import org.lwjgl.glfw.GLFWGamepadState;
 
+import java.nio.IntBuffer;
+
 import static org.lwjgl.glfw.GLFW.*;
+import static org.lwjgl.sdl.SDLError.SDL_GetError;
+import static org.lwjgl.sdl.SDLGamepad.*;
+import static org.lwjgl.sdl.SDLInit.*;
+import static org.lwjgl.sdl.SDLStdinc.SDL_free;
 
 /**
  * GamepadManager polls GLFW_JOYSTICK_1..GLFW_JOYSTICK_16 through the SDL-style gamepad mapping database
  * (glfwGetGamepadState), tracks the first connected gamepad as the active controller, and exposes
  * held / just-pressed buttons and deadzoned axes. Hot-plugging is handled implicitly by per-frame polling.
  * Triggers are additionally exposed as virtual buttons ({@link #BUTTON_LEFT_TRIGGER}, {@link #BUTTON_RIGHT_TRIGGER}).
+ * <p>
+ * GLFW has no haptics API, so rumble goes through SDL3's gamepad subsystem, opened only for output: the SDL handle of
+ * the active controller is bound lazily on the first vibration request, and a per-frame countdown stops it.
  */
 public class GamepadManager {
 
@@ -63,10 +72,30 @@ public class GamepadManager {
     private static final String BUNDLED_DB = "/input/gamecontrollerdb.txt";
     private static final String USER_DB = "gamecontrollerdb.txt";
 
+    // Rumble (SDL3): opened gamepad handle (0 = none), the GLFW joystick it was matched to, and the active burst
+    private boolean sdlAvailable = false;
+    private long sdlGamepad = 0L;
+    private int sdlBoundJoystick = -1;
+    private float vibrationRemaining = 0.0f;
+    private long lastUpdateNanos = 0L;
+
     public GamepadManager() {
         clearInputs();
         loadBundledMappings();
         loadUserMappings();
+        initRumble();
+    }
+
+    /** Rumble is optional: a missing SDL native or failed init only disables vibration. */
+    private void initRumble() {
+        try {
+            sdlAvailable = SDL_InitSubSystem(SDL_INIT_GAMEPAD);
+            if (!sdlAvailable) {
+                System.err.println("[Gamepad] SDL gamepad init failed, vibration disabled: " + SDL_GetError());
+            }
+        } catch (Throwable t) {
+            System.err.println("[Gamepad] SDL unavailable, vibration disabled: " + t);
+        }
     }
 
     /** Bundled SDL_GameControllerDB (zlib license), newer than the copy compiled into GLFW. */
@@ -128,6 +157,7 @@ public class GamepadManager {
     public void update() {
         System.arraycopy(buttons, 0, prevButtons, 0, BUTTON_COUNT);
         if (state == null) return;
+        updateVibration();
 
         // Prefer the controller already in use so a second pad being plugged in does not steal control
         int found = -1;
@@ -149,11 +179,13 @@ public class GamepadManager {
             activeJoystick = -1;
             activeName = null;
             clearInputs();
+            stopVibration();
             resolveUnmappedJoysticks();
             return;
         }
 
         if (found != activeJoystick) {
+            stopVibration(); // A burst belongs to the controller that was active when it started
             activeJoystick = found;
             activeName = glfwGetGamepadName(found);
             System.out.println("[Gamepad] Active controller: " + activeName + " (joystick " + (found + 1) + ")");
@@ -239,7 +271,126 @@ public class GamepadManager {
         return Math.min(1.0f, (pull - TRIGGER_DEADZONE) / (1.0f - TRIGGER_DEADZONE));
     }
 
+    /**
+     * Drives the dual rumble motors of the active controller: {@code lowFrequency} is the heavy left motor,
+     * {@code highFrequency} the light right motor, both 0..1. A new call replaces any burst in progress; the burst
+     * stops by itself after {@code durationSeconds} (counted down in {@link #update()}), and a zero duration or zero
+     * strength stops it immediately. Silently does nothing without a connected, rumble-capable controller.
+     */
+    public void setVibration(float lowFrequency, float highFrequency, float durationSeconds) {
+        float low = clamp01(lowFrequency);
+        float high = clamp01(highFrequency);
+        if (durationSeconds <= 0.0f || (low == 0.0f && high == 0.0f)) {
+            stopVibration();
+            return;
+        }
+        long pad = bindRumbleGamepad();
+        if (pad == 0L) return;
+        // Uint16 motor strengths; the cast keeps the bit pattern for values above Short.MAX_VALUE
+        int durationMs = (int) Math.ceil(durationSeconds * 1000.0f);
+        if (SDL_RumbleGamepad(pad, (short) Math.round(low * 0xFFFF), (short) Math.round(high * 0xFFFF), durationMs)) {
+            vibrationRemaining = durationSeconds;
+        }
+    }
+
+    /** Stops both motors right away. */
+    public void stopVibration() {
+        if (vibrationRemaining <= 0.0f) return;
+        vibrationRemaining = 0.0f;
+        haltMotors();
+    }
+
+    private void haltMotors() {
+        if (sdlGamepad != 0L) {
+            SDL_RumbleGamepad(sdlGamepad, (short) 0, (short) 0, 0);
+        }
+    }
+
+    public boolean isVibrating() { return vibrationRemaining > 0.0f; }
+
+    /** Counts the active burst down by real frame time, so it ends even if gameplay is paused or the frame rate drops. */
+    private void updateVibration() {
+        long now = System.nanoTime();
+        float dt = lastUpdateNanos != 0L ? (now - lastUpdateNanos) / 1_000_000_000.0f : 0.0f;
+        lastUpdateNanos = now;
+        if (vibrationRemaining <= 0.0f) return;
+        vibrationRemaining -= dt;
+        if (vibrationRemaining <= 0.0f) {
+            vibrationRemaining = 0.0f;
+            haltMotors();
+        }
+    }
+
+    /**
+     * SDL handle for the GLFW-active controller, opened on demand. The two libraries number devices differently, so
+     * the pad is matched by the USB vendor / product ids embedded in GLFW's GUID, falling back to SDL's first gamepad.
+     */
+    private long bindRumbleGamepad() {
+        if (!sdlAvailable || activeJoystick < 0) return 0L;
+        if (sdlGamepad != 0L && sdlBoundJoystick == activeJoystick && SDL_GamepadConnected(sdlGamepad)) return sdlGamepad;
+        closeRumbleGamepad();
+
+        SDL_UpdateGamepads(); // Refresh SDL's device list; nothing pumps SDL events in this engine
+        IntBuffer ids = SDL_GetGamepads();
+        if (ids == null) return 0L;
+        int chosen = 0;
+        try {
+            String guid = glfwGetJoystickGUID(activeJoystick);
+            int vendor = guidWord(guid, 8), product = guidWord(guid, 16);
+            for (int i = 0; i < ids.remaining(); i++) {
+                int id = ids.get(i);
+                if (chosen == 0) chosen = id;
+                if (vendor >= 0 && (SDL_GetGamepadVendorForID(id) & 0xFFFF) == vendor
+                        && (SDL_GetGamepadProductForID(id) & 0xFFFF) == product) {
+                    chosen = id;
+                    break;
+                }
+            }
+        } finally {
+            SDL_free(ids);
+        }
+        if (chosen == 0) return 0L;
+
+        sdlGamepad = SDL_OpenGamepad(chosen);
+        if (sdlGamepad == 0L) {
+            System.err.println("[Gamepad] Could not open '" + activeName + "' for vibration: " + SDL_GetError());
+            return 0L;
+        }
+        sdlBoundJoystick = activeJoystick;
+        return sdlGamepad;
+    }
+
+    private void closeRumbleGamepad() {
+        if (sdlGamepad != 0L) {
+            SDL_CloseGamepad(sdlGamepad);
+            sdlGamepad = 0L;
+        }
+        sdlBoundJoystick = -1;
+    }
+
+    /** Little-endian 16-bit word at hex offset {@code at} of a 32-char GUID, or -1 when the GUID is malformed. */
+    private static int guidWord(String guid, int at) {
+        if (guid == null || guid.length() != 32) return -1;
+        try {
+            int lo = Integer.parseInt(guid.substring(at, at + 2), 16);
+            int hi = Integer.parseInt(guid.substring(at + 2, at + 4), 16);
+            return lo | (hi << 8);
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    private static float clamp01(float v) {
+        return v > 0.0f ? Math.min(1.0f, v) : 0.0f; // NaN maps to 0
+    }
+
     public void destroy() {
+        stopVibration();
+        closeRumbleGamepad();
+        if (sdlAvailable) {
+            SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
+            sdlAvailable = false;
+        }
         if (state != null) {
             state.free();
             state = null;

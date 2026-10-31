@@ -7,7 +7,7 @@ import java.util.Set;
 
 /**
  * Static Input facade providing state queries for keyboard keys,
- * mouse buttons, and cursor coordinates during gameplay simulation.
+ * mouse buttons, and cursor coordinates during gameplay simulation, plus gamepad access and rumble.
  */
 public class Input {
 
@@ -43,6 +43,20 @@ public class Input {
     /** Active gamepad of the bound window, or null when headless / unbound. */
     public static GamepadManager getGamepad() {
         return boundWindow != null ? boundWindow.getGamepadManager() : null;
+    }
+
+    /**
+     * Rumbles the active gamepad: {@code lowFreq} drives the heavy left motor, {@code highFreq} the light right motor
+     * (both 0..1), for {@code duration} seconds. Replaces any rumble in progress; no-op without a controller.
+     */
+    public static void vibrate(float lowFreq, float highFreq, float duration) {
+        GamepadManager pad = getGamepad();
+        if (pad != null) pad.setVibration(lowFreq, highFreq, duration);
+    }
+
+    public static void stopVibration() {
+        GamepadManager pad = getGamepad();
+        if (pad != null) pad.stopVibration();
     }
 
     public static boolean isKeyPressed(int keyCode) {
@@ -107,6 +121,7 @@ public class Input {
     }
 
     public static void clearState() {
+        stopVibration();
         boundWindow = null;
         activeKeys.clear();
         pressedKeys.clear();

@@ -99,11 +99,11 @@ public class NativeFileDialog {
         return TinyFileDialogs.tinyfd_messageBox(
             title != null ? title : "Confirm",
             message != null ? message : "",
-            "yesno", "question", defaultYes
-        );
+            "yesno", "question", defaultYes ? 1 : 0
+        ) == 1;
     }
 
     public static void showError(String title, String message) {
-        TinyFileDialogs.tinyfd_messageBox(title != null ? title : "Error", message != null ? message : "", "ok", "error", true);
+        TinyFileDialogs.tinyfd_messageBox(title != null ? title : "Error", message != null ? message : "", "ok", "error", 1);
     }
 }

@@ -15,7 +15,7 @@ repositories {
     mavenCentral()
 }
 
-val lwjglVersion = "3.3.4"
+val lwjglVersion = "3.4.3"
 
 val lwjglNatives = listOf(
     "natives-windows",
@@ -30,6 +30,7 @@ dependencies {
 
     implementation("org.lwjgl:lwjgl")
     implementation("org.lwjgl:lwjgl-glfw")
+    implementation("org.lwjgl:lwjgl-sdl") // Gamepad rumble (GLFW has no haptics API)
     implementation("org.lwjgl:lwjgl-vulkan")
     implementation("org.lwjgl:lwjgl-assimp")
     implementation("org.lwjgl:lwjgl-stb")
@@ -41,6 +42,7 @@ dependencies {
     for (platformNative in lwjglNatives) {
         runtimeOnly("org.lwjgl:lwjgl::$platformNative")
         runtimeOnly("org.lwjgl:lwjgl-glfw::$platformNative")
+        runtimeOnly("org.lwjgl:lwjgl-sdl::$platformNative")
         runtimeOnly("org.lwjgl:lwjgl-assimp::$platformNative")
         runtimeOnly("org.lwjgl:lwjgl-stb::$platformNative")
         runtimeOnly("org.lwjgl:lwjgl-tinyfd::$platformNative")

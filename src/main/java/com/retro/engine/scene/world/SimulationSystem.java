@@ -7,6 +7,7 @@ import com.retro.engine.scene.components.media.AudioSource;
 import com.retro.engine.scene.components.rendering.Camera;
 import com.retro.engine.scene.components.transform.Transform;
 import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.scripting.Input;
 import com.retro.engine.scripting.ScriptEngine;
 
 import java.util.List;
@@ -55,6 +56,7 @@ public class SimulationSystem {
     public void pause() {
         if (playState == PlayState.SIMULATING) {
             this.playState = PlayState.PAUSED;
+            Input.stopVibration();
             System.out.println("[SimulationSystem] Simulation paused.");
         }
     }
@@ -63,6 +65,7 @@ public class SimulationSystem {
         if (playState == PlayState.SIMULATING || playState == PlayState.PAUSED) {
             ScriptEngine.destroyScripts(activeEntities);
             physicsWorld.cleanup();
+            Input.stopVibration();
 
             if (activeEntities != null) {
                 backupManager.restoreSnapshot(activeEntities);
