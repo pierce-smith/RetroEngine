@@ -5,6 +5,7 @@ import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.components.Component;
 import com.retro.engine.scene.components.rendering.Material;
 import com.retro.engine.scene.components.gameplay.ScriptComponent;
+import com.retro.engine.scene.components.media.AudioSource;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.EditorWorkspace.DropdownMenu;
 import com.retro.engine.assets.AssetMeta;
@@ -159,9 +160,29 @@ public class MainMenuBarInputDelegate {
                     manager.getCommandHistory().executeCommand(new EditorCommands.ScriptAssignCommand(
                             selected, pickerTargetScript(manager, selected), null, null));
                     InspectorPanel.resetScroll();
+                } else if (pickerFilterType == AssetType.AUDIO) {
+                    AudioSource audio = pickerTargetAudio(manager, selected);
+                    if (audio != null) {
+                        manager.getCommandHistory().executeCommand(new EditorCommands.AudioClipAssignCommand(selected, audio, null));
+                    }
                 }
             }
             UISoundPlayer.play(UISound.CLICK);
+            manager.getOverlayManager().closeModal();
+            return;
+        }
+
+        // [+ IMPORT DISK...]: import a file from disk, then bind it exactly as if its row had been clicked
+        if (ModalDialogOverlay.isOverPickerImportButton(ndcX, ndcY)) {
+            UISoundPlayer.play(UISound.OPEN_MODAL);
+            AssetMeta imported = ModalDialogOverlay.importPickerAssetFromDisk(pickerFilterType, manager.getAssetDatabase());
+            if (imported == null) {
+                // Cancelled or not importable: keep the picker open
+                UISoundPlayer.play(UISound.CLOSE_MODAL);
+                return;
+            }
+            UISoundPlayer.play(UISound.SPAWN);
+            applyPickedAsset(manager, pickerFilterType, imported);
             manager.getOverlayManager().closeModal();
             return;
         }
@@ -172,10 +193,16 @@ public class MainMenuBarInputDelegate {
         int row = ModalDialogOverlay.pickerRowAt(ndcX, ndcY, filteredAssets.size());
         if (row < 0) return;
 
-        AssetMeta asset = filteredAssets.get(row);
         UISoundPlayer.play(UISound.CLICK);
+        applyPickedAsset(manager, pickerFilterType, filteredAssets.get(row));
+        manager.getOverlayManager().closeModal();
+    }
+
+    /** Binds a picker choice to the selected entity: Material channel, texture, mesh, or the targeted ScriptComponent. */
+    private static void applyPickedAsset(EditorWorkspace manager, AssetType pickerFilterType, AssetMeta asset) {
         Entity selected = manager.getSelectedEntity();
-        if (selected != null) {
+        // Only an asset of the picker's own type may be bound, so e.g. an audio clip can never land in a mesh or texture slot
+        if (selected != null && asset != null && asset.type == pickerFilterType) {
             if (assignMaterialChannel(manager, selected, asset.absolutePath)) {
                 // Non-albedo Material channel assigned through the undoable property command
             } else if (pickerFilterType == AssetType.TEXTURE) {
@@ -187,9 +214,19 @@ public class MainMenuBarInputDelegate {
                 manager.getCommandHistory().executeCommand(new EditorCommands.ScriptAssignCommand(
                         selected, pickerTargetScript(manager, selected), asset.absolutePath, asset.name));
                 InspectorPanel.resetScroll();
+            } else if (pickerFilterType == AssetType.AUDIO) {
+                // Bound to an Audio Source card: set that clip; otherwise the first AudioSource, adding one if none exists
+                manager.getCommandHistory().executeCommand(new EditorCommands.AudioClipAssignCommand(
+                        selected, pickerTargetAudio(manager, selected), asset.absolutePath));
             }
         }
-        manager.getOverlayManager().closeModal();
+    }
+
+    /** AudioSource the picker was opened from if still attached to {@code selected}, else its first AudioSource (or null). */
+    private static AudioSource pickerTargetAudio(EditorWorkspace manager, Entity selected) {
+        Component target = manager.getOverlayManager().getPickerTargetComponent();
+        if (target instanceof AudioSource audio && selected.getComponents(AudioSource.class).contains(audio)) return audio;
+        return selected.getComponent(AudioSource.class);
     }
 
     /** ScriptComponent the picker was opened from, if it is still attached to {@code selected}; null means add a new one. */

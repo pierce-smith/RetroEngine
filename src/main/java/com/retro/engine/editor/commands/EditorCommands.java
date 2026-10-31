@@ -433,6 +433,56 @@ public class EditorCommands {
         }
     }
 
+    /** Sets one AudioSource's clip, or attaches a new AudioSource when {@code target} is null. */
+    public static class AudioClipAssignCommand implements ICommand {
+        private final Entity entity;
+        private AudioSource target;
+        private final String oldPath;
+        private final String newPath;
+        private boolean addedTarget = false;
+
+        public AudioClipAssignCommand(Entity entity, AudioSource target, String newPath) {
+            this.entity = entity;
+            this.target = target;
+            this.oldPath = (target != null) ? target.audioAssetPath : null;
+            this.newPath = (newPath != null) ? newPath : "";
+        }
+
+        @Override
+        public void execute() {
+            if (entity == null) return;
+            if (target == null || addedTarget) {
+                if (target == null) target = new AudioSource(newPath);
+                entity.addComponent(target);
+                addedTarget = true;
+            } else {
+                setClip(newPath);
+            }
+        }
+
+        @Override
+        public void undo() {
+            if (entity == null || target == null) return;
+            if (addedTarget) {
+                target.dispose();
+                entity.removeComponentInstance(target);
+            } else {
+                setClip(oldPath);
+            }
+        }
+
+        // The loaded Clip still holds the previous file's samples, so release it before switching paths
+        private void setClip(String path) {
+            target.dispose();
+            target.audioAssetPath = (path != null) ? path : "";
+        }
+
+        @Override
+        public String getName() {
+            return "Assign Audio Clip to Entity '" + (entity != null ? entity.name : "null") + "'";
+        }
+    }
+
     public static class ScriptPropertyOverrideCommand implements ICommand {
         private final ScriptComponent scriptComponent;
         private final String fieldName;

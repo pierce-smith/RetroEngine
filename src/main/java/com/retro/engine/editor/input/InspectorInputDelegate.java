@@ -244,9 +244,9 @@ public class InspectorInputDelegate {
                 if (ndcX >= InspectorPanel.PICK_X0 && ndcX <= InspectorPanel.PICK_X1) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     AssetType assetType = parseAssetType(prop.assetType());
-                    // Script cards bind the picker to their own instance, so each ScriptComponent is assigned independently
+                    // Script and Audio Source cards bind the picker to their own instance, so the pick lands in that component
                     manager.getOverlayManager().openAssetPicker(assetType, (comp instanceof Material) ? field.getName() : null,
-                            (comp instanceof ScriptComponent) ? comp : null);
+                            (comp instanceof ScriptComponent || comp instanceof AudioSource) ? comp : null);
                     return true;
                 }
                 if (ndcX >= InspectorPanel.IMPORT_X0 && ndcX <= InspectorPanel.IMPORT_X1) {
@@ -255,6 +255,8 @@ public class InspectorInputDelegate {
                         promptImportTexture(manager, field.getName());
                     } else if (comp instanceof ScriptComponent sc) {
                         promptImportScript(manager, sc);
+                    } else if (comp instanceof AudioSource audio) {
+                        promptImportAudio(manager, audio);
                     } else {
                         promptImportAssetForType(manager, prop.assetType());
                     }
@@ -597,6 +599,11 @@ public class InspectorInputDelegate {
     }
 
     public static void promptImportAudio(EditorWorkspace manager) {
+        promptImportAudio(manager, null);
+    }
+
+    /** Imports an audio file into {@code target}, or the entity's first AudioSource (adding one if none) when target is null. */
+    public static void promptImportAudio(EditorWorkspace manager, AudioSource target) {
         if (manager == null) return;
         List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
             "Select Audio Asset(s)", "", "Audio Files (*.wav, *.mp3, *.ogg)", "wav", "mp3", "ogg"
@@ -609,19 +616,9 @@ public class InspectorInputDelegate {
             String primaryPath = importedPaths.get(0);
             Entity selected = manager.getSelectedEntity();
             if (selected != null) {
-                AudioSource ac = selected.getComponent(AudioSource.class);
-                if (ac == null) {
-                    ac = new AudioSource(primaryPath);
-                    selected.addComponent(ac);
-                } else {
-                    try {
-                        Field field = AudioSource.class.getDeclaredField("audioAssetPath");
-                        EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(ac, field, ac.audioAssetPath, primaryPath, "AUDIO");
-                        manager.getCommandHistory().executeCommand(cmd);
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
-                }
+                AudioSource ac = (target != null && selected.getComponents(AudioSource.class).contains(target))
+                        ? target : selected.getComponent(AudioSource.class);
+                manager.getCommandHistory().executeCommand(new EditorCommands.AudioClipAssignCommand(selected, ac, primaryPath));
                 InspectorPanel.resetScroll();
             }
         } else {

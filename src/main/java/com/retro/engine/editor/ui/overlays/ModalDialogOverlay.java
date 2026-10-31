@@ -3,11 +3,13 @@ package com.retro.engine.editor.ui.overlays;
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
+import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.panels.HierarchyPanel;
 import com.retro.engine.editor.ui.theme.EditorTheme;
 import com.retro.engine.scene.entity.Entity;
 
+import java.io.File;
 import java.util.List;
 
 /**
@@ -51,8 +53,8 @@ public class ModalDialogOverlay {
         centeredTextIn(buffer, "NONE / UNBIND", -0.42f, -0.07f, actionMidY, 0.82f, EditorTheme.RED);
 
         // Import Disk Button
-        UIGeometryBatch.addRoundedQuad(buffer, 0.07f, actionY0, 0.42f, actionY1, EditorTheme.RADIUS_SMALL, EditorTheme.ACCENT, 1.0f);
-        centeredTextIn(buffer, "+ IMPORT DISK...", 0.07f, 0.42f, actionMidY, 0.82f, EditorTheme.TEXT);
+        UIGeometryBatch.addRoundedQuad(buffer, PICKER_IMPORT_X0, actionY0, PICKER_IMPORT_X1, actionY1, EditorTheme.RADIUS_SMALL, EditorTheme.ACCENT, 1.0f);
+        centeredTextIn(buffer, "+ IMPORT DISK...", PICKER_IMPORT_X0, PICKER_IMPORT_X1, actionMidY, 0.82f, EditorTheme.TEXT);
 
         List<AssetMeta> filtered = assetPickerEntries(pickerFilterType, assetDirectory);
         updatePickerScrollBounds(filtered.size());
@@ -99,6 +101,63 @@ public class ModalDialogOverlay {
     /** Rows the asset picker lists for {@code filterType}, alphabetical by name; MainMenuBarInputDelegate hit-tests the same list. */
     public static List<AssetMeta> assetPickerEntries(AssetType filterType, List<AssetMeta> assetDirectory) {
         return AssetDatabase.filterByTypeSorted(assetDirectory, filterType);
+    }
+
+    /** True when (ndcX, ndcY) lies on the asset picker's [+ IMPORT DISK...] button. */
+    public static boolean isOverPickerImportButton(float ndcX, float ndcY) {
+        return ndcX >= PICKER_IMPORT_X0 && ndcX <= PICKER_IMPORT_X1 && ndcY >= PICKER_ACTION_Y0 && ndcY <= PICKER_ACTION_Y1;
+    }
+
+    /**
+     * [+ IMPORT DISK...]: opens the OS file dialog filtered to {@code filterType}, imports the chosen file into the
+     * project's Assets/ folder and returns its registered asset (so the caller can bind it as the picker's choice).
+     * Returns null when the dialog is cancelled, the type has no importable files, or the import did not register.
+     */
+    public static AssetMeta importPickerAssetFromDisk(AssetType filterType, AssetDatabase assetDb) {
+        if (filterType == null || assetDb == null) return null;
+        String[] extensions = importExtensions(filterType);
+        if (extensions.length == 0) return null;
+
+        String chosen = NativeFileDialog.openFileDialog("Import " + filterType.name() + " Asset", "",
+                importFilterDescription(filterType, extensions), extensions);
+        if (chosen == null || chosen.trim().isEmpty()) return null;
+
+        // Copies outside files into the current Assets/ folder and rescans, so the picker list refreshes on the next frame
+        List<String> imported = assetDb.onFilesDropped(List.of(chosen));
+        if (imported.isEmpty()) return null;
+        File importedFile = new File(imported.get(0)).getAbsoluteFile();
+        for (AssetMeta meta : assetPickerEntries(filterType, assetDb.getAssetDirectory())) {
+            if (meta.absolutePath != null && new File(meta.absolutePath).getAbsoluteFile().equals(importedFile)) {
+                return meta;
+            }
+        }
+        return null;
+    }
+
+    /** File extensions the importer accepts for each picker type (same sets as the Inspector IMPORT buttons). */
+    private static String[] importExtensions(AssetType type) {
+        return switch (type) {
+            case TEXTURE -> new String[] {"png", "jpg", "jpeg", "tga"};
+            case MESH_3D -> new String[] {"obj", "fbx", "gltf", "glb"};
+            case AUDIO -> new String[] {"wav", "mp3", "ogg"};
+            case SCRIPT -> new String[] {"java"};
+            default -> new String[0];
+        };
+    }
+
+    private static String importFilterDescription(AssetType type, String[] extensions) {
+        StringBuilder sb = new StringBuilder(switch (type) {
+            case TEXTURE -> "Image Files";
+            case MESH_3D -> "3D Models";
+            case AUDIO -> "Audio Files";
+            case SCRIPT -> "Java Scripts";
+            default -> "Supported Files";
+        }).append(" (");
+        for (int i = 0; i < extensions.length; i++) {
+            if (i > 0) sb.append(", ");
+            sb.append("*.").append(extensions[i]);
+        }
+        return sb.append(')').toString();
     }
 
     public static void renderAssetPickerModal(List<Float> verts, AssetType pickerFilterType, List<AssetMeta> assetDirectory) {
@@ -254,6 +313,7 @@ public class ModalDialogOverlay {
     // --- Shared picker list layout + scroll (screen-space NDC). Only one picker modal is open at a time, so the
     // asset and parent pickers share one scroll state; MainMenuBarInputDelegate / OverlaySystem hit-test these values ---
     public static final float PICKER_ACTION_Y0 = 0.27f, PICKER_ACTION_Y1 = 0.33f;
+    public static final float PICKER_IMPORT_X0 = 0.07f, PICKER_IMPORT_X1 = 0.42f;
     public static final float PICKER_LIST_TOP = 0.23f, PICKER_LIST_BOTTOM = -0.43f;
     public static final float PICKER_ROW_H = 0.08f, PICKER_ROW_PITCH = 0.10f;
     public static final float PICKER_ROW_X0 = -0.42f, PICKER_ROW_X1 = 0.42f;
