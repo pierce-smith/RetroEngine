@@ -140,6 +140,46 @@ public class EditorCommands {
         }
     }
 
+    /**
+     * Hierarchy drag-and-drop: re-parents an entity and moves it to a new scene-list index (sibling order).
+     * Undo restores both the old parent and the old list position.
+     */
+    public static class HierarchyMoveCommand implements ICommand {
+        private final EditorWorkspace workspace;
+        private final Entity entity;
+        private final Entity oldParent, newParent;
+        private final int oldIndex, newIndex;
+
+        public HierarchyMoveCommand(EditorWorkspace workspace, Entity entity, Entity oldParent, int oldIndex, Entity newParent, int newIndex) {
+            this.workspace = workspace;
+            this.entity = entity;
+            this.oldParent = oldParent;
+            this.oldIndex = oldIndex;
+            this.newParent = newParent;
+            this.newIndex = newIndex;
+        }
+
+        @Override
+        public void execute() {
+            if (workspace == null || entity == null) return;
+            if (workspace.getSceneManager().setParent(entity, newParent)) {
+                workspace.getSceneManager().moveEntity(entity, newIndex);
+            }
+        }
+
+        @Override
+        public void undo() {
+            if (workspace == null || entity == null) return;
+            workspace.getSceneManager().setParent(entity, oldParent);
+            workspace.getSceneManager().moveEntity(entity, oldIndex);
+        }
+
+        @Override
+        public String getName() {
+            return "Move Entity '" + (entity != null ? entity.name : "null") + "'";
+        }
+    }
+
     /** Gizmo edit of one skeleton bone's local pose; undo restores the previous edit pose (or the bind pose). */
     public static class BonePoseCommand implements ICommand {
         private final SceneWorld sceneWorld;

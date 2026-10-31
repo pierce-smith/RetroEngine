@@ -18,27 +18,146 @@ import java.util.List;
 
 public class AssetBrowserInputDelegate {
 
-    public static void processHierarchyClick(float ndcY, EditorWorkspace manager) {
+    // --- Hierarchy press / drag-and-drop state ---
+    private static final float HIERARCHY_DRAG_THRESHOLD = 0.025f; // design-space Y travel before a press becomes a drag
+    private static Entity hierarchyPressEntity = null;
+    private static float hierarchyPressY = 0.0f;
+    private static float hierarchyDragY = 0.0f;
+    private static boolean hierarchyDragging = false;
+    private static boolean hierarchyPendingToggle = false;
+    private static boolean draggingHierarchyScrollbar = false;
+    private static float hierarchyScrollbarGrabOffset = 0.0f;
+
+    /**
+     * Press in the Hierarchy (design space). Selects the row under the cursor, or arms an expand/collapse toggle when
+     * the row is already selected; the toggle fires on release only if the press never turned into a drag.
+     */
+    public static void processHierarchyClick(float ndcX, float ndcY, EditorWorkspace manager) {
+        resetHierarchyPress();
+
+        // Scrollbar: grab the thumb, or jump-to-click on the track, then drag
+        if (HierarchyPanel.inScrollbar(ndcX, ndcY)) {
+            float top = HierarchyPanel.thumbTop();
+            float h = HierarchyPanel.thumbHeight();
+            if (ndcY > top || ndcY < top - h) {
+                HierarchyPanel.setThumbTop(ndcY + h * 0.5f);
+                top = HierarchyPanel.thumbTop();
+            }
+            hierarchyScrollbarGrabOffset = top - ndcY;
+            draggingHierarchyScrollbar = true;
+            return;
+        }
+
         List<Entity> entities = manager.getSceneEntities();
         if (entities == null || entities.isEmpty()) return;
 
         List<HierarchyPanel.HierarchyNode> visibleTree = HierarchyPanel.buildFlattenedTree(entities);
         if (visibleTree.isEmpty()) return;
 
-        float fromTop = HierarchyPanel.ROW_TOP - ndcY;
-        int index = fromTop >= 0.0f ? (int) (fromTop / HierarchyPanel.ROW_HEIGHT) : -1;
-        if (index >= 0 && index < visibleTree.size()) {
-            Entity clickedEntity = visibleTree.get(index).entity;
-            if (visibleTree.get(index).hasChildren && manager.getSelectedEntity() == clickedEntity) {
-                UISoundPlayer.play(UISound.CLICK);
-                clickedEntity.expandedInHierarchy = !clickedEntity.expandedInHierarchy;
+        int index = HierarchyPanel.rowAt(ndcY, visibleTree.size());
+        if (index >= 0) {
+            HierarchyPanel.HierarchyNode node = visibleTree.get(index);
+            Entity clickedEntity = node.entity;
+            UISoundPlayer.play(UISound.CLICK);
+            if (node.hasChildren && manager.getSelectedEntity() == clickedEntity) {
+                hierarchyPendingToggle = true;
             } else {
-                UISoundPlayer.play(UISound.CLICK);
                 manager.selectEntity(clickedEntity);
             }
-        } else {
+            hierarchyPressEntity = clickedEntity;
+            hierarchyPressY = ndcY;
+            hierarchyDragY = ndcY;
+        } else if (ndcY <= HierarchyPanel.VIEW_TOP && ndcY >= HierarchyPanel.VIEW_BOTTOM) {
             manager.selectEntity(null);
         }
+    }
+
+    /** Cursor move in Hierarchy design space; drives scrollbar drags and row drag-and-drop. */
+    public static boolean processHierarchyDrag(float ndcY) {
+        if (draggingHierarchyScrollbar) {
+            HierarchyPanel.setThumbTop(ndcY + hierarchyScrollbarGrabOffset);
+            return true;
+        }
+        if (hierarchyPressEntity == null) return false;
+
+        hierarchyDragY = ndcY;
+        if (!hierarchyDragging && Math.abs(ndcY - hierarchyPressY) > HIERARCHY_DRAG_THRESHOLD) {
+            hierarchyDragging = true;
+            hierarchyPendingToggle = false;
+        }
+        if (hierarchyDragging) {
+            HierarchyPanel.setDrag(hierarchyPressEntity, ndcY);
+        }
+        return true;
+    }
+
+    /** Mouse wheel over the Hierarchy: same rate as the Inspector and Asset Browser. */
+    public static boolean handleHierarchyScroll(double yOffset) {
+        HierarchyPanel.scroll((float) -yOffset * 0.18f);
+        if (hierarchyDragging) HierarchyPanel.setDrag(hierarchyPressEntity, hierarchyDragY);
+        return true;
+    }
+
+    private static void processHierarchyRelease(EditorWorkspace manager) {
+        if (manager != null && hierarchyPressEntity != null) {
+            if (hierarchyDragging) {
+                List<Entity> entities = manager.getSceneEntities();
+                List<HierarchyPanel.HierarchyNode> visibleTree = HierarchyPanel.buildFlattenedTree(entities);
+                applyHierarchyDrop(manager, hierarchyPressEntity, HierarchyPanel.computeDrop(hierarchyDragY, hierarchyPressEntity, visibleTree, entities));
+            } else if (hierarchyPendingToggle) {
+                hierarchyPressEntity.expandedInHierarchy = !hierarchyPressEntity.expandedInHierarchy;
+            }
+        }
+        resetHierarchyPress();
+    }
+
+    private static void resetHierarchyPress() {
+        hierarchyPressEntity = null;
+        hierarchyDragging = false;
+        hierarchyPendingToggle = false;
+        draggingHierarchyScrollbar = false;
+        HierarchyPanel.clearDrag();
+    }
+
+    /**
+     * Commits a drop as one undoable move: re-parent (cycle-checked at any depth) plus a scene-list reorder, since
+     * list order is sibling order in the tree and in saved .rscene files.
+     */
+    private static void applyHierarchyDrop(EditorWorkspace manager, Entity source, HierarchyPanel.DropTarget drop) {
+        if (drop.kind == HierarchyPanel.DropKind.NONE || !drop.valid) return;
+        List<Entity> entities = manager.getSceneEntities();
+        int from = entities.indexOf(source);
+        if (from < 0) return;
+
+        Entity oldParent = HierarchyPanel.findEntity(entities, source.parentId);
+        Entity newParent;
+        int toIndex;
+        switch (drop.kind) {
+            case INTO -> {
+                newParent = drop.target;
+                toIndex = entities.size() - 1; // last among its new siblings
+            }
+            case ROOT_END -> {
+                newParent = null;
+                toIndex = entities.size() - 1;
+            }
+            default -> {
+                newParent = drop.newParent;
+                int targetIndex = entities.indexOf(drop.target);
+                if (targetIndex < 0) return;
+                // moveEntity removes the source first, which shifts later indices down by one
+                int before = (from < targetIndex) ? targetIndex - 1 : targetIndex;
+                toIndex = (drop.kind == HierarchyPanel.DropKind.AFTER) ? before + 1 : before;
+            }
+        }
+
+        if (!HierarchyPanel.isCycleSafeParent(source, newParent, entities)) return;
+        if (newParent == oldParent && toIndex == from) return;
+
+        if (newParent != null) newParent.expandedInHierarchy = true;
+        manager.getCommandHistory().executeCommand(new EditorCommands.HierarchyMoveCommand(manager, source, oldParent, from, newParent, toIndex));
+        manager.selectEntity(source);
+        UISoundPlayer.play(UISound.CLICK);
     }
 
     public static void processAssetDirectoryClick(float ndcX, float ndcY, EditorWorkspace manager) {
@@ -166,7 +285,8 @@ public class AssetBrowserInputDelegate {
         return true;
     }
 
-    public static void onMouseRelease() {
+    public static void onMouseRelease(EditorWorkspace manager) {
         draggingScrollbar = false;
+        processHierarchyRelease(manager);
     }
 }

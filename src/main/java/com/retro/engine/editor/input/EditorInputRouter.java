@@ -180,7 +180,8 @@ public class EditorInputRouter {
         } else if (action == 0) { // Release
             if (button == 0) gizmoStateController.onPrimaryRelease();
             InspectorInputDelegate.onMouseRelease(workspace);
-            AssetBrowserInputDelegate.onMouseRelease();
+            AssetBrowserInputDelegate.onMouseRelease(workspace);
+            overlayManager.onModalMouseRelease();
             if (button == 1) {
                 overlayManager.onRightClickRelease(
                     refX, refY, workspace, cameraController,
@@ -257,7 +258,7 @@ public class EditorInputRouter {
         try {
             switch (panel) {
                 case HIERARCHY -> {
-                    AssetBrowserInputDelegate.processHierarchyClick(dy, workspace);
+                    AssetBrowserInputDelegate.processHierarchyClick(dx, dy, workspace);
                     return true;
                 }
                 case INSPECTOR -> {
@@ -312,6 +313,13 @@ public class EditorInputRouter {
             if (workspace.getDockSpace().isVisible(DockPanel.ANIMATOR_INSPECTOR)) {
                 AnimatorGraphPanel.handleInspectorCursorPos(workspace.getDockSpace().toDesignX(DockPanel.ANIMATOR_INSPECTOR, coords.ndcX), workspace.getDockSpace().toDesignY(DockPanel.ANIMATOR_INSPECTOR, coords.ndcY), workspace);
             }
+            if (workspace.getOverlayManager().processModalDrag(coords.ndcY)) {
+                return true;
+            }
+            if (workspace.getDockSpace().isVisible(DockPanel.HIERARCHY)
+                    && AssetBrowserInputDelegate.processHierarchyDrag(workspace.getDockSpace().toDesignY(DockPanel.HIERARCHY, coords.ndcY))) {
+                return true;
+            }
             if (workspace.getDockSpace().isVisible(DockPanel.ASSETS)
                     && AssetBrowserInputDelegate.processDrag(workspace.getDockSpace().toDesignY(DockPanel.ASSETS, coords.ndcY))) {
                 return true;
@@ -326,8 +334,14 @@ public class EditorInputRouter {
     public boolean handleScroll(double yOffset) {
         if (workspace == null) return false;
         if (!workspace.hasActiveProject()) return true;
+        if (workspace.getOverlayManager().handlePickerScroll(yOffset)) {
+            return true;
+        }
         DockPanel panel = workspace.getDockSpace().panelAt(workspace.getLastNdcX(), workspace.getLastNdcY());
 
+        if (panel == DockPanel.HIERARCHY) {
+            return AssetBrowserInputDelegate.handleHierarchyScroll(yOffset);
+        }
         if (panel == DockPanel.INSPECTOR) {
             InspectorPanel.scroll((float) -yOffset * 0.18f);
             return true;

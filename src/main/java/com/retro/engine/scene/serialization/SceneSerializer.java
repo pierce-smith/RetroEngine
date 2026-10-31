@@ -218,7 +218,19 @@ public class SceneSerializer {
         return ComponentBinaryCodec.readUuid(dis);
     }
 
+    /**
+     * Rebuilds child links from each entity's parentId. Entity records are written in scene-list order, which is the
+     * Hierarchy's sibling order, so child lists come back in the same order they were saved. A parent loop in a
+     * corrupt file (which would hide every entity in it from the tree) is broken by moving the entity to the root.
+     */
     private static void postProcessHierarchy(List<Entity> entities) {
+        for (Entity e : entities) {
+            if (e.parentId != null && !e.parentId.isEmpty()
+                    && (e.parentId.equalsIgnoreCase(e.id) || e.isDescendantOf(e, entities))) {
+                System.err.println("[SceneSerializer] Broke circular parent link on entity '" + e.name + "'");
+                e.parentId = null;
+            }
+        }
         for (Entity e : entities) {
             if (e.parentId != null && !e.parentId.isEmpty()) {
                 for (Entity p : entities) {

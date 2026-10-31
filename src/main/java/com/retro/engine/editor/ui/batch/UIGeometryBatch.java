@@ -30,6 +30,7 @@ public class UIGeometryBatch {
         private float mapSx = 1.0f, mapSy = 1.0f, mapTx = 0.0f, mapTy = 0.0f;
         private float clipX0, clipY0, clipX1, clipY1;
         private float savedClipY0, savedClipY1;
+        private boolean screenClipActive = false;
         private float textScale = 1.0f;
 
         // Window metrics: pixel-height / pixel-width keeps rounded corners circular; sizes snap text to pixels
@@ -140,6 +141,22 @@ public class UIGeometryBatch {
 
         public void popClipY() {
             clipY0 = savedClipY0; clipY1 = savedClipY1;
+        }
+
+        /**
+         * Clips subsequent unmapped (screen-space) geometry to [x0,x1]x[y0,y1] until {@link #endScreenClip()}, via an
+         * identity panel mapping. Only for overlays drawn while no panel mapping is active.
+         */
+        public void beginScreenClip(float x0, float y0, float x1, float y1) {
+            if (mapped) return;
+            setPanelMapping(x0, y0, x1, y1, x0, y0, x1, y1);
+            screenClipActive = true;
+        }
+
+        public void endScreenClip() {
+            if (!screenClipActive) return;
+            screenClipActive = false;
+            clearPanelMapping();
         }
 
         public boolean isMapped() { return mapped; }

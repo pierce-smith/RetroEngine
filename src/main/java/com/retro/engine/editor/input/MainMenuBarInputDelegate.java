@@ -1,5 +1,6 @@
 package com.retro.engine.editor.input;
 
+import com.retro.engine.editor.ui.overlays.ModalDialogOverlay;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.components.rendering.Material;
 import com.retro.engine.scene.components.gameplay.ScriptComponent;
@@ -142,7 +143,9 @@ public class MainMenuBarInputDelegate {
 
         AssetType pickerFilterType = manager.getOverlayManager().getPickerFilterType();
 
-        if (ndcX >= -0.42f && ndcX <= -0.07f && ndcY >= 0.27f && ndcY <= 0.33f) {
+        if (manager.getOverlayManager().beginPickerScrollbarDrag(ndcX, ndcY)) return;
+
+        if (ndcX >= -0.42f && ndcX <= -0.07f && ndcY >= ModalDialogOverlay.PICKER_ACTION_Y0 && ndcY <= ModalDialogOverlay.PICKER_ACTION_Y1) {
             Entity selected = manager.getSelectedEntity();
             if (selected != null) {
                 if (assignMaterialChannel(manager, selected, null)) {
@@ -165,38 +168,32 @@ public class MainMenuBarInputDelegate {
             return;
         }
 
-        List<AssetMeta> allAssets = manager.getAssetDatabase().getAssetDirectory();
-        List<AssetMeta> filteredAssets = (allAssets != null) ? allAssets.stream()
-                .filter(a -> a.type == pickerFilterType)
-                .toList() : List.of();
+        // Same alphabetical list and scroll-aware row layout the modal draws
+        List<AssetMeta> filteredAssets = ModalDialogOverlay.assetPickerEntries(pickerFilterType, manager.getAssetDatabase().getAssetDirectory());
+        ModalDialogOverlay.updatePickerScrollBounds(filteredAssets.size());
+        int row = ModalDialogOverlay.pickerRowAt(ndcX, ndcY, filteredAssets.size());
+        if (row < 0) return;
 
-        float listY = 0.20f;
-        for (AssetMeta asset : filteredAssets) {
-            if (listY < -0.38f) break;
-            if (ndcX >= -0.42f && ndcX <= 0.42f && ndcY >= listY - 0.05f && ndcY <= listY + 0.03f) {
-                UISoundPlayer.play(UISound.CLICK);
-                Entity selected = manager.getSelectedEntity();
-                if (selected != null) {
-                    if (assignMaterialChannel(manager, selected, asset.absolutePath)) {
-                        // Non-albedo Material channel assigned through the undoable property command
-                    } else if (pickerFilterType == AssetType.TEXTURE) {
-                        selected.setTextureAsset(asset.absolutePath, asset.name);
-                    } else if (pickerFilterType == AssetType.MESH_3D) {
-                        selected.setMeshAssetPath(asset.absolutePath);
-                    } else if (pickerFilterType == AssetType.SCRIPT) {
-                        ScriptComponent sc = selected.getComponent(ScriptComponent.class);
-                        String oldPath = (sc != null) ? sc.scriptAssetPath : null;
-                        String oldName = (sc != null) ? sc.scriptName : null;
-                        EditorCommands.ScriptAssignCommand cmd = new EditorCommands.ScriptAssignCommand(selected, oldPath, oldName, asset.absolutePath, asset.name);
-                        manager.getCommandHistory().executeCommand(cmd);
-                        InspectorPanel.resetScroll();
-                    }
-                }
-                manager.getOverlayManager().closeModal();
-                return;
+        AssetMeta asset = filteredAssets.get(row);
+        UISoundPlayer.play(UISound.CLICK);
+        Entity selected = manager.getSelectedEntity();
+        if (selected != null) {
+            if (assignMaterialChannel(manager, selected, asset.absolutePath)) {
+                // Non-albedo Material channel assigned through the undoable property command
+            } else if (pickerFilterType == AssetType.TEXTURE) {
+                selected.setTextureAsset(asset.absolutePath, asset.name);
+            } else if (pickerFilterType == AssetType.MESH_3D) {
+                selected.setMeshAssetPath(asset.absolutePath);
+            } else if (pickerFilterType == AssetType.SCRIPT) {
+                ScriptComponent sc = selected.getComponent(ScriptComponent.class);
+                String oldPath = (sc != null) ? sc.scriptAssetPath : null;
+                String oldName = (sc != null) ? sc.scriptName : null;
+                EditorCommands.ScriptAssignCommand cmd = new EditorCommands.ScriptAssignCommand(selected, oldPath, oldName, asset.absolutePath, asset.name);
+                manager.getCommandHistory().executeCommand(cmd);
+                InspectorPanel.resetScroll();
             }
-            listY -= 0.10f;
         }
+        manager.getOverlayManager().closeModal();
     }
 
     /**

@@ -407,6 +407,19 @@ public class SceneWorld {
         }
     }
 
+    /**
+     * Moves an existing entity to {@code index} in the scene list (clamped). List order is sibling order in the
+     * Hierarchy and is what .rscene saves persist. Returns false when the entity is not in the scene.
+     */
+    public boolean moveEntity(Entity target, int index) {
+        int from = sceneEntities.indexOf(target);
+        if (from < 0) return false;
+        sceneEntities.remove(from);
+        sceneEntities.add(Math.max(0, Math.min(sceneEntities.size(), index)), target);
+        graphEvaluator.clearCache();
+        return true;
+    }
+
     public void deleteSelectedEntity() {
         deleteEntity(getSelectedEntity());
     }

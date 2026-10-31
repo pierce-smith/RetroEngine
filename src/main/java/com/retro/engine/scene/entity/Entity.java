@@ -116,16 +116,26 @@ public class Entity {
         return childIds.contains(childId);
     }
 
+    /**
+     * True when {@code potentialAncestor} appears anywhere up this entity's parent chain (any depth). The walk is
+     * bounded by the scene size, so a corrupt parent loop that does not include the ancestor terminates.
+     */
     public boolean isDescendantOf(Entity potentialAncestor, List<Entity> allEntities) {
-        if (potentialAncestor == null || allEntities == null) return false;
-        if (this.parentId == null) return false;
-        if (this.parentId.equalsIgnoreCase(potentialAncestor.id)) return true;
+        if (potentialAncestor == null || potentialAncestor.id == null || allEntities == null) return false;
+        String currentParentId = this.parentId;
+        for (int steps = 0; steps <= allEntities.size(); steps++) {
+            if (currentParentId == null || currentParentId.isEmpty()) return false;
+            if (currentParentId.equalsIgnoreCase(potentialAncestor.id)) return true;
 
-        for (int i = 0; i < allEntities.size(); i++) {
-            Entity e = allEntities.get(i);
-            if (e != null && e.id != null && e.id.equalsIgnoreCase(this.parentId)) {
-                return e.isDescendantOf(potentialAncestor, allEntities);
+            String nextParentId = null;
+            for (int i = 0; i < allEntities.size(); i++) {
+                Entity e = allEntities.get(i);
+                if (e != null && e.id != null && e.id.equalsIgnoreCase(currentParentId)) {
+                    nextParentId = e.parentId;
+                    break;
+                }
             }
+            currentParentId = nextParentId;
         }
         return false;
     }

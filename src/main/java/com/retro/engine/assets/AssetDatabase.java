@@ -116,14 +116,26 @@ public class AssetDatabase {
         return uuidToAssetMap.get(uuid.trim());
     }
 
+    /** Case-insensitive alphabetical order by asset name, with the path as a stable tiebreak for duplicate names. */
+    public static final Comparator<AssetMeta> NAME_ORDER = Comparator
+        .comparing((AssetMeta m) -> m.name != null ? m.name.toLowerCase() : "")
+        .thenComparing(m -> m.absolutePath != null ? m.absolutePath : "");
+
+    /** All assets of {@code targetType}, sorted alphabetically by name. */
     public List<AssetMeta> getAssetsByType(AssetType targetType) {
+        return filterByTypeSorted(assetDirectory, targetType);
+    }
+
+    /** Assets of {@code targetType} from {@code assets}, sorted alphabetically by name (a new list). */
+    public static List<AssetMeta> filterByTypeSorted(List<AssetMeta> assets, AssetType targetType) {
         List<AssetMeta> matches = new ArrayList<>();
-        if (targetType == null) return matches;
-        for (AssetMeta meta : assetDirectory) {
-            if (meta.type == targetType) {
+        if (targetType == null || assets == null) return matches;
+        for (AssetMeta meta : assets) {
+            if (meta != null && meta.type == targetType) {
                 matches.add(meta);
             }
         }
+        matches.sort(NAME_ORDER);
         return matches;
     }
 

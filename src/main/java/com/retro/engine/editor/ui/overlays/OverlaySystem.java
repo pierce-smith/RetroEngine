@@ -84,6 +84,7 @@ public class OverlaySystem {
         this.pickerFilterType = filterType;
         this.pickerTargetField = targetFieldName;
         this.activeModal = ModalState.ASSET_PICKER;
+        ModalDialogOverlay.resetPickerScroll();
     }
 
     /** Component field the open asset picker writes to, or null for the primary texture / mesh. */
@@ -100,6 +101,7 @@ public class OverlaySystem {
         if (target != null) {
             this.parentPickerTargetEntity = target;
             this.activeModal = ModalState.PARENT_PICKER;
+            ModalDialogOverlay.resetPickerScroll();
         }
     }
     public void openParentPickerModal(Entity target) { openParentPicker(target); }
@@ -261,8 +263,8 @@ public class OverlaySystem {
             List<Entity> entities = manager.getSceneEntities();
             if (entities != null && !entities.isEmpty()) {
                 List<HierarchyPanel.HierarchyNode> visibleTree = HierarchyPanel.buildFlattenedTree(entities);
-                int index = (int) ((0.85f - ndcY) / 0.08f);
-                if (index >= 0 && index < visibleTree.size()) {
+                int index = HierarchyPanel.rowAt(ndcY, visibleTree.size());
+                if (index >= 0) {
                     final Entity hitEntity = visibleTree.get(index).entity;
                     manager.selectEntity(hitEntity);
 
@@ -329,29 +331,82 @@ public class OverlaySystem {
             return;
         }
 
-        if (ndcX >= -0.42f && ndcX <= -0.07f && ndcY >= 0.27f && ndcY <= 0.33f) {
+        if (beginPickerScrollbarDrag(ndcX, ndcY)) return;
+
+        if (ndcX >= ModalDialogOverlay.PICKER_ROW_X0 && ndcX <= ModalDialogOverlay.PICKER_ROW_X1
+                && ndcY >= ModalDialogOverlay.PICKER_ACTION_Y0 && ndcY <= ModalDialogOverlay.PICKER_ACTION_Y1) {
             unparentEntity(manager, parentPickerTargetEntity);
             UISoundPlayer.play(UISound.CLICK);
             closeModal();
             return;
         }
 
-        List<Entity> allEntities = manager.getSceneEntities();
-        List<Entity> candidateParents = (allEntities != null) ? allEntities.stream()
-                .filter(e -> e != null && !e.id.equalsIgnoreCase(parentPickerTargetEntity.id) && !e.isDescendantOf(parentPickerTargetEntity, manager.getSceneEntities()))
-                .toList() : List.of();
+        // Same flattened tree the modal draws (Hierarchy order, indentation, and expand/collapse state)
+        List<Entity> sceneEntities = manager.getSceneEntities();
+        List<HierarchyPanel.HierarchyNode> tree = HierarchyPanel.buildFlattenedTree(sceneEntities);
+        ModalDialogOverlay.updatePickerScrollBounds(tree.size());
+        int row = ModalDialogOverlay.pickerRowAt(ndcX, ndcY, tree.size());
+        if (row < 0) return;
 
-        float listY = 0.20f;
-        for (Entity parentCandidate : candidateParents) {
-            if (listY < -0.38f) break;
-            if (ndcX >= -0.42f && ndcX <= 0.42f && ndcY >= listY - 0.05f && ndcY <= listY + 0.03f) {
-                UISoundPlayer.play(UISound.CLICK);
-                setParentEntity(manager, parentPickerTargetEntity, parentCandidate);
-                closeModal();
-                return;
-            }
-            listY -= 0.10f;
+        HierarchyPanel.HierarchyNode node = tree.get(row);
+        if (node.hasChildren && ModalDialogOverlay.hitsParentPickerDisclosure(ndcX, node.depth, HierarchyPanel.getLastMaxDepth())) {
+            UISoundPlayer.play(UISound.CLICK);
+            node.entity.expandedInHierarchy = !node.entity.expandedInHierarchy;
+            return;
         }
+
+        // The target itself and its descendants are shown but disabled: picking one would form a parent loop
+        if (!ModalDialogOverlay.isSelectableParent(parentPickerTargetEntity, node.entity, sceneEntities)) return;
+
+        UISoundPlayer.play(UISound.CLICK);
+        setParentEntity(manager, parentPickerTargetEntity, node.entity);
+        closeModal();
+    }
+
+    private boolean draggingModalScrollbar = false;
+    private float modalScrollbarGrabOffset = 0.0f;
+
+    /**
+     * Press on an open picker modal's scrollbar: grabs the thumb, or jumps to the click on the track, then drags.
+     * Returns false (and does nothing) when the press is not on the scrollbar.
+     */
+    public boolean beginPickerScrollbarDrag(float ndcX, float ndcY) {
+        if (!ModalDialogOverlay.inPickerScrollbar(ndcX, ndcY)) return false;
+        float top = ModalDialogOverlay.pickerThumbTop();
+        float h = ModalDialogOverlay.pickerThumbHeight();
+        if (ndcY > top || ndcY < top - h) {
+            ModalDialogOverlay.setPickerThumbTop(ndcY + h * 0.5f);
+            top = ModalDialogOverlay.pickerThumbTop();
+        }
+        modalScrollbarGrabOffset = top - ndcY;
+        draggingModalScrollbar = true;
+        return true;
+    }
+
+    private boolean isPickerModalOpen() {
+        return activeModal == ModalState.PARENT_PICKER || activeModal == ModalState.ASSET_PICKER;
+    }
+
+    /** Mouse wheel while a picker modal is open: scrolls its list. Returns false when no picker is open. */
+    public boolean handlePickerScroll(double yOffset) {
+        if (!isPickerModalOpen()) return false;
+        ModalDialogOverlay.scrollPicker((float) -yOffset * 0.18f);
+        return true;
+    }
+
+    /** Cursor move in screen space; drives an active modal scrollbar drag. */
+    public boolean processModalDrag(float ndcY) {
+        if (!draggingModalScrollbar) return false;
+        if (!isPickerModalOpen()) {
+            draggingModalScrollbar = false;
+            return false;
+        }
+        ModalDialogOverlay.setPickerThumbTop(ndcY + modalScrollbarGrabOffset);
+        return true;
+    }
+
+    public void onModalMouseRelease() {
+        draggingModalScrollbar = false;
     }
 
     // --- Helper Entity Action Dispatchers ---
@@ -416,6 +471,11 @@ public class OverlaySystem {
 
     private void setParentEntity(EditorWorkspace manager, Entity child, Entity parent) {
         if (child == null || manager == null) return;
+        // Walks the full ancestor chain, so a loop is rejected at any depth (child -> ... -> great-grandchild)
+        if (!HierarchyPanel.isCycleSafeParent(child, parent, manager.getSceneEntities())) {
+            EngineConsolePanel.log(EngineConsolePanel.LogLevel.WARN, "[Scene] Cannot parent '" + child.name + "' under its own descendant");
+            return;
+        }
         Entity oldParent = null;
         if (child.parentId != null && !child.parentId.isEmpty()) {
             for (Entity e : manager.getSceneEntities()) {
