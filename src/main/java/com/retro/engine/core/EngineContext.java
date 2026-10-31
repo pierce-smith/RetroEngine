@@ -133,11 +133,17 @@ public class EngineContext {
             }
         });
 
-        if (!isRuntimeOnly) {
+        if (isRuntimeOnly) {
+            window.setOnMouseClickListener((mouseX, mouseY, button, action) -> {
+                if (action == GLFW.GLFW_PRESS) relockCursorForPlay();
+            });
+        } else {
             window.setOnMouseClickListener((mouseX, mouseY, button, action) -> {
                 if (selectionController == null || cameraController == null) return;
-                boolean handled = selectionController.handleMouseClick(mouseX, mouseY, button, action);
                 boolean inViewport = selectionController.isCursorInViewport(mouseX, mouseY);
+                // Clicking the game view during Play re-locks a mouse-look cursor that Escape freed; the click is consumed
+                if (action == GLFW.GLFW_PRESS && inViewport && relockCursorForPlay()) return;
+                boolean handled = selectionController.handleMouseClick(mouseX, mouseY, button, action);
                 
                 // Forward to camera controller if not handled by UI, OR if right-clicking inside the 3D viewport.
                 // Releases always go through: a release that opens a context menu turns the region into
@@ -243,6 +249,14 @@ public class EngineContext {
             if (args[i] != null && args[i].toLowerCase().startsWith(flag + "=")) return args[i].substring(flag.length() + 1);
         }
         return null;
+    }
+
+    /** Re-captures the cursor when gameplay wants mouse-look but Escape freed it; true if it did. */
+    private boolean relockCursorForPlay() {
+        if (window == null || window.isCursorCaptured() || !com.retro.engine.scripting.Input.isCursorLockWanted()) return false;
+        if (editorManager == null || editorManager.getPlayState() != com.retro.engine.scene.world.SceneWorld.PlayState.SIMULATING) return false;
+        window.setCursorCaptured(true);
+        return true;
     }
 
     public boolean isHeadlessMode() { return headlessMode; }

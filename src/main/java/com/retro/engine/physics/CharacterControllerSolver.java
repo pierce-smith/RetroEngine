@@ -25,8 +25,9 @@ import static org.lwjgl.glfw.GLFW.*;
  *   <li>Left Stick [WASD]: move relative to the active camera's yaw (world axes when the scene has no camera)</li>
  *   <li>A [Space]: jump, with a light rumble on takeoff</li>
  *   <li>X [Left Shift]: sprint, scaling moveSpeed by {@link CharacterControllerComponent#sprintSpeedMultiplier}</li>
- *   <li>Right Stick: orbit / pitch the camera on or under the character's transform tree</li>
+ *   <li>Right Stick [mouse-look]: orbit / pitch the camera on or under the character's transform tree</li>
  * </ul>
+ * A character with such a camera locks the cursor for mouse-look when play starts (Escape frees it, a click re-locks).
  * Landing from a fall plays a heavy rumble scaled by the impact speed.
  */
 public class CharacterControllerSolver {
@@ -38,6 +39,7 @@ public class CharacterControllerSolver {
     private static final float ORBIT_PITCH_SPEED = 120.0f;
     private static final float MIN_PITCH = -40.0f;
     private static final float MAX_PITCH = 75.0f;
+    private static final float MOUSE_LOOK_DEGREES_PER_PIXEL = 0.15f;
 
     // Light (right motor) burst on jump takeoff
     private static final float JUMP_RUMBLE_STRENGTH = 0.4f;
@@ -84,6 +86,9 @@ public class CharacterControllerSolver {
     // Jump is an edge, sampled per frame and held until the next physics step so frames without a step do not drop it
     private boolean jumpRequested = false;
     private boolean prevJumpKeyDown = false;
+    // Mouse motion arrives per frame, so it is banked in degrees and spent by the next physics step
+    private float pendingLookYaw = 0.0f, pendingLookPitch = 0.0f;
+    private boolean cursorLockRequested = false;
 
     /** Called once per frame before the fixed steps run. */
     public void beginFrame(List<Entity> sceneEntities) {
@@ -94,6 +99,9 @@ public class CharacterControllerSolver {
             jumpRequested = true;
         }
         prevJumpKeyDown = jumpKeyDown;
+        // Mouse right turns right, mouse up looks up (screen Y grows downward, positive pitch looks down)
+        pendingLookYaw += Input.getMouseDeltaX() * MOUSE_LOOK_DEGREES_PER_PIXEL;
+        pendingLookPitch += Input.getMouseDeltaY() * MOUSE_LOOK_DEGREES_PER_PIXEL;
     }
 
     /** Drops cached camera rigs and latched input; call when the physics world is rebuilt or torn down. */
@@ -101,6 +109,9 @@ public class CharacterControllerSolver {
         rigs.clear();
         jumpRequested = false;
         prevJumpKeyDown = false;
+        pendingLookYaw = 0.0f;
+        pendingLookPitch = 0.0f;
+        cursorLockRequested = false;
     }
 
     public void updateControllers(List<PhysicsSystem.PhysicsBody> activeBodies, float dt, PhysicsSystem physicsSystem, RaycastHit sharedRaycastHit) {
@@ -129,7 +140,11 @@ public class CharacterControllerSolver {
             inputForward /= inputLen;
         }
         boolean hasMoveInput = inputLen > 0.0f;
-        boolean hasLookInput = lookX != 0.0f || lookY != 0.0f;
+        float lookYaw = lookX * ORBIT_YAW_SPEED * dt + pendingLookYaw;
+        float lookPitch = lookY * ORBIT_PITCH_SPEED * dt + pendingLookPitch;
+        pendingLookYaw = 0.0f;
+        pendingLookPitch = 0.0f;
+        boolean hasLookInput = lookYaw != 0.0f || lookPitch != 0.0f;
         boolean jump = jumpRequested;
         jumpRequested = false;
 
@@ -138,8 +153,12 @@ public class CharacterControllerSolver {
             if (cc == null) continue;
 
             CameraRig rig = rigs.computeIfAbsent(cc, k -> resolveCameraRig(body.entity));
+            if (rig.orbit() != null && !cursorLockRequested) {
+                cursorLockRequested = true; // Once per session, so a script that frees the cursor keeps it free
+                Input.setCursorLocked(true);
+            }
             if (hasLookInput && rig.orbit() != null) {
-                applyOrbit(rig.orbit(), body, lookX, lookY, dt);
+                applyOrbit(rig.orbit(), body, lookYaw, lookPitch);
             }
 
             // Only override while there is input, so script-set velocities and friction coasting still apply otherwise
@@ -205,11 +224,12 @@ public class CharacterControllerSolver {
     }
 
     /**
-     * Stick right turns the view right, stick up looks up. A child camera swings around its pivot and keeps facing it;
-     * a camera on the character itself turns the body (yaw only, so the collider never tilts).
+     * Turns the view by the given degrees (positive yaw turns right, positive pitch looks down). A child camera swings
+     * around its pivot and keeps facing it; a camera on the character itself turns the body (yaw only, so the collider
+     * never tilts).
      */
-    private static void applyOrbit(OrbitState orbit, PhysicsSystem.PhysicsBody body, float lookX, float lookY, float dt) {
-        orbit.yaw = wrapDegrees(orbit.yaw + lookX * ORBIT_YAW_SPEED * dt);
+    private static void applyOrbit(OrbitState orbit, PhysicsSystem.PhysicsBody body, float yawDelta, float pitchDelta) {
+        orbit.yaw = wrapDegrees(orbit.yaw + yawDelta);
         if (orbit.onCharacter) {
             // The body's rotation is synced over the transform after the step, so turn the body
             body.ry = orbit.yaw;
@@ -217,7 +237,7 @@ public class CharacterControllerSolver {
         }
         // An authored pitch outside the range is kept rather than snapped; the stick only moves it back toward the range
         float lo = Math.min(MIN_PITCH, orbit.pitch), hi = Math.max(MAX_PITCH, orbit.pitch);
-        orbit.pitch = Math.max(lo, Math.min(hi, orbit.pitch + lookY * ORBIT_PITCH_SPEED * dt));
+        orbit.pitch = Math.max(lo, Math.min(hi, orbit.pitch + pitchDelta));
         float[] f = forward(orbit.yaw, orbit.pitch);
         Transform t = orbit.camera;
         t.setPosition(orbit.pivotX - f[0] * orbit.distance, orbit.pivotY - f[1] * orbit.distance, orbit.pivotZ - f[2] * orbit.distance);

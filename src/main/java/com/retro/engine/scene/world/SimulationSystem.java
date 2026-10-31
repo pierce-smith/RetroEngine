@@ -50,6 +50,7 @@ public class SimulationSystem {
             System.out.println("[SimulationSystem] Simulation started; physics world & gameplay scripts initialized (Zero-Allocation Snapshot).");
         } else if (playState == PlayState.PAUSED) {
             this.playState = PlayState.SIMULATING;
+            if (Input.isCursorLockWanted()) Input.setCursorCaptured(true);
         }
     }
 
@@ -57,6 +58,7 @@ public class SimulationSystem {
         if (playState == PlayState.SIMULATING) {
             this.playState = PlayState.PAUSED;
             Input.stopVibration();
+            Input.setCursorCaptured(false); // Keeps the lock wanted, so resuming re-locks
             System.out.println("[SimulationSystem] Simulation paused.");
         }
     }
@@ -66,6 +68,7 @@ public class SimulationSystem {
             ScriptEngine.destroyScripts(activeEntities);
             physicsWorld.cleanup();
             Input.stopVibration();
+            Input.setCursorLocked(false);
 
             if (activeEntities != null) {
                 backupManager.restoreSnapshot(activeEntities);

@@ -112,6 +112,12 @@ public class WindowHost {
 
     private GamepadManager gamepadManager;
 
+    // Mouse-look: while captured the cursor is hidden and unbounded, and motion accumulates per frame
+    private boolean cursorCaptured = false;
+    private boolean cursorCaptureFresh = false; // Next position sample only re-bases, so capturing never jumps the view
+    private double lastCursorX, lastCursorY;
+    private double mouseDeltaX, mouseDeltaY;
+
     public WindowHost(int width, int height, String title) {
         this.width = width;
         this.height = height;
@@ -220,7 +226,9 @@ public class WindowHost {
             }
             if (action == GLFW_PRESS) {
                 if (key == GLFW_KEY_ESCAPE) {
-                    if (textInputCapture == null || !textInputCapture.getAsBoolean()) {
+                    if (cursorCaptured) {
+                        setCursorCaptured(false); // First Escape frees the mouse; a second one closes as before
+                    } else if (textInputCapture == null || !textInputCapture.getAsBoolean()) {
                         glfwSetWindowShouldClose(window, true);
                     }
                 } else if (key == GLFW_KEY_F11 || (key == GLFW_KEY_ENTER && (mods & GLFW_MOD_ALT) != 0)) {
@@ -290,6 +298,15 @@ public class WindowHost {
 
         // Cursor Position Callback
         glfwSetCursorPosCallback(windowHandle, (window, xpos, ypos) -> {
+            if (cursorCaptured) {
+                if (!cursorCaptureFresh) {
+                    mouseDeltaX += xpos - lastCursorX;
+                    mouseDeltaY += ypos - lastCursorY;
+                }
+                cursorCaptureFresh = false;
+                lastCursorX = xpos;
+                lastCursorY = ypos;
+            }
             boolean isShiftDown = isKeyDown(GLFW_KEY_LEFT_SHIFT) || isKeyDown(GLFW_KEY_RIGHT_SHIFT);
             boolean isAltDown = isKeyDown(GLFW_KEY_LEFT_ALT) || isKeyDown(GLFW_KEY_RIGHT_ALT);
 
@@ -316,11 +333,32 @@ public class WindowHost {
     }
 
     public void pollEvents() {
+        mouseDeltaX = 0.0;
+        mouseDeltaY = 0.0;
         glfwPollEvents();
         if (gamepadManager != null) {
             gamepadManager.update();
         }
     }
+
+    /** Hides and locks the cursor for mouse-look (raw, unaccelerated motion where the platform supports it). */
+    public void setCursorCaptured(boolean captured) {
+        if (windowHandle == NULL || captured == cursorCaptured) return;
+        cursorCaptured = captured;
+        cursorCaptureFresh = true;
+        mouseDeltaX = 0.0;
+        mouseDeltaY = 0.0;
+        glfwSetInputMode(windowHandle, GLFW_CURSOR, captured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+        if (glfwRawMouseMotionSupported()) {
+            glfwSetInputMode(windowHandle, GLFW_RAW_MOUSE_MOTION, captured ? GLFW_TRUE : GLFW_FALSE);
+        }
+    }
+
+    public boolean isCursorCaptured() { return cursorCaptured; }
+
+    /** Cursor motion in pixels since the last {@link #pollEvents()} while captured (+X right, +Y down); 0 otherwise. */
+    public float getMouseDeltaX() { return (float) mouseDeltaX; }
+    public float getMouseDeltaY() { return (float) mouseDeltaY; }
 
     public boolean shouldClose() {
         return glfwWindowShouldClose(windowHandle);
