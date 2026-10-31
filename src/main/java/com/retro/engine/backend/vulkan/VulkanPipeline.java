@@ -300,6 +300,60 @@ public class VulkanPipeline {
         }
     }
 
+    /**
+     * Shader hot reload: rebuilds every VkPipeline from the current SPIR-V against the existing set and pipeline layouts,
+     * so VulkanGpuCache's bindless set stays valid. The rebuilt set is kept only when it covers every pipeline that was
+     * live; otherwise it is destroyed and the previous pipelines are restored. The caller guarantees the GPU no longer
+     * executes work recorded with the old pipelines.
+     */
+    public boolean reloadGraphicsPipelines(VulkanDevice device) {
+        if (device == null || device.getLogicalDevice() == null || pipelineLayout3D == 0L) return false;
+        VkDevice vkDevice = device.getLogicalDevice();
+
+        long[] previous = pipelineHandles();
+        setPipelineHandles(new long[previous.length]);
+        createGraphicsPipelines(device);
+        long[] rebuilt = pipelineHandles();
+
+        for (int i = 0; i < previous.length; i++) {
+            if (previous[i] != 0L && rebuilt[i] == 0L) {
+                destroyPipelines(vkDevice, rebuilt);
+                setPipelineHandles(previous);
+                return false;
+            }
+        }
+        destroyPipelines(vkDevice, previous);
+        savePipelineCache(vkDevice);
+        return true;
+    }
+
+    /** Every shader-dependent VkPipeline, in a fixed order (layouts are shader-independent and never rebuilt). */
+    private long[] pipelineHandles() {
+        return new long[] { graphicsPipeline3D, graphicsPipelineShadow, graphicsPipelineSkinned, graphicsPipelineShadowDepth,
+                graphicsPipelineShadowDepthSkinned, graphicsPipelinePick, graphicsPipelinePickSkinned, graphicsPipelinePickOverlay,
+                graphicsPipelineGrid, graphicsPipelineGridLines, graphicsPipelineUI };
+    }
+
+    private void setPipelineHandles(long[] h) {
+        graphicsPipeline3D = h[0];
+        graphicsPipelineShadow = h[1];
+        graphicsPipelineSkinned = h[2];
+        graphicsPipelineShadowDepth = h[3];
+        graphicsPipelineShadowDepthSkinned = h[4];
+        graphicsPipelinePick = h[5];
+        graphicsPipelinePickSkinned = h[6];
+        graphicsPipelinePickOverlay = h[7];
+        graphicsPipelineGrid = h[8];
+        graphicsPipelineGridLines = h[9];
+        graphicsPipelineUI = h[10];
+    }
+
+    private static void destroyPipelines(VkDevice vkDevice, long[] handles) {
+        for (long handle : handles) {
+            if (handle != 0L) vkDestroyPipeline(vkDevice, handle, null);
+        }
+    }
+
     private void createGraphicsPipelines(VulkanDevice device) {
         VkDevice vkDevice = device.getLogicalDevice();
         long cacheHandle = pipelineCache;

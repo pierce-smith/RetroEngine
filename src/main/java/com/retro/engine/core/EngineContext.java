@@ -9,6 +9,7 @@ import com.retro.engine.editor.input.InspectorInputDelegate;
 import com.retro.engine.editor.render.SceneRenderPipeline;
 import com.retro.engine.editor.ui.panels.ViewportPanel;
 import com.retro.engine.rhi.IRenderBackend;
+import com.retro.engine.rhi.ShaderSources;
 import org.lwjgl.glfw.GLFW;
 
 /**
@@ -60,6 +61,18 @@ public class EngineContext {
         return true;
     }
 
+    /**
+     * Editor only: when the engine's shader sources are on disk (running from a checkout), pipelines read them from there
+     * and the asset watcher reports edits, which SceneRenderPipeline applies as a pipeline swap at the next frame boundary.
+     */
+    private void enableShaderHotReload() {
+        java.io.File shaderRoot = ShaderSources.locateSourceRoot();
+        if (shaderRoot == null) return;
+        ShaderSources.setSourceRoot(shaderRoot);
+        editorManager.getAssetDatabase().watchShaderSources(shaderRoot.getPath(), renderSubmitter::requestShaderReload);
+        System.out.println("[EngineContext] Shader hot reload watching " + shaderRoot.getPath());
+    }
+
     public boolean initialize(int width, int height, String title, boolean isRuntimeOnly, String[] cliArgs) {
         this.runtimeOnlyMode = isRuntimeOnly;
         if (isRuntimeOnly) runtimeProcess = true;
@@ -96,6 +109,8 @@ public class EngineContext {
         }
 
         rhi = loader.getBackend();
+
+        if (!isRuntimeOnly) enableShaderHotReload();
 
         // Listen for window resizes and update editorManager dimensions
         display.setOnWindowSizeListener((w, h) -> {

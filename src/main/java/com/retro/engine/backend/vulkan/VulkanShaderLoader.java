@@ -1,12 +1,11 @@
 package com.retro.engine.backend.vulkan;
 
+import com.retro.engine.rhi.ShaderSources;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 
@@ -19,7 +18,7 @@ import static org.lwjgl.vulkan.VK10.*;
 public class VulkanShaderLoader {
 
     /**
-     * Reads a pre-compiled SPIR-V binary from classpath into a direct ByteBuffer and creates a VkShaderModule.
+     * Reads a pre-compiled SPIR-V binary (editor shader source root first, then classpath) into a direct ByteBuffer and creates a VkShaderModule.
      *
      * @param device       Active VkDevice handle
      * @param resourcePath Path to .spv file in resources
@@ -59,22 +58,12 @@ public class VulkanShaderLoader {
     }
 
     private static ByteBuffer loadResourceToDirectBuffer(String resourcePath) {
-        try (InputStream is = VulkanShaderLoader.class.getResourceAsStream(resourcePath)) {
-            InputStream stream = is;
-            if (stream == null) {
-                stream = Thread.currentThread().getContextClassLoader().getResourceAsStream(resourcePath);
-            }
-            if (stream == null) return null;
-
-            byte[] bytes = stream.readAllBytes();
-            ByteBuffer directBuffer = MemoryUtil.memAlloc(bytes.length);
-            directBuffer.put(bytes);
-            directBuffer.flip();
-            return directBuffer;
-        } catch (IOException e) {
-            e.printStackTrace();
-            return null;
-        }
+        byte[] bytes = ShaderSources.read(resourcePath);
+        if (bytes == null) return null;
+        ByteBuffer directBuffer = MemoryUtil.memAlloc(bytes.length);
+        directBuffer.put(bytes);
+        directBuffer.flip();
+        return directBuffer;
     }
 
     public static void destroyShaderModule(VkDevice device, long shaderModule) {

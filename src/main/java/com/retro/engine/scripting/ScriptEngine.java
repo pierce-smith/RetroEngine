@@ -24,7 +24,7 @@ import java.util.regex.Pattern;
  * Hardened ScriptEngine managing script instantiation, lifecycle ticks,
  * physics update dispatches, collision/trigger events, reflection lookups,
  * property overrides injection, ClassLoader caching, Janino in-memory compilation,
- * and hot-loop exception suppression.
+ * hot-loop exception suppression, and live hot reload of edited script sources.
  */
 public class ScriptEngine {
 
@@ -36,6 +36,9 @@ public class ScriptEngine {
 
     // Reusable URLClassLoader to prevent Metaspace and classloader leaks across re-compilations
     private static URLClassLoader scriptClassLoader;
+
+    // Scripts whose source changed on disk; running instances are swapped at the start of the next updateScripts()
+    private static final Set<String> pendingHotSwaps = ConcurrentHashMap.newKeySet();
 
     // Active project's Assets/ folder; script sources are searched here before the working directory
     private static volatile String projectAssetsRoot = null;
@@ -54,6 +57,19 @@ public class ScriptEngine {
             } catch (IOException ignored) {}
             scriptClassLoader = null;
         }
+    }
+
+    /**
+     * Hot reload entry point for a script source modified on disk: drops its compiled class and any cached compile
+     * failure so the next resolve recompiles it, and schedules running instances for a swap on the next script tick.
+     */
+    public static void invalidateScript(String scriptPath) {
+        String className = cleanClassName(scriptPath);
+        if (className == null) return;
+        compiledClassCache.remove(className);
+        failedScriptCache.remove(className);
+        pendingHotSwaps.add(className);
+        System.out.println("[ScriptEngine] Script source changed on disk: " + className + " (queued for hot reload).");
     }
 
     /** Binds script source lookup to a project's Assets/ folder (null to unbind) and drops all cached classes. */
@@ -83,6 +99,7 @@ public class ScriptEngine {
 
     public static void updateScripts(List<Entity> entities, float deltaTime, SceneWorld sceneWorld) {
         if (entities == null) return;
+        if (!pendingHotSwaps.isEmpty()) hotSwapScripts(entities, sceneWorld);
         for (Entity entity : entities) {
             if (entity == null) continue;
             for (ScriptComponent sc : entity.getComponents(ScriptComponent.class)) {
@@ -98,6 +115,64 @@ public class ScriptEngine {
                         sc.activeScriptInstance = null;
                         sc.enabled = false;
                     }
+                }
+            }
+        }
+    }
+
+    /**
+     * Frame boundary swap for invalidated scripts: recompiles each one once, then replaces every running instance with
+     * a fresh one (old onDestroy(), new init(), property overrides re-bound, onStart()). If the source no longer compiles
+     * or the new class cannot be constructed, the old instance keeps running. Components without a running instance need
+     * nothing: they resolve the recompiled class whenever they next instantiate.
+     */
+    private static void hotSwapScripts(List<Entity> entities, SceneWorld sceneWorld) {
+        Set<String> classNames = new java.util.HashSet<>();
+        for (java.util.Iterator<String> it = pendingHotSwaps.iterator(); it.hasNext(); ) {
+            classNames.add(it.next());
+            it.remove();
+        }
+
+        for (Entity entity : entities) {
+            if (entity == null) continue;
+            for (ScriptComponent sc : entity.getComponents(ScriptComponent.class)) {
+                EntityScript previous = sc.activeScriptInstance;
+                if (previous == null) continue;
+                String className = cleanClassName((sc.scriptName != null && !sc.scriptName.trim().isEmpty()) ? sc.scriptName : sc.scriptAssetPath);
+                if (className == null || !classNames.contains(className)) continue;
+
+                Class<?> clazz = resolveScriptClass(sc);
+                // Unchanged class: e.g. Play started after the edit, so this instance already runs the recompiled code
+                if (clazz == previous.getClass()) continue;
+                if (clazz == null || !EntityScript.class.isAssignableFrom(clazz)) {
+                    System.err.println("[ScriptEngine] Hot reload of '" + className + "' failed; Entity '" + entity.name + "' keeps the previous version.");
+                    continue;
+                }
+
+                EntityScript replacement;
+                try {
+                    replacement = (EntityScript) clazz.getDeclaredConstructor().newInstance();
+                } catch (Exception e) {
+                    System.err.println("[ScriptEngine] Hot reload could not construct '" + className + "' on Entity '" + entity.name + "': " + e.getMessage() + "; keeping the previous version.");
+                    continue;
+                }
+
+                try {
+                    previous.onDestroy();
+                } catch (Exception e) {
+                    System.err.println("[ScriptEngine] Exception during onDestroy() on Entity '" + entity.name + "' (hot reload): " + e.getMessage());
+                }
+
+                sc.activeScriptInstance = replacement;
+                try {
+                    replacement.init(entity, sceneWorld);
+                    injectPropertyOverrides(replacement, sc.propertyOverrides);
+                    replacement.onStart();
+                    System.out.println("[ScriptEngine] Hot reloaded script '" + className + "' on Entity '" + entity.name + "'");
+                } catch (Exception e) {
+                    System.err.println("[ScriptEngine] Exception starting hot-reloaded '" + className + "' on Entity '" + entity.name + "': " + e.getMessage());
+                    sc.activeScriptInstance = null;
+                    sc.enabled = false;
                 }
             }
         }
@@ -182,17 +257,8 @@ public class ScriptEngine {
     }
 
     public static Class<?> resolveScriptClass(String rawName, String sourcePathHint) {
-        if (rawName == null || rawName.trim().isEmpty()) return null;
-
-        File sourceFile = new File(rawName);
-        String fileName = sourceFile.getName().trim();
-
-        String cleanClassName = fileName;
-        if (cleanClassName.toLowerCase().endsWith(".java")) {
-            cleanClassName = cleanClassName.substring(0, cleanClassName.length() - 5);
-        } else if (cleanClassName.toLowerCase().endsWith(".class")) {
-            cleanClassName = cleanClassName.substring(0, cleanClassName.length() - 6);
-        }
+        String cleanClassName = cleanClassName(rawName);
+        if (cleanClassName == null) return null;
 
         if (failedScriptCache.contains(cleanClassName)) {
             return null;
@@ -243,6 +309,18 @@ public class ScriptEngine {
 
         failedScriptCache.add(cleanClassName);
         return null;
+    }
+
+    /** Simple class name (the class cache key) for a script name or path: file name without .java / .class. */
+    private static String cleanClassName(String rawName) {
+        if (rawName == null || rawName.trim().isEmpty()) return null;
+        String name = new File(rawName.trim()).getName().trim();
+        if (name.toLowerCase().endsWith(".java")) {
+            name = name.substring(0, name.length() - 5);
+        } else if (name.toLowerCase().endsWith(".class")) {
+            name = name.substring(0, name.length() - 6);
+        }
+        return name.isEmpty() ? null : name;
     }
 
     public static void injectPropertyOverrides(EntityScript script, Map<String, String> overrides) {

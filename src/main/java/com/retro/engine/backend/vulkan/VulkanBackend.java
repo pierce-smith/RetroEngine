@@ -14,6 +14,7 @@ import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
 
 import java.nio.IntBuffer;
+import java.util.List;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
@@ -133,6 +134,33 @@ public class VulkanBackend implements IRenderBackend {
             vkGetPhysicalDeviceProperties(deviceManager.getPhysicalDevice(), props);
             this.minUniformAlignment = props.limits().minUniformBufferOffsetAlignment();
             System.out.println("[VulkanBackend] Hardware minUniformBufferOffsetAlignment: " + minUniformAlignment + " bytes.");
+        }
+    }
+
+    /**
+     * Shader hot reload. Edited GLSL is recompiled to SPIR-V in the background (the resulting .spv write arrives here as
+     * its own change); changed .spv files rebuild every VkPipeline against the existing layouts. Runs on the render thread
+     * between frames: waiting on the in-flight fence retires the only frame that can still use the old pipelines.
+     */
+    @Override
+    public void reloadShaders(List<String> changedShaderFiles) {
+        boolean spirvChanged = false;
+        for (String path : changedShaderFiles) {
+            String lower = path.toLowerCase();
+            if (lower.endsWith(".spv")) {
+                spirvChanged = true;
+            } else if (lower.endsWith(".vert") || lower.endsWith(".frag")) {
+                VulkanShaderCompiler.compileAsync(path);
+            }
+        }
+        VkDevice device = deviceManager.getDevice();
+        if (!spirvChanged || device == null) return;
+
+        vkWaitForFences(device, queueSubmitter.getInFlightFence(), true, Long.MAX_VALUE);
+        if (pipelineManager.reloadGraphicsPipelines(deviceManager)) {
+            System.out.println("[VulkanBackend] Shader hot reload: Vulkan pipelines rebuilt and swapped.");
+        } else {
+            System.err.println("[VulkanBackend] Shader hot reload failed; keeping the previous pipelines.");
         }
     }
 

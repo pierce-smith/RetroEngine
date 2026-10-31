@@ -15,6 +15,7 @@ import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.libffi.FFICIF;
 import org.lwjgl.system.macosx.LibSystem;
 
+import java.util.List;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
@@ -50,7 +51,8 @@ public class MetalBackend implements IRenderBackend {
 
     private final MetalDevice metalDevice = new MetalDevice();
     private final MetalTexture metalTexture = new MetalTexture();
-    private final MetalPipeline metalPipeline = new MetalPipeline();
+    // Replaced wholesale by shader hot reload; only the render thread reads or swaps it, between frames
+    private MetalPipeline metalPipeline = new MetalPipeline();
 
     private final MetalTargetPass framebuffer = new MetalTargetPass();
     // Picture-in-picture render target for the selected Camera entity; projection aspect is set by the editor, so a
@@ -324,6 +326,38 @@ public class MetalBackend implements IRenderBackend {
 
     @Override public void unregisterMesh(long meshHandle) { resourceCache.unregisterMesh(meshHandle); }
     @Override public void unregisterTexture(long textureHandle) { resourceCache.unregisterTexture(textureHandle); }
+
+    /**
+     * Shader hot reload: rebuilds every pipeline state from the current .metal sources. The rebuilt set is swapped in
+     * only when it covers every state the live one has; otherwise the live pipeline keeps rendering. Runs on the render
+     * thread between frames, so no encoder holds the old states; they are released once in-flight frames retire.
+     */
+    @Override
+    public void reloadShaders(List<String> changedShaderFiles) {
+        boolean metalSourceChanged = false;
+        for (String path : changedShaderFiles) {
+            if (path.toLowerCase().endsWith(".metal")) metalSourceChanged = true;
+        }
+        if (!metalSourceChanged || metalDevice.getObjcMsgSend() == 0L) return;
+
+        MetalPipeline rebuilt = new MetalPipeline();
+        if (!rebuilt.initialize(metalDevice) || !rebuilt.covers(metalPipeline)) {
+            rebuilt.release(metalDevice);
+            System.err.println("[MetalBackend] Shader hot reload failed; keeping the previous pipelines (see compile errors above).");
+            return;
+        }
+
+        MetalPipeline previous = metalPipeline;
+        metalPipeline = rebuilt;
+        // Taking every permit means the GPU has completed all submitted frames that could reference the old states
+        inFlightFrames.acquireUninterruptibly(MAX_FRAMES_IN_FLIGHT);
+        try {
+            previous.release(metalDevice);
+        } finally {
+            inFlightFrames.release(MAX_FRAMES_IN_FLIGHT);
+        }
+        System.out.println("[MetalBackend] Shader hot reload: Metal pipelines rebuilt and swapped.");
+    }
 
     @Override
     public void beginFrame() {

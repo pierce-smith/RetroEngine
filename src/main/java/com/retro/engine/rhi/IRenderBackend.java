@@ -134,6 +134,14 @@ public interface IRenderBackend {
      */
     default void onFramebufferResized(int width, int height) {}
 
+    /**
+     * Editor shader hot reload, called on the render thread between frames with the absolute paths of shader files
+     * ({@link ShaderSources#isShaderFile}) modified on disk. Backends ignore files they do not consume, rebuild the
+     * affected pipelines from {@link ShaderSources}, and swap them in only if the rebuild fully succeeds; otherwise the
+     * previous pipelines stay live.
+     */
+    default void reloadShaders(java.util.List<String> changedShaderFiles) {}
+
     long createBuffer(BufferDesc createInfo);
     void destroyBuffer(long handle);
     long createTexture(TextureDesc createInfo);

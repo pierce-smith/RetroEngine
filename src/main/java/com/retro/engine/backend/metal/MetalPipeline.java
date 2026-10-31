@@ -1,11 +1,10 @@
 package com.retro.engine.backend.metal;
 
+import com.retro.engine.rhi.ShaderSources;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.macosx.LibSystem;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -27,6 +26,7 @@ import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
  * MSL sources live in {@code /shaders/metal/*.metal} on the classpath. When the build's compileMetalShaders task
  * produced a {@code .metallib} whose recorded source hash matches the shipped source, the precompiled library is
  * loaded; otherwise (non-macOS builds, missing Metal toolchain, stale output) the source is compiled at runtime.
+ * The editor's shader hot reload builds a fresh instance from the edited sources and swaps it in (see MetalBackend).
  */
 public class MetalPipeline {
 
@@ -255,12 +255,7 @@ public class MetalPipeline {
     }
 
     private static byte[] readResource(String path) {
-        try (InputStream in = MetalPipeline.class.getResourceAsStream(path)) {
-            return in != null ? in.readAllBytes() : null;
-        } catch (IOException e) {
-            System.err.println("[MetalPipeline] Failed to read " + path + ": " + e.getMessage());
-            return null;
-        }
+        return ShaderSources.read(path);
     }
 
     private static String sha256Hex(byte[] data) {
@@ -269,6 +264,30 @@ public class MetalPipeline {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /** Every pipeline and depth-stencil state this instance owns, in a fixed order. */
+    private long[] ownedStates() {
+        return new long[] { pipelineState3D, pipelineStateComposition, depthStencilState3D, depthStencilStateShadow,
+                pipelineStateShadowMap, depthStencilStateShadowMap, pipelineStatePick, pipelineStatePickOverlay,
+                pipelineStateUI, depthStencilStateUI };
+    }
+
+    /** True when this instance built every state {@code previous} had, so swapping it in cannot switch a pass off. */
+    public boolean covers(MetalPipeline previous) {
+        long[] mine = ownedStates(), theirs = previous.ownedStates();
+        for (int i = 0; i < mine.length; i++) {
+            if (theirs[i] != 0L && mine[i] == 0L) return false;
+        }
+        return true;
+    }
+
+    /** Releases every owned state. The caller guarantees no in-flight command buffer still uses them. */
+    public void release(MetalDevice device) {
+        for (long state : ownedStates()) device.release(state);
+        pipelineState3D = pipelineStateComposition = depthStencilState3D = depthStencilStateShadow = 0L;
+        pipelineStateShadowMap = depthStencilStateShadowMap = pipelineStatePick = pipelineStatePickOverlay = 0L;
+        pipelineStateUI = depthStencilStateUI = 0L;
     }
 
     public long getPipelineState3D() { return pipelineState3D; }

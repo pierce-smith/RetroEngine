@@ -28,8 +28,10 @@ import com.retro.engine.scene.components.rendering.Material;
 import com.retro.engine.scene.components.rendering.MeshFilter;
 import com.retro.engine.scene.components.transform.Transform;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * High-level render pipeline processing 3D scene entities, view-frustum culling,
@@ -360,6 +362,7 @@ public class SceneRenderPipeline {
     public void submitFrame(RenderSceneSnapshot snapshot, IRenderBackend rhi) {
         if (snapshot == null || rhi == null) return;
 
+        applyPendingShaderReloads(rhi);
         rhi.setSceneLights(snapshot.lights);
 
         rhi.setCameraView(snapshot.cameraViewActive ? snapshot.cameraView : null,
@@ -380,6 +383,25 @@ public class SceneRenderPipeline {
     }
 
     private boolean uiFontResolved = false;
+
+    // Shader files modified on disk, reported by the asset watcher and applied at the next frame boundary
+    private final ConcurrentLinkedQueue<String> pendingShaderReloads = new ConcurrentLinkedQueue<>();
+
+    /** Thread-safe: queues modified shader files; the backend rebuilds its pipelines before the next frame is recorded. */
+    public void requestShaderReload(List<String> changedShaderFiles) {
+        if (changedShaderFiles != null) pendingShaderReloads.addAll(changedShaderFiles);
+    }
+
+    /** Render thread, before any backend call of the frame: no command buffer is recording, so pipelines can be swapped. */
+    private void applyPendingShaderReloads(IRenderBackend rhi) {
+        if (pendingShaderReloads.isEmpty()) return;
+        List<String> changed = new ArrayList<>();
+        for (String path; (path = pendingShaderReloads.poll()) != null; ) {
+            if (!changed.contains(path)) changed.add(path);
+        }
+        System.out.println("[SceneRenderPipeline] Shader hot reload: " + changed.size() + " modified shader file(s).");
+        rhi.reloadShaders(changed);
+    }
 
     /**
      * Fills the snapshot's UI stream: game UI first (drawn over the composited 3D image, clipped to the game viewport),

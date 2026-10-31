@@ -3,6 +3,7 @@ package com.retro.engine.assets;
 import com.retro.engine.assets.importers.TextureImporter;
 import com.retro.engine.assets.importers.MeshImporter;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
+import com.retro.engine.rhi.ShaderSources;
 import com.retro.engine.scene.serialization.SceneSerializer;
 
 import java.io.BufferedInputStream;
@@ -23,7 +24,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 /**
  * Disk-mirrored asset registry for the active project's Assets/ folder.
@@ -35,6 +39,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * 128-bit UUIDs persist in {@code <project>/.retro/asset_registry.bin}, keyed by project-relative path, so
  * scene references survive restarts. Only {@link #openProject(String)} clears and re-scans the registry;
  * scene loads never touch it. A background watcher picks up changes made outside the editor.
+ *
+ * The watcher also drives hot reload: edited .java scripts under Assets/ are invalidated in the ScriptEngine, and
+ * edited shader files under the engine's shader source root (when bound) are reported to the shader change listener.
  *
  * Hardened with CopyOnWriteArrayList and ConcurrentHashMap for multi-threaded asset queries and
  * Virtual Thread streaming lookups.
@@ -66,6 +73,11 @@ public class AssetDatabase {
 
     private volatile boolean filesChangedOnDisk = false;
     private Thread watcherThread;
+
+    // Hot reload: script and shader sources the watcher saw modified, dispatched on the main thread by pollFileChanges()
+    private final ConcurrentLinkedQueue<String> modifiedSources = new ConcurrentLinkedQueue<>();
+    private volatile String shaderSourceRoot = null;
+    private volatile Consumer<List<String>> shaderChangeListener = null;
 
     public List<AssetMeta> getAssetDirectory() {
         return Collections.unmodifiableList(assetDirectory);
@@ -335,7 +347,10 @@ public class AssetDatabase {
     private void startWatching() {
         stopWatching();
         final String assetsRoot = getProjectAssetsPath();
-        final long[] lastSignature = { computeTreeSignature(assetsRoot) };
+        final String shaderRoot = shaderSourceRoot;
+        final long[] lastSignature = { computeTreeSignature(assetsRoot), shaderRoot != null ? computeTreeSignature(shaderRoot) : 0L };
+        final Map<String, Long> scriptStamps = stampSources(assetsRoot, AssetDatabase::isScriptSource);
+        final Map<String, Long> shaderStamps = shaderRoot != null ? stampSources(shaderRoot, ShaderSources::isShaderFile) : new HashMap<>();
         watcherThread = Thread.ofVirtual().name("asset-folder-watcher").start(() -> {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
@@ -346,7 +361,15 @@ public class AssetDatabase {
                 long signature = computeTreeSignature(assetsRoot);
                 if (signature != lastSignature[0]) {
                     lastSignature[0] = signature;
+                    collectModifiedSources(assetsRoot, scriptStamps, AssetDatabase::isScriptSource);
                     filesChangedOnDisk = true;
+                }
+                if (shaderRoot != null) {
+                    long shaderSignature = computeTreeSignature(shaderRoot);
+                    if (shaderSignature != lastSignature[1]) {
+                        lastSignature[1] = shaderSignature;
+                        collectModifiedSources(shaderRoot, shaderStamps, ShaderSources::isShaderFile);
+                    }
                 }
             }
         });
@@ -358,6 +381,50 @@ public class AssetDatabase {
             watcherThread = null;
         }
         filesChangedOnDisk = false;
+        modifiedSources.clear();
+    }
+
+    private static boolean isScriptSource(String fileName) {
+        return classifyFile(fileName) == AssetType.SCRIPT;
+    }
+
+    /** Modification stamp of every matching (non-hidden) file under root, keyed by normalized absolute path. */
+    private static Map<String, Long> stampSources(String root, Predicate<String> matches) {
+        Map<String, Long> stamps = new HashMap<>();
+        File rootDir = new File(root);
+        if (!rootDir.isDirectory()) return stamps;
+        try (var stream = Files.walk(rootDir.toPath())) {
+            stream.forEach(path -> {
+                String name = path.getFileName().toString();
+                if (name.startsWith(".") || !matches.test(name)) return;
+                File f = path.toFile();
+                if (f.isFile()) stamps.put(normalizePath(f.getAbsolutePath()), 31 * f.lastModified() + f.length());
+            });
+        } catch (IOException | UncheckedIOException ignored) {
+            // Files vanishing mid-walk: whatever was stamped is compared now, the rest on the next signature change
+        }
+        return stamps;
+    }
+
+    /** Watcher thread: queues sources that are new or whose stamp changed since the last walk, then adopts the new stamps. */
+    private void collectModifiedSources(String root, Map<String, Long> stamps, Predicate<String> matches) {
+        Map<String, Long> current = stampSources(root, matches);
+        for (Map.Entry<String, Long> entry : current.entrySet()) {
+            if (!entry.getValue().equals(stamps.get(entry.getKey()))) modifiedSources.add(entry.getKey());
+        }
+        stamps.clear();
+        stamps.putAll(current);
+    }
+
+    /**
+     * Editor hot reload: also watches {@code root} (the engine's shader source folder) and reports modified shader files
+     * to {@code listener} from {@link #pollFileChanges()} on the main thread. Pass a null root to stop watching shaders.
+     */
+    public void watchShaderSources(String root, Consumer<List<String>> listener) {
+        this.shaderSourceRoot = (root != null && new File(root).isDirectory()) ? normalizePath(new File(root).getAbsolutePath()) : null;
+        this.shaderChangeListener = listener;
+        // A project may already be bound (and its watcher running) before the editor wires this up
+        if (hasActiveProject()) startWatching();
     }
 
     private static long computeTreeSignature(String root) {
@@ -378,11 +445,29 @@ public class AssetDatabase {
         return sig;
     }
 
-    /** Main-thread hook: re-syncs with Assets/ if the watcher saw files added, removed, or modified. */
+    /** Main-thread hook: re-syncs with Assets/ if the watcher saw files added, removed, or modified, then dispatches hot reloads. */
     public void pollFileChanges() {
-        if (!filesChangedOnDisk || !hasActiveProject()) return;
-        filesChangedOnDisk = false;
-        rescanProjectAssets();
+        if (!hasActiveProject()) return;
+        if (filesChangedOnDisk) {
+            filesChangedOnDisk = false;
+            rescanProjectAssets();
+        }
+        dispatchModifiedSources();
+    }
+
+    /** Main thread: invalidates edited scripts (hot-swapped on the next script tick) and forwards edited shaders. */
+    private void dispatchModifiedSources() {
+        List<String> shaders = null;
+        for (String path; (path = modifiedSources.poll()) != null; ) {
+            if (isScriptSource(path)) {
+                com.retro.engine.scripting.ScriptEngine.invalidateScript(path);
+            } else {
+                if (shaders == null) shaders = new ArrayList<>();
+                shaders.add(path);
+            }
+        }
+        Consumer<List<String>> listener = shaderChangeListener;
+        if (shaders != null && listener != null) listener.accept(shaders);
     }
 
     // --- DISK-BACKED BROWSER OPERATIONS ---
