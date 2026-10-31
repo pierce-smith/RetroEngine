@@ -18,7 +18,7 @@ public enum PlatformShortcuts {
     DUPLICATE("⌘D", "Ctrl + D"),
     DELETE("⌫", "Del"),
     QUIT("⌘Q", "Alt + F4"),
-    FOCUS_CAMERA("F", "F"),
+    RESET_CAMERA("⇧F", "Shift + F"),
     TOGGLE_CONSOLE("~", "~");
 
     public static final boolean IS_MAC = detectMac(System.getProperty("os.name"));

@@ -11,7 +11,8 @@ import com.retro.engine.core.GamepadManager;
  * - Orbit / Rotate (Yaw & Pitch): Right Mouse Drag OR Alt + Left Mouse Drag
  * - Pan (X / Y): Middle Mouse Drag OR Shift + Right Mouse Drag
  * - Zoom (In / Out): Mouse Scroll Wheel
- * - Focus / Reset: 'F' Key
+ * - Frame Selected: 'F' Key
+ * - Reset to Startup View: Shift + 'F'
  * Gamepad (no button hold required):
  * - Left Stick: Strafe (X) / Forward-Backward flight (Y), same axes as WASD
  * - Right Stick: Orbit (Yaw & Pitch)
@@ -24,7 +25,7 @@ public class ViewportCamera {
     private float panX = 0.0f;
     private float panY = -1.2f;  // Elevated camera height
     private float zoom = -8.5f;  // Pulled back perspective
-    private float pitch = 22.0f; // Angled down toward ground origin
+    private float pitch = -22.0f; // Negative pitch tilts the view down toward the ground origin (eye ~4.3 above it)
     private float yaw = -35.0f; // Angled slightly to highlight 3D depth
 
     private double lastMouseX = 0.0;
@@ -48,14 +49,22 @@ public class ViewportCamera {
     private boolean playLocked = false;
     private float savedPanX, savedPanY, savedZoom, savedPitch, savedYaw;
 
+    // Frame Selected: world-space pivot and distance the view glides toward; targets are re-derived each tick so an
+    // orbit mid-glide still ends centered. Any manual navigation cancels the glide.
+    private static final float FOCUS_SPEED = 12.0f;
+    private boolean focusActive = false;
+    private float focusX, focusY, focusZ, focusDistance;
+
     public void update(float deltaTime, boolean isWDown, boolean isSDown, boolean isADown, boolean isDDown, boolean isQDown, boolean isEDown) {
         update(deltaTime, isWDown, isSDown, isADown, isDDown, isQDown, isEDown, (isDraggingRmb || isDraggingMmb));
     }
 
     public void update(float deltaTime, boolean isWDown, boolean isSDown, boolean isADown, boolean isDDown, boolean isQDown, boolean isEDown, boolean isRmbOrMmbActive) {
         if (playLocked) return;
+        tickFocus(deltaTime);
         if (isRmbOrMmbActive || isDraggingRmb || isDraggingMmb) {
             float speed = 3.5f * deltaTime;
+            if (isWDown || isSDown || isADown || isDDown || isQDown || isEDown) focusActive = false;
             
             // W / S: Move FORWARD / BACKWARD along camera view depth
             if (isWDown) zoom += speed * 4.0f;
@@ -98,6 +107,7 @@ public class ViewportCamera {
     public void onMouseButton(int button, int action, double x, double y) {
         if (playLocked) return;
         if (action == 1) { // PRESS
+            if (button == 1 || button == 2) focusActive = false;
             lastMouseX = x;
             lastMouseY = y;
             if (button == 1) isDraggingRmb = true;
@@ -132,6 +142,7 @@ public class ViewportCamera {
         }
         // Pan X/Y (MMB Drag OR Shift + RMB Drag)
         else if (isDraggingMmb || (isDraggingRmb && isShiftDown)) {
+            focusActive = false;
             panX += (float) dx * 0.008f;
             panY -= (float) dy * 0.008f;
         }
@@ -141,22 +152,25 @@ public class ViewportCamera {
 
     public void onScroll(double yoffset) {
         if (playLocked) return;
+        focusActive = false;
         zoom += (float) yoffset * 0.75f;
         clamp();
     }
 
     public void onScroll(double xoffset, double yoffset) {
         if (playLocked) return;
+        focusActive = false;
         zoom += (float) yoffset * 0.75f;
         clamp();
     }
 
     public void reset() {
         if (playLocked) return;
+        focusActive = false;
         panX = 0.0f;
         panY = -1.2f;
         zoom = -8.5f;
-        pitch = 22.0f;
+        pitch = -22.0f;
         yaw = -35.0f;
         System.out.println("[Camera] Reset Viewport Camera to Unity Startup View.");
     }
@@ -166,7 +180,45 @@ public class ViewportCamera {
         if (playLocked) return;
         savedPanX = panX; savedPanY = panY; savedZoom = zoom; savedPitch = pitch; savedYaw = yaw;
         isDraggingRmb = isDraggingMmb = isDraggingLmb = false;
+        focusActive = false;
         playLocked = true;
+    }
+
+    /**
+     * Frame Selected: glides the view (keeping the current yaw/pitch) until the world-space point
+     * ({@code x}, {@code y}, {@code z}) sits at the screen center, {@code distance} units in front of the eye.
+     * The glide advances in {@link #update}; manual navigation cancels it.
+     */
+    public void focusOn(float x, float y, float z, float distance) {
+        if (playLocked) return;
+        focusX = x; focusY = y; focusZ = z;
+        focusDistance = Math.max(0.8f, distance);
+        focusActive = true;
+    }
+
+    public boolean isFocusing() { return focusActive; }
+
+    /** Exponentially eases pan/zoom toward the focus pose: view-space pivot R * P + t = (0, 0, -distance). */
+    private void tickFocus(float deltaTime) {
+        if (!focusActive) return;
+        float radYaw = (float) Math.toRadians(yaw), radPitch = (float) Math.toRadians(pitch);
+        float cy = (float) Math.cos(radYaw), sy = (float) Math.sin(radYaw);
+        float cp = (float) Math.cos(radPitch), sp = (float) Math.sin(radPitch);
+        float targetPanX = -(cy * focusX - sy * focusZ);
+        float targetPanY = -(sy * sp * focusX + cp * focusY + cy * sp * focusZ);
+        float targetZoom = -focusDistance - (sy * cp * focusX - sp * focusY + cy * cp * focusZ);
+        // Same depth range clamp() enforces, so the next scroll doesn't jump
+        targetZoom = Math.max(-150.0f, Math.min(-0.8f, targetZoom));
+
+        float t = 1.0f - (float) Math.exp(-FOCUS_SPEED * deltaTime);
+        panX += (targetPanX - panX) * t;
+        panY += (targetPanY - panY) * t;
+        zoom += (targetZoom - zoom) * t;
+
+        if (Math.abs(targetPanX - panX) < 1e-3f && Math.abs(targetPanY - panY) < 1e-3f && Math.abs(targetZoom - zoom) < 1e-3f) {
+            panX = targetPanX; panY = targetPanY; zoom = targetZoom;
+            focusActive = false;
+        }
     }
 
     /**

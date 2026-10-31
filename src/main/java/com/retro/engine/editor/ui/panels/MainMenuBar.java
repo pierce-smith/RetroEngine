@@ -223,7 +223,7 @@ public class MainMenuBar {
                 renderDropdownItem(buffer, menu, 3, hover, "Save Selected as Prefab...", null, true);
             }
             case VIEW -> {
-                renderDropdownItem(buffer, menu, 0, hover, "Reset Viewport Camera", PlatformShortcuts.FOCUS_CAMERA.label(), true);
+                renderDropdownItem(buffer, menu, 0, hover, "Reset Viewport Camera", PlatformShortcuts.RESET_CAMERA.label(), true);
                 renderDropdownItem(buffer, menu, 1, hover, show3DGrid ? "Hide 3D Grid" : "Show 3D Grid", null, true);
                 renderSeparator(buffer, menu, 2);
                 renderDropdownItem(buffer, menu, 2, hover, "Reset Dock Layout", null, true);

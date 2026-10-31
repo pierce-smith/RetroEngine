@@ -8,6 +8,7 @@ import com.retro.engine.core.GamepadManager;
 import com.retro.engine.core.WindowHost;
 import com.retro.engine.editor.gizmos.GizmoInteractor;
 import com.retro.engine.editor.ui.panels.EngineConsolePanel;
+import com.retro.engine.editor.ui.panels.ViewportPanel;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.editor.commands.EditorCommands;
 import com.retro.engine.editor.dialogs.NativeFileDialog;
@@ -19,7 +20,7 @@ import static org.lwjgl.glfw.GLFW.*;
 /**
  * Encapsulates keyboard hotkeys, debouncing, gizmo snap modifiers,
  * engine console shortcuts, and viewport camera controls.
- * Gamepad shortcuts: R3 = camera reset (F), D-Pad Left / Up / Right = Translate / Rotate / Scale gizmo.
+ * Gamepad shortcuts: R3 = camera reset (Shift+F), D-Pad Left / Up / Right = Translate / Rotate / Scale gizmo.
  */
 public class HotkeyRouter {
 
@@ -35,6 +36,7 @@ public class HotkeyRouter {
     private boolean kKeyPressedLastFrame = false;
     private boolean commaPressedLastFrame = false;
     private boolean periodPressedLastFrame = false;
+    private boolean fKeyPressedLastFrame = false;
 
     public void processInput(WindowHost window, EditorWorkspace editorManager, ViewportCamera cameraController, float deltaTime) {
         if (window == null || editorManager == null) return;
@@ -95,7 +97,14 @@ public class HotkeyRouter {
             graveKeyPressedLastFrame = false;
         }
 
-        if (window.isKeyDown(GLFW_KEY_F) && cameraController != null) cameraController.reset();
+        // F: Frame Selected in the focused Scene viewport | Shift+F: reset the viewport camera to the startup view.
+        // Shift is read from the press event's mods (like the chords) so a latched polled modifier can't misfire.
+        boolean isF = window.isKeyDown(GLFW_KEY_F);
+        if (isF && !fKeyPressedLastFrame && !isCtrlDown && cameraController != null) {
+            if ((window.getKeyPressMods(GLFW_KEY_F) & GLFW_MOD_SHIFT) != 0) cameraController.reset();
+            else ViewportPanel.frameSelected(editorManager, cameraController);
+        }
+        fKeyPressedLastFrame = isF;
 
         // K: key the selected bone's current pose into its animator's recorded-pose track buffer
         boolean isK = window.isKeyDown(GLFW_KEY_K);

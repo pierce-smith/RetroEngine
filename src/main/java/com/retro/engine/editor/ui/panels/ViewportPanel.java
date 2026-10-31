@@ -114,6 +114,28 @@ public class ViewportPanel {
         viewportCamera.snapToView(playCameraView, wt.px(), wt.py(), wt.pz(), fov, near, far);
     }
 
+    /** Frame Selected distance for a unit-scale entity; grows with the entity's largest world scale axis. */
+    public static final float FRAME_SELECTED_DISTANCE = 5.0f;
+
+    /**
+     * Frame Selected (F): when the Scene viewport is the focused, visible workspace in EDITING and an entity is
+     * selected, glides the viewport camera to its world position (parent hierarchy included). Returns false when it
+     * didn't apply, so the caller can fall back (e.g. reset the view).
+     */
+    public static boolean frameSelected(EditorWorkspace workspace, ViewportCamera viewportCamera) {
+        if (workspace == null || viewportCamera == null || viewportCamera.isPlayLocked()) return false;
+        DockSpace dock = workspace.getDockSpace();
+        if (dock == null || dock.getFocusedWorkspace() != DockPanel.SCENE || !dock.isSceneViewportVisible()) return false;
+        Entity selected = workspace.getSelectedEntity();
+        if (selected == null) return false;
+
+        WorldTransform wt = workspace.getSceneManager().getComputedWorldTransform(selected);
+        if (wt == null) return false;
+        float maxScale = Math.max(Math.abs(wt.sx()), Math.max(Math.abs(wt.sy()), Math.abs(wt.sz())));
+        viewportCamera.focusOn(wt.px(), wt.py(), wt.pz(), FRAME_SELECTED_DISTANCE * Math.max(1.0f, maxScale));
+        return true;
+    }
+
     /** First entity with a primary Camera, falling back to the first entity with any Camera. */
     public static Entity findMainCamera(List<Entity> entities) {
         if (entities == null) return null;
