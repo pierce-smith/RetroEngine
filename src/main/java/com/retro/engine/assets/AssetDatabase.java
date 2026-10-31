@@ -57,6 +57,9 @@ public class AssetDatabase {
 
     // Manifest UUIDs (lowercase project-relative path -> uuid) applied to files as the scan discovers them
     private final Map<String, String> manifestUuidSeed = new HashMap<>();
+    // Runtime builds only: manifest entries ("Assets/..." in original case -> UUID) whose raw source was stripped at
+    // export because a cooked .rpack replaces it. Kept for the whole session so every rescan re-registers them.
+    private final Map<String, String> cookedOnlyAssets = new HashMap<>();
 
     private String currentFolderPath = "";
     private String activeProjectPath = "";
@@ -262,6 +265,7 @@ public class AssetDatabase {
             System.err.println("[AssetDatabase] Assets/ scan failed: " + e.getMessage());
             return;
         }
+        addCookedOnlyAssets(next, previous);
 
         next.sort(Comparator
             .comparing((AssetMeta m) -> m.parentFolderPath.toLowerCase())
@@ -284,6 +288,34 @@ public class AssetDatabase {
             currentFolderPath = (lastSlash != -1) ? currentFolderPath.substring(0, lastSlash) : "";
         }
         saveManifest();
+    }
+
+    /** Registers stripped sources that still stream from Cooked/, so scene UUIDs resolve to their original paths. */
+    private void addCookedOnlyAssets(List<AssetMeta> next, Map<String, AssetMeta> previous) {
+        if (cookedOnlyAssets.isEmpty()) return;
+        java.util.Set<String> onDisk = new java.util.HashSet<>();
+        for (AssetMeta meta : next) onDisk.add(normalizePath(meta.absolutePath).toLowerCase());
+        for (Map.Entry<String, String> entry : cookedOnlyAssets.entrySet()) {
+            String abs = normalizePath(activeProjectPath + "/" + entry.getKey());
+            if (onDisk.contains(abs.toLowerCase())) continue;
+            String relPath = entry.getKey().substring(ASSETS_DIR.length() + 1);
+            String name = relPath.substring(relPath.lastIndexOf('/') + 1);
+            int lastSlash = relPath.lastIndexOf('/');
+            String parent = (lastSlash != -1) ? relPath.substring(0, lastSlash) : "";
+            AssetMeta meta = previous.get(abs.toLowerCase());
+            if (meta == null) meta = new AssetMeta(entry.getValue(), name, abs, classifyFile(name), parent);
+            next.add(meta);
+        }
+    }
+
+    /** Runtime builds: remembers a manifest entry whose raw file is absent but whose cooked package exists. */
+    private void noteCookedOnlyAsset(String storedPath, String uuid) {
+        if (!storedPath.startsWith(ASSETS_DIR + "/")) return;
+        File raw = new File(activeProjectPath, storedPath);
+        if (raw.exists()) return;
+        File cooked = com.retro.engine.assets.cooker.RpackCookerCli.cookedPathFor(
+            new File(activeProjectPath, ASSETS_DIR), new File(activeProjectPath, COOKED_DIR), raw);
+        if (cooked.isFile()) cookedOnlyAssets.put(storedPath, uuid);
     }
 
     private static boolean isIgnoredRelativePath(String relPath) {
@@ -587,6 +619,8 @@ public class AssetDatabase {
     /** Loads manifest UUIDs into the scan seed; returns the saved browser folder. Older manifests' virtual folders simply never match disk. */
     private String loadManifestSeed() {
         manifestUuidSeed.clear();
+        cookedOnlyAssets.clear();
+        boolean runtime = com.retro.engine.core.EngineContext.isRuntimeProcess();
         File manifest = getManifestFile();
         if (manifest == null || !manifest.isFile()) return "";
 
@@ -609,6 +643,7 @@ public class AssetDatabase {
                 dis.readUTF(); // type
                 dis.readUTF(); // parent
                 manifestUuidSeed.put(storedPath.toLowerCase(), uuid);
+                if (runtime) noteCookedOnlyAsset(storedPath, uuid);
             }
             return savedFolder;
         } catch (IOException e) {
@@ -772,6 +807,7 @@ public class AssetDatabase {
         this.uuidToAssetMap.clear();
         this.pathToUuidMap.clear();
         this.manifestUuidSeed.clear();
+        this.cookedOnlyAssets.clear();
         this.currentFolderPath = "";
         if (hasActiveProject()) com.retro.engine.scripting.ScriptEngine.setProjectAssetsRoot(null);
         this.activeProjectPath = "";

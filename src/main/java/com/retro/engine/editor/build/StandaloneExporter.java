@@ -3,6 +3,7 @@ package com.retro.engine.editor.build;
 import com.retro.engine.Main;
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.cooker.RpackCookerCli;
+import com.retro.engine.assets.importers.SkeletonImporter;
 import com.retro.engine.core.ProjectWorkspace;
 import com.retro.engine.core.ProjectWorkspace.ProjectSettings;
 import com.retro.engine.scene.serialization.SceneSerializer;
@@ -24,6 +25,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.function.Predicate;
 import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
@@ -134,19 +136,59 @@ public final class StandaloneExporter {
 
     private void stageGameData(File gameData) throws IOException {
         File srcAssets = new File(req.projectDir, AssetDatabase.ASSETS_DIR);
-        progress.report(0.05f, "COPYING ASSETS");
-        copyTree(srcAssets.toPath(), new File(gameData, AssetDatabase.ASSETS_DIR).toPath(), StandaloneExporter::isEditorOnlyAsset);
+        File cookedDir = new File(gameData, AssetDatabase.COOKED_DIR);
+
+        // Cook meshes/textures from the source project first so manifest UUIDs are preserved and the copy below
+        // knows which raw files now have a package
+        progress.report(0.05f, "COOKING ASSETS");
+        int cooked = RpackCookerCli.cookDirectory(srcAssets.getAbsolutePath(), cookedDir.getAbsolutePath());
+        System.out.println("[Exporter] Cooked " + cooked + " asset(s) into " + GAME_DATA_DIR + "/" + AssetDatabase.COOKED_DIR);
+
+        progress.report(0.25f, "COPYING ASSETS");
+        copyTree(srcAssets.toPath(), new File(gameData, AssetDatabase.ASSETS_DIR).toPath(),
+            rel -> isEditorOnlyAsset(rel) || isReplacedByCookedPackage(srcAssets, cookedDir, rel));
         File internal = new File(req.projectDir, AssetDatabase.INTERNAL_DIR);
         if (internal.isDirectory()) copyTree(internal.toPath(), new File(gameData, AssetDatabase.INTERNAL_DIR).toPath());
 
         ProjectSettings settings = ProjectWorkspace.readSettings(req.projectDir);
         settings.startupScene = req.startupScene.replace('\\', '/');
         ProjectWorkspace.writeSettings(gameData, settings);
+    }
 
-        // Cook meshes/textures from the source project so manifest UUIDs are preserved
-        progress.report(0.15f, "COOKING ASSETS");
-        int cooked = RpackCookerCli.cookDirectory(srcAssets.getAbsolutePath(), new File(gameData, AssetDatabase.COOKED_DIR).getAbsolutePath());
-        System.out.println("[Exporter] Cooked " + cooked + " asset(s) into " + GAME_DATA_DIR + "/" + AssetDatabase.COOKED_DIR);
+    private static final Set<String> COOKED_MESH_EXTENSIONS = Set.of("obj", "fbx", "gltf", "glb");
+    private static final Set<String> COOKED_TEXTURE_EXTENSIONS = Set.of("png", "jpg", "jpeg", "tga");
+
+    /**
+     * True when a raw mesh/texture has a cooked .rpack, so the runtime never reads the source (the registry keeps its
+     * UUID from the manifest). Rigged meshes stay: skeletons and clips are rebuilt from the raw file on scene load
+     * and the .rpack only carries vertices.
+     */
+    private static boolean isReplacedByCookedPackage(File srcAssets, File cookedDir, String relPath) {
+        String name = relPath.substring(relPath.lastIndexOf('/') + 1);
+        int dot = name.lastIndexOf('.');
+        if (dot < 0) return false;
+        String ext = name.substring(dot + 1).toLowerCase(Locale.ROOT);
+        boolean mesh = COOKED_MESH_EXTENSIONS.contains(ext);
+        if (!mesh && !COOKED_TEXTURE_EXTENSIONS.contains(ext)) return false;
+
+        File raw = new File(srcAssets, relPath);
+        if (!RpackCookerCli.cookedPathFor(srcAssets, cookedDir, raw).isFile()) return false;
+        if (mesh && !ext.equals("obj") && hasSkeletonOrClips(raw)) {
+            System.out.println("[Exporter] Keeping rigged source mesh: " + relPath);
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean hasSkeletonOrClips(File meshFile) {
+        try {
+            SkeletonImporter.SkeletonImportResult r = SkeletonImporter.loadSkeletonAndAnimations(meshFile.getAbsolutePath());
+            if (r == null) return false;
+            return (r.skeleton() != null && r.skeleton().getBoneCount() > 0)
+                || (r.animations() != null && !r.animations().isEmpty());
+        } catch (Exception e) {
+            return true; // Unknown: ship the source rather than risk losing animation data
+        }
     }
 
     /** Runs the full pipeline; returns the path of the produced build. */
@@ -276,6 +318,13 @@ public final class StandaloneExporter {
     // Host-native packaging (jpackage)
     // ------------------------------------------------------------------------------------------
 
+    /**
+     * Modules the runtime needs (jdeps over the engine plus its jars), plus jdk.zipfs, a FileSystem provider jdeps
+     * cannot see. Janino compiles scripts in-process, so java.compiler is not required.
+     */
+    private static final String RUNTIME_MODULES = "java.base,java.desktop,java.logging,jdk.unsupported,jdk.zipfs";
+    private static final String JLINK_SLIM_FLAGS = "--strip-debug --no-header-files --no-man-pages";
+
     private File packageWithJpackage(File app) throws IOException, InterruptedException {
         File jpackage = jdkTool("jpackage");
         req.exportDir.mkdirs();
@@ -293,7 +342,10 @@ public final class StandaloneExporter {
             "--main-jar", ENGINE_JAR,
             "--main-class", Main.class.getName(),
             "--dest", req.exportDir.getAbsolutePath(),
-            "--arguments", "--runtime"));
+            "--arguments", "--runtime",
+            "--add-modules", RUNTIME_MODULES,
+            // Replaces jpackage's default jlink options, so keep --strip-native-commands (the launcher needs no bin/java)
+            "--jlink-options", JLINK_SLIM_FLAGS + " --strip-native-commands"));
         for (String opt : jvmOptions("$APPDIR")) {
             cmd.add("--java-options");
             cmd.add(opt);
@@ -352,7 +404,7 @@ public final class StandaloneExporter {
         File runtime = new File(work, "runtime");
         run(List.of(jdkTool("jlink").getAbsolutePath(),
             "--module-path", new File(req.targetJdk, "jmods").getAbsolutePath(),
-            "--add-modules", "java.se,jdk.unsupported,jdk.zipfs",
+            "--add-modules", RUNTIME_MODULES,
             "--strip-debug", "--no-header-files", "--no-man-pages",
             "--output", runtime.getAbsolutePath()), null);
 
@@ -525,7 +577,7 @@ public final class StandaloneExporter {
                 String name = file.getFileName().toString();
                 if (name.equals(".DS_Store") || name.equalsIgnoreCase("Thumbs.db")) return FileVisitResult.CONTINUE;
                 if (exclude.test(src.relativize(file).toString().replace('\\', '/'))) {
-                    System.out.println("[Exporter] Skipping editor-only asset: " + src.relativize(file));
+                    System.out.println("[Exporter] Not shipping: " + src.relativize(file));
                     return FileVisitResult.CONTINUE;
                 }
                 Path out = dst.resolve(src.relativize(file).toString());
