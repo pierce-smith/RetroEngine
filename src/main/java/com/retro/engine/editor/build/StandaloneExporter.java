@@ -5,6 +5,7 @@ import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.cooker.RpackCookerCli;
 import com.retro.engine.core.ProjectWorkspace;
 import com.retro.engine.core.ProjectWorkspace.ProjectSettings;
+import com.retro.engine.scene.serialization.SceneSerializer;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -23,6 +24,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Predicate;
 import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
@@ -133,7 +135,7 @@ public final class StandaloneExporter {
     private void stageGameData(File gameData) throws IOException {
         File srcAssets = new File(req.projectDir, AssetDatabase.ASSETS_DIR);
         progress.report(0.05f, "COPYING ASSETS");
-        copyTree(srcAssets.toPath(), new File(gameData, AssetDatabase.ASSETS_DIR).toPath());
+        copyTree(srcAssets.toPath(), new File(gameData, AssetDatabase.ASSETS_DIR).toPath(), StandaloneExporter::isEditorOnlyAsset);
         File internal = new File(req.projectDir, AssetDatabase.INTERNAL_DIR);
         if (internal.isDirectory()) copyTree(internal.toPath(), new File(gameData, AssetDatabase.INTERNAL_DIR).toPath());
 
@@ -493,11 +495,28 @@ public final class StandaloneExporter {
         if (!file.setExecutable(true, false)) System.err.println("[Exporter] Could not mark executable: " + file);
     }
 
+    /**
+     * Assets/-relative paths the editor uses but a shipped game never loads: UI sound effects, Editor/ and Engine/
+     * folders (editor icons and gizmo art live there), and in-flight temp/backup files.
+     */
+    static boolean isEditorOnlyAsset(String relPath) {
+        String lower = relPath.replace('\\', '/').toLowerCase(Locale.ROOT);
+        if (SceneSerializer.isInternalEditorResource(lower)) return true;
+        String name = lower.substring(lower.lastIndexOf('/') + 1);
+        return name.endsWith(".tmp") || name.endsWith("~") || name.endsWith(".bak") || name.endsWith(".swp");
+    }
+
     private static void copyTree(Path src, Path dst) throws IOException {
+        copyTree(src, dst, rel -> false);
+    }
+
+    private static void copyTree(Path src, Path dst, Predicate<String> exclude) throws IOException {
         Files.walkFileTree(src, new SimpleFileVisitor<>() {
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
-                Files.createDirectories(dst.resolve(src.relativize(dir).toString()));
+                String rel = src.relativize(dir).toString().replace('\\', '/');
+                if (!rel.isEmpty() && exclude.test(rel + "/")) return FileVisitResult.SKIP_SUBTREE;
+                Files.createDirectories(dst.resolve(rel));
                 return FileVisitResult.CONTINUE;
             }
 
@@ -505,6 +524,10 @@ public final class StandaloneExporter {
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
                 String name = file.getFileName().toString();
                 if (name.equals(".DS_Store") || name.equalsIgnoreCase("Thumbs.db")) return FileVisitResult.CONTINUE;
+                if (exclude.test(src.relativize(file).toString().replace('\\', '/'))) {
+                    System.out.println("[Exporter] Skipping editor-only asset: " + src.relativize(file));
+                    return FileVisitResult.CONTINUE;
+                }
                 Path out = dst.resolve(src.relativize(file).toString());
                 Files.copy(file, out, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES);
                 return FileVisitResult.CONTINUE;

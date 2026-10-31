@@ -12,12 +12,13 @@ import com.retro.engine.rhi.IRenderBackend;
 import org.lwjgl.glfw.GLFW;
 
 /**
- * EngineContext manages subsystem bootstrapping, window creation,
- * listener wiring, and RHI backend initialization.
+ * EngineContext manages subsystem bootstrapping, input listener wiring, and RHI backend initialization.
+ * Window lifecycle and display metrics are delegated to {@link DisplayService}.
  * Hardened with explicit listener unbinding and workspace disposal hooks.
  */
 public class EngineContext {
 
+    private DisplayService display;
     private WindowHost window;
     private EditorWorkspace editorManager;
     private EditorInputRouter selectionController;
@@ -62,11 +63,13 @@ public class EngineContext {
     public boolean initialize(int width, int height, String title, boolean isRuntimeOnly, String[] cliArgs) {
         this.runtimeOnlyMode = isRuntimeOnly;
         if (isRuntimeOnly) runtimeProcess = true;
-        window = new WindowHost(width, height, title);
-        if (!window.create()) {
+        display = new DisplayService();
+        if (!display.create(width, height, title)) {
             System.err.println("[Fatal] Could not create GLFW window. Halting.");
+            display = null;
             return false;
         }
+        window = display.getWindow();
 
         com.retro.engine.scripting.Input.bindWindow(window);
 
@@ -86,7 +89,7 @@ public class EngineContext {
         renderSubmitter = new SceneRenderPipeline();
 
         BackendLoader loader = new BackendLoader();
-        if (!loader.initializeWithFallback(window.getWindowInfo(), cliArgs)) {
+        if (!loader.initializeWithFallback(display.getViewportSpec(), cliArgs)) {
             System.err.println("[Fatal] Target backend failed to initialize with automatic fallback. Halting execution.");
             shutdown();
             return false;
@@ -95,15 +98,14 @@ public class EngineContext {
         rhi = loader.getBackend();
 
         // Listen for window resizes and update editorManager dimensions
-        window.setOnWindowSizeListener((w, h) -> {
+        display.setOnWindowSizeListener((w, h) -> {
             if (editorManager != null) {
                 editorManager.setWindowDimensions(w, h);
                 System.out.println("[Engine] Window Resized -> " + w + "x" + h);
             }
         });
 
-        // Swapchain-backed RHIs rebuild their presentation images at the new pixel size before the next frame
-        window.setOnFramebufferSizeListener((w, h) -> {
+        display.setOnFramebufferSizeListener((w, h) -> {
             if (rhi != null) {
                 rhi.onFramebufferResized(w, h);
             }
@@ -231,6 +233,8 @@ public class EngineContext {
     public boolean isHeadlessMode() { return headlessMode; }
     public boolean isRuntimeOnlyMode() { return runtimeOnlyMode; }
 
+    /** Null in headless mode (no GLFW). */
+    public DisplayService getDisplay() { return display; }
     public WindowHost getWindow() { return window; }
     /** Null in headless mode (no GLFW). */
     public GamepadManager getGamepadManager() { return window != null ? window.getGamepadManager() : null; }
@@ -242,8 +246,8 @@ public class EngineContext {
     public IRenderBackend getRhi() { return rhi; }
 
     public void unbindWindowListeners() {
-        if (window != null) {
-            window.unbindAllListeners();
+        if (display != null) {
+            display.unbindListeners();
         }
     }
 
@@ -262,10 +266,11 @@ public class EngineContext {
             rhi.shutdown();
             rhi = null;
         }
-        if (window != null) {
-            window.destroy();
-            window = null;
+        if (display != null) {
+            display.destroy();
+            display = null;
         }
+        window = null;
         if (selectionController != null) {
             selectionController.dispose();
             selectionController = null;

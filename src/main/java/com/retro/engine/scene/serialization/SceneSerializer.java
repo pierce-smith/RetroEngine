@@ -198,15 +198,21 @@ public class SceneSerializer {
         }
     }
 
-    private static boolean isInternalEditorResource(String path) {
+    private static final String[] EDITOR_UI_SOUNDS = {
+        "click.ogg", "open.ogg", "close.ogg", "spawn.ogg", "delete.ogg", "duplicate.ogg", "toggle.ogg"
+    };
+
+    /** True for editor-only files (UISoundPlayer clips under Audio/UI/, Editor/ and Engine/ folders). */
+    public static boolean isInternalEditorResource(String path) {
         if (path == null) return false;
         String lower = path.replace('\\', '/').toLowerCase();
-        return lower.endsWith("click.ogg") || lower.endsWith("open.ogg") ||
-               lower.endsWith("close.ogg") || lower.endsWith("spawn.ogg") ||
-               lower.endsWith("delete.ogg") || lower.endsWith("duplicate.ogg") ||
-               lower.endsWith("toggle.ogg") || lower.startsWith("editor/") ||
-               lower.contains("/editor/") || lower.startsWith("engine/") ||
-               lower.contains("/engine/");
+        // Match whole file names inside Audio/UI/ so user clips like "door_open.ogg" are not swallowed
+        for (String sound : EDITOR_UI_SOUNDS) {
+            String rel = "audio/ui/" + sound;
+            if (lower.equals(rel) || lower.endsWith("/" + rel)) return true;
+        }
+        return lower.startsWith("editor/") || lower.contains("/editor/") ||
+               lower.startsWith("engine/") || lower.contains("/engine/");
     }
 
     // --- HELPER UTILITIES ---
