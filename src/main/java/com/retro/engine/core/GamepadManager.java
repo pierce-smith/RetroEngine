@@ -16,8 +16,9 @@ import static org.lwjgl.sdl.SDLStdinc.SDL_free;
  * held / just-pressed buttons and deadzoned axes. Hot-plugging is handled implicitly by per-frame polling.
  * Triggers are additionally exposed as virtual buttons ({@link #BUTTON_LEFT_TRIGGER}, {@link #BUTTON_RIGHT_TRIGGER}).
  * <p>
- * GLFW has no haptics API, so rumble goes through SDL3's gamepad subsystem, opened only for output: the SDL handle of
- * the active controller is bound lazily on the first vibration request, and a per-frame countdown stops it.
+ * GLFW has no haptics API, so rumble goes through SDL3's gamepad subsystem, used only for output. SDL is started and
+ * the active controller opened on the first vibration request, so games that never rumble never load it (and exports
+ * may leave its natives out); a per-frame countdown stops each burst.
  */
 public class GamepadManager {
 
@@ -73,6 +74,7 @@ public class GamepadManager {
     private static final String USER_DB = "gamecontrollerdb.txt";
 
     // Rumble (SDL3): opened gamepad handle (0 = none), the GLFW joystick it was matched to, and the active burst
+    private boolean sdlInitAttempted = false;
     private boolean sdlAvailable = false;
     private long sdlGamepad = 0L;
     private int sdlBoundJoystick = -1;
@@ -83,16 +85,18 @@ public class GamepadManager {
         clearInputs();
         loadBundledMappings();
         loadUserMappings();
-        initRumble();
     }
 
-    /** Rumble is optional: a missing SDL native or failed init only disables vibration. */
+    /** Rumble is optional: SDL left out of the build or a failed init only disables vibration. Tried once. */
     private void initRumble() {
+        sdlInitAttempted = true;
         try {
             sdlAvailable = SDL_InitSubSystem(SDL_INIT_GAMEPAD);
             if (!sdlAvailable) {
                 System.err.println("[Gamepad] SDL gamepad init failed, vibration disabled: " + SDL_GetError());
             }
+        } catch (LinkageError e) {
+            System.out.println("[Gamepad] SDL is not part of this build; vibration disabled.");
         } catch (Throwable t) {
             System.err.println("[Gamepad] SDL unavailable, vibration disabled: " + t);
         }
@@ -326,7 +330,9 @@ public class GamepadManager {
      * the pad is matched by the USB vendor / product ids embedded in GLFW's GUID, falling back to SDL's first gamepad.
      */
     private long bindRumbleGamepad() {
-        if (!sdlAvailable || activeJoystick < 0) return 0L;
+        if (activeJoystick < 0) return 0L;
+        if (!sdlInitAttempted) initRumble();
+        if (!sdlAvailable) return 0L;
         if (sdlGamepad != 0L && sdlBoundJoystick == activeJoystick && SDL_GamepadConnected(sdlGamepad)) return sdlGamepad;
         closeRumbleGamepad();
 

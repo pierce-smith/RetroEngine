@@ -15,23 +15,23 @@ import com.retro.engine.editor.ui.theme.EditorTheme;
 import java.io.File;
 
 /**
- * "File > Export Standalone Build..." modal: export folder, executable name, target platform and startup scene,
- * then runs {@link StandaloneExporter} on a background thread with live progress. Rendering and hit-testing share
+ * "File > Export Standalone Build..." modal: export folder, executable name, target platform, startup scene and
+ * whether to ship controller haptics (SDL), then runs {@link StandaloneExporter} on a background thread with live progress. Rendering and hit-testing share
  * the layout constants below.
  */
 public final class BuildExporterOverlay {
 
     private static final float CARD_X0 = -0.56f, CARD_X1 = 0.56f;
-    private static final float CARD_Y0 = -0.44f, CARD_Y1 = 0.42f;
+    private static final float CARD_Y0 = -0.54f, CARD_Y1 = 0.42f;
 
     private static final float LABEL_X = -0.52f;
     private static final float WELL_X0 = -0.22f, WELL_X1 = 0.30f;
     private static final float BTN_X0 = 0.32f, BTN_X1 = 0.52f;
     private static final float ROW_H = 0.072f;
 
-    private static final float PATH_Y = 0.22f, NAME_Y = 0.10f, PLATFORM_Y = -0.02f, SCENE_Y = -0.14f;
-    private static final float PROGRESS_Y = -0.25f;
-    private static final float ACTION_Y0 = -0.40f, ACTION_Y1 = -0.32f;
+    private static final float PATH_Y = 0.22f, NAME_Y = 0.10f, PLATFORM_Y = -0.02f, SCENE_Y = -0.14f, HAPTICS_Y = -0.26f;
+    private static final float PROGRESS_Y = -0.37f;
+    private static final float ACTION_Y0 = -0.50f, ACTION_Y1 = -0.42f;
     private static final float CANCEL_X0 = 0.04f, CANCEL_X1 = 0.26f;
     private static final float EXPORT_X0 = 0.29f, EXPORT_X1 = 0.52f;
     private static final float CLOSE_X0 = CARD_X1 - 0.075f, CLOSE_X1 = CARD_X1 - 0.02f;
@@ -43,6 +43,9 @@ public final class BuildExporterOverlay {
     private static String executableName = "Game";
     private static Platform platform = Platform.host();
     private static String startupScene = "";
+    // Defaults to what the project appears to use; SDL adds a few MB per platform
+    private static boolean includeHaptics = true;
+    private static boolean hapticsDetected = true;
 
     private static volatile boolean running = false;
     private static volatile float progress = 0.0f;
@@ -71,6 +74,8 @@ public final class BuildExporterOverlay {
                 String active = projectRelative(project, workspace.getSceneManager().getActiveScenePath());
                 startupScene = (active != null) ? active : "";
             }
+            hapticsDetected = StandaloneExporter.projectUsesHaptics(project);
+            includeHaptics = hapticsDetected;
             status = "";
             statusIsError = false;
             progress = 0.0f;
@@ -100,6 +105,11 @@ public final class BuildExporterOverlay {
         fieldRow(buffer, "EXPORT PATH", PATH_Y, exportDir != null ? exportDir.getAbsolutePath() : "", "BROWSE...");
         fieldRow(buffer, "EXECUTABLE NAME", NAME_Y, executableName, "EDIT...");
         fieldRow(buffer, "STARTUP SCENE", SCENE_Y, startupScene.isEmpty() ? "(NONE SELECTED)" : startupScene, "SELECT...");
+        fieldRow(buffer, "CONTROLLER RUMBLE", HAPTICS_Y, includeHaptics ? "INCLUDED (SDL, +2-4 MB)" : "EXCLUDED (VIBRATION CALLS DO NOTHING)",
+            includeHaptics ? "EXCLUDE" : "INCLUDE");
+        String hapticsHint = hapticsDetected ? "PROJECT USES RUMBLE (VIBRATE CALLS OR CHARACTER CONTROLLER)" : "NO RUMBLE USE FOUND IN SCRIPTS OR SCENES";
+        UIGeometryBatch.addTruncatedText(buffer, hapticsHint, WELL_X0, HAPTICS_Y - ROW_H * 0.5f - 0.012f, BTN_X1, 0.62f,
+            includeHaptics || !hapticsDetected ? EditorTheme.TEXT_MUTED : EditorTheme.YELLOW, 1.0f);
 
         rowLabel(buffer, "TARGET PLATFORM", PLATFORM_Y);
         for (int i = 0; i < PLATFORMS.length; i++) {
@@ -200,6 +210,9 @@ public final class BuildExporterOverlay {
                     startupScene = rel;
                 }
             }
+        } else if (inRow(ndcX, ndcY, HAPTICS_Y)) {
+            UISoundPlayer.play(UISound.CLICK);
+            includeHaptics = !includeHaptics;
         } else if (inRect(ndcX, ndcY, EXPORT_X0, ACTION_Y0, EXPORT_X1, ACTION_Y1)) {
             startExport(project);
         } else {
@@ -229,7 +242,8 @@ public final class BuildExporterOverlay {
         }
 
         UISoundPlayer.play(UISound.SPAWN);
-        StandaloneExporter.Request request = new StandaloneExporter.Request(project, exportDir, executableName, platform, startupScene, targetJdk);
+        StandaloneExporter.Request request = new StandaloneExporter.Request(project, exportDir, executableName, platform, startupScene,
+            targetJdk, includeHaptics);
         running = true;
         setStatus("STARTING EXPORT", false, 0.01f);
         Thread worker = new Thread(() -> {
@@ -259,7 +273,7 @@ public final class BuildExporterOverlay {
     public static File exportNonInteractive(File project, String scene, Platform target, boolean gameDataOnly) throws Exception {
         File targetJdk = (target == Platform.host()) ? null : new File(System.getProperty("java.home"));
         StandaloneExporter.Request request = new StandaloneExporter.Request(project.getAbsoluteFile(), TEST_EXPORT_DIR,
-            sanitizeName(project.getName()), target, scene, targetJdk);
+            sanitizeName(project.getName()), target, scene, targetJdk, StandaloneExporter.projectUsesHaptics(project));
         StandaloneExporter exporter = new StandaloneExporter(request, (f, msg) -> {
             setStatus(msg, false, f);
             System.out.println("[Exporter] " + Math.round(f * 100) + "% " + msg);

@@ -37,7 +37,7 @@ import java.util.jar.Manifest;
  *
  * Staged app payload (becomes the launcher's $APPDIR):
  * <pre>
- *   retro-engine.jar + dependency jars (LWJGL JNI + target-OS native jars only)
+ *   retro-engine.jar + dependency jars (LWJGL JNI + target-OS native jars only; SDL only with controller haptics)
  *   natives/                      MoltenVK (macOS)
  *   Game_Data/ProjectSettings.bin startup scene rewritten to the chosen scene
  *   Game_Data/Assets/             scenes (.rscene), scripts, materials, audio, raw sources
@@ -82,14 +82,18 @@ public final class StandaloneExporter {
         public final String startupScene;
         /** Target platform JDK home (with jmods/); required only for cross-OS exports. */
         public final File targetJdk;
+        /** Ships SDL (bindings + natives, a few MB) for gamepad rumble; without it vibration calls are no-ops. */
+        public final boolean includeHaptics;
 
-        public Request(File projectDir, File exportDir, String executableName, Platform platform, String startupScene, File targetJdk) {
+        public Request(File projectDir, File exportDir, String executableName, Platform platform, String startupScene,
+                       File targetJdk, boolean includeHaptics) {
             this.projectDir = projectDir;
             this.exportDir = exportDir;
             this.executableName = executableName;
             this.platform = platform;
             this.startupScene = startupScene;
             this.targetJdk = targetJdk;
+            this.includeHaptics = includeHaptics;
         }
     }
 
@@ -100,6 +104,8 @@ public final class StandaloneExporter {
     public static final String GAME_DATA_DIR = "Game_Data";
     public static final String GAME_DATA_PROPERTY = "retro.gameData";
     private static final String ENGINE_JAR = "retro-engine.jar";
+    private static final String SDL_JAR_PREFIX = "lwjgl-sdl";
+    private static final java.util.regex.Pattern HAPTICS_CALL = java.util.regex.Pattern.compile("\\b(vibrate|setVibration)\\s*\\(");
 
     private final Request req;
     private final Progress progress;
@@ -247,8 +253,15 @@ public final class StandaloneExporter {
         writeEngineJar(classDirs, new File(app, ENGINE_JAR));
     }
 
-    /** Keeps platform-neutral jars and the target OS's native jars (all architectures; LWJGL picks at load time). */
+    /**
+     * Keeps platform-neutral jars and the target OS's native jars (all architectures; LWJGL picks at load time). SDL
+     * serves only gamepad rumble, so its jars are dropped when the build does not include haptics.
+     */
     private boolean includeJarForTarget(String jarName) {
+        if (!req.includeHaptics && jarName.startsWith(SDL_JAR_PREFIX)) {
+            System.out.println("[Exporter] Not shipping (no controller haptics): " + jarName);
+            return false;
+        }
         int idx = jarName.indexOf("natives-");
         if (idx < 0) return true;
         return jarName.startsWith(req.platform.nativesToken, idx);
@@ -539,6 +552,43 @@ public final class StandaloneExporter {
         }
         int code = proc.waitFor();
         if (code != 0) throw new IOException(new File(cmd.get(0)).getName() + " failed (exit " + code + "): " + tail.toString().trim());
+    }
+
+    /**
+     * Best guess for the haptics default: a script calls vibrate / setVibration, or a scene or prefab has a Character
+     * Controller (its solver rumbles on jump and landing). Scenes store component type names as plain ASCII.
+     */
+    public static boolean projectUsesHaptics(File projectDir) {
+        Path assets = new File(projectDir, AssetDatabase.ASSETS_DIR).toPath();
+        if (!Files.isDirectory(assets)) return false;
+        byte[] controllerTag = "CharacterController".getBytes(StandardCharsets.US_ASCII);
+        try (var stream = Files.walk(assets)) {
+            return stream.filter(Files::isRegularFile).anyMatch(p -> {
+                String name = p.getFileName().toString().toLowerCase(Locale.ROOT);
+                try {
+                    if (name.endsWith(".java")) return HAPTICS_CALL.matcher(Files.readString(p)).find();
+                    if (name.endsWith(".rscene") || name.endsWith(".prefab") || name.endsWith(".prefab.bin")) {
+                        return indexOf(Files.readAllBytes(p), controllerTag) >= 0;
+                    }
+                } catch (IOException | java.io.UncheckedIOException e) {
+                    return true; // Unreadable: keep haptics rather than silently drop rumble
+                }
+                return false;
+            });
+        } catch (IOException | java.io.UncheckedIOException e) {
+            return true;
+        }
+    }
+
+    private static int indexOf(byte[] haystack, byte[] needle) {
+        outer:
+        for (int i = 0, last = haystack.length - needle.length; i <= last; i++) {
+            for (int j = 0; j < needle.length; j++) {
+                if (haystack[i + j] != needle[j]) continue outer;
+            }
+            return i;
+        }
+        return -1;
     }
 
     private static void writeExecutable(File file, String content) throws IOException {
