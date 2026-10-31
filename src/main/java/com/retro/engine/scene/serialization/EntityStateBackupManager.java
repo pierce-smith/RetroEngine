@@ -608,16 +608,7 @@ public class EntityStateBackupManager {
 
             AnimatorComponent origAnim = orig.getComponent(AnimatorComponent.class);
             if (origAnim != null) {
-                AnimatorComponent cloneAnim = new AnimatorComponent();
-                cloneAnim.skeleton = origAnim.skeleton;
-                cloneAnim.controller = origAnim.controller;
-                cloneAnim.currentClip = origAnim.currentClip;
-                cloneAnim.activeClipName = origAnim.activeClipName;
-                cloneAnim.playbackTime = origAnim.playbackTime;
-                cloneAnim.playbackSpeed = origAnim.playbackSpeed;
-                cloneAnim.isPlaying = origAnim.isPlaying;
-                cloneAnim.copyEditPoseFrom(origAnim);
-                cloned.addComponent(cloneAnim);
+                cloned.addComponent(new AnimatorComponent(origAnim));
             }
 
             RigidBodyComponent origRb = orig.getComponent(RigidBodyComponent.class);

@@ -82,7 +82,8 @@ public class AnimatorCanvasDelegate {
 
     private static float textTop(float midY, float size) { return midY + size * 0.009f; }
 
-    public static void renderCanvas(UIGeometryBatch.Buffer buffer, AnimatorController controller, String selectedStateName) {
+    /** {@code animator}: the instance whose playing / crossfading states are highlighted (null shows none live). */
+    public static void renderCanvas(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorComponent animator, String selectedStateName) {
         UIGeometryBatch.addQuad(buffer, CANVAS_X0, CANVAS_Y0, CANVAS_X1, CANVAS_Y1, EditorTheme.BACKGROUND, 1.0f);
         renderCanvasGrid(buffer);
 
@@ -93,8 +94,8 @@ public class AnimatorCanvasDelegate {
             return;
         }
 
-        AnimatorState activeState = controller.getCurrentState();
-        AnimatorState targetState = controller.getTargetState();
+        AnimatorState activeState = (animator != null) ? animator.getCurrentState() : null;
+        AnimatorState targetState = (animator != null) ? animator.getTargetState() : null;
         AnimatorState entryState = controller.getEntryState();
         AnimatorState selectedState = selectedStateName != null ? controller.getState(selectedStateName) : null;
         Collection<AnimatorState> allStates = controller.getStates().values();
@@ -105,7 +106,7 @@ public class AnimatorCanvasDelegate {
                 AnimatorState dstState = controller.getState(transition.destinationStateName);
                 if (dstState == null) continue;
 
-                boolean isBlending = controller.isCrossfading() && activeState == srcState && targetState == dstState;
+                boolean isBlending = targetState != null && activeState == srcState && targetState == dstState;
                 boolean touchesSelection = selectedState != null && (srcState == selectedState || dstState == selectedState);
                 int color = isBlending ? EditorTheme.ORANGE : (touchesSelection ? EditorTheme.ACCENT : EditorTheme.TEXT_MUTED);
                 renderTransition(buffer,
@@ -155,8 +156,8 @@ public class AnimatorCanvasDelegate {
             }
 
             float progress = -1.0f;
-            if (isActive) progress = state.getNormalizedTime(controller.getCurrentStateTime(), controller);
-            else if (isTarget) progress = state.getNormalizedTime(controller.getTargetStateTime(), controller);
+            if (isActive) progress = state.getNormalizedTime(animator.currentTime, animator.getParameters());
+            else if (isTarget) progress = state.getNormalizedTime(animator.targetTime, animator.getParameters());
 
             int ring = -1;
             if (isSelected) ring = isActive ? EditorTheme.TEXT : EditorTheme.ACCENT;

@@ -5,6 +5,7 @@ import com.retro.engine.animation.clips.AnimationClip;
 import com.retro.engine.animation.clips.AnimationClipIO;
 import com.retro.engine.animation.clips.KeyframeTrack;
 import com.retro.engine.animation.state.AnimatorController;
+import com.retro.engine.animation.state.AnimatorParameter;
 import com.retro.engine.animation.state.AnimatorState;
 import com.retro.engine.animation.skeleton.Skeleton;
 import com.retro.engine.editor.ui.panels.InspectorProperty;
@@ -18,6 +19,7 @@ import java.io.DataOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,6 +27,11 @@ import java.util.Map;
 /**
  * Entity Component storing skeleton reference, active animation clip, state machine controller,
  * playback state, and pre-allocated 64-matrix bone palette buffer for zero per-frame JVM allocations.
+ *
+ * The skeleton and imported clips are shared, read-only assets: duplicated entities reference the same ones.
+ * Everything an entity advances or edits is owned here: the state machine graph (its own controller), its position and
+ * times, parameter values, edit pose, recorded clip and bone palette. {@link #copyFrom} deep-copies all of it, so
+ * duplicates animate and are edited independently.
  *
  * The skeleton and controller are rebuilt from the mesh asset after a scene load (EntitySpawner.attachAnimatorIfRigged);
  * only the authored data is persisted ({@link #poseData}): editor pose edits and recorded keys by bone name, the record
@@ -34,15 +41,30 @@ public class AnimatorComponent implements Component {
 
     public static final int MAX_BONES = 64;
 
-    /** Name of {@link #recordedPose} and of the controller state that plays it. */
+    /** Default name of {@link #recordedPose} (and of the controller state that plays it) until one is given. */
     public static final String RECORDED_CLIP_NAME = "Recorded Pose";
     private static final int POSE_DATA_VERSION = 1;
 
     public String activeClipName = "";
+    // Shared read-only assets
     public AnimationClip currentClip = null;
     public Skeleton skeleton = null;
 
+    // This entity's own state machine graph (duplicates get a deep copy)
     public AnimatorController controller = null;
+
+    // State machine instance state, advanced by AnimationSystem. States are referenced by name so a state removed
+    // from the controller falls back to its entry state instead of playing on.
+    public String currentStateId = null;
+    public float currentTime = 0.0f;
+    public String targetStateId = null;
+    public float targetTime = 0.0f;
+    public float crossfadeTimer = 0.0f;
+    public float crossfadeDuration = 0.25f;
+    public boolean transitioning = false;
+
+    // Live parameter values, seeded from the controller's defaults (getParameters keeps them in sync with its definitions)
+    public final Map<String, AnimatorParameter> parameterValues = new LinkedHashMap<>();
 
     public float playbackTime = 0.0f;
     public float playbackSpeed = 1.0f;
@@ -95,12 +117,147 @@ public class AnimatorComponent implements Component {
         initIdentityPalette();
     }
 
+    /** Copy of {@code other} sharing its read-only assets but nothing editable (see {@link #copyFrom}). */
+    public AnimatorComponent(AnimatorComponent other) {
+        initIdentityPalette();
+        copyFrom(other);
+    }
+
+    /**
+     * Makes this animator a duplicate of {@code other}. The skeleton and imported clips are shared (never written to);
+     * the controller graph, recorded clip, playback and state machine state, parameter values, bone palette and edit
+     * pose are deep copies, so editing or playing one entity never changes the other.
+     */
+    public void copyFrom(AnimatorComponent other) {
+        if (other == null || other == this) return;
+        skeleton = other.skeleton;
+        activeClipName = other.activeClipName;
+        playbackTime = other.playbackTime;
+        playbackSpeed = other.playbackSpeed;
+        isPlaying = other.isPlaying;
+
+        currentStateId = other.currentStateId;
+        currentTime = other.currentTime;
+        targetStateId = other.targetStateId;
+        targetTime = other.targetTime;
+        crossfadeTimer = other.crossfadeTimer;
+        crossfadeDuration = other.crossfadeDuration;
+        transitioning = other.transitioning;
+        parameterValues.clear();
+        for (Map.Entry<String, AnimatorParameter> entry : other.parameterValues.entrySet()) {
+            parameterValues.put(entry.getKey(), entry.getValue().copy());
+        }
+
+        for (int b = 0; b < MAX_BONES; b++) {
+            System.arraycopy(other.bonePaletteMatrices[b], 0, bonePaletteMatrices[b], 0, 16);
+        }
+        copyEditPoseFrom(other);
+
+        // Recording keys edits the recorded clip in place, so it is copied and the copied graph points at the copy
+        AnimationClip sourceRecorded = other.recordedPose;
+        recordedPose = (sourceRecorded != null) ? AnimationClipIO.copy(sourceRecorded, sourceRecorded.name) : null;
+        AnimationClip copiedRecorded = recordedPose;
+        controller = (other.controller != null)
+                ? other.controller.copy(clip -> (clip != null && clip == sourceRecorded) ? copiedRecorded : clip)
+                : null;
+        currentClip = (other.currentClip != null && other.currentClip == sourceRecorded) ? copiedRecorded : other.currentClip;
+        dirty = true;
+    }
+
     private void initIdentityPalette() {
         for (int b = 0; b < MAX_BONES; b++) {
             for (int i = 0; i < 16; i++) {
                 bonePaletteMatrices[b][i] = (i % 5 == 0) ? 1.0f : 0.0f;
             }
         }
+    }
+
+    // --- State machine instance state ---
+
+    /** The state this animator is playing, resolved on the controller (null when none or removed). */
+    public AnimatorState getCurrentState() {
+        return (controller != null && currentStateId != null) ? controller.getState(currentStateId) : null;
+    }
+
+    /** The state being crossfaded into, or null when not transitioning. */
+    public AnimatorState getTargetState() {
+        return (transitioning && controller != null && targetStateId != null) ? controller.getState(targetStateId) : null;
+    }
+
+    public float getCrossfadeWeight() {
+        if (!transitioning || crossfadeDuration <= 0.0f) return 0.0f;
+        return Math.min(1.0f, Math.max(0.0f, crossfadeTimer / crossfadeDuration));
+    }
+
+    /** True when the current single-shot state has played to its end and no crossfade is leaving it. */
+    public boolean isCurrentStateFinished() {
+        AnimatorState current = getCurrentState();
+        return current != null && !transitioning && current.isFinished(currentTime, getParameters());
+    }
+
+    /** Hard-resets this animator's state machine to the controller's entry state, cancelling any crossfade. */
+    public void resetToEntryState() {
+        AnimatorState entry = (controller != null) ? controller.getEntryState() : null;
+        currentStateId = (entry != null) ? entry.name : null;
+        currentTime = 0.0f;
+        cancelTransition();
+    }
+
+    public void cancelTransition() {
+        targetStateId = null;
+        targetTime = 0.0f;
+        crossfadeTimer = 0.0f;
+        transitioning = false;
+    }
+
+    /** Seeks the current state's timeline (editor scrubbing), bounded exactly like normal playback. */
+    public void setCurrentTime(float stateTime) {
+        AnimatorState current = getCurrentState();
+        if (current != null) currentTime = current.boundStateTime(stateTime, getParameters());
+    }
+
+    /**
+     * This animator's live parameter values, brought in line with the controller's definitions first: parameters
+     * added to the controller are seeded with its default value, retyped ones are re-seeded, removed ones dropped.
+     */
+    public Map<String, AnimatorParameter> getParameters() {
+        if (controller == null) return parameterValues;
+        Map<String, AnimatorParameter> definitions = controller.getParameters();
+        for (AnimatorParameter def : definitions.values()) {
+            AnimatorParameter value = parameterValues.get(def.name);
+            if (value == null || value.type != def.type) parameterValues.put(def.name, def.copy());
+        }
+        if (parameterValues.size() > definitions.size()) {
+            for (Iterator<String> it = parameterValues.keySet().iterator(); it.hasNext(); ) {
+                if (!definitions.containsKey(it.next())) it.remove();
+            }
+        }
+        return parameterValues;
+    }
+
+    public void setFloat(String name, float value) {
+        AnimatorParameter param = getParameters().get(name);
+        if (param != null && param.type == AnimatorParameter.ParameterType.FLOAT) param.floatValue = value;
+    }
+
+    public float getFloat(String name) {
+        AnimatorParameter param = getParameters().get(name);
+        return param != null ? param.floatValue : 0.0f;
+    }
+
+    public void setInt(String name, int value) {
+        AnimatorParameter param = getParameters().get(name);
+        if (param != null && param.type == AnimatorParameter.ParameterType.INT) param.intValue = value;
+    }
+
+    public void setBool(String name, boolean value) {
+        AnimatorParameter param = getParameters().get(name);
+        if (param != null && param.type == AnimatorParameter.ParameterType.BOOL) param.boolValue = value;
+    }
+
+    public void setTrigger(String name) {
+        AnimatorParameter param = getParameters().get(name);
+        if (param != null) param.setTrigger();
     }
 
     /** Local transform bone {@code boneIndex} rests at: its edit pose if one is set, else the skeleton's bind transform. */
@@ -123,7 +280,7 @@ public class AnimatorComponent implements Component {
 
     /**
      * Copies another animator's authored data onto this one (duplicates and play-mode clones keep the authored pose).
-     * The edit pose is copied; the recorded clip is shared, like the controller whose "Recorded Pose" state plays it.
+     * The edit pose is copied; the recorded clip is shared ({@link #copyFrom} replaces it with a copy).
      */
     public void copyEditPoseFrom(AnimatorComponent other) {
         if (other == null) return;
@@ -194,6 +351,71 @@ public class AnimatorComponent implements Component {
             setEditPose(bone, local);
         }
         bindPoseApplied = false;
+    }
+
+    /**
+     * Starts a blank recording: {@link #recordedPose} becomes an empty clip named {@code clipName} (made unique among
+     * the controller's states) bound to a new controller state, and the record playhead returns to 0. The state that
+     * played the previous recording is removed; an exported copy assigned under its own state is kept. Returns the
+     * new state (null without a controller).
+     */
+    public AnimatorState newRecordedClip(String clipName) {
+        String name = (clipName == null || clipName.isBlank()) ? RECORDED_CLIP_NAME : clipName.trim();
+        AnimationClip previous = recordedPose;
+        AnimatorState previousState = recordedState();
+        if (previousState != null) controller.removeState(previousState.name);
+        if (currentClip != null && currentClip == previous) {
+            currentClip = null;
+            activeClipName = "";
+        }
+
+        if (controller != null) name = controller.uniqueStateName(name);
+        recordedPose = createRecordedClip(name);
+        recordTime = 0.0f;
+        bindPoseApplied = false;
+        return AnimationSystem.assignClipToState(controller, recordedPose);
+    }
+
+    /**
+     * Renames {@link #recordedPose} and the controller state playing it (binding one if it has none), keeping both
+     * names equal and unique among the controller's states. Returns the name applied, or null without a recording.
+     */
+    public String renameRecordedClip(String newName) {
+        if (recordedPose == null || newName == null || newName.isBlank()) return null;
+        String name = newName.trim();
+        AnimatorState state = recordedState();
+        if (state != null) {
+            String oldName = state.name;
+            if (!name.equals(oldName)) {
+                name = controller.uniqueStateName(name);
+                controller.renameState(oldName, name);
+                if (oldName.equals(currentStateId)) currentStateId = name;
+                if (oldName.equals(targetStateId)) targetStateId = name;
+            }
+            recordedPose.name = name;
+        } else {
+            // Unbound (e.g. its state now plays an exported copy): a fresh state, never hijacking a same-named one
+            if (controller != null) name = controller.uniqueStateName(name);
+            recordedPose.name = name;
+            AnimationSystem.assignClipToState(controller, recordedPose);
+        }
+        if (currentClip == recordedPose) activeClipName = name;
+        return name;
+    }
+
+    /** The controller state playing {@link #recordedPose}, or null when it is not bound to one. */
+    public AnimatorState recordedState() {
+        if (controller == null || recordedPose == null) return null;
+        for (AnimatorState state : controller.getStates().values()) {
+            if (state.blendTree == null && state.clip == recordedPose) return state;
+        }
+        return null;
+    }
+
+    private static AnimationClip createRecordedClip(String name) {
+        AnimationClip clip = new AnimationClip(name, 0.01f);
+        clip.ticksPerSecond = 30.0f;
+        return clip;
     }
 
     /**
@@ -277,10 +499,7 @@ public class AnimatorComponent implements Component {
      */
     public KeyframeTrack recordKeyframe(Skeleton.BoneNode bone, float[] pos, float[] quat, float[] scale) {
         if (bone == null) return null;
-        if (recordedPose == null) {
-            recordedPose = new AnimationClip(RECORDED_CLIP_NAME, 0.01f);
-            recordedPose.ticksPerSecond = 30.0f;
-        }
+        if (recordedPose == null) recordedPose = createRecordedClip(RECORDED_CLIP_NAME);
         KeyframeTrack track = recordedPose.getTrack(bone.name);
         if (track == null) {
             track = new KeyframeTrack(bone.name);

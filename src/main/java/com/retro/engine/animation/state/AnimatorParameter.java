@@ -1,7 +1,8 @@
 package com.retro.engine.animation.state;
 
 /**
- * Parameter stored within an AnimatorController used to drive state machine transitions.
+ * Parameter used to drive state machine transitions. The AnimatorController holds the definition and default value;
+ * each AnimatorComponent holds its own copy with the live value.
  * Supports FLOAT, INT, BOOL, and TRIGGER types.
  */
 public class AnimatorParameter {
@@ -38,6 +39,15 @@ public class AnimatorParameter {
         this.name = name;
         this.type = ParameterType.BOOL;
         this.boolValue = value;
+    }
+
+    /** Independent copy (an animator's own value seeded from a controller default, or a duplicated animator's value). */
+    public AnimatorParameter copy() {
+        AnimatorParameter c = new AnimatorParameter(name, type);
+        c.floatValue = floatValue;
+        c.intValue = intValue;
+        c.boolValue = boolValue;
+        return c;
     }
 
     public void setTrigger() {

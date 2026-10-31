@@ -172,6 +172,22 @@ public class EditorWorkspace {
         return activeAnimatorController;
     }
 
+    /**
+     * The animator whose live state the animator panels show and edit: the selected entity's when it owns the active
+     * controller, else the animator that does. Null for the placeholder controller.
+     */
+    public AnimatorComponent getActiveAnimator() {
+        AnimatorController controller = getActiveAnimatorController();
+        Entity selected = sceneManager.getSelectedEntity();
+        AnimatorComponent animator = (selected != null) ? selected.getComponent(AnimatorComponent.class) : null;
+        if (animator != null && animator.controller == controller) return animator;
+        for (Entity e : sceneManager.getSceneEntities()) {
+            AnimatorComponent anim = e.getComponent(AnimatorComponent.class);
+            if (anim != null && anim.controller == controller) return anim;
+        }
+        return null;
+    }
+
     private AnimatorController createDefaultAnimatorController() {
         AnimatorController ctrl = new AnimatorController("ArmsAnimatorController");
         ctrl.setFloat("Speed", 1.25f);
@@ -189,7 +205,7 @@ public class EditorWorkspace {
         ctrl.addState(idle);
         ctrl.addState(walk);
         ctrl.addState(run);
-        ctrl.setInitialState("Idle");
+        ctrl.setEntryState("Idle");
 
         return ctrl;
     }
@@ -310,8 +326,9 @@ public class EditorWorkspace {
     }
 
     /**
-     * Exports the selected animator's recorded pose to Assets/Animations/<name>.ranim (name prompted) and assigns the
-     * exported clip to a controller state of that name, so it can be wired into the graph and played.
+     * Exports the selected animator's recorded pose to Assets/Animations/<name>.ranim (name prompted, defaulting to the
+     * clip's name) and assigns the exported clip to a controller state of that name, so it can be wired into the graph
+     * and played. Then offers to start a new blank recording clip; the exported state stays in the controller either way.
      */
     public void exportRecordedClip() {
         AnimatorComponent animator = getSelectedAnimator();
@@ -319,10 +336,11 @@ public class EditorWorkspace {
             EngineConsolePanel.log(EngineConsolePanel.LogLevel.WARN, "[Animation] Nothing recorded to export: key a bone with K first.");
             return;
         }
-        String input = NativeFileDialog.promptInput("Export Animation Clip", "Clip name:", "NewClip");
+        String clipName = animator.recordedPose.name;
+        String suggested = (clipName == null || clipName.equals(AnimatorComponent.RECORDED_CLIP_NAME)) ? "NewClip" : clipName;
+        String input = NativeFileDialog.promptInput("Export Animation Clip", "Clip name:", suggested);
         if (input == null || input.isBlank()) return;
-        String name = input.trim().replaceAll("[^A-Za-z0-9 _.-]", "_");
-        if (name.equalsIgnoreCase(AnimatorComponent.RECORDED_CLIP_NAME)) name = name + " Clip";
+        String name = sanitizeClipName(input);
 
         String assetsRoot = hasActiveProject() ? assetDirectoryManager.getProjectAssetsPath() : "Assets";
         java.io.File file = new java.io.File(new java.io.File(assetsRoot, "Animations"), name + AnimationClipIO.EXTENSION).getAbsoluteFile();
@@ -331,8 +349,69 @@ public class EditorWorkspace {
             return;
         }
         assetDirectoryManager.addAssetDirectoryIfNotExists(file.getPath(), AssetType.ANIMATION);
+        // A state already named after the clip (the recording's own, when exported under its name) now plays the asset
         assignClipAsset(animator, file.getPath());
         EngineConsolePanel.log(EngineConsolePanel.LogLevel.INFO, "[Animation] Exported '" + name + "' to " + file.getPath());
+
+        if (NativeFileDialog.confirm("New Recording", "Exported '" + name + "'. Start a new blank recording clip?", true)) {
+            String next = NativeFileDialog.promptInput("New Animation Clip", "Clip name:", animator.controller.uniqueStateName("NewClip"));
+            if (next != null && !next.isBlank()) {
+                startRecordedClip(animator, next);
+                return;
+            }
+        }
+        // Keep editing the recording: rebind it if the export took over its state (keys land there again)
+        if (animator.recordedState() == null) AnimationSystem.assignClipToState(animator.controller, animator.recordedPose);
+    }
+
+    /**
+     * Replaces the selected animator's recording with a blank clip named {@code name}, bound to a new controller state
+     * that the dope sheet then shows, with the record playhead at 0. Asks before discarding keys. False when not EDITING
+     * an animator or cancelled.
+     */
+    public boolean createNewRecordedClip(String name) {
+        AnimatorComponent animator = getRecordingAnimator();
+        if (animator == null || animator.controller == null) {
+            EngineConsolePanel.log(EngineConsolePanel.LogLevel.WARN, "[Animation] Select a rigged entity in edit mode to record a new clip.");
+            return false;
+        }
+        AnimationClip current = animator.recordedPose;
+        if (current != null && !current.getTracks().isEmpty() && animator.recordedState() != null
+                && !NativeFileDialog.confirm("New Recording", "Discard the keys recorded in '" + current.name
+                        + "'? Keys that were not exported are lost.", false)) {
+            return false;
+        }
+        return startRecordedClip(animator, name);
+    }
+
+    private boolean startRecordedClip(AnimatorComponent animator, String name) {
+        AnimatorState state = animator.newRecordedClip(sanitizeClipName(name));
+        if (state == null) return false;
+        // The previous recording's state (and transitions into it) may be gone; show the new clip on the dope sheet
+        clearAnimatorSelection();
+        setSelectedStateName(state.name);
+        EngineConsolePanel.log(EngineConsolePanel.LogLevel.INFO, "[Animation] Started new clip '" + state.name + "' on '" + getSelectedEntity().name + "'.");
+        return true;
+    }
+
+    /** Renames the selected animator's recorded clip and its controller state (starts a clip of that name if there is none). */
+    public boolean renameActiveRecordedClip(String name) {
+        AnimatorComponent animator = getRecordingAnimator();
+        if (animator == null || animator.controller == null || name == null || name.isBlank()) return false;
+        if (animator.recordedPose == null) return startRecordedClip(animator, name);
+
+        String oldName = animator.recordedPose.name;
+        String applied = animator.renameRecordedClip(sanitizeClipName(name));
+        if (applied == null) return false;
+        setSelectedStateName(applied);
+        EngineConsolePanel.log(EngineConsolePanel.LogLevel.INFO, "[Animation] Renamed clip '" + oldName + "' to '" + applied + "'.");
+        return true;
+    }
+
+    /** Clip names double as state names and .ranim file names, so keep them file-name safe. */
+    private static String sanitizeClipName(String name) {
+        String clean = name.trim().replaceAll("[^A-Za-z0-9 _.-]", "_");
+        return clean.isEmpty() ? AnimatorComponent.RECORDED_CLIP_NAME : clean;
     }
 
     /** Assigns a .ranim asset to the selected animator's controller as a state (added from the graph's context menu). */
@@ -506,9 +585,9 @@ public class EditorWorkspace {
             }
             case HIERARCHY -> HierarchyPanel.render(uiContext, sceneManager.getSceneEntities());
             case INSPECTOR -> InspectorPanel.render(uiContext, sceneManager.getSelectedEntity(), getSelectedBone(), getSelectedBoneIndex(), assetDirectoryManager.getAssetDirectory());
-            case ANIMATOR -> AnimatorGraphPanel.renderCanvas(uiGeometryBuffer, getActiveAnimatorController(), selectedStateName);
-            case ANIMATOR_PARAMETERS -> AnimatorGraphPanel.renderParameters(uiGeometryBuffer, getActiveAnimatorController());
-            case ANIMATOR_INSPECTOR -> AnimatorGraphPanel.renderInspector(uiGeometryBuffer, getActiveAnimatorController(), selectedStateName, selectedTransition, getRecordingAnimator());
+            case ANIMATOR -> AnimatorGraphPanel.renderCanvas(uiGeometryBuffer, getActiveAnimatorController(), getActiveAnimator(), selectedStateName);
+            case ANIMATOR_PARAMETERS -> AnimatorGraphPanel.renderParameters(uiGeometryBuffer, getActiveAnimatorController(), getActiveAnimator());
+            case ANIMATOR_INSPECTOR -> AnimatorGraphPanel.renderInspector(uiGeometryBuffer, getActiveAnimatorController(), getActiveAnimator(), selectedStateName, selectedTransition, getRecordingAnimator());
             case ASSETS -> AssetBrowserPanel.render(uiContext, assetDirectoryManager.getAssetDirectory(), assetDirectoryManager.getCurrentFolderPath(), assetDirectoryManager.getActiveProjectPath());
             case CONSOLE -> EngineConsolePanel.renderConsole(uiGeometryBuffer);
         }

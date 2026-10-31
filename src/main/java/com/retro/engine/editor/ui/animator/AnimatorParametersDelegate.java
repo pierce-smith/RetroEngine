@@ -10,9 +10,11 @@ import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.panels.MenuItem;
 import com.retro.engine.editor.ui.theme.EditorTheme;
+import com.retro.engine.scene.components.media.AnimatorComponent;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * SRP Delegate: Manages the Animator Parameters list: typed rows with inline value editors
@@ -64,13 +66,23 @@ public class AnimatorParametersDelegate {
         };
     }
 
-    public static void renderParametersSidebar(UIGeometryBatch.Buffer buffer, AnimatorController controller) {
+    /**
+     * Values shown and edited: {@code animator}'s own live values,
+     * else the controller's defaults.
+     */
+    private static Map<String, AnimatorParameter> parameters(AnimatorController controller, AnimatorComponent animator) {
+        if (controller == null) return null;
+        return (animator != null && animator.controller == controller) ? animator.getParameters() : controller.getParameters();
+    }
+
+    public static void renderParametersSidebar(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorComponent animator) {
         UIGeometryBatch.addQuad(buffer, PANEL_X0, PANEL_Y0, PANEL_X1, PANEL_Y1, EditorTheme.SURFACE, 1.0f);
 
-        int count = controller != null ? controller.getParameters().size() : 0;
+        Map<String, AnimatorParameter> parameters = parameters(controller, animator);
+        int count = parameters != null ? parameters.size() : 0;
         int index = 0;
         if (count > 0) {
-            for (AnimatorParameter param : controller.getParameters().values()) {
+            for (AnimatorParameter param : parameters.values()) {
                 float top = rowTop(index);
                 if (top - ROW_H < PANEL_Y0 + 0.04f) {
                     valueScratch.setLength(0);
@@ -214,14 +226,14 @@ public class AnimatorParametersDelegate {
 
         // 2. Parameter rows
         if (ndcX >= ROW_X0 && ndcX <= ROW_X1 && ndcY >= PANEL_Y0 && ndcY < HEADER_Y0) {
-            return processParameterClick(ndcX, ndcY, controller);
+            return processParameterClick(ndcX, ndcY, parameters(controller, manager.getActiveAnimator()));
         }
         return false;
     }
 
-    private static boolean processParameterClick(float ndcX, float ndcY, AnimatorController controller) {
+    private static boolean processParameterClick(float ndcX, float ndcY, Map<String, AnimatorParameter> parameters) {
         int index = 0;
-        for (AnimatorParameter param : controller.getParameters().values()) {
+        for (AnimatorParameter param : parameters.values()) {
             float top = rowTop(index);
             float bottom = top - ROW_H;
             if (bottom < PANEL_Y0 + 0.04f) break;

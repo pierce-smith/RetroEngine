@@ -4,8 +4,11 @@ import com.retro.engine.animation.clips.AnimationClip;
 import com.retro.engine.animation.clips.AnimationClipIO;
 import com.retro.engine.animation.clips.KeyframeTrack;
 import com.retro.engine.animation.skeleton.Skeleton;
+import com.retro.engine.animation.state.AnimatorCondition;
 import com.retro.engine.animation.state.AnimatorController;
+import com.retro.engine.animation.state.AnimatorParameter;
 import com.retro.engine.animation.state.AnimatorState;
+import com.retro.engine.animation.state.AnimatorTransition;
 import com.retro.engine.animation.state.BlendTree;
 import com.retro.engine.assets.importers.MeshImporter;
 import com.retro.engine.scene.components.media.AnimatorComponent;
@@ -14,11 +17,16 @@ import com.retro.engine.scene.world.SceneWorld.PlayState;
 import java.io.File;
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 
 /**
  * System executing per-frame skeletal animation updates, keyframe sampling,
  * AnimatorController state machine transitions, crossfade clip blending,
  * hierarchy pose evaluation, and matrix palette generation for GPU skinning.
+ *
+ * Skeletons and imported clips are shared, read-only assets, and controllers are only read here. Every per-entity value the system advances (state
+ * machine position, state times, crossfade, parameter values) and writes (the bone palette) lives on the entity's
+ * AnimatorComponent, so duplicated models sharing one rig animate independently.
  */
 public class AnimationSystem {
 
@@ -66,8 +74,8 @@ public class AnimationSystem {
         animator.playbackTime = 0.0f;
         animator.isPlaying = true;
         if (animator.controller != null) {
-            animator.controller.resetToEntryState();
-            syncActiveClip(animator, animator.controller.getCurrentState());
+            animator.resetToEntryState();
+            syncActiveClip(animator, animator.getCurrentState());
         }
         update(animator, 0.0f);
     }
@@ -89,8 +97,8 @@ public class AnimationSystem {
         animator.playbackTime = 0.0f;
         animator.isPlaying = true;
         if (animator.controller != null) {
-            animator.controller.resetToEntryState();
-            syncActiveClip(animator, animator.controller.getCurrentState());
+            animator.resetToEntryState();
+            syncActiveClip(animator, animator.getCurrentState());
         }
         resetToBindPose(animator);
     }
@@ -104,7 +112,7 @@ public class AnimationSystem {
         animator.isPlaying = false;
         animator.playbackTime = 0.0f;
         if (animator.controller != null) {
-            animator.controller.resetToEntryState();
+            animator.resetToEntryState();
         }
         resetToBindPose(animator);
     }
@@ -190,28 +198,28 @@ public class AnimationSystem {
         int jointCount = skeleton.getBoneCount();
         ensureCapacity(jointCount);
 
-        // 1. Controller State Machine Execution
+        // 1. Controller State Machine Execution (on this animator's instance state; the controller is only read)
         if (animator.controller != null) {
-            AnimatorController controller = animator.controller;
-            controller.update(deltaTime);
+            stepStateMachine(animator, deltaTime);
+            Map<String, AnimatorParameter> parameters = animator.getParameters();
 
-            AnimatorState currentState = controller.getCurrentState();
-            AnimatorState targetState = controller.getTargetState();
-            if (currentState == null || !currentState.hasMotion() || controller.isCurrentStateFinished()) {
+            AnimatorState currentState = animator.getCurrentState();
+            AnimatorState targetState = animator.getTargetState();
+            if (currentState == null || !currentState.hasMotion() || animator.isCurrentStateFinished()) {
                 // Empty state, or a single-shot state that ran out with no transition leaving it
                 applyBindPoseOnce(animator);
                 return;
             }
             syncActiveClip(animator, currentState);
 
-            boolean blendTarget = controller.isTransitioning() && targetState != null && targetState.hasMotion();
-            float weight = controller.getCrossfadeWeight();
-            float stateTimeA = controller.getCurrentStateTime();
-            float stateTimeB = controller.getTargetStateTime();
+            boolean blendTarget = targetState != null && targetState.hasMotion();
+            float weight = animator.getCrossfadeWeight();
+            float stateTimeA = animator.currentTime;
+            float stateTimeB = animator.targetTime;
 
             // Blend weights depend only on parameters, so evaluate them once per frame rather than per bone
-            float[] weightsA = currentState.blendTree != null ? currentState.blendTree.evaluateWeights(controller) : null;
-            float[] weightsB = (blendTarget && targetState.blendTree != null) ? targetState.blendTree.evaluateWeights(controller) : null;
+            float[] weightsA = currentState.blendTree != null ? currentState.blendTree.evaluateWeights(parameters) : null;
+            float[] weightsB = (blendTarget && targetState.blendTree != null) ? targetState.blendTree.evaluateWeights(parameters) : null;
 
             for (int i = 0; i < jointCount; i++) {
                 Skeleton.BoneNode bone = skeleton.getBone(i);
@@ -291,6 +299,67 @@ public class AnimationSystem {
     }
 
     /**
+     * Advances {@code animator}'s state machine instance by {@code deltaTime}: state times, crossfade completion, and
+     * outgoing transitions evaluated against the animator's own parameter values. The controller only supplies
+     * the graph. An animator whose state is unset or was removed from the controller restarts at the entry state.
+     */
+    private static void stepStateMachine(AnimatorComponent animator, float deltaTime) {
+        AnimatorController controller = animator.controller;
+        Map<String, AnimatorParameter> parameters = animator.getParameters();
+        AnimatorState current = animator.getCurrentState();
+        if (current == null) {
+            animator.resetToEntryState();
+            current = animator.getCurrentState();
+            if (current == null) return;
+        }
+
+        // Looping states wrap, single-shot states freeze at their terminal frame
+        animator.currentTime = current.boundStateTime(animator.currentTime + deltaTime * current.speed, parameters);
+
+        if (animator.transitioning) {
+            AnimatorState target = animator.getTargetState();
+            if (target == null) {
+                animator.cancelTransition(); // target state removed mid-crossfade
+            } else {
+                animator.targetTime = target.boundStateTime(animator.targetTime + deltaTime * target.speed, parameters);
+                animator.crossfadeTimer += deltaTime;
+                if (animator.crossfadeTimer >= animator.crossfadeDuration) {
+                    // Complete crossfade transition
+                    animator.currentStateId = animator.targetStateId;
+                    animator.currentTime = animator.targetTime;
+                    animator.cancelTransition();
+                    current = target;
+                }
+            }
+        }
+
+        // Evaluate outgoing transitions if not already crossfading
+        if (!animator.transitioning) {
+            float normalizedTime = current.getNormalizedTime(animator.currentTime, parameters);
+            for (AnimatorTransition transition : current.transitions) {
+                if (!transition.canTransition(normalizedTime, parameters)) continue;
+                AnimatorState next = controller.getState(transition.destinationStateName);
+                if (next != null && next != current) {
+                    animator.targetStateId = next.name;
+                    animator.targetTime = 0.0f;
+                    animator.crossfadeTimer = 0.0f;
+                    animator.crossfadeDuration = Math.max(0.01f, transition.duration);
+                    animator.transitioning = true;
+                    resetTriggersUsedIn(transition, parameters);
+                    break;
+                }
+            }
+        }
+    }
+
+    private static void resetTriggersUsedIn(AnimatorTransition transition, Map<String, AnimatorParameter> parameters) {
+        for (AnimatorCondition cond : transition.conditions) {
+            AnimatorParameter param = parameters.get(cond.parameterName);
+            if (param != null && param.type == AnimatorParameter.ParameterType.TRIGGER) param.resetTrigger();
+        }
+    }
+
+    /**
      * Makes {@code clip} playable from {@code controller}: returns the state already playing it, else re-points the
      * single-clip state of the same name at it (a re-exported clip replaces its old version), else adds a new state
      * below the existing graph. Sampling is by bone name, so recorded and .ranim clips play like imported ones.
@@ -335,7 +404,7 @@ public class AnimationSystem {
             if (clip != null) assignClipToState(controller, clip);
         }
         String entry = animator.takeSavedEntryState();
-        if (entry != null && controller.setEntryState(entry)) controller.resetToEntryState();
+        if (entry != null && controller.setEntryState(entry)) animator.resetToEntryState();
     }
 
     /** Loads a .ranim clip, resolving project-relative or moved paths like mesh assets; null (logged) on failure. */

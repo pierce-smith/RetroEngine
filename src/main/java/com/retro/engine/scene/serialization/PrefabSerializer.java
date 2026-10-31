@@ -1,7 +1,9 @@
 package com.retro.engine.scene.serialization;
 
 import com.retro.engine.assets.AssetDatabase;
+import com.retro.engine.scene.components.media.AnimatorComponent;
 import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.scene.entity.EntitySpawner;
 import com.retro.engine.scene.world.SceneWorld;
 
 import java.io.*;
@@ -114,6 +116,13 @@ public class PrefabSerializer {
                     e.parentId = idRemap.get(e.parentId);
                 } else {
                     e.parentId = null;
+                }
+                // Skeletons / controllers are not serialized: rebuild this instance's rig from its mesh, as a scene load
+                // does, so every instantiated copy animates with its own state rather than sitting unposed
+                String meshPath = e.getMeshAssetPath();
+                AnimatorComponent animator = e.getComponent(AnimatorComponent.class);
+                if ((animator == null || animator.skeleton == null) && meshPath != null && !meshPath.trim().isEmpty()) {
+                    EntitySpawner.attachAnimatorIfRigged(e, meshPath);
                 }
                 world.addEntity(e, -1);
                 if (rootInstantiated == null) rootInstantiated = e;

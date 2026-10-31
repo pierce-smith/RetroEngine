@@ -8,6 +8,9 @@ import java.util.Map;
 /**
  * Encapsulates the skeletal bone hierarchy, parent-child bone linkage,
  * and inverse bind pose matrices (offset matrices) for GPU skinning.
+ *
+ * A shared, read-only asset once built: duplicated entities reference the same Skeleton, so animation never writes
+ * pose data here. Per-entity poses (edit pose, evaluated palette) live on each AnimatorComponent.
  */
 public class Skeleton {
 

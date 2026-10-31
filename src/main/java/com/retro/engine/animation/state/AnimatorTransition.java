@@ -33,6 +33,13 @@ public class AnimatorTransition {
         this.exitTime = exitTime;
     }
 
+    /** Independent copy, conditions included. */
+    public AnimatorTransition copy() {
+        AnimatorTransition c = new AnimatorTransition(destinationStateName, duration, hasExitTime, exitTime);
+        for (AnimatorCondition cond : conditions) c.conditions.add(new AnimatorCondition(cond.parameterName, cond.mode, cond.threshold));
+        return c;
+    }
+
     public AnimatorTransition addCondition(String paramName, AnimatorCondition.Comparison mode, float threshold) {
         conditions.add(new AnimatorCondition(paramName, mode, threshold));
         return this;

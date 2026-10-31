@@ -3,10 +3,14 @@ package com.retro.engine.editor.ui.animator;
 import com.retro.engine.animation.clips.AnimationClip;
 import com.retro.engine.animation.clips.KeyframeTrack;
 import com.retro.engine.animation.state.AnimatorController;
+import com.retro.engine.animation.state.AnimatorParameter;
 import com.retro.engine.animation.state.AnimatorState;
 import com.retro.engine.animation.state.AnimatorTransition;
 import com.retro.engine.animation.state.BlendTree;
 import com.retro.engine.editor.EditorWorkspace;
+import com.retro.engine.editor.audio.UISoundPlayer;
+import com.retro.engine.editor.audio.UISoundPlayer.UISound;
+import com.retro.engine.editor.dialogs.NativeFileDialog;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.theme.EditorTheme;
 import com.retro.engine.scene.components.media.AnimatorComponent;
@@ -14,16 +18,18 @@ import com.retro.engine.scene.components.media.AnimatorComponent;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 /**
  * SRP Delegate: Manages the Animator Inspector: state details and outgoing transitions on top,
  * and a dope sheet below — time ruler, per-bone Translation/Rotation/Scale keyframe tracks,
- * and a draggable playhead synced to the controller's playback time.
+ * and a draggable playhead synced to the active animator's playback time.
  *
- * The playhead seeks the controller when the inspected state is the one currently playing;
+ * The playhead seeks the animator when the inspected state is the one currently playing;
  * for any other state it scrubs a local preview time that only drives this view. On the selected animator's
  * recorded clip (while EDITING) it is the record playhead instead: it sets the time 'K' / drag-release keys land
- * at, and the timeline runs past the last key so new keys can be placed later in time.
+ * at, and the timeline runs past the last key so new keys can be placed later in time. While recording, the dope sheet
+ * header offers [+ NEW CLIP] (start a blank recording clip) and [RENAME] (retitle the recording and its state).
  */
 public class AnimatorInspectorDelegate {
 
@@ -41,6 +47,11 @@ public class AnimatorInspectorDelegate {
     private static final float LABEL_X1 = 0.705f;
     private static final float TL_X0 = 0.718f, TL_X1 = 0.972f;
     private static final float DIAMOND_H = 0.010f;
+
+    // Dope sheet header buttons (shown while recording), in place of the "DOPE SHEET" title
+    private static final float HEADER_BTN_Y0 = DOPE_HEADER_Y0 + 0.006f, HEADER_BTN_Y1 = DOPE_TOP - 0.006f;
+    private static final float NEW_CLIP_X0 = CX0 + 0.006f, NEW_CLIP_X1 = CX0 + 0.106f;
+    private static final float RENAME_X0 = NEW_CLIP_X1 + 0.006f, RENAME_X1 = NEW_CLIP_X1 + 0.081f;
 
     // Record timeline: at least this long, and this far past the last key
     private static final float RECORD_MIN_LENGTH = 2.0f, RECORD_TAIL = 1.0f;
@@ -70,19 +81,25 @@ public class AnimatorInspectorDelegate {
     private static float textTop(float midY, float size) { return midY + size * 0.009f; }
 
     /** Selected state, or the playing state when nothing is selected. Shared by render and input. */
-    private static AnimatorState resolveInspectedState(AnimatorController controller, String selectedStateName) {
+    private static AnimatorState resolveInspectedState(AnimatorController controller, AnimatorComponent animator, String selectedStateName) {
         if (controller == null) return null;
         AnimatorState state = selectedStateName != null ? controller.getState(selectedStateName) : null;
-        return state != null ? state : controller.getCurrentState();
+        if (state == null && animator != null) state = animator.getCurrentState();
+        return state != null ? state : controller.getEntryState();
+    }
+
+    /** Parameter values blend trees are evaluated with: the animator's live values, else the controller's defaults. */
+    private static Map<String, AnimatorParameter> parameters(AnimatorController controller, AnimatorComponent animator) {
+        return (animator != null) ? animator.getParameters() : controller.getParameters();
     }
 
     /** Clip shown on the dope sheet: the state's clip, or a blend tree's currently dominant motion. */
-    private static AnimationClip displayClip(AnimatorState state, AnimatorController controller) {
+    private static AnimationClip displayClip(AnimatorState state, AnimatorController controller, AnimatorComponent animator) {
         if (state == null) return null;
         if (state.blendTree == null) return state.clip;
         List<BlendTree.Motion> motions = state.blendTree.getMotions();
         if (motions.isEmpty()) return null;
-        float[] weights = state.blendTree.evaluateWeights(controller);
+        float[] weights = state.blendTree.evaluateWeights(parameters(controller, animator));
         int best = 0;
         for (int i = 1; i < motions.size(); i++) {
             if (weights[i] > weights[best]) best = i;
@@ -90,19 +107,19 @@ public class AnimatorInspectorDelegate {
         return motions.get(best).clip;
     }
 
-    /** Only the playing state is seekable, so only it shows (and scrubs) the controller's time. */
-    private static boolean isLive(AnimatorState state, AnimatorController controller) {
-        return state == controller.getCurrentState();
+    /** Only the playing state is seekable, so only it shows (and scrubs) the animator's time. */
+    private static boolean isLive(AnimatorState state, AnimatorComponent animator) {
+        return animator != null && state == animator.getCurrentState();
     }
 
     /** Clip-local playhead time for the inspected state. */
-    private static float playheadTime(AnimatorState state, AnimationClip clip, AnimatorController controller) {
-        if (!isLive(state, controller)) {
+    private static float playheadTime(AnimatorState state, AnimationClip clip, AnimatorComponent animator) {
+        if (!isLive(state, animator)) {
             return state.name.equals(previewStateName) ? Math.min(previewTime, clip.durationSeconds) : 0.0f;
         }
-        float stateTime = controller.getCurrentStateTime();
+        float stateTime = animator.currentTime;
         if (state.blendTree == null) return state.getClipSampleTime(stateTime);
-        return state.getNormalizedTime(stateTime, controller) * clip.durationSeconds;
+        return state.getNormalizedTime(stateTime, animator.getParameters()) * clip.durationSeconds;
     }
 
     private static float frameRate(AnimationClip clip) {
@@ -125,17 +142,17 @@ public class AnimatorInspectorDelegate {
 
     // --- Rendering ---
 
-    public static void renderInspectorSidebar(UIGeometryBatch.Buffer buffer, AnimatorController controller, String selectedStateName,
+    public static void renderInspectorSidebar(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorComponent animator, String selectedStateName,
                                               AnimatorTransition transition, AnimatorComponent recorder) {
         UIGeometryBatch.addQuad(buffer, PANEL_X0, PANEL_Y0, PANEL_X1, PANEL_Y1, EditorTheme.SURFACE, 1.0f);
 
-        AnimatorState state = resolveInspectedState(controller, selectedStateName);
+        AnimatorState state = resolveInspectedState(controller, animator, selectedStateName);
         if (state == null) {
             centeredTextIn(buffer, "NOTHING TO INSPECT", PANEL_X0, PANEL_X1, 0.30f, 1.0f, EditorTheme.TEXT_MUTED);
             centeredTextIn(buffer, "SELECT A STATE NODE IN THE GRAPH", PANEL_X0, PANEL_X1, 0.24f, 0.72f, EditorTheme.TEXT_DISABLED);
         } else {
-            renderStateDetails(buffer, controller, state);
-            renderDopeSheet(buffer, controller, state, recorder);
+            renderStateDetails(buffer, controller, animator, state);
+            renderDopeSheet(buffer, controller, animator, state, recorder);
         }
 
         // Header
@@ -144,8 +161,8 @@ public class AnimatorInspectorDelegate {
         UIGeometryBatch.addBoundedText(buffer, "INSPECTOR", CX0, textTop(0.835f, 0.85f), CX1, 0.85f, EditorTheme.TEXT, 1.0f);
     }
 
-    private static void renderStateDetails(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorState state) {
-        boolean active = state == controller.getCurrentState();
+    private static void renderStateDetails(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorComponent animator, AnimatorState state) {
+        boolean active = isLive(state, animator);
         boolean entry = state == controller.getEntryState();
 
         // Title: status dot, name, status pills
@@ -179,7 +196,7 @@ public class AnimatorInspectorDelegate {
         rowMid -= PROP_ROW_H;
 
         textScratch.setLength(0);
-        AnimatorParametersDelegate.appendFixed2(textScratch, state.getCycleDuration(controller));
+        AnimatorParametersDelegate.appendFixed2(textScratch, state.getCycleDuration(parameters(controller, animator)));
         textScratch.append('s');
         propertyRow(buffer, "LENGTH", textScratch, rowMid);
         rowMid -= PROP_ROW_H + 0.012f;
@@ -246,13 +263,17 @@ public class AnimatorInspectorDelegate {
         UIGeometryBatch.addBoundedText(buffer, title, CX0 + 0.008f, textTop(mid, 0.75f), CX1 - 0.008f, 0.75f, EditorTheme.TEXT, 1.0f);
     }
 
-    private static void renderDopeSheet(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorState state, AnimatorComponent recorder) {
-        AnimationClip clip = displayClip(state, controller);
+    private static void renderDopeSheet(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorComponent animator, AnimatorState state, AnimatorComponent recorder) {
+        AnimationClip clip = displayClip(state, controller, animator);
         float headerMid = (DOPE_HEADER_Y0 + DOPE_TOP) * 0.5f;
 
         textScratch.setLength(0);
-        textScratch.append("DOPE SHEET");
+        if (recorder == null) textScratch.append("DOPE SHEET");
         sectionHeader(buffer, textScratch, headerMid);
+        if (recorder != null) {
+            headerButton(buffer, "+ NEW CLIP", NEW_CLIP_X0, NEW_CLIP_X1, headerMid, EditorTheme.ACCENT);
+            headerButton(buffer, "RENAME", RENAME_X0, RENAME_X1, headerMid, EditorTheme.GRAPHITE);
+        }
 
         if (clip == null || clip.durationSeconds <= 0.0f) {
             centeredTextIn(buffer, "NO CLIP ON THIS STATE", PANEL_X0, PANEL_X1, 0.0f, 0.8f, EditorTheme.TEXT_DISABLED);
@@ -262,8 +283,8 @@ public class AnimatorInspectorDelegate {
         boolean recording = isRecording(clip, recorder);
         float duration = recording ? recordTimelineLength(clip, recorder) : clip.durationSeconds;
         float fps = frameRate(clip);
-        float playTime = Math.max(0.0f, Math.min(duration, recording ? recorder.recordTime : playheadTime(state, clip, controller)));
-        boolean live = recording || isLive(state, controller);
+        float playTime = Math.max(0.0f, Math.min(duration, recording ? recorder.recordTime : playheadTime(state, clip, animator)));
+        boolean live = recording || isLive(state, animator);
 
         // Header readout: [PREVIEW | REC]  0.45 / 2.00s (record mode shows the recorded clip's length)
         textScratch.setLength(0);
@@ -288,6 +309,11 @@ public class AnimatorInspectorDelegate {
         renderRuler(buffer, duration, fps);
         renderTracks(buffer, clip, duration, playTime, fps);
         renderPlayhead(buffer, playTime, duration, fps);
+    }
+
+    private static void headerButton(UIGeometryBatch.Buffer buffer, String label, float x0, float x1, float mid, int color) {
+        UIGeometryBatch.addRoundedQuad(buffer, x0, HEADER_BTN_Y0, x1, HEADER_BTN_Y1, EditorTheme.RADIUS_SMALL, color, 1.0f);
+        centeredTextIn(buffer, label, x0, x1, mid, 0.6f, EditorTheme.TEXT);
     }
 
     private static void renderRuler(UIGeometryBatch.Buffer buffer, float duration, float fps) {
@@ -458,13 +484,43 @@ public class AnimatorInspectorDelegate {
 
     // --- Input ---
 
-    /** Left press: starts a playhead scrub when it lands on the ruler or the track area. */
+    /** Left press: a dope sheet header button, else starts a playhead scrub when it lands on the ruler or the track area. */
     public static boolean handleInspectorClick(float ndcX, float ndcY, EditorWorkspace manager) {
         if (manager == null) return false;
+        if (handleHeaderButtons(ndcX, ndcY, manager)) return true;
         if (ndcX < TL_X0 - 0.012f || ndcX > TL_X1 + 0.012f || ndcY < TRACK_BOTTOM || ndcY > RULER_Y1) return false;
         if (!seek(ndcX, manager)) return false;
         scrubbing = true;
         return true;
+    }
+
+    /** [+ NEW CLIP] / [RENAME], hit only while they are drawn (a recording animator and an inspected state). */
+    private static boolean handleHeaderButtons(float ndcX, float ndcY, EditorWorkspace manager) {
+        if (ndcY < HEADER_BTN_Y0 || ndcY > HEADER_BTN_Y1 || ndcX < NEW_CLIP_X0 || ndcX > RENAME_X1) return false;
+        AnimatorComponent recorder = manager.getRecordingAnimator();
+        AnimatorController controller = manager.getActiveAnimatorController();
+        if (recorder == null || resolveInspectedState(controller, manager.getActiveAnimator(), manager.getSelectedStateName()) == null) return false;
+
+        if (ndcX <= NEW_CLIP_X1) {
+            UISoundPlayer.play(UISound.OPEN_MODAL);
+            String suggested = (recorder.controller != null) ? recorder.controller.uniqueStateName("NewClip") : "NewClip";
+            String name = NativeFileDialog.promptInput("New Animation Clip", "Clip name:", suggested);
+            if (name != null && !name.isBlank() && manager.createNewRecordedClip(name)) {
+                // Fresh timeline: the record playhead is back at 0.00s and the empty clip's track list starts at the top
+                scrubbing = false;
+                scrollRows = 0.0f;
+                UISoundPlayer.play(UISound.SPAWN);
+            }
+            return true;
+        }
+        if (ndcX >= RENAME_X0) {
+            UISoundPlayer.play(UISound.OPEN_MODAL);
+            String current = (recorder.recordedPose != null) ? recorder.recordedPose.name : "NewClip";
+            String name = NativeFileDialog.promptInput("Rename Clip", "Clip title:", current);
+            if (name != null && !name.isBlank() && manager.renameActiveRecordedClip(name)) UISoundPlayer.play(UISound.CLICK);
+            return true;
+        }
+        return true; // gap between the buttons
     }
 
     public static boolean handleCursorPos(float ndcX, float ndcY, EditorWorkspace manager) {
@@ -488,8 +544,9 @@ public class AnimatorInspectorDelegate {
     /** Moves the playhead to the time under {@code ndcX}; returns false when there is nothing to scrub. */
     private static boolean seek(float ndcX, EditorWorkspace manager) {
         AnimatorController controller = manager.getActiveAnimatorController();
-        AnimatorState state = resolveInspectedState(controller, manager.getSelectedStateName());
-        AnimationClip clip = displayClip(state, controller);
+        AnimatorComponent animator = manager.getActiveAnimator();
+        AnimatorState state = resolveInspectedState(controller, animator, manager.getSelectedStateName());
+        AnimationClip clip = displayClip(state, controller, animator);
         if (clip == null || clip.durationSeconds <= 0.0f) return false;
 
         AnimatorComponent recorder = manager.getRecordingAnimator();
@@ -507,9 +564,9 @@ public class AnimatorInspectorDelegate {
         // Looping states wrap at exactly the clip length, so stop just short of it
         t = Math.max(0.0f, Math.min(state.isLooping ? duration * 0.9999f : duration, t));
 
-        if (isLive(state, controller)) {
-            float stateTime = state.blendTree == null ? t : (t / duration) * state.getCycleDuration(controller);
-            controller.setCurrentStateTime(stateTime);
+        if (isLive(state, animator)) {
+            float stateTime = state.blendTree == null ? t : (t / duration) * state.getCycleDuration(animator.getParameters());
+            animator.setCurrentTime(stateTime);
         } else {
             previewTime = t;
             previewStateName = state.name;

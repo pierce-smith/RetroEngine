@@ -4,6 +4,8 @@ import com.retro.engine.animation.clips.AnimationClip;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.function.UnaryOperator;
 
 /**
  * State in an AnimatorController representing an animation clip, playback parameters,
@@ -46,6 +48,18 @@ public class AnimatorState {
         this.graphY = y;
     }
 
+    /** Independent copy (transitions, blend tree, layout); clips are passed through {@code clipMap}. */
+    public AnimatorState copy(UnaryOperator<AnimationClip> clipMap) {
+        AnimatorState c = new AnimatorState(name, clipMap.apply(clip), speed, isLooping);
+        c.blendTree = (blendTree != null) ? blendTree.copy(clipMap) : null;
+        c.graphX = graphX;
+        c.graphY = graphY;
+        c.graphW = graphW;
+        c.graphH = graphH;
+        for (AnimatorTransition t : transitions) c.transitions.add(t.copy());
+        return c;
+    }
+
     public AnimatorState setGraphPos(float x, float y) {
         this.graphX = x;
         this.graphY = y;
@@ -69,9 +83,9 @@ public class AnimatorState {
      * whose period spans forward + reverse), or the weight-blended duration of a blend tree.
      * Returns 0 for states with no motion.
      */
-    public float getCycleDuration(AnimatorController controller) {
+    public float getCycleDuration(Map<String, AnimatorParameter> parameters) {
         if (blendTree != null) {
-            return blendTree.getBlendedDuration(blendTree.evaluateWeights(controller));
+            return blendTree.getBlendedDuration(blendTree.evaluateWeights(parameters));
         }
         if (clip != null) {
             boolean pingPong = isLooping && clip.loopMode == AnimationClip.LoopMode.PING_PONG;
@@ -84,8 +98,8 @@ public class AnimatorState {
      * Bounds an accumulated state time to this state's timeline: looping states wrap by modulo
      * so the accumulator never grows without bound; single-shot states clamp at the terminal frame.
      */
-    public float boundStateTime(float stateTime, AnimatorController controller) {
-        float duration = getCycleDuration(controller);
+    public float boundStateTime(float stateTime, Map<String, AnimatorParameter> parameters) {
+        float duration = getCycleDuration(parameters);
         if (duration <= 0.0001f) return 0.0f;
         if (isLooping) {
             float wrapped = stateTime % duration;
@@ -95,9 +109,9 @@ public class AnimatorState {
     }
 
     /** True once a single-shot state's timeline has reached its terminal frame. */
-    public boolean isFinished(float stateTime, AnimatorController controller) {
+    public boolean isFinished(float stateTime, Map<String, AnimatorParameter> parameters) {
         if (isLooping || !hasMotion()) return false;
-        float duration = getCycleDuration(controller);
+        float duration = getCycleDuration(parameters);
         return duration > 0.0001f && stateTime >= duration;
     }
 
@@ -115,8 +129,8 @@ public class AnimatorState {
      * Playback phase in [0, 1] for exit-time evaluation and blend-tree clip synchronisation.
      * Single-shot states saturate at 1. Returns 0 for states with no motion.
      */
-    public float getNormalizedTime(float stateTime, AnimatorController controller) {
-        float duration = getCycleDuration(controller);
+    public float getNormalizedTime(float stateTime, Map<String, AnimatorParameter> parameters) {
+        float duration = getCycleDuration(parameters);
         return phaseFor(stateTime, duration);
     }
 

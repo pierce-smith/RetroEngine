@@ -4,6 +4,8 @@ import com.retro.engine.animation.clips.AnimationClip;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.function.UnaryOperator;
 
 /**
  * Parametric pose blend container owned by an AnimatorState.
@@ -55,6 +57,18 @@ public class BlendTree {
         this.parameterY = parameterY;
     }
 
+    /** Independent copy; each motion's clip is passed through {@code clipMap} (identity shares the clips). */
+    public BlendTree copy(UnaryOperator<AnimationClip> clipMap) {
+        BlendTree c = new BlendTree(type, parameterX, parameterY);
+        for (Motion m : motions) {
+            Motion copy = new Motion(clipMap.apply(m.clip), m.posX, m.posY);
+            copy.threshold = m.threshold;
+            c.motions.add(copy);
+        }
+        c.weights = new float[c.motions.size()];
+        return c;
+    }
+
     public List<Motion> getMotions() {
         return motions;
     }
@@ -82,16 +96,21 @@ public class BlendTree {
         weights = new float[motions.size()];
     }
 
+    private static float floatValue(Map<String, AnimatorParameter> parameters, String name) {
+        AnimatorParameter param = (parameters != null) ? parameters.get(name) : null;
+        return param != null ? param.floatValue : 0.0f;
+    }
+
     /**
-     * Recomputes motion weights from the controller's live parameters.
+     * Recomputes motion weights from an animator's live parameter values.
      * Returned array is owned by this tree; weights sum to 1 when any motion exists.
      */
-    public float[] evaluateWeights(AnimatorController controller) {
+    public float[] evaluateWeights(Map<String, AnimatorParameter> parameters) {
         int count = motions.size();
         if (count == 0) return weights;
         for (int i = 0; i < count; i++) weights[i] = 0.0f;
 
-        float px = controller != null ? controller.getFloat(parameterX) : 0.0f;
+        float px = floatValue(parameters, parameterX);
 
         if (type == BlendType.SIMPLE_1D) {
             if (px <= motions.get(0).threshold) {
@@ -112,7 +131,7 @@ public class BlendTree {
                 }
             }
         } else {
-            float py = controller != null ? controller.getFloat(parameterY) : 0.0f;
+            float py = floatValue(parameters, parameterY);
             float total = 0.0f;
             for (int i = 0; i < count; i++) {
                 Motion m = motions.get(i);

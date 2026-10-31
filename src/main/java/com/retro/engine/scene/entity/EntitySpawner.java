@@ -3,6 +3,7 @@ package com.retro.engine.scene.entity;
 import com.retro.engine.animation.AnimationSystem;
 import com.retro.engine.animation.clips.AnimationClip;
 import com.retro.engine.animation.state.AnimatorController;
+import com.retro.engine.animation.state.AnimatorParameter;
 import com.retro.engine.animation.state.AnimatorState;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
@@ -133,13 +134,8 @@ public class EntitySpawner {
 
         AnimatorComponent origAnim = selectedEntity.getComponent(AnimatorComponent.class);
         if (origAnim != null) {
-            AnimatorComponent copyAnim = new AnimatorComponent();
-            copyAnim.skeleton = origAnim.skeleton;
-            copyAnim.controller = origAnim.controller;
-            copyAnim.currentClip = origAnim.currentClip;
-            copyAnim.activeClipName = origAnim.activeClipName;
-            copyAnim.copyEditPoseFrom(origAnim);
-            copy.addComponent(copyAnim);
+            // Shares the skeleton and imported clips; the controller graph and all instance state are deep copies
+            copy.addComponent(new AnimatorComponent(origAnim));
         }
 
         sceneEntities.add(copy);
@@ -200,8 +196,16 @@ public class EntitySpawner {
                 }
 
                 AnimatorController controller = animator.controller;
-                if (controller == null) {
+                if (controller == null || hasAnims) {
+                    // A re-import builds a new controller rather than rewriting the old one in place (parameter
+                    // definitions carry over)
+                    AnimatorController previous = controller;
                     controller = new AnimatorController(entity.name + "_Controller");
+                    if (previous != null) {
+                        for (AnimatorParameter param : previous.getParameters().values()) {
+                            controller.getParameters().put(param.name, param.copy());
+                        }
+                    }
                     animator.controller = controller;
                 }
 
@@ -225,7 +229,8 @@ public class EntitySpawner {
                     if (!result.animations().isEmpty()) {
                         animator.currentClip = result.animations().get(0);
                         animator.activeClipName = animator.currentClip.name;
-                        controller.setInitialState(result.animations().get(0).name);
+                        controller.setEntryState(result.animations().get(0).name);
+                        animator.resetToEntryState();
                         // Auto-play the entry clip as soon as the rig finishes loading
                         animator.playbackTime = 0.0f;
                         animator.isPlaying = true;

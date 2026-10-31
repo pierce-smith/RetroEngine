@@ -29,31 +29,33 @@ public class AnimatorGraphPanel {
         }
     }
 
-    public static void render(UIGeometryBatch.Buffer buffer, AnimatorController controller, String selectedStateName, AnimatorTransition selectedTransition) {
+    /** {@code animator}: the instance whose live playback and parameter values are shown (null for none). */
+    public static void render(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorComponent animator,
+                              String selectedStateName, AnimatorTransition selectedTransition) {
         // 1. Central Canvas & State Nodes
-        AnimatorCanvasDelegate.renderCanvas(buffer, controller, selectedStateName);
+        AnimatorCanvasDelegate.renderCanvas(buffer, controller, animator, selectedStateName);
 
         // 2. Parameters Sidebar
-        AnimatorParametersDelegate.renderParametersSidebar(buffer, controller);
+        AnimatorParametersDelegate.renderParametersSidebar(buffer, controller, animator);
 
         // 3. Inspector Sidebar
-        AnimatorInspectorDelegate.renderInspectorSidebar(buffer, controller, selectedStateName, selectedTransition, null);
+        AnimatorInspectorDelegate.renderInspectorSidebar(buffer, controller, animator, selectedStateName, selectedTransition, null);
     }
 
     // --- Per-section entry points: each section is an independently dockable panel ---
 
-    public static void renderCanvas(UIGeometryBatch.Buffer buffer, AnimatorController controller, String selectedStateName) {
-        AnimatorCanvasDelegate.renderCanvas(buffer, controller, selectedStateName);
+    public static void renderCanvas(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorComponent animator, String selectedStateName) {
+        AnimatorCanvasDelegate.renderCanvas(buffer, controller, animator, selectedStateName);
     }
 
-    public static void renderParameters(UIGeometryBatch.Buffer buffer, AnimatorController controller) {
-        AnimatorParametersDelegate.renderParametersSidebar(buffer, controller);
+    public static void renderParameters(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorComponent animator) {
+        AnimatorParametersDelegate.renderParametersSidebar(buffer, controller, animator);
     }
 
     /** {@code recorder}: the animator whose recorded clip the dope sheet edits as a record timeline (null when not EDITING). */
-    public static void renderInspector(UIGeometryBatch.Buffer buffer, AnimatorController controller, String selectedStateName,
+    public static void renderInspector(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorComponent animator, String selectedStateName,
                                        AnimatorTransition selectedTransition, AnimatorComponent recorder) {
-        AnimatorInspectorDelegate.renderInspectorSidebar(buffer, controller, selectedStateName, selectedTransition, recorder);
+        AnimatorInspectorDelegate.renderInspectorSidebar(buffer, controller, animator, selectedStateName, selectedTransition, recorder);
     }
 
     public static boolean handleCanvasClick(float ndcX, float ndcY, int button, int action, EditorWorkspace manager) {
