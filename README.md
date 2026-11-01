@@ -2,6 +2,8 @@
 
 > **A cross-platform 3D engine / editor suite using Java 25 & LWJGL 3.4**
 
+<img width="1408" height="881" alt="Screenshot 2026-11-01 at 14 29 13" src="https://github.com/user-attachments/assets/9bd2baa2-da32-40a0-bb66-52d984f9a89f" />
+
 ---
 
 ## Origin & Motivation
@@ -52,6 +54,8 @@ Even as a 1-month proof-of-concept, RetroEngine implements a functional core arc
 - **It's possible it may crash on the first build** (especially if you're on Windows). This is due to certain shaders being compiled on my MacBook, and also recent file removal from the repository as they were found to not be CC0. Just run the build again.
 - You can use the RetroEngine root folder as a project and open it (it may prompt it has not been initialized as a project, you can without harming anything). There's a few basic script's and assets here as well as additional starter content with new project creation.
 - There are a few volumes of pdf documentation in the docs/ folder. Though not all information may be accurate, as the architecture and design scope changed drastically within the development timeframe till now.
+
+<img width="1408" height="881" alt="Screenshot 2026-11-01 at 14 30 00" src="https://github.com/user-attachments/assets/96cdf85e-7c8d-4134-a33d-87bdd02e4bb5" />
 
 ---
 
