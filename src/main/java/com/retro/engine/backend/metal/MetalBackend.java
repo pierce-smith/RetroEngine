@@ -145,6 +145,26 @@ public class MetalBackend implements IRenderBackend {
     }
 
     /**
+     * Block invoke signature: void (*)(Block_literal *block, id<MTLCommandBuffer> commandBuffer).
+     * LWJGL 3.4's FFM upcall path requires a dedicated @FunctionalInterface with a single abstract method,
+     * so this mirrors the shape of LWJGL's generated callback interfaces (e.g. GLFWErrorCallbackI).
+     */
+    @FunctionalInterface
+    interface CommandBufferCompletedHandler extends CallbackI {
+        Callback.Descriptor DESCRIPTOR = new Callback.Descriptor(CommandBufferCompletedHandler.class, MethodHandles.lookup(),
+                apiCreateCIF(FFI_DEFAULT_ABI, ffi_type_void, ffi_type_pointer, ffi_type_pointer));
+
+        @Override default Callback.Descriptor getDescriptor() { return DESCRIPTOR; }
+
+        @Override default void callback(long ret, long args) {
+            invoke(MemoryUtil.memGetAddress(MemoryUtil.memGetAddress(args)),
+                   MemoryUtil.memGetAddress(MemoryUtil.memGetAddress(args + Long.BYTES)));
+        }
+
+        void invoke(long block, long commandBuffer);
+    }
+
+    /**
      * Builds a global Objective-C block literal (void (^)(id<MTLCommandBuffer>)) whose invoke pointer is an
      * LWJGL libffi closure. Global blocks are never copied or disposed by the runtime, so one instance is
      * reused for every frame. Metal calls it on its own dispatch thread; LWJGL attaches that thread to the JVM.
@@ -156,15 +176,10 @@ public class MetalBackend implements IRenderBackend {
             return false;
         }
 
-        final Callback.Descriptor descriptor = new Callback.Descriptor(CallbackI.class, MethodHandles.lookup(),
-                apiCreateCIF(FFI_DEFAULT_ABI, ffi_type_void, ffi_type_pointer, ffi_type_pointer));
-        CallbackI onCompleted = new CallbackI() {
-            @Override public Callback.Descriptor getDescriptor() { return descriptor; }
-            @Override public void callback(long ret, long args) {
-                // Advance the disposal fence before the permit lets the render thread start another frame
-                resourceCache.onFrameCompleted();
-                inFlightFrames.release();
-            }
+        CommandBufferCompletedHandler onCompleted = (block, commandBuffer) -> {
+            // Advance the disposal fence before the permit lets the render thread start another frame
+            resourceCache.onFrameCompleted();
+            inFlightFrames.release();
         };
         completedHandlerCallback = onCompleted.address();
 
