@@ -157,7 +157,17 @@ void main() {
         baseColor.rgb *= vColor.rgb;
     }
 
+    vec3 eyePos = (u_PushConstants.texIndices2.z == 1) ? u_Lights.previewViewPos.xyz : u_Lights.viewPos.xyz;
+    vec3 V = normalize(eyePos - vFragPos);
+
     vec3 geomN = (dot(vNormal, vNormal) > 1e-8) ? normalize(vNormal) : vec3(0.0, 1.0, 0.0);
+    // Two-sided lighting: the true face normal, turned toward the camera, decides which side is being shaded, so a
+    // single leaf card or wall lights correctly from behind. Independent of winding, so both backends agree.
+    vec3 faceN = cross(dFdx(vFragPos), dFdy(vFragPos));
+    if (dot(faceN, faceN) > 1e-20) {
+        if (dot(faceN, V) < 0.0) faceN = -faceN;
+        if (dot(geomN, faceN) < 0.0) geomN = -geomN;
+    }
     vec3 N = computeShadingNormal(geomN);
 
     // Specular/roughness map: R = specular mask, G = roughness multiplier (absent map = scalar material values)
@@ -168,9 +178,6 @@ void main() {
 
     // Lightmap / AO on the second UV set modulates the ambient (indirect) term
     vec3 lightmap = sampleChannel(u_PushConstants.texIndices.w, vLightmapUV, vec4(1.0)).rgb;
-
-    vec3 eyePos = (u_PushConstants.texIndices2.z == 1) ? u_Lights.previewViewPos.xyz : u_Lights.viewPos.xyz;
-    vec3 V = normalize(eyePos - vFragPos);
 
     // Every active light accumulates into the same diffuse/specular sums in this single forward pass
     vec3 diffuse = vec3(0.0);

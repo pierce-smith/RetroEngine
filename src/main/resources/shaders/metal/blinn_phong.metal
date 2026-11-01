@@ -131,6 +131,17 @@ float3 computeShadingNormal(float3 N, VertexOut in, constant Uniforms& u,
     return normalize(float3x3(T, B, N) * tangentNormal);
 }
 
+// Inverse-transpose of the model's upper 3x3, identical to blinn_phong.vert's transpose(inverse(mat3(model))).
+// Columns of the cofactor matrix are the cross products of the model's columns; dividing by the determinant keeps the
+// same magnitude as Vulkan, so the fragment stage's zero-length test behaves the same on tiny or huge scales.
+static float3x3 normalMatrixOf(float4x4 model) {
+    float3 c0 = model[0].xyz, c1 = model[1].xyz, c2 = model[2].xyz;
+    float3 r0 = cross(c1, c2);
+    float det = dot(c0, r0);
+    if (det == 0.0) return float3x3(c0, c1, c2);
+    return float3x3(r0, cross(c2, c0), cross(c0, c1)) * (1.0 / det);
+}
+
 vertex VertexOut vertexMain(uint vertexID [[vertex_id]],
                             uint drawIndex [[base_instance]],
                             constant DrawArgs* draws [[buffer(0)]]) {
@@ -168,7 +179,9 @@ vertex VertexOut vertexMain(uint vertexID [[vertex_id]],
             }
         }
 
-        out.worldNormal = normalize((uniforms.model * float4(localNorm, 0.0)).xyz);
+        // Left unnormalized, exactly like Vulkan: normalizing per vertex turns a zero normal into NaN under Metal's
+        // fast math, and the fragment stage already normalizes after its zero-length test
+        out.worldNormal = normalMatrixOf(uniforms.model) * localNorm;
         out.color = float4(vertices[idx+6], vertices[idx+7], vertices[idx+8], vertices[idx+9]);
         out.uv = float2(vertices[idx+10], vertices[idx+11]);
         out.uv2 = float2(vertices[idx+12], vertices[idx+13]);
@@ -177,7 +190,7 @@ vertex VertexOut vertexMain(uint vertexID [[vertex_id]],
         out.bitangent = (uniforms.model * float4(localBitan, 0.0)).xyz;
     } else if (vertStride == 14) {
         float3 localNorm = float3(vertices[idx+3], vertices[idx+4], vertices[idx+5]);
-        out.worldNormal = normalize((uniforms.model * float4(localNorm, 0.0)).xyz);
+        out.worldNormal = normalMatrixOf(uniforms.model) * localNorm;
         out.color = float4(vertices[idx+6], vertices[idx+7], vertices[idx+8], vertices[idx+9]);
         out.uv = float2(vertices[idx+10], vertices[idx+11]);
         out.uv2 = float2(vertices[idx+12], vertices[idx+13]);
@@ -279,17 +292,28 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
     }
 
     // Mode 0: Standard Opaque 3D Mesh Lighting
+    // Same rules as blinn_phong.frag: albedo alpha drives the cutout and output alpha, and vertex color tints rgb
+    // only when it is non-black
     uint mask = uniforms.materialMask;
-    float4 baseColor = in.color;
-    if ((mask & MAT_ALBEDO) != 0u) {
-        float4 texColor = args.albedo.sample(smp, in.uv);
-        if (texColor.a < 0.25) {
-            discard_fragment();
-        }
-        baseColor *= texColor;
+    float4 texColor = ((mask & MAT_ALBEDO) != 0u) ? args.albedo.sample(smp, in.uv) : float4(1.0);
+    if (texColor.a < 0.25) {
+        discard_fragment();
+    }
+    float4 baseColor = texColor;
+    if (length(in.color.rgb) > 0.001) {
+        baseColor.rgb *= in.color.rgb;
     }
 
+    float3 V = normalize(uniforms.viewPos.xyz - in.worldPos);
+
     float3 geomN = (dot(in.worldNormal, in.worldNormal) > 1e-8) ? normalize(in.worldNormal) : float3(0.0, 1.0, 0.0);
+    // Two-sided lighting, identical to blinn_phong.frag: the true face normal, turned toward the camera, decides
+    // which side is being shaded, so a single leaf card or wall lights correctly from behind on both backends
+    float3 faceN = cross(dfdx(in.worldPos), dfdy(in.worldPos));
+    if (dot(faceN, faceN) > 1e-20) {
+        if (dot(faceN, V) < 0.0) faceN = -faceN;
+        if (dot(geomN, faceN) < 0.0) geomN = -geomN;
+    }
     float3 N = computeShadingNormal(geomN, in, uniforms, args.normalMap, smp);
 
     // Specular/roughness map: R = specular mask, G = roughness multiplier (absent map = scalar material values)
@@ -300,8 +324,6 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
 
     // Lightmap / AO on the second UV set modulates the ambient (indirect) term
     float3 lightmap = ((mask & MAT_LIGHTMAP) != 0u) ? args.lightmap.sample(smp, in.uv2).rgb : float3(1.0);
-
-    float3 V = normalize(uniforms.viewPos.xyz - in.worldPos);
 
     // Every active light accumulates into the same diffuse/specular sums in this single forward pass
     float3 numLights = uniforms.numLights.xyz;
@@ -351,7 +373,8 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
         accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
     }
 
-    float3 ambient = max(uniforms.ambientColor.rgb, float3(0.35, 0.35, 0.38)) * lightmap;
+    // Matches blinn_phong.frag: a bright sun lifts the ambient floor (dirLightColor is zero when there is no sun)
+    float3 ambient = max(max(uniforms.dirLightColor.rgb * 0.35, uniforms.ambientColor.rgb), float3(0.35, 0.35, 0.38)) * lightmap;
 
     float3 finalRGB = (ambient + diffuse) * baseColor.rgb + specular;
 

@@ -709,8 +709,9 @@ public class MetalPassEncoder {
     private void bindArgumentTable(MetalTexture texture) {
         bindVertexBuffer(drawArgsBuffer, drawArgsOffset, 0);
         bindFragmentBuffer(drawArgsBuffer, drawArgsOffset, 0);
-        if (texture.getSamplerStateHandle() != 0L) {
-            bindFragmentSampler(texture.getSamplerStateHandle());
+        long materialSampler = texture.getMaterialSamplerStateHandle() != 0L ? texture.getMaterialSamplerStateHandle() : texture.getSamplerStateHandle();
+        if (materialSampler != 0L) {
+            bindFragmentSampler(materialSampler);
         }
     }
 

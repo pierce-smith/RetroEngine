@@ -18,12 +18,16 @@ public class MetalTexture {
     private long activeTextureHandle = 0L;
     private long defaultTextureHandle = 0L;
     private long samplerStateHandle = 0L;
+    // Scene material sampler: linear filtering with Repeat addressing, matching VulkanGpuCache.createMaterialSampler.
+    // The UI sampler above keeps Metal's default ClampToEdge so font atlas glyphs never bleed across edges.
+    private long materialSamplerStateHandle = 0L;
     private int hasActiveTexture = 0;
     // MTLTexture.gpuResourceID values (Metal 3), resolved once so argument buffer writes need no FFI call
     private long activeResourceId = 0L;
     private long defaultResourceId = 0L;
 
     private static final long SEL_GPU_RESOURCE_ID = sel_registerName("gpuResourceID");
+    private static final long MTL_SAMPLER_ADDRESS_REPEAT = 2L;
 
     public void initDefaultTextureAndSampler(long device, long objc_msgSend) {
         if (device == 0L) return;
@@ -58,6 +62,18 @@ public class MetalTexture {
         invokePPPP(samplerDesc, sel_registerName("setMinFilter:"), 1L, objc_msgSend);
         invokePPPP(samplerDesc, sel_registerName("setMagFilter:"), 1L, objc_msgSend);
         samplerStateHandle = invokePPPP(device, sel_registerName("newSamplerStateWithDescriptor:"), samplerDesc, objc_msgSend);
+
+        // Imported models routinely carry tiled UVs outside [0, 1]; clamping them smears the texture's edge texels
+        // across whole faces, so scene materials repeat exactly like the Vulkan backend's material sampler
+        long materialDesc = invokePPP(samplerDescClass, sel_registerName("new"), objc_msgSend);
+        invokePPPP(materialDesc, sel_registerName("setMinFilter:"), 1L, objc_msgSend);                    // Linear
+        invokePPPP(materialDesc, sel_registerName("setMagFilter:"), 1L, objc_msgSend);
+        invokePPPP(materialDesc, sel_registerName("setSAddressMode:"), MTL_SAMPLER_ADDRESS_REPEAT, objc_msgSend);
+        invokePPPP(materialDesc, sel_registerName("setTAddressMode:"), MTL_SAMPLER_ADDRESS_REPEAT, objc_msgSend);
+        materialSamplerStateHandle = invokePPPP(device, sel_registerName("newSamplerStateWithDescriptor:"), materialDesc, objc_msgSend);
+        long selRelease = sel_registerName("release");
+        invokePPP(samplerDesc, selRelease, objc_msgSend);
+        invokePPP(materialDesc, selRelease, objc_msgSend);
     }
 
     public void uploadTexture(long device, long objc_msgSend, byte[] pixels, int width, int height) {
@@ -99,5 +115,7 @@ public class MetalTexture {
     }
 
     public long getSamplerStateHandle() { return samplerStateHandle; }
+    /** Repeat-addressed linear sampler for lit scene materials (sampler(0) of the scene passes). */
+    public long getMaterialSamplerStateHandle() { return materialSamplerStateHandle; }
     public int getHasActiveTexture() { return hasActiveTexture; }
 }
