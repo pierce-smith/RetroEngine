@@ -49,12 +49,7 @@ Even as a 1-month proof-of-concept, RetroEngine implements a functional core arc
 
 ### Quickstart
 
-- To test the beta, you will be building the application **from source**. You will need a Java IDE (IntelliJ IDEA, Eclipse, Netbeans).
-- Load the project's root folder (RetroEngine) in the IDE of your choice, navigate to src/main/java/com/retro/engine and open the Main.java file.
-- In IDEA you'll now press the green play button to build the application.
-- **It's possible it may crash on the first build** (especially if you're on Windows). This is due to certain shaders being compiled on my MacBook, and also recent file removal from the repository as they were found to not be CC0. Just run the build again.
-- You can use the RetroEngine root folder as a project and open it (it may prompt it has not been initialized as a project, you can without harming anything). There's a few basic script's and assets here as well as additional starter content with new project creation.
-- There are a few volumes of pdf documentation in the docs/ folder. Though not all information may be accurate, as the architecture and design scope changed drastically within the development timeframe till now.
+- Download your platform's version from the Releases section if on Windows or Apple Silicon. If on Linux or an Intel Mac, you will need to compile from source.
 
 ---
 
