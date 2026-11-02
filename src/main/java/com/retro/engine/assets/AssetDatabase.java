@@ -217,6 +217,7 @@ public class AssetDatabase {
 
         clear();
         this.activeProjectPath = normalizePath(root.getAbsolutePath());
+        com.retro.engine.assets.importers.ProjectFileLocator.setProjectRoot(root);
         new File(root, ASSETS_DIR).mkdirs();
         new File(root, INTERNAL_DIR).mkdirs();
 
@@ -896,6 +897,7 @@ public class AssetDatabase {
         this.currentFolderPath = "";
         if (hasActiveProject()) com.retro.engine.scripting.ScriptEngine.setProjectAssetsRoot(null);
         this.activeProjectPath = "";
+        com.retro.engine.assets.importers.ProjectFileLocator.setProjectRoot(null);
     }
 
     private static String normalizePath(String path) {

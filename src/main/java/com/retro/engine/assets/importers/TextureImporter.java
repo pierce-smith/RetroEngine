@@ -8,7 +8,7 @@ import java.io.File;
 
 /**
  * Importer and loader for 2D texture assets (PNG, JPG, TGA, etc.)
- * featuring multi-location file resolution (working directory, Assets/, Downloads/).
+ * resolving paths against the working directory and the open project (see ProjectFileLocator).
  */
 public class TextureImporter {
 
@@ -80,50 +80,13 @@ public class TextureImporter {
             if (userDirStripped.exists()) return userDirStripped;
         }
 
-        // 4. Recursive search by filename in working directory, Assets/, and Downloads
-        String fileName = new File(clean).getName();
-        // Runtime builds never scan user.dir ("/" when launched from Finder) or ~/Downloads: those walks trip macOS
-        // iCloud Drive / Downloads / network-volume permission prompts. Exported assets resolve from Game_Data/.
-        if (fileName.isEmpty() || EngineContext.isRuntimeProcess()) return null;
-        {
-            File rootAssets = new File("Assets");
-            if (rootAssets.exists() && rootAssets.isDirectory()) {
-                File found = findFileByName(rootAssets, fileName, 0);
-                if (found != null && found.exists()) return found;
-            }
+        File inProject = ProjectFileLocator.resolveInProject(clean);
+        if (inProject != null) return inProject;
 
-            File userDir = new File(System.getProperty("user.dir"));
-            if (userDir.exists() && userDir.isDirectory()) {
-                File found = findFileByName(userDir, fileName, 0);
-                if (found != null && found.exists()) return found;
-            }
-
-            String userHome = System.getProperty("user.home");
-            if (userHome != null) {
-                File downloadsDir = new File(userHome, "Downloads");
-                if (downloadsDir.exists() && downloadsDir.isDirectory()) {
-                    File homeFound = findFileByName(downloadsDir, fileName, 0);
-                    if (homeFound != null && homeFound.exists()) return homeFound;
-                }
-            }
-        }
-
-        return null;
+        // 4. Search by filename. Exported games resolve from Game_Data/ and never search; the editor searches the
+        // open project only (see ProjectFileLocator for why it must not walk user.dir or the home folder).
+        if (EngineContext.isRuntimeProcess()) return null;
+        return ProjectFileLocator.findByName(new File(clean).getName());
     }
 
-    private static File findFileByName(File dir, String name, int depth) {
-        if (dir == null || !dir.exists() || !dir.isDirectory() || depth > 5) return null;
-        File[] files = dir.listFiles();
-        if (files == null) return null;
-
-        for (File f : files) {
-            if (f.isFile() && f.getName().equalsIgnoreCase(name)) {
-                return f;
-            } else if (f.isDirectory() && !f.getName().startsWith(".") && !f.getName().equals("build") && !f.getName().equals("node_modules")) {
-                File sub = findFileByName(f, name, depth + 1);
-                if (sub != null) return sub;
-            }
-        }
-        return null;
-    }
 }

@@ -256,6 +256,13 @@ tasks.named<ProcessResources>("processResources") {
 //   ./gradlew packageEditor -PinstallerType=dmg     -> dmg | pkg | msi | exe | deb | rpm
 //   ./gradlew packageEditor -PwinConsole            -> Windows launcher with a console window
 //
+// macOS distribution signing (default is jpackage's ad-hoc signature, which Gatekeeper blocks on other Macs):
+//   ./gradlew packageEditor  -PmacSignIdentity="Developer ID Application: Name (TEAMID)"
+//   ./gradlew notarizeEditor -PmacSignIdentity="..." [-PinstallerType=dmg] [-PnotaryProfile=RetroEngine-notary]
+// notarizeEditor packages, submits to Apple's notary service, staples the ticket and runs a Gatekeeper check.
+// One-time setup: xcrun notarytool store-credentials RetroEngine-notary --apple-id <id> --team-id <TEAMID>
+// pkg installers additionally need -PmacInstallerSignIdentity="Developer ID Installer: Name (TEAMID)".
+//
 // Layout of the app payload ($APPDIR):
 //   retro-engine.jar + dependency jars     host-OS natives only (both archs; LWJGL picks at load time),
 //                                           so the packaged editor exports games for its own OS only
@@ -284,6 +291,53 @@ val editorInputDir = layout.buildDirectory.dir("editor/input")
 val distDir = layout.buildDirectory.dir("dist")
 
 fun makeOwnerWritable(root: File) = root.walk().forEach { it.setWritable(true, true) }
+
+val macSignIdentity: Provider<String> = providers.gradleProperty("macSignIdentity")
+val macInstallerSignIdentity: Provider<String> = providers.gradleProperty("macInstallerSignIdentity")
+val macEntitlements: File = layout.projectDirectory.file("packaging/macos/entitlements.plist").asFile
+
+fun runChecked(cmd: List<String>, what: String, dir: File? = null) {
+    val code = ProcessBuilder(cmd).directory(dir).inheritIO().start().waitFor()
+    if (code != 0) throw GradleException("$what failed (exit $code): ${cmd.joinToString(" ")}")
+}
+
+/** Developer ID signature with hardened runtime + secure timestamp, both required for notarization. */
+fun codesignForDistribution(identity: String, file: File) = runChecked(
+    listOf("codesign", "--force", "--timestamp", "--options", "runtime", "--sign", identity, file.absolutePath),
+    "codesign"
+)
+
+/**
+ * The notary service inspects dylibs inside jars, and LWJGL ships them unsigned (x64) or ad-hoc (arm64).
+ * Re-signs each one in place. LWJGL verifies every loaded native against a META-INF/.../<lib>.sha1 that exists in
+ * both the natives jar and its classes jar (lwjgl-glfw-natives-macos.jar -> lwjgl-glfw.jar), so both get refreshed.
+ */
+fun signNativesInJar(jarTool: String, jar: File, identity: String, scratch: File) {
+    scratch.deleteRecursively()
+    scratch.mkdirs()
+    runChecked(listOf(jarTool, "xf", jar.absolutePath), "jar extract", scratch) // no project.copy: config-cache safe
+    val dylibs = scratch.walk().filter { it.isFile && it.name.endsWith(".dylib") }.toList()
+    if (dylibs.isEmpty()) return
+    val updated = mutableListOf<String>()
+    for (lib in dylibs) {
+        codesignForDistribution(identity, lib)
+        updated += lib.relativeTo(scratch).invariantSeparatorsPath
+        val sha1 = File(scratch, "META-INF/" + lib.relativeTo(scratch).invariantSeparatorsPath + ".sha1")
+        if (sha1.isFile) {
+            val hex = MessageDigest.getInstance("SHA-1").digest(lib.readBytes()).joinToString("") { "%02x".format(it) }
+            sha1.writeText(hex + "\n")
+            updated += sha1.relativeTo(scratch).invariantSeparatorsPath
+        }
+    }
+    runChecked(listOf(jarTool, "uf", jar.absolutePath) + updated.flatMap { listOf("-C", scratch.absolutePath, it) }, "jar update")
+
+    val shaFiles = updated.filter { it.endsWith(".sha1") }
+    val classesJar = File(jar.parentFile, jar.name.replace(Regex("-natives-macos(-arm64)?"), ""))
+    if (shaFiles.isNotEmpty()) {
+        if (!classesJar.isFile) throw GradleException("No classes jar ${classesJar.name} for ${jar.name} (LWJGL hash check would fail)")
+        runChecked(listOf(jarTool, "uf", classesJar.absolutePath) + shaFiles.flatMap { listOf("-C", scratch.absolutePath, it) }, "jar update")
+    }
+}
 
 val linkGameRuntime = tasks.register("linkGameRuntime") {
     group = "distribution"
@@ -326,6 +380,20 @@ val stageEditor = tasks.register<Sync>("stageEditor") {
         from("libs/macos/libMoltenVK.dylib") { into("natives") }
     }
     from(linkGameRuntime) { into("game-runtime") }
+
+    if (hostOs.isMacOsX) {
+        val identity = macSignIdentity
+        val jdk = toolchainHome
+        val scratchRoot = editorBuildDir.map { it.dir("native-sign-tmp") }
+        inputs.property("macSignIdentity", identity.orElse(""))
+        doLast {
+            if (!identity.isPresent) return@doLast
+            val jarTool = jdkTool(jdk.get(), "jar")
+            destinationDir.listFiles { f -> f.name.contains("-natives-macos") && f.name.endsWith(".jar") }!!.forEach {
+                signNativesInJar(jarTool, it, identity.get(), scratchRoot.get().dir(it.nameWithoutExtension).asFile)
+            }
+        }
+    }
 }
 
 tasks.register("packageEditor") {
@@ -339,6 +407,15 @@ tasks.register("packageEditor") {
     val input = editorInputDir
     val dest = distDir
     val buildRoot = editorBuildDir
+    val signIdentity = macSignIdentity
+    val installerIdentity = macInstallerSignIdentity
+    val entitlements = macEntitlements
+    // Declaring any input enables up-to-date checks, so every input must be listed or stale apps get reused
+    inputs.dir(input)
+    inputs.file(entitlements)
+    inputs.property("macSignIdentity", signIdentity.orElse(""))
+    inputs.property("installerType", installerType)
+    inputs.property("winConsole", winConsole)
     outputs.dir(dest)
 
     doLast {
@@ -369,8 +446,22 @@ tasks.register("packageEditor") {
         javaOptions.forEach { cmd += listOf("--java-options", it) }
 
         when {
-            hostOs.isMacOsX -> cmd += listOf("--mac-package-identifier", "com.retro.engine.editor",
-                                             "--mac-package-name", editorAppName)
+            hostOs.isMacOsX -> {
+                cmd += listOf("--mac-package-identifier", "com.retro.engine.editor",
+                              "--mac-package-name", editorAppName)
+                if (signIdentity.isPresent) {
+                    // jpackage signs every executable/dylib in the bundle (incl. game-runtime) with these entitlements
+                    cmd += listOf("--mac-sign", "--mac-app-image-sign-identity", signIdentity.get(),
+                                  "--mac-entitlements", entitlements.absolutePath)
+                    if (type == "pkg") {
+                        if (!installerIdentity.isPresent) throw GradleException(
+                            "pkg signing needs -PmacInstallerSignIdentity=\"Developer ID Installer: ...\"")
+                        cmd += listOf("--mac-installer-sign-identity", installerIdentity.get())
+                    }
+                } else {
+                    println("[packageEditor] No -PmacSignIdentity: app is ad-hoc signed and will be blocked by Gatekeeper on other Macs")
+                }
+            }
             hostOs.isWindows -> {
                 if (winConsole) cmd += "--win-console"
                 if (type != "app-image") cmd += listOf("--win-menu", "--win-shortcut", "--win-dir-chooser")
@@ -382,6 +473,53 @@ tasks.register("packageEditor") {
         println("[packageEditor] ${cmd.joinToString(" ")}")
         val code = ProcessBuilder(cmd).inheritIO().start().waitFor()
         if (code != 0) throw GradleException("jpackage failed (exit $code)")
+        if (hostOs.isMacOsX && signIdentity.isPresent && type == "dmg") {
+            // jpackage signs the app inside the dmg but not the dmg itself
+            destDir.listFiles { f -> f.name.startsWith(editorAppName) && f.name.endsWith(".dmg") }!!
+                .forEach { runChecked(listOf("codesign", "--force", "--timestamp", "--sign", signIdentity.get(), it.absolutePath), "codesign dmg") }
+        }
         println("[packageEditor] Output: ${destDir.absolutePath}")
+    }
+}
+
+tasks.register("notarizeEditor") {
+    group = "distribution"
+    description = "Packages, notarizes and staples the macOS editor (needs -PmacSignIdentity and a notarytool keychain profile)."
+    dependsOn("packageEditor")
+    onlyIf("macOS only") { hostOs.isMacOsX }
+
+    val identity = macSignIdentity
+    val profile = providers.gradleProperty("notaryProfile").orElse("RetroEngine-notary")
+    val dest = distDir
+
+    doLast {
+        if (!identity.isPresent) throw GradleException(
+            "notarizeEditor needs -PmacSignIdentity=\"Developer ID Application: Name (TEAMID)\"")
+        val destDir = dest.get().asFile
+        val artifact = destDir.listFiles { f -> f.name.startsWith(editorAppName) }!!
+            .singleOrNull() ?: throw GradleException("Expected exactly one $editorAppName artifact in $destDir")
+
+        // notarytool accepts dmg/pkg/zip; an .app has to be zipped (ditto keeps the signature's extended attributes)
+        val submission = if (artifact.name.endsWith(".app")) {
+            File(destDir.parentFile, "$editorAppName-notarize.zip").also {
+                it.delete()
+                runChecked(listOf("ditto", "-c", "-k", "--keepParent", artifact.absolutePath, it.absolutePath), "ditto")
+            }
+        } else artifact
+
+        println("[notarizeEditor] Submitting ${submission.name} (usually takes a few minutes)...")
+        runChecked(listOf("xcrun", "notarytool", "submit", submission.absolutePath,
+                          "--keychain-profile", profile.get(), "--wait"), "notarytool submit " +
+                   "(on 'Invalid', run: xcrun notarytool log <submission-id> --keychain-profile ${profile.get()})")
+        if (submission != artifact) submission.delete()
+
+        runChecked(listOf("xcrun", "stapler", "staple", artifact.absolutePath), "stapler")
+        val spctl = when {
+            artifact.name.endsWith(".app") -> listOf("spctl", "--assess", "--type", "execute", "-vv", artifact.absolutePath)
+            artifact.name.endsWith(".pkg") -> listOf("spctl", "--assess", "--type", "install", "-vv", artifact.absolutePath)
+            else -> listOf("spctl", "--assess", "--type", "open", "--context", "context:primary-signature", "-vv", artifact.absolutePath)
+        }
+        runChecked(spctl, "Gatekeeper check")
+        println("[notarizeEditor] Notarized and stapled: ${artifact.absolutePath}")
     }
 }
