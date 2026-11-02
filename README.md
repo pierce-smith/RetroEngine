@@ -13,7 +13,7 @@
 
 - **Why Java?**: Minecraft is probably one of the main drivers for modern Java development. Look at it, its the most popular game of all-time and also one of the most modded. Java is an easier language to come into than some of the others like C++, and experienced Minecraft modders also deserve another platform they can use their skills on.
 - **The Engine Void**: There's only one other full-fledged engine suite made in Java, and it's experience is quite clunky in my opinion. People are always complaining that Java isn't worth the hassle or the most performant for games. Maybe a few years ago that would've been true, but with JDK 25, we've successfully targeted both Metal 3 for macOS and Vulkan 1.3 for Windows/Linux/macOS (through MoltenVK).
-- **The 30-Day Sprint**: As a graduate of computer science pre-LLM era, I was used to finishing software in a timecrunch. I previously had to create a fully functioning game with a small team in 4 weeks and present it to the class. I figured, why not give the timecrunch another try? If it's so hard, let's see how far I could get. Besides a few oversights, and not getting the mod SDK built into the architecture, RetroEngine is complete enough for me to consider a beta.
+- **The Month-Long Sprint**: As a graduate of computer science pre-LLM era, I was used to finishing software in a timecrunch. I previously had to create a fully functioning game with a small team in 4 weeks and present it to the class. I figured, why not give the timecrunch another try? If it's so hard, let's see how far I could get. Besides a few oversights, and not getting the mod SDK built into the architecture, RetroEngine is complete enough for me to consider a beta.
 
 ---
 
