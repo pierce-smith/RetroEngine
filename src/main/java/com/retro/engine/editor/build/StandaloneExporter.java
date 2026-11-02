@@ -103,6 +103,10 @@ public final class StandaloneExporter {
 
     public static final String GAME_DATA_DIR = "Game_Data";
     public static final String GAME_DATA_PROPERTY = "retro.gameData";
+    /** Set by the packaged editor's launcher: a jlinked JRE (with bin/java) that exported games can embed. */
+    public static final String GAME_RUNTIME_PROPERTY = "retro.gameRuntime";
+    /** Optional override pointing at a full JDK whose jpackage/jlink the exporter should use. */
+    public static final String JDK_PROPERTY = "retro.jdk";
     private static final String ENGINE_JAR = "retro-engine.jar";
     private static final String SDL_JAR_PREFIX = "lwjgl-sdl";
     private static final java.util.regex.Pattern HAPTICS_CALL = java.util.regex.Pattern.compile("\\b(vibrate|setVibration)\\s*\\(");
@@ -203,6 +207,19 @@ public final class StandaloneExporter {
         if (!nativeHost && (req.targetJdk == null || !new File(req.targetJdk, "jmods").isDirectory())) {
             throw new IOException("Cross-platform export needs a " + req.platform.label + " JDK containing jmods/");
         }
+        // The packaged editor's own runtime has no jpackage (a jlinked image cannot contain jdk.jpackage), so host
+        // exports fall back to the JRE bundled with the editor plus script launchers when no full JDK is installed
+        boolean useJpackage = nativeHost && findJdkTool("jpackage") != null;
+        File bundledRuntime = nativeHost && !useJpackage ? bundledGameRuntime() : null;
+        if (nativeHost && !useJpackage && bundledRuntime == null) {
+            throw new IOException("No jpackage found and no bundled game runtime: install JDK 25 and set JAVA_HOME (or -D"
+                + JDK_PROPERTY + "=<jdk>)");
+        }
+        if (!nativeHost) jdkTool("jlink");
+        if (!hasTargetNatives()) {
+            throw new IOException("This editor build has no " + req.platform.label + " native libraries (packaged editors ship "
+                + "their own OS's natives only). Export from the editor running on " + req.platform.label + " instead.");
+        }
 
         File work = new File(req.exportDir, "." + req.executableName + "-staging");
         deleteRecursively(work.toPath());
@@ -219,8 +236,9 @@ public final class StandaloneExporter {
             stageNativeLibraries(new File(app, "natives"));
 
             // 4. Native packaging
-            progress.report(0.55f, nativeHost ? "PACKAGING NATIVE LAUNCHER (JPACKAGE)" : "LINKING EMBEDDED RUNTIME (JLINK)");
-            File result = nativeHost ? packageWithJpackage(app) : packageCrossPlatform(work, app);
+            progress.report(0.55f, useJpackage ? "PACKAGING NATIVE LAUNCHER (JPACKAGE)"
+                : bundledRuntime != null ? "EMBEDDING BUNDLED RUNTIME" : "LINKING EMBEDDED RUNTIME (JLINK)");
+            File result = useJpackage ? packageWithJpackage(app) : packageWithScriptLauncher(work, app, bundledRuntime);
             progress.report(1.0f, "EXPORT COMPLETE");
             return result;
         } finally {
@@ -244,10 +262,19 @@ public final class StandaloneExporter {
                 Files.copy(f.toPath(), new File(app, f.getName()).toPath(), StandardCopyOption.REPLACE_EXISTING);
             }
         }
-        if (classDirs.isEmpty() && !new File(app, ENGINE_JAR).exists()) {
-            // Editor itself launched from a jar: make sure an entry named retro-engine.jar exists for the launcher
-            File self = new File(Main.class.getProtectionDomain().getCodeSource().getLocation().getPath());
-            if (self.isFile()) Files.copy(self.toPath(), new File(app, ENGINE_JAR).toPath(), StandardCopyOption.REPLACE_EXISTING);
+        if (classDirs.isEmpty()) {
+            // Editor itself launched from a jar (packaged editor): make sure an entry named retro-engine.jar exists
+            File engineJar = new File(app, ENGINE_JAR);
+            File self;
+            try {
+                self = new File(Main.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+            } catch (java.net.URISyntaxException e) {
+                throw new IOException("Cannot locate the engine jar", e);
+            }
+            if (!engineJar.exists() && self.isFile()) {
+                Files.copy(self.toPath(), engineJar.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                new File(app, self.getName()).delete(); // already copied above under its own name
+            }
             return;
         }
         writeEngineJar(classDirs, new File(app, ENGINE_JAR));
@@ -257,6 +284,16 @@ public final class StandaloneExporter {
      * Keeps platform-neutral jars and the target OS's native jars (all architectures; LWJGL picks at load time). SDL
      * serves only gamepad rumble, so its jars are dropped when the build does not include haptics.
      */
+    /** True when the editor's classpath has the target OS's LWJGL native jars to ship with the game. */
+    private boolean hasTargetNatives() {
+        for (String entry : System.getProperty("java.class.path", "").split(File.pathSeparator)) {
+            String name = new File(entry).getName();
+            int idx = name.indexOf("natives-");
+            if (idx >= 0 && name.startsWith(req.platform.nativesToken, idx)) return true;
+        }
+        return false;
+    }
+
     private boolean includeJarForTarget(String jarName) {
         if (!req.includeHaptics && jarName.startsWith(SDL_JAR_PREFIX)) {
             System.out.println("[Exporter] Not shipping (no controller haptics): " + jarName);
@@ -413,13 +450,20 @@ public final class StandaloneExporter {
     // Cross-OS packaging (jlink against target jmods + script launchers)
     // ------------------------------------------------------------------------------------------
 
-    private File packageCrossPlatform(File work, File app) throws IOException, InterruptedException {
-        File runtime = new File(work, "runtime");
-        run(List.of(jdkTool("jlink").getAbsolutePath(),
-            "--module-path", new File(req.targetJdk, "jmods").getAbsolutePath(),
-            "--add-modules", RUNTIME_MODULES,
-            "--strip-debug", "--no-header-files", "--no-man-pages",
-            "--output", runtime.getAbsolutePath()), null);
+    /**
+     * Script-launcher build. {@code prebuiltRuntime} (the editor's bundled host JRE) is embedded as-is; when null a
+     * runtime is jlinked from the target platform's jmods.
+     */
+    private File packageWithScriptLauncher(File work, File app, File prebuiltRuntime) throws IOException, InterruptedException {
+        File runtime = prebuiltRuntime;
+        if (runtime == null) {
+            runtime = new File(work, "runtime");
+            run(List.of(jdkTool("jlink").getAbsolutePath(),
+                "--module-path", new File(req.targetJdk, "jmods").getAbsolutePath(),
+                "--add-modules", RUNTIME_MODULES,
+                "--strip-debug", "--no-header-files", "--no-man-pages",
+                "--output", runtime.getAbsolutePath()), null);
+        }
 
         progress.report(0.85f, "ASSEMBLING " + req.platform.label);
         String exe = req.executableName;
@@ -519,11 +563,30 @@ public final class StandaloneExporter {
     // Process + file helpers
     // ------------------------------------------------------------------------------------------
 
-    private static File jdkTool(String name) throws IOException {
+    /** Looks for a JDK tool in -Dretro.jdk, the running JDK, then JAVA_HOME; null if none has it. */
+    private static File findJdkTool(String name) {
         String suffix = Platform.host() == Platform.WINDOWS ? ".exe" : "";
-        File tool = new File(System.getProperty("java.home"), "bin/" + name + suffix);
-        if (!tool.isFile()) throw new IOException(name + " not found in " + System.getProperty("java.home") + " (a full JDK is required to export)");
+        for (String home : new String[] { System.getProperty(JDK_PROPERTY), System.getProperty("java.home"), System.getenv("JAVA_HOME") }) {
+            if (home == null || home.isBlank()) continue;
+            File tool = new File(home.trim(), "bin/" + name + suffix);
+            if (tool.isFile()) return tool;
+        }
+        return null;
+    }
+
+    private static File jdkTool(String name) throws IOException {
+        File tool = findJdkTool(name);
+        if (tool == null) throw new IOException(name + " not found: install JDK 25 and set JAVA_HOME (or -D" + JDK_PROPERTY + "=<jdk>)");
         return tool;
+    }
+
+    /** The host JRE shipped inside the packaged editor (must contain bin/java), or null when running from source. */
+    private static File bundledGameRuntime() {
+        String path = System.getProperty(GAME_RUNTIME_PROPERTY);
+        if (path == null || path.isBlank()) return null;
+        File dir = new File(path.trim());
+        String java = Platform.host() == Platform.WINDOWS ? "bin/javaw.exe" : "bin/java";
+        return new File(dir, java).isFile() ? dir : null;
     }
 
     private static String findOnPath(String exe) {

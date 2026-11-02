@@ -204,7 +204,16 @@ public class VulkanPipeline {
     // ---------------------------------------------------------------------------------
 
     private static Path pipelineCachePath() {
-        return Path.of(System.getProperty("user.dir"), PIPELINE_CACHE_FILE_NAME);
+        // Packaged apps start in "/" (macOS Finder) or a read-only install dir: fall back to a per-user cache folder
+        Path cwd = Path.of(System.getProperty("user.dir"));
+        if (!Boolean.getBoolean("retro.packaged") && Files.isWritable(cwd)) return cwd.resolve(PIPELINE_CACHE_FILE_NAME);
+        Path dir = Path.of(System.getProperty("user.home"), ".retroengine", "cache");
+        try {
+            Files.createDirectories(dir);
+        } catch (IOException e) {
+            return cwd.resolve(PIPELINE_CACHE_FILE_NAME);
+        }
+        return dir.resolve(PIPELINE_CACHE_FILE_NAME);
     }
 
     /** Creates the pipeline cache, seeded from disk when the stored blob was produced by this exact device/driver. */

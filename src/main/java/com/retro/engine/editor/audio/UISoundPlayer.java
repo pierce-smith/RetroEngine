@@ -110,7 +110,8 @@ public class UISoundPlayer {
         }
 
         if (!file.exists()) {
-            return false;
+            // Packaged editor: cwd is "/" or the install dir, so use the copies bundled in the jar
+            return loadBundledSound(sound);
         }
 
         try {
@@ -133,6 +134,44 @@ public class UISoundPlayer {
         } catch (Exception ignored) {
         }
         return false;
+    }
+
+    private static final String BUNDLED_UI_SOUND_DIR = "/editor/audio/ui/";
+
+    private static boolean loadBundledSound(UISound sound) {
+        String name = sound.getDefaultPath().substring(sound.getDefaultPath().lastIndexOf('/') + 1);
+        java.io.InputStream found = UISoundPlayer.class.getResourceAsStream(BUNDLED_UI_SOUND_DIR + name);
+        if (found == null && sound == UISound.DUPLICATE) {
+            found = UISoundPlayer.class.getResourceAsStream(BUNDLED_UI_SOUND_DIR + "spawn.ogg");
+        }
+        if (found == null) return false;
+        final java.io.InputStream in = found;
+
+        java.nio.ByteBuffer encoded = null;
+        ShortBuffer rawAudio = null;
+        try (in; MemoryStack stack = MemoryStack.stackPush()) {
+            byte[] bytes = in.readAllBytes();
+            encoded = MemoryUtil.memAlloc(bytes.length).put(bytes).flip();
+            IntBuffer channels = stack.mallocInt(1);
+            IntBuffer sampleRate = stack.mallocInt(1);
+            rawAudio = STBVorbis.stb_vorbis_decode_memory(encoded, channels, sampleRate);
+            if (rawAudio == null) return false;
+
+            byte[] pcm = new byte[rawAudio.remaining() * 2];
+            for (int i = 0; rawAudio.hasRemaining(); i += 2) {
+                short sample = rawAudio.get();
+                pcm[i] = (byte) (sample & 0xFF);
+                pcm[i + 1] = (byte) ((sample >> 8) & 0xFF);
+            }
+            soundBufferCache.put(sound, pcm);
+            soundFormatCache.put(sound, new AudioFormat(sampleRate.get(0), 16, channels.get(0), true, false));
+            return true;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            if (rawAudio != null) MemoryUtil.memFree(rawAudio);
+            if (encoded != null) MemoryUtil.memFree(encoded);
+        }
     }
 
     private static AudioInputStream loadOggVorbisStream(String filePath) {

@@ -55,22 +55,26 @@ java {
     }
 }
 
+val hostOs: OperatingSystem = OperatingSystem.current()
+
+/**
+ * JVM flags shared by `gradle run` and the packaged editor. [moltenVkPath] is where libMoltenVK.dylib lives on macOS;
+ * -XstartOnFirstThread is macOS-only (GLFW/Cocoa need the main thread) and is an invalid flag elsewhere.
+ */
+fun engineJvmArgs(moltenVkPath: String): List<String> = buildList {
+    add("-Xms256m")
+    add("-Xmx512m")
+    add("-Dorg.lwjgl.system.stack.size=128") // Boosts LWJGL thread stack capacity
+    add("--enable-native-access=ALL-UNNAMED")
+    if (hostOs.isMacOsX) {
+        add("-XstartOnFirstThread")
+        add("-Dorg.lwjgl.vulkan.libname=$moltenVkPath")
+    }
+}
+
 application {
     mainClass.set("com.retro.engine.Main")
-    val isMac = OperatingSystem.current().isMacOsX
-    val jvmArgsList = mutableListOf(
-        "-Xms256m",
-        "-Xmx512m",
-        "-Dorg.lwjgl.system.stack.size=128", // Boosts LWJGL thread stack capacity
-        "--enable-native-access=ALL-UNNAMED"
-    )
-
-    if (isMac) {
-        jvmArgsList.add("-XstartOnFirstThread")
-        jvmArgsList.add("-Dorg.lwjgl.vulkan.libname=${project.projectDir}/libs/macos/libMoltenVK.dylib")
-    }
-
-    applicationDefaultJvmArgs = jvmArgsList
+    applicationDefaultJvmArgs = engineJvmArgs("${project.projectDir}/libs/macos/libMoltenVK.dylib")
 }
 
 tasks.withType<JavaCompile> {
@@ -232,4 +236,152 @@ tasks.register<JavaExec>("cookAssets") {
 
 tasks.named("run") {
     dependsOn("cookAssets")
+}
+
+// ------------------------------------------------------------------------------------------
+// Editor sounds ship inside the jar: packaged apps start with cwd "/" (macOS Finder) or the
+// install dir, so Assets/Audio/UI is not reachable relative to the working directory.
+// ------------------------------------------------------------------------------------------
+
+tasks.named<ProcessResources>("processResources") {
+    from("Assets/Audio/UI") {
+        include("*.ogg", "*.wav")
+        into("editor/audio/ui")
+    }
+}
+
+// ------------------------------------------------------------------------------------------
+// Standalone Editor packaging (jpackage), one build per host OS/arch:
+//   ./gradlew packageEditor                         -> build/dist/RetroEngine(.app)
+//   ./gradlew packageEditor -PinstallerType=dmg     -> dmg | pkg | msi | exe | deb | rpm
+//   ./gradlew packageEditor -PwinConsole            -> Windows launcher with a console window
+//
+// Layout of the app payload ($APPDIR):
+//   retro-engine.jar + dependency jars     host-OS natives only (both archs; LWJGL picks at load time),
+//                                           so the packaged editor exports games for its own OS only
+//   natives/libMoltenVK.dylib              macOS only (universal arm64 + x86_64)
+//   game-runtime/                          jlinked JRE that games exported from the editor embed when
+//                                           no full JDK is installed on the user's machine
+// ------------------------------------------------------------------------------------------
+
+val editorAppName = "RetroEngine"
+val editorAppVersion = version.toString().substringBefore("-") // jpackage rejects "-SNAPSHOT"
+
+// Modules for the editor itself (jdeps: java.base,java.desktop,java.logging,jdk.unsupported, plus
+// jdk.zipfs which jdeps cannot see). java.desktop carries javax.sound (AudioSource / UISoundPlayer).
+// Keep in sync with StandaloneExporter.RUNTIME_MODULES.
+val engineRuntimeModules = "java.base,java.desktop,java.logging,jdk.unsupported,jdk.zipfs"
+
+val toolchainHome: Provider<File> = javaToolchains
+    .launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) }
+    .map { it.metadata.installationPath.asFile }
+
+fun jdkTool(home: File, name: String): String =
+    File(home, "bin/$name" + if (hostOs.isWindows) ".exe" else "").absolutePath
+
+val editorBuildDir = layout.buildDirectory.dir("editor")
+val editorInputDir = layout.buildDirectory.dir("editor/input")
+val distDir = layout.buildDirectory.dir("dist")
+
+fun makeOwnerWritable(root: File) = root.walk().forEach { it.setWritable(true, true) }
+
+val linkGameRuntime = tasks.register("linkGameRuntime") {
+    group = "distribution"
+    description = "jlinks the JRE that games exported from the packaged editor embed."
+    val out = editorBuildDir.map { it.dir("game-runtime") }
+    val jdk = toolchainHome
+    inputs.property("modules", engineRuntimeModules)
+    outputs.dir(out)
+    doLast {
+        val outDir = out.get().asFile
+        outDir.deleteRecursively() // jlink refuses an existing output dir
+        // bin/java(w) is kept: exported games launch it from a script when jpackage is unavailable
+        val code = ProcessBuilder(
+            jdkTool(jdk.get(), "jlink"),
+            "--add-modules", engineRuntimeModules,
+            "--strip-debug", "--no-header-files", "--no-man-pages",
+            "--output", outDir.absolutePath
+        ).inheritIO().start().waitFor()
+        if (code != 0) throw GradleException("jlink failed (exit $code)")
+        makeOwnerWritable(outDir) // jlink emits read-only files, which later copies/syncs cannot overwrite
+    }
+}
+
+val stageEditor = tasks.register<Sync>("stageEditor") {
+    group = "distribution"
+    description = "Stages the jars, natives and embedded game runtime for jpackage."
+    into(editorInputDir)
+    doFirst { makeOwnerWritable(editorInputDir.get().asFile) } // stale read-only jlink files from older builds
+    from(tasks.named("jar")) { rename { "retro-engine.jar" } } // the name StandaloneExporter expects
+    from(configurations.runtimeClasspath) {
+        // e.g. on macOS keep "-natives-macos" and "-natives-macos-arm64", drop Windows/Linux natives
+        val hostNatives = "-natives-" + when {
+            hostOs.isMacOsX -> "macos"
+            hostOs.isWindows -> "windows"
+            else -> "linux"
+        }
+        exclude { it.name.contains("-natives-") && !it.name.contains(hostNatives) }
+    }
+    if (hostOs.isMacOsX) {
+        from("libs/macos/libMoltenVK.dylib") { into("natives") }
+    }
+    from(linkGameRuntime) { into("game-runtime") }
+}
+
+tasks.register("packageEditor") {
+    group = "distribution"
+    description = "Packages the full RetroEngine editor as a native app for the host OS (jpackage)."
+    dependsOn(stageEditor)
+
+    val installerType = providers.gradleProperty("installerType").orElse("app-image")
+    val winConsole = providers.gradleProperty("winConsole").isPresent
+    val jdk = toolchainHome
+    val input = editorInputDir
+    val dest = distDir
+    val buildRoot = editorBuildDir
+    outputs.dir(dest)
+
+    doLast {
+        val type = installerType.get()
+        val destDir = dest.get().asFile
+        // jpackage fails if its output already exists
+        destDir.listFiles { f -> f.name.startsWith(editorAppName) }?.forEach { it.deleteRecursively() }
+        destDir.mkdirs()
+
+        val cmd = mutableListOf(
+            jdkTool(jdk.get(), "jpackage"),
+            "--type", type,
+            "--name", editorAppName,
+            "--app-version", editorAppVersion,
+            "--vendor", "RetroEngine",
+            "--input", input.get().asFile.absolutePath,
+            "--main-jar", "retro-engine.jar",
+            "--main-class", "com.retro.engine.Main",
+            "--dest", destDir.absolutePath,
+            "--temp", buildRoot.get().dir("jpackage-tmp").asFile.apply { deleteRecursively() }.absolutePath,
+            "--add-modules", engineRuntimeModules,
+            "--jlink-options", "--strip-debug --no-header-files --no-man-pages --strip-native-commands"
+        )
+        val javaOptions = engineJvmArgs("\$APPDIR/natives/libMoltenVK.dylib") + listOf(
+            "-Dretro.packaged=true",
+            "-Dretro.gameRuntime=\$APPDIR/game-runtime"
+        )
+        javaOptions.forEach { cmd += listOf("--java-options", it) }
+
+        when {
+            hostOs.isMacOsX -> cmd += listOf("--mac-package-identifier", "com.retro.engine.editor",
+                                             "--mac-package-name", editorAppName)
+            hostOs.isWindows -> {
+                if (winConsole) cmd += "--win-console"
+                if (type != "app-image") cmd += listOf("--win-menu", "--win-shortcut", "--win-dir-chooser")
+            }
+            else -> if (type != "app-image") cmd += listOf("--linux-package-name", "retroengine",
+                                                          "--linux-shortcut", "--linux-app-category", "Development")
+        }
+
+        println("[packageEditor] ${cmd.joinToString(" ")}")
+        val code = ProcessBuilder(cmd).inheritIO().start().waitFor()
+        if (code != 0) throw GradleException("jpackage failed (exit $code)")
+        println("[packageEditor] Output: ${destDir.absolutePath}")
+    }
 }
