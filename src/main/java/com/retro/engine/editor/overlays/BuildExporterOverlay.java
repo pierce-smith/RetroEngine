@@ -14,22 +14,24 @@ import com.retro.engine.ui.UISoundPlayer.UISound;
 
 import java.io.File;
 
+import static org.lwjgl.glfw.GLFW.*;
+
 /**
- * "File > Export Standalone Build..." modal: export folder, executable name, target platform, startup scene and
- * whether to ship controller haptics (SDL), then runs {@link StandaloneExporter} on a background thread with live progress. Rendering and hit-testing share
+ * "File > Export Standalone Build..." modal: export folder, game name (typed inline; it is the jpackage --name), application
+ * icon (jpackage --icon), target platform, startup scene and whether to ship controller haptics (SDL), then runs {@link StandaloneExporter} on a background thread with live progress. Rendering and hit-testing share
  * the layout constants below.
  */
 public final class BuildExporterOverlay {
 
     private static final float CARD_X0 = -0.56f, CARD_X1 = 0.56f;
-    private static final float CARD_Y0 = -0.54f, CARD_Y1 = 0.42f;
+    private static final float CARD_Y0 = -0.54f, CARD_Y1 = 0.54f;
 
     private static final float LABEL_X = -0.52f;
     private static final float WELL_X0 = -0.22f, WELL_X1 = 0.30f;
     private static final float BTN_X0 = 0.32f, BTN_X1 = 0.52f;
     private static final float ROW_H = 0.072f;
 
-    private static final float PATH_Y = 0.22f, NAME_Y = 0.10f, PLATFORM_Y = -0.02f, SCENE_Y = -0.14f, HAPTICS_Y = -0.26f;
+    private static final float PATH_Y = 0.34f, NAME_Y = 0.22f, ICON_Y = 0.10f, PLATFORM_Y = -0.02f, SCENE_Y = -0.14f, HAPTICS_Y = -0.26f;
     private static final float PROGRESS_Y = -0.37f;
     private static final float ACTION_Y0 = -0.50f, ACTION_Y1 = -0.42f;
     private static final float CANCEL_X0 = 0.04f, CANCEL_X1 = 0.26f;
@@ -40,8 +42,15 @@ public final class BuildExporterOverlay {
 
     private static final Platform[] PLATFORMS = Platform.values();
 
+    static final String DEFAULT_GAME_NAME = "My Retro Engine Game";
+    private static final int MAX_GAME_NAME = 64;
+
     private static File exportDir;
-    private static String executableName = "Game";
+    private static String gameName = DEFAULT_GAME_NAME;
+    private static File iconFile = StandaloneExporter.defaultIconFile(Platform.host());
+    // Inline Game Name editing: while true the field owns the keyboard (HotkeyRouter stands down, see isEditingText)
+    private static boolean editingName = false;
+    private static final StringBuilder nameBuffer = new StringBuilder();
     private static Platform platform = Platform.host();
     private static String startupScene = "";
     // Defaults to what the project appears to use; SDL adds a few MB per platform
@@ -63,12 +72,13 @@ public final class BuildExporterOverlay {
         File project = new File(workspace.getActiveProjectPath());
         if (!running) {
             exportDir = new File(project, "Build");
+            editingName = false;
+            gameName = sanitizeName(project.getName());
+            if (iconFile == null || !iconFile.isFile()) iconFile = StandaloneExporter.defaultIconFile(platform);
             try {
                 com.retro.engine.core.ProjectSettings settings = ProjectWorkspace.readSettings(project);
-                executableName = sanitizeName(settings.projectName);
                 startupScene = settings.startupScene != null ? settings.startupScene : "";
             } catch (Exception e) {
-                executableName = sanitizeName(project.getName());
                 startupScene = "";
             }
             if (startupScene.isEmpty() || !new File(project, startupScene).isFile()) {
@@ -104,7 +114,15 @@ public final class BuildExporterOverlay {
         }
 
         fieldRow(buffer, "EXPORT PATH", PATH_Y, exportDir != null ? exportDir.getAbsolutePath() : "", "BROWSE...");
-        fieldRow(buffer, "EXECUTABLE NAME", NAME_Y, executableName, "EDIT...");
+        renderNameRow(buffer);
+        fieldRow(buffer, "APPLICATION ICON", ICON_Y, iconFile != null ? iconFile.getAbsolutePath() : "(DEFAULT ICON)",
+            iconFile != null ? "CLEAR" : "BROWSE...");
+        boolean iconMismatch = iconFile != null && !StandaloneExporter.isValidIconFor(iconFile, platform);
+        String iconHint = iconMismatch
+            ? "WRONG FORMAT: " + platform.label + " NEEDS A ." + platform.iconExtension().toUpperCase() + " ICON"
+            : ".ICNS FOR MACOS, .ICO FOR WINDOWS, .PNG FOR LINUX";
+        UIGeometryBatch.addTruncatedText(buffer, iconHint, WELL_X0, ICON_Y - ROW_H * 0.5f - 0.012f, BTN_X1, 0.62f,
+            iconMismatch ? EditorTheme.YELLOW : EditorTheme.TEXT_MUTED, 1.0f);
         fieldRow(buffer, "STARTUP SCENE", SCENE_Y, startupScene.isEmpty() ? "(NONE SELECTED)" : startupScene, "SELECT...");
         fieldRow(buffer, "CONTROLLER RUMBLE", HAPTICS_Y, includeHaptics ? "INCLUDED (SDL, +2-4 MB)" : "EXCLUDED (VIBRATION CALLS DO NOTHING)",
             includeHaptics ? "EXCLUDE" : "INCLUDE");
@@ -160,6 +178,22 @@ public final class BuildExporterOverlay {
         centeredTextIn(buffer, button, BTN_X0, BTN_X1, midY, 0.8f, running ? EditorTheme.TEXT_DISABLED : EditorTheme.TEXT);
     }
 
+    /** Game Name row: a click-to-type well (accent outline + caret while focused) instead of a native prompt. */
+    private static void renderNameRow(UIGeometryBatch.Buffer buffer) {
+        if (!editingName) {
+            fieldRow(buffer, "GAME NAME", NAME_Y, gameName, "EDIT");
+            return;
+        }
+        rowLabel(buffer, "GAME NAME", NAME_Y);
+        float y0 = NAME_Y - ROW_H * 0.5f, y1 = NAME_Y + ROW_H * 0.5f;
+        UIGeometryBatch.addRoundedCard(buffer, WELL_X0, y0, WELL_X1, y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_SUNKEN, EditorTheme.ACCENT, 1.0f);
+        boolean caretOn = (System.currentTimeMillis() / 500L) % 2L == 0L;
+        String text = nameBuffer + (caretOn ? "_" : " ");
+        UIGeometryBatch.addTruncatedText(buffer, text, WELL_X0 + 0.014f, NAME_Y + 0.8f * 0.009f, WELL_X1 - 0.014f, 0.8f, EditorTheme.TEXT, 1.0f);
+        UIGeometryBatch.addRoundedQuad(buffer, BTN_X0, y0, BTN_X1, y1, EditorTheme.RADIUS_SMALL, EditorTheme.ACCENT, 1.0f);
+        centeredTextIn(buffer, "DONE", BTN_X0, BTN_X1, NAME_Y, 0.8f, EditorTheme.TEXT);
+    }
+
     private static void rowLabel(UIGeometryBatch.Buffer buffer, String label, float midY) {
         UIGeometryBatch.addBoundedText(buffer, label, LABEL_X, midY + 0.82f * 0.009f, WELL_X0 - 0.02f, 0.82f, EditorTheme.TEXT_MUTED, 1.0f);
     }
@@ -183,6 +217,12 @@ public final class BuildExporterOverlay {
         if (workspace == null || running) return;
         File project = new File(workspace.getActiveProjectPath());
 
+        // A click anywhere while typing commits the name; clicking the name row again (or DONE) just ends the edit
+        if (editingName) {
+            commitNameEdit();
+            if (inRow(ndcX, ndcY, NAME_Y)) return;
+        }
+
         if (inRect(ndcX, ndcY, CLOSE_X0, CLOSE_Y0, CLOSE_X1, CLOSE_Y1) || inRect(ndcX, ndcY, CANCEL_X0, ACTION_Y0, CANCEL_X1, ACTION_Y1)) {
             UISoundPlayer.play(UISound.CLOSE_MODAL);
             workspace.getOverlayManager().setActiveModal(ModalState.NONE);
@@ -192,16 +232,15 @@ public final class BuildExporterOverlay {
                 (exportDir != null && exportDir.isDirectory() ? exportDir : project).getAbsolutePath() + File.separator);
             if (picked != null) exportDir = new File(picked).getAbsoluteFile();
         } else if (inRow(ndcX, ndcY, NAME_Y)) {
-            UISoundPlayer.play(UISound.OPEN_MODAL);
-            String name = NativeFileDialog.promptInput("Executable Name", "Executable / bundle name:", executableName);
-            if (name != null) {
-                name = name.trim();
-                if (StandaloneExporter.isValidExecutableName(name)) {
-                    executableName = name;
-                } else {
-                    setStatus("INVALID NAME: USE LETTERS, DIGITS, SPACE, DOT, DASH OR UNDERSCORE", true, 0.0f);
-                }
-            }
+            UISoundPlayer.play(UISound.CLICK);
+            nameBuffer.setLength(0);
+            nameBuffer.append(gameName);
+            editingName = true;
+        } else if (inRect(ndcX, ndcY, BTN_X0, ICON_Y - ROW_H * 0.5f, BTN_X1, ICON_Y + ROW_H * 0.5f) && iconFile != null) {
+            UISoundPlayer.play(UISound.CLICK);
+            iconFile = null;
+        } else if (inRow(ndcX, ndcY, ICON_Y)) {
+            browseIcon(project);
         } else if (inRow(ndcX, ndcY, SCENE_Y)) {
             UISoundPlayer.play(UISound.OPEN_MODAL);
             String picked = NativeFileDialog.openFileDialog("Select Startup Scene", workspace.getProjectScenesDir(), "Retro Scene (*.rscene)", "rscene");
@@ -230,9 +269,80 @@ public final class BuildExporterOverlay {
         }
     }
 
+    private static void browseIcon(File project) {
+        UISoundPlayer.play(UISound.OPEN_MODAL);
+        File start = (iconFile != null && iconFile.getParentFile() != null) ? iconFile.getParentFile() : project;
+        String ext = platform.iconExtension();
+        String picked = NativeFileDialog.openFileDialog("Select Application Icon (." + ext + " for " + platform.label + ")",
+            start.getAbsolutePath() + File.separator, "Application Icon (*.icns, *.ico, *.png)", "icns", "ico", "png");
+        if (picked == null) return;
+        File f = new File(picked).getAbsoluteFile();
+        if (!f.isFile()) {
+            setStatus("ICON FILE NOT FOUND", true, 0.0f);
+        } else {
+            iconFile = f;
+            if (!StandaloneExporter.isValidIconFor(f, platform)) {
+                setStatus(platform.label + " NEEDS A ." + ext.toUpperCase() + " ICON", true, 0.0f);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Game Name text entry (keyboard routed here from EngineContext while isEditingText is true)
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * True while the Game Name field owns the keyboard. Also requires the modal to still be open, so focus can never
+     * leak (and lock hotkeys) if the modal is closed by some other path mid-edit.
+     */
+    public static boolean isEditingText(EditorWorkspace workspace) {
+        if (!editingName) return false;
+        if (workspace == null || workspace.getOverlayManager().getActiveModal() != ModalState.BUILD_EXPORTER) {
+            editingName = false;
+            return false;
+        }
+        return true;
+    }
+
+    /** Enter commits, Escape cancels, Backspace deletes. Returns true when the key was consumed. */
+    public static boolean handleKey(int key, int action, EditorWorkspace workspace) {
+        if (!isEditingText(workspace) || action == GLFW_RELEASE) return false;
+        switch (key) {
+            case GLFW_KEY_ENTER, GLFW_KEY_KP_ENTER -> commitNameEdit();
+            case GLFW_KEY_ESCAPE -> editingName = false;
+            case GLFW_KEY_BACKSPACE -> { if (nameBuffer.length() > 0) nameBuffer.setLength(nameBuffer.length() - 1); }
+            default -> {}
+        }
+        return true;
+    }
+
+    /** Typed characters: only those valid in an executable / bundle name are accepted. */
+    public static boolean handleChar(int codepoint, EditorWorkspace workspace) {
+        if (!isEditingText(workspace)) return false;
+        boolean allowed = (codepoint >= 'A' && codepoint <= 'Z') || (codepoint >= 'a' && codepoint <= 'z')
+            || (codepoint >= '0' && codepoint <= '9') || codepoint == ' ' || codepoint == '_' || codepoint == '.' || codepoint == '-';
+        if (allowed && nameBuffer.length() < MAX_GAME_NAME) nameBuffer.appendCodePoint(codepoint);
+        return true;
+    }
+
+    private static void commitNameEdit() {
+        if (!editingName) return;
+        editingName = false;
+        String name = nameBuffer.toString().trim();
+        if (StandaloneExporter.isValidExecutableName(name)) {
+            gameName = name;
+        } else {
+            setStatus("INVALID GAME NAME: START WITH A LETTER OR DIGIT; USE LETTERS, DIGITS, SPACE, . - _", true, 0.0f);
+        }
+    }
+
     private static void startExport(File project) {
         if (exportDir == null) { setStatus("SELECT AN EXPORT PATH", true, 0.0f); return; }
         if (startupScene.isEmpty()) { setStatus("SELECT A STARTUP SCENE", true, 0.0f); return; }
+        if (iconFile != null && !StandaloneExporter.isValidIconFor(iconFile, platform)) {
+            setStatus(platform.label + " NEEDS A ." + platform.iconExtension().toUpperCase() + " ICON (OR CLEAR IT)", true, 0.0f);
+            return;
+        }
 
         File targetJdk = null;
         if (platform != Platform.host()) {
@@ -247,8 +357,8 @@ public final class BuildExporterOverlay {
         }
 
         UISoundPlayer.play(UISound.SPAWN);
-        StandaloneExporter.Request request = new StandaloneExporter.Request(project, exportDir, executableName, platform, startupScene,
-            targetJdk, includeHaptics);
+        StandaloneExporter.Request request = new StandaloneExporter.Request(project, exportDir, gameName, platform, startupScene,
+            targetJdk, includeHaptics, iconFile);
         running = true;
         setStatus("STARTING EXPORT", false, 0.01f);
         Thread worker = new Thread(() -> {
@@ -363,7 +473,7 @@ public final class BuildExporterOverlay {
     private static String sanitizeName(String name) {
         String clean = (name != null) ? name.replaceAll("[^A-Za-z0-9 _.-]", "").trim() : "";
         while (clean.startsWith(".") || clean.startsWith("-") || clean.startsWith("_") || clean.startsWith(" ")) clean = clean.substring(1);
-        return StandaloneExporter.isValidExecutableName(clean) ? clean : "Game";
+        return StandaloneExporter.isValidExecutableName(clean) ? clean : DEFAULT_GAME_NAME;
     }
 
     private static boolean inRow(float x, float y, float midY) {

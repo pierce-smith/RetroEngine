@@ -11,6 +11,8 @@ import com.retro.engine.editor.EditorWorkspace.GizmoMode;
 import com.retro.engine.editor.EditorWorkspace.WorkspaceTab;
 import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.gizmos.GizmoInteractor;
+import com.retro.engine.editor.gizmos.GizmoMath;
+import com.retro.engine.editor.gizmos.GizmoState;
 import com.retro.engine.editor.gizmos.GizmoRenderer;
 import com.retro.engine.graphics.GameView;
 import com.retro.engine.graphics.IRenderBackend;
@@ -383,6 +385,54 @@ public class ViewportPanel {
         sb.append(scaled / 100).append('.');
         if (frac < 10) sb.append('0');
         sb.append(frac);
+    }
+
+    private static final float MARKER_LINE = 0.003f;
+
+    /**
+     * Multi-selection feedback in the Scene panel's design space: a screen-space bracket around each selected entity's
+     * projected world bounds (only when more than one is selected) and the in-flight marquee rectangle.
+     */
+    public static void renderSelectionOverlay(UIGeometryBatch.Buffer buffer, EditorWorkspace workspace) {
+        GizmoState gizmo = workspace.getGizmoStateController();
+        if (workspace.getSelectionCount() > 1) {
+            SceneWorld scene = workspace.getSceneManager();
+            float[] b = new float[6];
+            for (Entity e : workspace.getSelectedEntities()) {
+                if (!GizmoMath.computeWorldBounds(e, scene, b)) continue;
+                float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+                boolean visible = true;
+                for (int corner = 0; corner < 8 && visible; corner++) {
+                    float x = (corner & 1) != 0 ? b[3] : b[0];
+                    float y = (corner & 2) != 0 ? b[4] : b[1];
+                    float z = (corner & 4) != 0 ? b[5] : b[2];
+                    if (GizmoMath.viewDepth(x, y, z, workspace.getCameraController(), gizmo.getCamPanX(), gizmo.getCamPanY(),
+                            gizmo.getCamZoom(), gizmo.getCamPitch(), gizmo.getCamYaw()) <= 0.0f) {
+                        visible = false; // Straddling the camera plane would project to a nonsense rectangle
+                        break;
+                    }
+                    float[] p = GizmoMath.projectWorldToNdc(x, y, z, workspace);
+                    minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]);
+                    minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]);
+                }
+                if (!visible) continue;
+                float pad = 0.008f; // Point entities (lights, audio) still get a visible box
+                outlineRect(buffer, minX - pad, minY - pad, maxX + pad, maxY + pad,
+                        e == workspace.getSelectedEntity() ? EditorTheme.TEXT : EditorTheme.ACCENT, 0.9f);
+            }
+        }
+        if (gizmo.isMarqueeActive()) {
+            float[] r = gizmo.getMarqueeDesignRect();
+            UIGeometryBatch.addQuad(buffer, r[0], r[1], r[2], r[3], EditorTheme.ACCENT, 0.15f);
+            outlineRect(buffer, r[0], r[1], r[2], r[3], EditorTheme.ACCENT, 0.9f);
+        }
+    }
+
+    private static void outlineRect(UIGeometryBatch.Buffer buffer, float x0, float y0, float x1, float y1, int rgb, float alpha) {
+        UIGeometryBatch.addQuad(buffer, x0, y1 - MARKER_LINE, x1, y1, rgb, alpha);
+        UIGeometryBatch.addQuad(buffer, x0, y0, x1, y0 + MARKER_LINE, rgb, alpha);
+        UIGeometryBatch.addQuad(buffer, x0, y0, x0 + MARKER_LINE, y1, rgb, alpha);
+        UIGeometryBatch.addQuad(buffer, x1 - MARKER_LINE, y0, x1, y1, rgb, alpha);
     }
 
     public static void renderToolbar(UIGeometryBatch.Buffer buffer, GizmoMode currentGizmoMode) {

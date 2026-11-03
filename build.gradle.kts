@@ -243,6 +243,8 @@ tasks.named("run") {
 //   ./gradlew packageEditor                         -> build/dist/RetroEngine(.app)
 //   ./gradlew packageEditor -PinstallerType=dmg     -> dmg | pkg | msi | exe | deb | rpm
 //   ./gradlew packageEditor -PwinConsole            -> Windows launcher with a console window
+//   ./gradlew packageEditor -PappName="My Game" -PappIcon=path/to/icon.icns
+//                                                   -> custom jpackage --name / --icon (.icns macOS, .ico Windows, .png Linux)
 //
 // macOS distribution signing (default is jpackage's ad-hoc signature, which Gatekeeper blocks on other Macs):
 //   ./gradlew packageEditor  -PmacSignIdentity="Developer ID Application: Name (TEAMID)"
@@ -259,7 +261,13 @@ tasks.named("run") {
 //                                           no full JDK is installed on the user's machine
 // ------------------------------------------------------------------------------------------
 
-val editorAppName = "RetroEngine"
+val editorAppName: String = providers.gradleProperty("appName").orNull?.trim()?.takeIf { it.isNotEmpty() } ?: "RetroEngine"
+val editorAppIcon: File? = providers.gradleProperty("appIcon").orNull?.trim()?.takeIf { it.isNotEmpty() }?.let { file(it) }
+    ?: file("src/main/resources/icons/icon." + when {
+        hostOs.isMacOsX -> "icns"
+        hostOs.isWindows -> "ico"
+        else -> "png"
+    }).takeIf { it.isFile } // default: OS-appropriate icon from src/main/resources/icons/
 val editorAppVersion = version.toString().substringBefore("-") // jpackage rejects "-SNAPSHOT"
 
 // Modules for the editor itself (jdeps: java.base,java.desktop,java.logging,jdk.unsupported, plus
@@ -404,6 +412,9 @@ tasks.register("packageEditor") {
     inputs.property("macSignIdentity", signIdentity.orElse(""))
     inputs.property("installerType", installerType)
     inputs.property("winConsole", winConsole)
+    inputs.property("appName", editorAppName)
+    val appIcon = editorAppIcon
+    if (appIcon != null) inputs.file(appIcon)
     outputs.dir(dest)
 
     doLast {
@@ -427,6 +438,12 @@ tasks.register("packageEditor") {
             "--add-modules", engineRuntimeModules,
             "--jlink-options", "--strip-debug --no-header-files --no-man-pages --strip-native-commands"
         )
+        if (appIcon != null) {
+            val expected = when { hostOs.isMacOsX -> "icns"; hostOs.isWindows -> "ico"; else -> "png" }
+            if (!appIcon.isFile) throw GradleException("-PappIcon not found: $appIcon")
+            if (!appIcon.name.lowercase().endsWith(".$expected")) throw GradleException("-PappIcon must be a .$expected file on this OS: $appIcon")
+            cmd += listOf("--icon", appIcon.absolutePath)
+        }
         val javaOptions = engineJvmArgs("\$APPDIR/natives/libMoltenVK.dylib") + listOf(
             "-Dretro.packaged=true",
             "-Dretro.gameRuntime=\$APPDIR/game-runtime"

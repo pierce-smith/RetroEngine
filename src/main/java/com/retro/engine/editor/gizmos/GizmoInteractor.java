@@ -111,9 +111,13 @@ public class GizmoInteractor {
     }
 
     public static boolean handleGizmoDrag(double deltaX, double deltaY, double refX, double refY, GizmoAxis activeGizmoAxis, GizmoMode currentGizmoMode, Entity selectedEntity, float wx, float wy, float wz, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
-        if (activeGizmoAxis == GizmoAxis.NONE || selectedEntity == null) return false;
-        Transform tc = selectedEntity.getTransform();
-        if (tc == null) return false;
+        if (selectedEntity == null) return false;
+        return handleGizmoDrag(deltaX, deltaY, refX, refY, activeGizmoAxis, currentGizmoMode, selectedEntity.getTransform(), wx, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+    }
+
+    /** Same as the entity overload, on a bare transform (multi-selection drags drive a pivot proxy this way). */
+    public static boolean handleGizmoDrag(double deltaX, double deltaY, double refX, double refY, GizmoAxis activeGizmoAxis, GizmoMode currentGizmoMode, Transform tc, float wx, float wy, float wz, ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
+        if (activeGizmoAxis == GizmoAxis.NONE || tc == null) return false;
 
         if (currentGizmoMode == GizmoMode.TRANSLATE) {
             accumulateTranslation(deltaX, deltaY, activeGizmoAxis, wx, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);

@@ -50,7 +50,7 @@ public class Main {
             e.printStackTrace();
         });
 
-        System.out.println("[Main] Retro Engine on Java " + Runtime.version() + " (" + System.getProperty("os.name") + " "
+        System.out.println("[Main] RetroEngine on Java " + Runtime.version() + " (" + System.getProperty("os.name") + " "
                 + System.getProperty("os.arch") + ")");
 
         EngineContext context = new EngineContext();
@@ -62,12 +62,12 @@ public class Main {
                 }
             } else if (isRuntime) {
                 System.out.println("[Main] Mode: standalone game (--runtime)");
-                if (context.initialize(1280, 720, "Retro Engine Standalone Runtime", true, args)) {
+                if (context.initialize(1280, 720, "RetroEngine Standalone Runtime", true, args)) {
                     new RuntimeLoop(false).run(context, context.getEditorManager().getSceneManager());
                 }
             } else {
                 System.out.println("[Main] Mode: editor");
-                if (context.initialize(1280, 720, "Retro Engine Editor & Runtime", false, args)) {
+                if (context.initialize(1280, 720, "RetroEngine Editor & Runtime", false, args)) {
                     new EngineLoop().run(context);
                 }
             }

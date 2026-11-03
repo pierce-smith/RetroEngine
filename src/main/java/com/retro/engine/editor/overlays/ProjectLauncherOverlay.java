@@ -54,7 +54,7 @@ public final class ProjectLauncherOverlay {
         UIGeometryBatch.addQuad(buffer, -1.0f, -1.0f, 1.0f, 1.0f, EditorTheme.BACKGROUND, 1.0f);
         UIGeometryBatch.addRoundedCard(buffer, CARD_X0, CARD_Y0, CARD_X1, CARD_Y1, 0.02f, EditorTheme.SURFACE, EditorTheme.BORDER_STRONG, 1.0f);
 
-        centeredText(buffer, "RETRO ENGINE", CARD_Y1 - 0.10f, 2.0f, EditorTheme.TEXT);
+        centeredText(buffer, "RetroEngine", CARD_Y1 - 0.10f, 2.0f, EditorTheme.TEXT);
         centeredText(buffer, "PROJECT LAUNCHER", CARD_Y1 - 0.18f, 1.0f, EditorTheme.TEXT_MUTED);
         UIGeometryBatch.addQuad(buffer, CARD_X0 + 0.04f, HEADER_LINE_Y, CARD_X1 - 0.04f, HEADER_LINE_Y + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
 

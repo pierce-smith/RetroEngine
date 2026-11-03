@@ -39,10 +39,14 @@ public class AssetBrowserInputDelegate {
     private static boolean hierarchyPendingToggle = false;
     private static boolean draggingHierarchyScrollbar = false;
     private static float hierarchyScrollbarGrabOffset = 0.0f;
+    // Row a Shift+Click range extends from: the last row clicked without Shift
+    private static Entity hierarchyRangeAnchor = null;
 
     /**
      * Press in the Hierarchy (design space). Selects the row under the cursor, or arms an expand/collapse toggle when
-     * the row is already selected; the toggle fires on release only if the press never turned into a drag.
+     * the row is already the sole selection; the toggle fires on release only if the press never turned into a drag.
+     * Shift+Click selects the visible range from the anchor row, Cmd/Ctrl+Click toggles the row, and Shift+Cmd/Ctrl+Click
+     * adds the range to the existing selection. Modifier clicks never start a drag-and-drop.
      */
     public static void processHierarchyClick(float ndcX, float ndcY, EditorWorkspace manager) {
         resetHierarchyPress();
@@ -71,7 +75,18 @@ public class AssetBrowserInputDelegate {
             HierarchyPanel.HierarchyNode node = visibleTree.get(index);
             Entity clickedEntity = node.entity;
             UISoundPlayer.play(UISound.CLICK);
-            if (node.hasChildren && manager.getSelectedEntity() == clickedEntity) {
+            boolean shift = manager.isShiftHeld();
+            boolean toggle = manager.isToggleModifierHeld();
+            if (shift) {
+                manager.setSelection(rangeFromAnchor(visibleTree, index), clickedEntity, toggle);
+                return;
+            }
+            hierarchyRangeAnchor = clickedEntity;
+            if (toggle) {
+                manager.toggleEntitySelection(clickedEntity);
+                return;
+            }
+            if (node.hasChildren && manager.getSelectionCount() == 1 && manager.getSelectedEntity() == clickedEntity) {
                 hierarchyPendingToggle = true;
             } else {
                 manager.selectEntity(clickedEntity);
@@ -82,6 +97,23 @@ public class AssetBrowserInputDelegate {
         } else if (ndcY <= HierarchyPanel.VIEW_TOP && ndcY >= HierarchyPanel.VIEW_BOTTOM) {
             manager.selectEntity(null);
         }
+    }
+
+    /** Visible rows between the range anchor and {@code index} inclusive; just that row when the anchor is not visible. */
+    private static List<Entity> rangeFromAnchor(List<HierarchyPanel.HierarchyNode> visibleTree, int index) {
+        int anchor = -1;
+        for (int i = 0; i < visibleTree.size(); i++) {
+            if (visibleTree.get(i).entity == hierarchyRangeAnchor) { anchor = i; break; }
+        }
+        if (anchor < 0) {
+            hierarchyRangeAnchor = visibleTree.get(index).entity;
+            anchor = index;
+        }
+        List<Entity> range = new ArrayList<>();
+        int step = (index >= anchor) ? 1 : -1;
+        // Anchor first, clicked row last, so the clicked row becomes the primary selection
+        for (int i = anchor; i != index + step; i += step) range.add(visibleTree.get(i).entity);
+        return range;
     }
 
     /** Cursor move in Hierarchy design space; drives scrollbar drags and row drag-and-drop. */

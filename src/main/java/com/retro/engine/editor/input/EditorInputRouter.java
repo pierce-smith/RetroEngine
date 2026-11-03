@@ -183,7 +183,7 @@ public class EditorInputRouter {
             if (panel == null) return false;
             return dispatchToPanel(panel, ndcX, ndcY, button, action);
         } else if (action == 0) { // Release
-            if (button == 0) gizmoStateController.onPrimaryRelease();
+            if (button == 0) gizmoStateController.onPrimaryRelease(workspace);
             InspectorInputDelegate.onMouseRelease(workspace);
             AssetBrowserInputDelegate.onMouseRelease(workspace);
             overlayManager.onModalMouseRelease();
@@ -222,6 +222,11 @@ public class EditorInputRouter {
 
             if (button == 0 && gizmoStateController.isBoneDragActive()) {
                 gizmoStateController.finishBoneDrag(workspace);
+                return true;
+            }
+
+            if (button == 0 && gizmoStateController.isGroupDragActive()) {
+                gizmoStateController.finishGroupDrag(workspace);
                 return true;
             }
 

@@ -6,6 +6,8 @@ import com.retro.engine.ecs.*;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.EntitySpawner;
 import com.retro.engine.ecs.InspectorProperty;
+import com.retro.engine.ecs.components.Transform;
+import com.retro.engine.editor.ICommand;
 import com.retro.engine.ecs.components.AnimatorComponent;
 import com.retro.engine.ecs.components.AudioSource;
 import com.retro.engine.ecs.components.BoxCollider;
@@ -53,6 +55,11 @@ public class InspectorInputDelegate {
         // Clicking inside the focused field keeps typing; anywhere else is focus loss, which commits
         if (InspectorPanel.isOverActiveField(ndcX, ndcY)) return;
         commitInlineEdit(manager);
+
+        if (manager.getSelectionCount() > 1) {
+            if (ndcX >= 0.55f) processMultiSelectionClick(ndcX, ndcY, manager);
+            return;
+        }
 
         Entity selected = manager.getSelectedEntity();
         if (selected == null || ndcX < 0.55f) return;
@@ -234,6 +241,89 @@ public class InspectorInputDelegate {
     }
 
     /** Applies a click inside a property row; returns true when the click was consumed. */
+    /** Hit-tests {@link InspectorPanel#renderMultiSelection}'s row sequence (names, batch transform, shared components, add). */
+    private static void processMultiSelectionClick(float ndcX, float ndcY, EditorWorkspace manager) {
+        List<Entity> selection = List.copyOf(manager.getSelectedEntities());
+        Entity primary = manager.getSelectedEntity();
+        float scrollOffset = InspectorPanel.getScrollOffset();
+        float curY = InspectorPanel.CONTENT_TOP - InspectorPanel.TEXT_ROW_ADVANCE - InspectorPanel.HEADER_ADVANCE;
+
+        for (ComponentSchema.Property p : InspectorPanel.batchTransformProperties()) {
+            float drawY = curY + scrollOffset;
+            curY -= InspectorPanel.rowAdvance(p.control);
+            if (!InspectorPanel.isRowVisible(drawY) || ndcY < drawY - InspectorPanel.CTRL_BELOW || ndcY > drawY + InspectorPanel.CTRL_ABOVE) continue;
+            InspectorProperty prop = p.meta;
+            float step = prop.step() > 0.0f ? prop.step() : 0.1f;
+            float delta = 0.0f;
+            if (ndcX >= InspectorPanel.DEC_X0 && ndcX < InspectorPanel.DEC_X1) delta = -step;
+            else if (ndcX >= InspectorPanel.INC_X0 && ndcX <= InspectorPanel.INC_X1) delta = step;
+            if (delta != 0.0f) {
+                UISoundPlayer.play(UISound.CLICK);
+                applyBatchTransform(manager, selection, p, delta, true);
+                return;
+            }
+            Transform anchor = (primary != null) ? primary.getTransform() : null;
+            if (anchor != null && ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.FIELD_X1) {
+                float shared = InspectorPanel.sharedTransformValue(selection, p.field);
+                beginInlineEdit(anchor, InspectorPanel.MULTI_KEY_PREFIX + p.field.getName(), p.field, float.class, prop, p.label,
+                        null, Float.isNaN(shared) ? "" : Float.toString(shared));
+            }
+            return;
+        }
+        curY -= InspectorPanel.COMPONENT_GAP + InspectorPanel.HEADER_ADVANCE;
+
+        List<Class<? extends Component>> shared = InspectorPanel.sharedComponentTypes(selection, primary);
+        if (shared.isEmpty()) curY -= InspectorPanel.TEXT_ROW_ADVANCE;
+        for (Class<? extends Component> type : shared) {
+            float drawY = curY + scrollOffset;
+            curY -= InspectorPanel.ROW_ADVANCE;
+            if (!InspectorPanel.isRowVisible(drawY) || ndcY < drawY - InspectorPanel.CTRL_BELOW || ndcY > drawY + InspectorPanel.CTRL_ABOVE) continue;
+            if (ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.VALUE_X1 && InspectorPanel.isRemovable(primary.getComponent(type))) {
+                List<ICommand> removals = new ArrayList<>();
+                for (Entity e : selection) {
+                    Component c = e.getComponent(type);
+                    if (c != null) removals.add(new EditorCommands.RemoveComponentCommand(manager, e, c));
+                }
+                UISoundPlayer.play(UISound.DELETE);
+                manager.getCommandHistory().executeCommand(new EditorCommands.CompositeCommand(
+                        "Remove " + primary.getComponent(type).getComponentName() + " from " + removals.size() + " Entities", removals));
+            }
+            return;
+        }
+        curY -= InspectorPanel.COMPONENT_GAP;
+
+        float drawAddBtnY = curY + scrollOffset;
+        if (drawAddBtnY + InspectorPanel.ADD_ABOVE <= InspectorPanel.VIEW_TOP && drawAddBtnY - InspectorPanel.ADD_BELOW >= InspectorPanel.VIEW_BOTTOM
+                && ndcX >= InspectorPanel.ADD_X0 && ndcX <= InspectorPanel.ADD_X1
+                && ndcY >= drawAddBtnY - InspectorPanel.ADD_BELOW && ndcY <= drawAddBtnY + InspectorPanel.ADD_ABOVE) {
+            UISoundPlayer.play(UISound.OPEN_MODAL);
+            promptAddComponentMenu(manager, selection, ndcX, ndcY);
+        }
+    }
+
+    /**
+     * Sets (or, when {@code relative}, offsets) one Transform field on every selected entity, clamped to the property's
+     * range, as a single undo step. Entities whose value would not change are skipped.
+     */
+    private static void applyBatchTransform(EditorWorkspace manager, List<Entity> selection, ComponentSchema.Property p, float value, boolean relative) {
+        InspectorProperty prop = p.meta;
+        List<ICommand> edits = new ArrayList<>();
+        for (Entity e : selection) {
+            Transform tc = e.getTransform();
+            if (tc == null) continue;
+            try {
+                float old = p.field.getFloat(tc);
+                float next = Math.max(prop.min(), Math.min(prop.max(), relative ? old + value : value));
+                if (next != old) edits.add(new EditorCommands.ModifyPropertyCommand(tc, p.field, old, next, p.label));
+            } catch (IllegalAccessException ex) {
+                ex.printStackTrace();
+            }
+        }
+        if (!edits.isEmpty()) {
+            manager.getCommandHistory().executeCommand(new EditorCommands.CompositeCommand(p.label + " on " + edits.size() + " Entities", edits));
+        }
+    }
+
     private static boolean handlePropertyClick(EditorWorkspace manager, Component comp, ComponentSchema.Property p, Object val, float ndcX) {
         Field field = p.field;
         InspectorProperty prop = p.meta;
@@ -475,6 +565,20 @@ public class InspectorInputDelegate {
         Object oldValue = editOldValue;
         int boneRow = editBoneRow, boneIndex = editBoneIndex;
         clearInlineEdit();
+
+        // Batch transform field of a multi-selection: the typed value lands on every selected entity
+        if (key != null && key.startsWith(InspectorPanel.MULTI_KEY_PREFIX)) {
+            if (manager == null || manager.getSelectionCount() < 2 || text.isBlank()) return;
+            Object parsed = parseInlineValue(text, float.class, meta, true);
+            if (parsed == null) return;
+            for (ComponentSchema.Property p : InspectorPanel.batchTransformProperties()) {
+                if (p.field.equals(field)) {
+                    applyBatchTransform(manager, List.copyOf(manager.getSelectedEntities()), p, (Float) parsed, false);
+                    break;
+                }
+            }
+            return;
+        }
 
         // The edited component must still belong to the selection (it may have been removed mid-edit)
         Entity selected = (manager != null) ? manager.getSelectedEntity() : null;
@@ -730,77 +834,53 @@ public class InspectorInputDelegate {
     }
 
     public static void promptAddComponentMenu(EditorWorkspace manager, Entity entity, float ndcX, float ndcY) {
-        if (entity == null || manager == null) return;
-        List<MenuItem> items = new ArrayList<>();
-        items.add(new MenuItem("+ RigidBody", () -> {
-            if (entity.getComponent(RigidBodyComponent.class) == null) {
-                entity.addComponent(new RigidBodyComponent());
-                UISoundPlayer.play(UISound.SPAWN);
-            }
-        }));
-        items.add(new MenuItem("+ Box Collider", () -> {
-            if (entity.getComponent(BoxCollider.class) == null) {
-                entity.addComponent(new BoxCollider());
-                UISoundPlayer.play(UISound.SPAWN);
-            }
-        }));
-        items.add(new MenuItem("+ Sphere Collider", () -> {
-            if (entity.getComponent(SphereCollider.class) == null) {
-                entity.addComponent(new SphereCollider());
-                UISoundPlayer.play(UISound.SPAWN);
-            }
-        }));
-        items.add(new MenuItem("+ Capsule Collider", () -> {
-            if (entity.getComponent(CapsuleCollider.class) == null) {
-                entity.addComponent(new CapsuleCollider());
-                UISoundPlayer.play(UISound.SPAWN);
-            }
-        }));
-        items.add(new MenuItem("+ Light Source", () -> {
-            if (entity.getComponent(Light.class) == null) {
-                entity.addComponent(new Light());
-                UISoundPlayer.play(UISound.SPAWN);
-            }
-        }));
-        items.add(new MenuItem("+ Audio Source", () -> {
-            if (entity.getComponent(AudioSource.class) == null) {
-                entity.addComponent(new AudioSource());
-                UISoundPlayer.play(UISound.SPAWN);
-            }
-        }));
-        // Not limited to one per entity: an unbound SCRIPT picker attaches an additional ScriptComponent
-        items.add(new MenuItem("+ Script Component", () -> {
-            manager.getOverlayManager().openAssetPicker(AssetType.SCRIPT, null, null);
-        }));
-        items.add(new MenuItem("+ Character Controller", () -> {
-            if (entity.getComponent(CharacterControllerComponent.class) == null) {
-                entity.addComponent(new CharacterControllerComponent());
-                UISoundPlayer.play(UISound.SPAWN);
-            }
-        }));
-        items.add(new MenuItem("+ Vehicle Controller", () -> {
-            if (entity.getComponent(VehicleControllerComponent.class) == null) {
-                entity.addComponent(new VehicleControllerComponent());
-                UISoundPlayer.play(UISound.SPAWN);
-            }
-        }));
+        if (entity == null) return;
+        promptAddComponentMenu(manager, List.of(entity), ndcX, ndcY);
+    }
 
-        addUiComponentItem(items, entity, "+ UI Canvas", UICanvasComponent.class, UICanvasComponent::new);
-        addUiComponentItem(items, entity, "+ UI Panel", UIPanel.class, UIPanel::new);
-        addUiComponentItem(items, entity, "+ UI Text", UIText.class, UIText::new);
-        addUiComponentItem(items, entity, "+ UI Image", UIImage.class, UIImage::new);
-        addUiComponentItem(items, entity, "+ UI Progress Bar", UIProgressBar.class, UIProgressBar::new);
+    /**
+     * Add Component menu for one or more entities: each item adds a fresh component to every target that does not have
+     * one yet. Script Component binds through the asset picker to the primary entity, so it is offered for one target only.
+     */
+    public static void promptAddComponentMenu(EditorWorkspace manager, List<Entity> targets, float ndcX, float ndcY) {
+        if (targets == null || targets.isEmpty() || manager == null) return;
+        List<Entity> entities = List.copyOf(targets);
+        List<MenuItem> items = new ArrayList<>();
+        addComponentItem(items, entities, "+ RigidBody", RigidBodyComponent.class, RigidBodyComponent::new);
+        addComponentItem(items, entities, "+ Box Collider", BoxCollider.class, BoxCollider::new);
+        addComponentItem(items, entities, "+ Sphere Collider", SphereCollider.class, SphereCollider::new);
+        addComponentItem(items, entities, "+ Capsule Collider", CapsuleCollider.class, CapsuleCollider::new);
+        addComponentItem(items, entities, "+ Light Source", Light.class, Light::new);
+        addComponentItem(items, entities, "+ Audio Source", AudioSource.class, AudioSource::new);
+        if (entities.size() == 1) {
+            // Not limited to one per entity: an unbound SCRIPT picker attaches an additional ScriptComponent
+            items.add(new MenuItem("+ Script Component", () -> {
+                manager.getOverlayManager().openAssetPicker(AssetType.SCRIPT, null, null);
+            }));
+        }
+        addComponentItem(items, entities, "+ Character Controller", CharacterControllerComponent.class, CharacterControllerComponent::new);
+        addComponentItem(items, entities, "+ Vehicle Controller", VehicleControllerComponent.class, VehicleControllerComponent::new);
+
+        addComponentItem(items, entities, "+ UI Canvas", UICanvasComponent.class, UICanvasComponent::new);
+        addComponentItem(items, entities, "+ UI Panel", UIPanel.class, UIPanel::new);
+        addComponentItem(items, entities, "+ UI Text", UIText.class, UIText::new);
+        addComponentItem(items, entities, "+ UI Image", UIImage.class, UIImage::new);
+        addComponentItem(items, entities, "+ UI Progress Bar", UIProgressBar.class, UIProgressBar::new);
 
         manager.getOverlayManager().openContextMenu(ndcX, ndcY, items);
     }
 
-    private static <T extends Component> void addUiComponentItem(List<MenuItem> items, Entity entity, String label,
-                                                                 Class<T> type, java.util.function.Supplier<T> factory) {
+    private static <T extends Component> void addComponentItem(List<MenuItem> items, List<Entity> targets, String label,
+                                                               Class<T> type, java.util.function.Supplier<T> factory) {
         items.add(new MenuItem(label, () -> {
-            if (entity.getComponent(type) == null) {
-                entity.addComponent(factory.get());
-                UISoundPlayer.play(UISound.SPAWN);
+            boolean added = false;
+            for (Entity entity : targets) {
+                if (entity.getComponent(type) == null) {
+                    entity.addComponent(factory.get());
+                    added = true;
+                }
             }
+            if (added) UISoundPlayer.play(UISound.SPAWN);
         }));
     }
 }

@@ -216,6 +216,32 @@ public class EditorCommands {
         }
     }
 
+    /** Several commands as one undo step (group transforms, batch edits, multi-entity delete). Undo runs in reverse. */
+    public static class CompositeCommand implements ICommand {
+        private final String name;
+        private final List<ICommand> commands;
+
+        public CompositeCommand(String name, List<ICommand> commands) {
+            this.name = name;
+            this.commands = List.copyOf(commands);
+        }
+
+        public boolean isEmpty() { return commands.isEmpty(); }
+
+        @Override
+        public void execute() {
+            for (ICommand c : commands) c.execute();
+        }
+
+        @Override
+        public void undo() {
+            for (int i = commands.size() - 1; i >= 0; i--) commands.get(i).undo();
+        }
+
+        @Override
+        public String getName() { return name; }
+    }
+
     public static class TransformCommand implements ICommand {
         private final Transform transform;
         private final float oldPx, oldPy, oldPz, oldRx, oldRy, oldRz, oldSx, oldSy, oldSz;

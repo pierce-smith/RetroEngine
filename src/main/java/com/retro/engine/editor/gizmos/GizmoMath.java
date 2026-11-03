@@ -82,22 +82,36 @@ public class GizmoMath {
      */
     public static float[] computeGizmoAnchor(Entity entity, SceneWorld sceneManager) {
         if (entity == null) return new float[] { 0.0f, 0.0f, 0.0f };
+        float[] b = new float[6];
+        computeWorldBounds(entity, sceneManager, b);
+        return new float[] { (b[0] + b[3]) * 0.5f, b[1], (b[2] + b[5]) * 0.5f };
+    }
+
+    /**
+     * World-space AABB {minX, minY, minZ, maxX, maxY, maxZ} of the entity's drawn mesh bounds; a point at its world
+     * position when it has no mesh. Returns false (out untouched) for a null entity or one with no transform.
+     */
+    public static boolean computeWorldBounds(Entity entity, SceneWorld sceneManager, float[] out) {
+        if (entity == null) return false;
         SceneWorld.WorldTransform wt;
         if (sceneManager != null) {
             wt = sceneManager.getComputedWorldTransform(entity);
         } else {
             var tc = entity.getTransform();
-            if (tc == null) return new float[] { 0.0f, 0.0f, 0.0f };
+            if (tc == null) return false;
             wt = new SceneWorld.WorldTransform(tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ, tc.scaleX, tc.scaleY, tc.scaleZ);
         }
         MeshFilter mf = entity.getComponent(MeshFilter.class);
         float[] b = (mf != null) ? mf.getDrawnLocalBounds() : null;
-        if (b == null) return new float[] { wt.px(), wt.py(), wt.pz() };
+        if (b == null) {
+            out[0] = out[3] = wt.px(); out[1] = out[4] = wt.py(); out[2] = out[5] = wt.pz();
+            return true;
+        }
 
         float[] m = new float[9];
         computeModelBasis(wt.rx(), wt.ry(), wt.rz(), wt.sx(), wt.sy(), wt.sz(), m);
         float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, minZ = Float.MAX_VALUE;
-        float maxX = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
+        float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
         for (int corner = 0; corner < 8; corner++) {
             float lx = (corner & 1) != 0 ? b[3] : b[0];
             float ly = (corner & 2) != 0 ? b[4] : b[1];
@@ -106,10 +120,63 @@ public class GizmoMath {
             float y = m[1] * lx + m[4] * ly + m[7] * lz;
             float z = m[2] * lx + m[5] * ly + m[8] * lz;
             minX = Math.min(minX, x); maxX = Math.max(maxX, x);
-            minY = Math.min(minY, y);
+            minY = Math.min(minY, y); maxY = Math.max(maxY, y);
             minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
         }
-        return new float[] { wt.px() + (minX + maxX) * 0.5f, wt.py() + minY, wt.pz() + (minZ + maxZ) * 0.5f };
+        out[0] = wt.px() + minX; out[1] = wt.py() + minY; out[2] = wt.pz() + minZ;
+        out[3] = wt.px() + maxX; out[4] = wt.py() + maxY; out[5] = wt.pz() + maxZ;
+        return true;
+    }
+
+    /** Center of the union of the entities' world AABBs: the shared pivot for multi-selection gizmos. */
+    public static float[] computeGroupCenter(Iterable<Entity> entities, SceneWorld sceneManager) {
+        float[] b = new float[6];
+        float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, minZ = Float.MAX_VALUE;
+        float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
+        boolean any = false;
+        for (Entity e : entities) {
+            if (!computeWorldBounds(e, sceneManager, b)) continue;
+            any = true;
+            minX = Math.min(minX, b[0]); minY = Math.min(minY, b[1]); minZ = Math.min(minZ, b[2]);
+            maxX = Math.max(maxX, b[3]); maxY = Math.max(maxY, b[4]); maxZ = Math.max(maxZ, b[5]);
+        }
+        if (!any) return new float[] { 0.0f, 0.0f, 0.0f };
+        return new float[] { (minX + maxX) * 0.5f, (minY + maxY) * 0.5f, (minZ + maxZ) * 0.5f };
+    }
+
+    /** Pure rotation basis (unit scale) of Euler degrees, column-major, same convention as {@link #computeModelBasis}. */
+    public static void computeRotationBasis(float rx, float ry, float rz, float[] out) {
+        computeModelBasis(rx, ry, rz, 1.0f, 1.0f, 1.0f, out);
+    }
+
+    /**
+     * Inverse of {@link #computeRotationBasis}: Euler degrees {rx, ry, rz} of a column-major rotation basis. In that
+     * convention m(2,0) = sin(ry), m(0,0) = cos(ry)cos(rz), m(1,0) = -cos(ry)sin(rz), m(2,1) = -sin(rx)cos(ry),
+     * m(2,2) = cos(rx)cos(ry). At gimbal lock (cos(ry) ~ 0) rx is taken as 0 and rz read from column 1.
+     */
+    public static void eulerFromRotationBasis(float[] m, float[] outDeg) {
+        float sy = Math.max(-1.0f, Math.min(1.0f, m[2]));
+        double ry = Math.asin(sy);
+        double rx, rz;
+        if (Math.abs(sy) < 0.99999f) {
+            rx = Math.atan2(-m[5], m[8]);
+            rz = Math.atan2(-m[1], m[0]);
+        } else {
+            rx = 0.0;
+            rz = Math.atan2(m[3], m[4]);
+        }
+        outDeg[0] = (float) Math.toDegrees(rx);
+        outDeg[1] = (float) Math.toDegrees(ry);
+        outDeg[2] = (float) Math.toDegrees(rz);
+    }
+
+    /** out = a * b for column-major 3x3 matrices (out may not alias a or b). */
+    public static void multiply3x3(float[] a, float[] b, float[] out) {
+        for (int col = 0; col < 3; col++) {
+            for (int row = 0; row < 3; row++) {
+                out[col * 3 + row] = a[row] * b[col * 3] + a[3 + row] * b[col * 3 + 1] + a[6 + row] * b[col * 3 + 2];
+            }
+        }
     }
 
     /**

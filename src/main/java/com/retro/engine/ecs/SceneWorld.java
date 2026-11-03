@@ -17,7 +17,9 @@ import com.retro.engine.ui.UISoundPlayer.UISound;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 /**
@@ -73,6 +75,11 @@ public class SceneWorld {
     private final EntityManager entityManager = new EntityManager();
     private EntityHandle selectedHandle = EntityHandle.NULL;
     private Entity selectedEntity = null;
+    // Full multi-selection in selection order. selectedEntity is its primary (last-picked) member: single-entity tools
+    // (bone editing, prefab save, the inspector's full view) keep operating on it, group tools use the whole set.
+    private final LinkedHashSet<Entity> selection = new LinkedHashSet<>();
+    private final List<Entity> selectionSnapshot = new ArrayList<>();
+    private final List<Entity> selectionView = Collections.unmodifiableList(selectionSnapshot);
 
     private String activeScenePath = "Assets/Scenes/Default.rscene";
     // Scene transition requested by a script; applied at the end of update() so no entity list is mid-iteration
@@ -145,20 +152,93 @@ public class SceneWorld {
         return selectedEntity;
     }
 
+    /** Replaces the selection with just {@code entity} (null clears it). */
     public void selectEntity(Entity entity) {
+        selection.clear();
+        if (entity != null) selection.add(entity);
+        setPrimary(entity);
+    }
+
+    /** Replaces the selection with {@code entities} (scene members only); {@code primary} must be one of them, else the last. */
+    public void setSelection(Collection<Entity> entities, Entity primary) {
+        selection.clear();
+        if (entities != null) {
+            for (Entity e : entities) {
+                if (e != null && sceneEntities.contains(e)) selection.add(e);
+            }
+        }
+        setPrimary(selection.contains(primary) ? primary : lastSelected());
+    }
+
+    /** Cmd/Ctrl+Click: adds {@code entity} (making it primary) or removes it (the most recent remaining becomes primary). */
+    public void toggleSelection(Entity entity) {
+        if (entity == null) return;
+        if (selection.remove(entity)) {
+            setPrimary(entity == selectedEntity ? lastSelected() : selectedEntity);
+        } else {
+            selection.add(entity);
+            setPrimary(entity);
+        }
+    }
+
+    /** Adds {@code entities} to the selection; the last added becomes primary. */
+    public void addToSelection(Collection<Entity> entities) {
+        if (entities == null || entities.isEmpty()) return;
+        Entity last = null;
+        for (Entity e : entities) {
+            if (e != null && sceneEntities.contains(e)) {
+                selection.remove(e); // Re-insert so selection order tracks the latest pick
+                selection.add(e);
+                last = e;
+            }
+        }
+        if (last != null) setPrimary(last);
+    }
+
+    public boolean isSelected(Entity entity) {
+        return entity != null && selection.contains(entity);
+    }
+
+    public int getSelectionCount() {
+        pruneSelection();
+        return selection.size();
+    }
+
+    /** Every selected entity in selection order (primary included). Read-only view, valid until the selection next changes. */
+    public List<Entity> getSelectedEntities() {
+        pruneSelection();
+        return selectionView;
+    }
+
+    private Entity lastSelected() {
+        Entity last = null;
+        for (Entity e : selection) last = e;
+        return last;
+    }
+
+    /** Drops members that have left the scene (deleted through a path that bypassed {@link #deleteEntity}). */
+    private void pruneSelection() {
+        if (selection.removeIf(e -> e.handle == null || !isValidHandle(e.handle))) {
+            setPrimary(selection.contains(selectedEntity) ? selectedEntity : lastSelected());
+        }
+    }
+
+    private void setPrimary(Entity entity) {
         if (entity != null) {
             if (entity.handle == null || !isValidHandle(entity.handle)) {
                 registerEntityHandle(entity);
             }
+            selection.add(entity);
             this.selectedHandle = entity.getHandle();
             this.selectedEntity = entity;
         } else {
             this.selectedHandle = EntityHandle.NULL;
             this.selectedEntity = null;
         }
-
+        selectionSnapshot.clear();
+        selectionSnapshot.addAll(selection);
         for (Entity e : sceneEntities) {
-            e.selected = (e == selectedEntity);
+            e.selected = selection.contains(e);
         }
     }
 
@@ -293,12 +373,14 @@ public class SceneWorld {
 
         graphEvaluator.clearCache();
 
-        if (selectedEntity != null && selectedEntity.id != null) {
-            Entity matched = findEntityById(selectedEntity.id);
-            selectEntity(matched);
-        } else {
-            selectEntity((Entity) null);
+        // Re-match the whole selection by id onto the rebound entity instances
+        Entity primary = (selectedEntity != null && selectedEntity.id != null) ? findEntityById(selectedEntity.id) : null;
+        List<Entity> matched = new ArrayList<>();
+        for (Entity old : selection) {
+            Entity m = (old.id != null) ? findEntityById(old.id) : null;
+            if (m != null) matched.add(m);
         }
+        setSelection(matched, primary);
     }
 
     public void update(float deltaTime) {
@@ -435,8 +517,8 @@ public class SceneWorld {
             unregisterEntityHandle(target);
             entityFactory.deleteEntity(target, sceneEntities);
             graphEvaluator.clearCache();
-            if (selectedEntity == target) {
-                selectEntity((Entity) null);
+            if (selection.remove(target) || selectedEntity == target) {
+                setPrimary(selectedEntity == target ? lastSelected() : selectedEntity);
             }
         }
     }

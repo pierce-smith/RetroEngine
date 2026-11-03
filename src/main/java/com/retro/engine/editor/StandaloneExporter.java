@@ -66,6 +66,15 @@ public final class StandaloneExporter {
             this.nativesToken = nativesToken;
         }
 
+        /** Icon format jpackage (and the OS) expects for this target: .icns (macOS), .ico (Windows), .png (Linux). */
+        public String iconExtension() {
+            return switch (this) {
+                case MACOS -> "icns";
+                case WINDOWS -> "ico";
+                case LINUX -> "png";
+            };
+        }
+
         public static Platform host() {
             String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
             if (os.contains("win")) return WINDOWS;
@@ -85,9 +94,17 @@ public final class StandaloneExporter {
         public final File targetJdk;
         /** Ships SDL (bindings + natives, a few MB) for gamepad rumble; without it vibration calls are no-ops. */
         public final boolean includeHaptics;
+        /** Optional application icon in {@link Platform#iconExtension()} format; null keeps the default icon. */
+        public final File iconFile;
 
         public Request(File projectDir, File exportDir, String executableName, Platform platform, String startupScene,
                        File targetJdk, boolean includeHaptics) {
+            this(projectDir, exportDir, executableName, platform, startupScene, targetJdk, includeHaptics, null);
+        }
+
+        public Request(File projectDir, File exportDir, String executableName, Platform platform, String startupScene,
+                       File targetJdk, boolean includeHaptics, File iconFile) {
+            this.iconFile = iconFile;
             this.projectDir = projectDir;
             this.exportDir = exportDir;
             this.executableName = executableName;
@@ -126,8 +143,39 @@ public final class StandaloneExporter {
         return name != null && name.matches("[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}") && !name.endsWith(".");
     }
 
+    /** Default application icon for {@code platform}: src/main/resources/icons/icon.(icns|ico|png). */
+    public static String defaultIconPath(Platform platform) {
+        return "src/main/resources/icons/icon." + platform.iconExtension();
+    }
+
+    /** {@link #defaultIconPath(Platform)} as a file, or null when it doesn't exist (keeps the built-in icon). */
+    public static File defaultIconFile(Platform platform) {
+        File f = new File(defaultIconPath(platform));
+        return f.isFile() ? f : null;
+    }
+
+    /** True when {@code icon}'s extension is the format {@code platform} expects (see {@link Platform#iconExtension()}). */
+    public static boolean isValidIconFor(File icon, Platform platform) {
+        return icon != null && platform != null
+            && icon.getName().toLowerCase(Locale.ROOT).endsWith("." + platform.iconExtension());
+    }
+
+    /** Copies the configured icon to {@code dest}; false when no icon was configured. */
+    private boolean copyIcon(File dest) throws IOException {
+        if (req.iconFile == null) return false;
+        dest.getParentFile().mkdirs();
+        Files.copy(req.iconFile.toPath(), dest.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        return true;
+    }
+
     private void validate() throws IOException {
-        if (!isValidExecutableName(req.executableName)) throw new IOException("Invalid executable name: " + req.executableName);
+        if (!isValidExecutableName(req.executableName)) throw new IOException("Invalid game name: " + req.executableName);
+        if (req.iconFile != null) {
+            if (!req.iconFile.isFile()) throw new IOException("Application icon not found: " + req.iconFile);
+            if (!isValidIconFor(req.iconFile, req.platform)) {
+                throw new IOException(req.platform.label + " needs a ." + req.platform.iconExtension() + " icon: " + req.iconFile.getName());
+            }
+        }
         File assets = new File(req.projectDir, AssetDatabase.ASSETS_DIR);
         if (!assets.isDirectory()) throw new IOException("Project has no Assets/ folder: " + req.projectDir);
         if (!new File(req.projectDir, req.startupScene).isFile()) throw new IOException("Startup scene not found: " + req.startupScene);
@@ -455,6 +503,10 @@ public final class StandaloneExporter {
             cmd.add("--java-options");
             cmd.add(opt);
         }
+        if (req.iconFile != null) {
+            cmd.add("--icon");
+            cmd.add(req.iconFile.getAbsolutePath());
+        }
         if (req.platform == Platform.WINDOWS) cmd.add("--win-console");
         if (req.platform == Platform.MACOS) {
             cmd.add("--mac-package-identifier");
@@ -486,9 +538,11 @@ public final class StandaloneExporter {
         writeExecutable(new File(appDir, "AppRun"), "#!/bin/sh\nHERE=\"$(dirname \"$(readlink -f \"$0\")\")\"\nexec \"$HERE/bin/" + exe + "\" \"$@\"\n");
         Files.writeString(new File(appDir, exe + ".desktop").toPath(),
             "[Desktop Entry]\nType=Application\nName=" + exe + "\nExec=" + exe + "\nIcon=" + exe + "\nCategories=Game;\n");
-        BufferedImage icon = new BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB);
-        for (int y = 0; y < 64; y++) for (int x = 0; x < 64; x++) icon.setRGB(x, y, 0xFF3B82F6);
-        ImageIO.write(icon, "png", new File(appDir, exe + ".png"));
+        if (!copyIcon(new File(appDir, exe + ".png"))) {
+            BufferedImage icon = new BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB);
+            for (int y = 0; y < 64; y++) for (int x = 0; x < 64; x++) icon.setRGB(x, y, 0xFF3B82F6);
+            ImageIO.write(icon, "png", new File(appDir, exe + ".png"));
+        }
 
         String arch = System.getProperty("os.arch", "x86_64").replace("amd64", "x86_64").replace("aarch64", "arm64");
         File out = new File(req.exportDir, exe + "-" + arch + ".AppImage");
@@ -530,7 +584,8 @@ public final class StandaloneExporter {
                 File contents = new File(target, "Contents");
                 copyTree(runtime.toPath(), new File(contents, "runtime").toPath());
                 copyTree(app.toPath(), new File(contents, "app").toPath());
-                Files.writeString(new File(contents, "Info.plist").toPath(), infoPlist(exe, null));
+                String iconName = copyIcon(new File(contents, "Resources/" + exe + ".icns")) ? exe + ".icns" : null;
+                Files.writeString(new File(contents, "Info.plist").toPath(), infoPlist(exe, iconName));
                 writeExecutable(new File(contents, "MacOS/" + exe),
                     "#!/bin/sh\nCONTENTS=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"\nAPPDIR=\"$CONTENTS/app\"\n"
                         + "exec \"$CONTENTS/runtime/bin/java\" " + shellOptions("$APPDIR") + " -cp \"$APPDIR/*\" " + Main.class.getName() + " --runtime \"$@\"\n");
@@ -541,6 +596,7 @@ public final class StandaloneExporter {
                 deleteRecursively(target.toPath());
                 copyTree(runtime.toPath(), new File(target, "runtime").toPath());
                 copyTree(app.toPath(), new File(target, "app").toPath());
+                copyIcon(new File(target, exe + ".png"));
                 writeExecutable(new File(target, exe),
                     "#!/bin/sh\nHERE=\"$(dirname \"$(readlink -f \"$0\")\")\"\nAPPDIR=\"$HERE/app\"\n"
                         + "exec \"$HERE/runtime/bin/java\" " + shellOptions("$APPDIR") + " -cp \"$APPDIR/*\" " + Main.class.getName() + " --runtime \"$@\"\n");
@@ -550,6 +606,7 @@ public final class StandaloneExporter {
                 deleteRecursively(target.toPath());
                 copyTree(runtime.toPath(), new File(target, "runtime").toPath());
                 copyTree(app.toPath(), new File(target, "app").toPath());
+                copyIcon(new File(target, exe + ".ico")); // A .bat cannot embed an icon; shipped for shortcuts
                 StringBuilder opts = new StringBuilder();
                 for (String o : jvmOptions("%APPDIR%")) opts.append('"').append(o).append("\" ");
                 Files.writeString(new File(target, exe + ".bat").toPath(),

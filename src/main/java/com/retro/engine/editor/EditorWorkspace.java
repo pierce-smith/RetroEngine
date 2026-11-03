@@ -34,8 +34,19 @@ import com.retro.engine.ui.UIGeometryBatch;
 
 import java.util.List;
 
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_LEFT_ALT;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_LEFT_CONTROL;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_RIGHT_ALT;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_LEFT_SHIFT;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_LEFT_SUPER;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_RIGHT_CONTROL;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_RIGHT_SHIFT;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_RIGHT_SUPER;
+import static org.lwjgl.glfw.GLFW.GLFW_PRESS;
+import static org.lwjgl.glfw.GLFW.glfwGetKey;
+
 /**
- * EditorWorkspace is the central Session Context & Service Registry for Retro Engine.
+ * EditorWorkspace is the central Session Context & Service Registry for RetroEngine.
  * SRP Responsibility: Owns top-level window/viewport bounds, camera references, active workspace tab state,
  * and exposes direct getters for core domain managers (SceneWorld, AssetDatabase, GizmoState, OverlaySystem, CommandStack).
  */
@@ -222,6 +233,52 @@ public class EditorWorkspace {
         sceneManager.selectEntity(entity);
         clearBoneSelection();
         InspectorPanel.resetScroll();
+    }
+
+    // --- Multi-selection (see SceneWorld: the primary stays getSelectedEntity(), group tools use the whole set) ---
+    public List<Entity> getSelectedEntities() { return sceneManager.getSelectedEntities(); }
+    public int getSelectionCount() { return sceneManager.getSelectionCount(); }
+    public boolean isSelected(Entity entity) { return sceneManager.isSelected(entity); }
+
+    /** Cmd/Ctrl+Click: toggles {@code entity} in the selection. */
+    public void toggleEntitySelection(Entity entity) {
+        sceneManager.toggleSelection(entity);
+        onSelectionSetChanged();
+    }
+
+    /** Replaces the selection with {@code entities}, or adds them to it when {@code additive}. */
+    public void setSelection(java.util.Collection<Entity> entities, Entity primary, boolean additive) {
+        if (additive) sceneManager.addToSelection(entities);
+        else sceneManager.setSelection(entities, primary);
+        onSelectionSetChanged();
+    }
+
+    private void onSelectionSetChanged() {
+        // Bone editing is a single-entity mode; it ends as soon as a second entity joins the selection
+        if (sceneManager.getSelectionCount() != 1 || selectedBoneEntity != sceneManager.getSelectedEntity()) clearBoneSelection();
+        InspectorPanel.resetScroll();
+    }
+
+    /** Polled Shift state (either key). Used to read click modifiers, which the mouse callbacks do not carry. */
+    public boolean isShiftHeld() {
+        return windowHandle != 0L && (glfwGetKey(windowHandle, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS
+            || glfwGetKey(windowHandle, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS);
+    }
+
+    /** Polled Alt / Option state (either key). */
+    public boolean isAltHeld() {
+        return windowHandle != 0L && (glfwGetKey(windowHandle, GLFW_KEY_LEFT_ALT) == GLFW_PRESS
+            || glfwGetKey(windowHandle, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS);
+    }
+
+    /** Polled Cmd (macOS) / Ctrl state; like HotkeyRouter, either counts on every platform. */
+    public boolean isToggleModifierHeld() {
+        if (windowHandle == 0L) return false;
+        for (int key : new int[] { GLFW_KEY_LEFT_SUPER, GLFW_KEY_RIGHT_SUPER,
+                GLFW_KEY_LEFT_CONTROL, GLFW_KEY_RIGHT_CONTROL }) {
+            if (glfwGetKey(windowHandle, key) == GLFW_PRESS) return true;
+        }
+        return false;
     }
 
     /** Selects {@code entity} (if it is not already selected) and the joint {@code boneIndex} of its skeleton. */
@@ -593,12 +650,20 @@ public class EditorWorkspace {
                     );
                 }
 
+                ViewportPanel.renderSelectionOverlay(uiGeometryBuffer, this);
+
                 ViewportPanel.renderCameraPreviewHUD(uiGeometryBuffer, selected, cameraPreviewTexture);
 
                 EngineConsolePanel.renderProfilerHUD(uiGeometryBuffer, lastDeltaTime);
             }
             case HIERARCHY -> HierarchyPanel.render(uiContext, sceneManager.getSceneEntities());
-            case INSPECTOR -> InspectorPanel.render(uiContext, sceneManager.getSelectedEntity(), getSelectedBone(), getSelectedBoneIndex(), assetDirectoryManager.getAssetDirectory());
+            case INSPECTOR -> {
+                if (sceneManager.getSelectionCount() > 1) {
+                    InspectorPanel.renderMultiSelection(uiContext, sceneManager.getSelectedEntities(), sceneManager.getSelectedEntity());
+                } else {
+                    InspectorPanel.render(uiContext, sceneManager.getSelectedEntity(), getSelectedBone(), getSelectedBoneIndex(), assetDirectoryManager.getAssetDirectory());
+                }
+            }
             case ANIMATOR -> AnimatorGraphPanel.renderCanvas(uiGeometryBuffer, getActiveAnimatorController(), getActiveAnimator(), selectedStateName);
             case ANIMATOR_PARAMETERS -> AnimatorGraphPanel.renderParameters(uiGeometryBuffer, getActiveAnimatorController(), getActiveAnimator());
             case ANIMATOR_INSPECTOR -> AnimatorGraphPanel.renderInspector(uiGeometryBuffer, getActiveAnimatorController(), getActiveAnimator(), selectedStateName, selectedTransition, getRecordingAnimator());

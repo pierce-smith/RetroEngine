@@ -111,7 +111,7 @@ public class MainMenuBar {
 
         // App name, bold-white like the macOS application menu
         UIGeometryBatch.addRoundedQuad(buffer, -0.975f, 0.946f, -0.962f, 0.974f, EditorTheme.RADIUS_SMALL, EditorTheme.ACCENT, 1.0f);
-        UIGeometryBatch.addBoundedText(buffer, "RETRO ENGINE", -0.952f, 0.970f, -0.75f, 1.1f, EditorTheme.TEXT, 1.0f);
+        UIGeometryBatch.addBoundedText(buffer, "RetroEngine", -0.952f, 0.970f, -0.75f, 1.1f, EditorTheme.TEXT, 1.0f);
 
         renderMenuTitle(buffer, "FILE", DropdownMenu.FILE, activeMenu);
         renderMenuTitle(buffer, "EDIT", DropdownMenu.EDIT, activeMenu);
@@ -214,7 +214,7 @@ public class MainMenuBar {
                 renderSeparator(buffer, menu, 7);
                 renderDropdownItem(buffer, menu, 7, hover, "Switch Project...", null, true);
                 renderSeparator(buffer, menu, 8);
-                renderDropdownItem(buffer, menu, 8, hover, PlatformShortcuts.IS_MAC ? "Quit Retro Engine" : "Exit", PlatformShortcuts.QUIT.label(), true);
+                renderDropdownItem(buffer, menu, 8, hover, PlatformShortcuts.IS_MAC ? "Quit RetroEngine" : "Exit", PlatformShortcuts.QUIT.label(), true);
             }
             case EDIT -> {
                 renderDropdownItem(buffer, menu, 0, hover, "Undo", PlatformShortcuts.UNDO.label(), commandHistory.canUndo());

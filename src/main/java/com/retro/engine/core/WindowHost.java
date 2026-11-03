@@ -115,6 +115,8 @@ public class WindowHost {
 
     // Mouse-look: while captured the cursor is hidden and unbounded, and motion accumulates per frame
     private boolean cursorCaptured = false;
+    // Set by an Escape press that neither released the cursor nor went to a text field; see consumeEscapePress()
+    private boolean escapePressed = false;
     private boolean cursorCaptureFresh = false; // Next position sample only re-bases, so capturing never jumps the view
     private double lastCursorX, lastCursorY;
     private double mouseDeltaX, mouseDeltaY;
@@ -228,9 +230,9 @@ public class WindowHost {
             if (action == GLFW_PRESS) {
                 if (key == GLFW_KEY_ESCAPE) {
                     if (cursorCaptured) {
-                        setCursorCaptured(false); // First Escape frees the mouse; a second one closes as before
+                        setCursorCaptured(false); // Escape frees the mouse first; it never closes the window
                     } else if (textInputCapture == null || !textInputCapture.getAsBoolean()) {
-                        glfwSetWindowShouldClose(window, true);
+                        escapePressed = true; // Consumed by the editor (HotkeyRouter) to clear the selection
                     }
                 } else if (key == GLFW_KEY_F11 || (key == GLFW_KEY_ENTER && (mods & GLFW_MOD_ALT) != 0)) {
                     toggleFullscreen();
@@ -356,6 +358,13 @@ public class WindowHost {
     }
 
     public boolean isCursorCaptured() { return cursorCaptured; }
+
+    /** True once per Escape press that wasn't used to release the cursor or cancel text input. */
+    public boolean consumeEscapePress() {
+        boolean pressed = escapePressed;
+        escapePressed = false;
+        return pressed;
+    }
 
     /** Cursor motion in pixels since the last {@link #pollEvents()} while captured (+X right, +Y down); 0 otherwise. */
     public float getMouseDeltaX() { return (float) mouseDeltaX; }

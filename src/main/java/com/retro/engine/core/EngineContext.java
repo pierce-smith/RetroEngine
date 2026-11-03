@@ -6,6 +6,7 @@ import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.input.EditorInputRouter;
 import com.retro.engine.editor.input.HotkeyRouter;
 import com.retro.engine.editor.input.InspectorInputDelegate;
+import com.retro.engine.editor.overlays.BuildExporterOverlay;
 import com.retro.engine.editor.panels.ViewportPanel;
 import com.retro.engine.graphics.IRenderBackend;
 import com.retro.engine.graphics.SceneRenderPipeline;
@@ -165,9 +166,14 @@ public class EngineContext {
             });
 
             // Inline Inspector text fields own the keyboard while focused
-            window.setOnKeyListener((key, action, mods) -> InspectorInputDelegate.handleKey(key, action, editorManager));
-            window.setCharListener(InspectorInputDelegate::handleChar);
-            window.setTextInputCapture(InspectorInputDelegate::isEditingText);
+            // The Build Exporter's Game Name field gets first claim on typing while it is focused
+            window.setOnKeyListener((key, action, mods) -> {
+                if (!BuildExporterOverlay.handleKey(key, action, editorManager)) InspectorInputDelegate.handleKey(key, action, editorManager);
+            });
+            window.setCharListener(cp -> {
+                if (!BuildExporterOverlay.handleChar(cp, editorManager)) InspectorInputDelegate.handleChar(cp);
+            });
+            window.setTextInputCapture(() -> InspectorInputDelegate.isEditingText() || BuildExporterOverlay.isEditingText(editorManager));
 
             window.setOnScrollListener((xoffset, yoffset) -> {
                 if (selectionController != null) {

@@ -516,8 +516,11 @@ public class InspectorPanel {
             centeredTextIn(buffer, "+ ADD COMPONENT", ADD_X0, ADD_X1, (y0 + y1) * 0.5f, 0.95f, EditorTheme.TEXT);
         }
         curY -= ADD_BUTTON_ADVANCE;
+        finishScroll(buffer, curY);
+    }
 
-        // Compute total content height & clamp scrollOffset
+    /** Clamps the scroll offset to the content height ending at {@code curY} and draws the scrollbar thumb. */
+    private static void finishScroll(UIGeometryBatch.Buffer buffer, float curY) {
         float viewH = (VIEW_TOP - VIEW_BOTTOM) - 0.03f;
         float totalContentHeight = CONTENT_TOP - curY;
         maxScroll = Math.max(0.0f, totalContentHeight - viewH);
@@ -529,6 +532,157 @@ public class InspectorPanel {
             float thumbTopY = VIEW_TOP - (scrollOffset / maxScroll) * (trackH - thumbHeight);
             UIGeometryBatch.addPill(buffer, 0.984f, thumbTopY - thumbHeight, 0.993f, thumbTopY, EditorTheme.GRAPHITE, 0.85f);
         }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Multi-selection view
+    // ------------------------------------------------------------------------------------------
+
+    /** Inline-edit key prefix for batch transform fields (the edit is anchored on the primary entity's Transform). */
+    public static final String MULTI_KEY_PREFIX = "multi:";
+    private static final float MIXED_EPSILON = 1.0e-4f;
+
+    /** Transform properties offered for batch editing, in the same order the single-entity Transform card shows them. */
+    public static List<ComponentSchema.Property> batchTransformProperties() {
+        List<ComponentSchema.Property> out = new ArrayList<>();
+        for (ComponentSchema.Property p : ComponentSchema.of(Transform.class).inspectorProperties()) {
+            if (p.control == Control.NUMBER) out.add(p);
+        }
+        return out;
+    }
+
+    /**
+     * Component classes every selected entity has, in the primary entity's card order. Transform is edited by the batch
+     * section and ScriptComponent is per-script (an entity may carry several), so neither is listed.
+     */
+    public static List<Class<? extends Component>> sharedComponentTypes(List<Entity> selection, Entity primary) {
+        List<Class<? extends Component>> out = new ArrayList<>();
+        if (primary == null) return out;
+        for (Component c : primary.getAllComponents()) {
+            if (c == null || c instanceof Transform || c instanceof ScriptComponent || out.contains(c.getClass())) continue;
+            boolean shared = true;
+            for (Entity e : selection) {
+                if (e.getComponent(c.getClass()) == null) { shared = false; break; }
+            }
+            if (shared) out.add(c.getClass());
+        }
+        return out;
+    }
+
+    /** The common value of {@code field} across the selection's transforms, or NaN when they differ (or none have one). */
+    public static float sharedTransformValue(List<Entity> selection, Field field) {
+        float value = Float.NaN;
+        for (Entity e : selection) {
+            Transform tc = e.getTransform();
+            if (tc == null) continue;
+            float v;
+            try { v = field.getFloat(tc); } catch (IllegalAccessException ex) { return Float.NaN; }
+            if (Float.isNaN(value)) value = v;
+            else if (Math.abs(value - v) > MIXED_EPSILON) return Float.NaN;
+        }
+        return value;
+    }
+
+    /**
+     * Inspector for a multi-selection: "N ENTITIES SELECTED", batch transform rows (a shared value or MIXED; typing sets
+     * every entity, the steppers offset every entity), the components all of them share (REMOVE ALL) and ADD TO ALL.
+     * {@link com.retro.engine.editor.input.InspectorInputDelegate} hit-tests the same row sequence.
+     */
+    public static void renderMultiSelection(UIContext ui, List<Entity> selection, Entity primary) {
+        UIGeometryBatch.Buffer buffer = ui.geometry();
+        UIGeometryBatch.addQuad(buffer, 0.55f, -0.5f, 1.0f, 1.0f, EditorTheme.SURFACE, 1.0f);
+        activeWellVisible = false;
+
+        headerSb.setLength(0);
+        headerSb.append(selection.size()).append(" ENTITIES SELECTED");
+        UIGeometryBatch.addTruncatedText(buffer, headerSb, LABEL_X, 0.833f, VALUE_X1, 1.1f, EditorTheme.ACCENT, 1.0f);
+        UIGeometryBatch.addQuad(buffer, LABEL_X, 0.785f, VALUE_X1, 0.785f + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
+
+        float curY = CONTENT_TOP;
+
+        // Names of the selected entities (primary first)
+        float drawY = curY + scrollOffset;
+        if (isRowVisible(drawY)) {
+            strBuilder.setLength(0);
+            if (primary != null) strBuilder.append(primary.name);
+            for (Entity e : selection) {
+                if (e == primary) continue;
+                if (strBuilder.length() > 0) strBuilder.append(", ");
+                strBuilder.append(e.name);
+                if (strBuilder.length() > 120) break;
+            }
+            UIGeometryBatch.addTruncatedText(buffer, strBuilder, LABEL_X, textTop(drawY - 0.012f, 0.75f), VALUE_X1, 0.75f, EditorTheme.TEXT_MUTED, 1.0f);
+        }
+        curY -= TEXT_ROW_ADVANCE;
+
+        // Batch transform
+        drawY = curY + scrollOffset;
+        if (isRowVisible(drawY)) renderSectionHeader(buffer, "TRANSFORM (ALL SELECTED)", drawY, false, false);
+        curY -= HEADER_ADVANCE;
+        Transform anchor = (primary != null) ? primary.getTransform() : null;
+        for (ComponentSchema.Property p : batchTransformProperties()) {
+            drawY = curY + scrollOffset;
+            curY -= rowAdvance(p.control);
+            if (!isRowVisible(drawY)) continue;
+            float midY = drawY - (CTRL_BELOW - CTRL_ABOVE) * 0.5f;
+            Field field = p.field;
+            int axis = CACHED_AXES.computeIfAbsent(field, f -> axisOf(p.label));
+            String display = CACHED_DISPLAY_LABELS.computeIfAbsent(field, f -> {
+                int ax = axisOf(p.label);
+                if (ax < 0) return p.label;
+                return ax == 0 ? vectorGroupName(p.label) : "";
+            });
+            boolean editing = anchor != null && isActiveField(anchor, MULTI_KEY_PREFIX + field.getName());
+            rowLabel(buffer, display, midY);
+            if (editing) activeWell(buffer, VALUE_X0, FIELD_X1, drawY);
+            else well(buffer, VALUE_X0, FIELD_X1, drawY);
+            float textX = (axis >= 0) ? axisBadge(buffer, axis, VALUE_X0 + 0.005f, drawY) + 0.008f : VALUE_X0 + 0.008f;
+            if (editing) {
+                renderInputText(buffer, textX, FIELD_X1 - 0.006f, midY);
+            } else {
+                float shared = sharedTransformValue(selection, field);
+                strBuilder.setLength(0);
+                if (Float.isNaN(shared)) strBuilder.append("MIXED");
+                else appendFloat(strBuilder, shared, 1);
+                UIGeometryBatch.addTruncatedText(buffer, strBuilder, textX, textTop(midY, VALUE_TEXT), FIELD_X1 - 0.006f, VALUE_TEXT,
+                        Float.isNaN(shared) ? EditorTheme.TEXT_MUTED : EditorTheme.TEXT, 1.0f);
+            }
+            renderStepper(buffer, drawY, midY);
+        }
+        curY -= COMPONENT_GAP;
+
+        // Shared components
+        drawY = curY + scrollOffset;
+        if (isRowVisible(drawY)) renderSectionHeader(buffer, "SHARED COMPONENTS", drawY, false, false);
+        curY -= HEADER_ADVANCE;
+        List<Class<? extends Component>> shared = sharedComponentTypes(selection, primary);
+        if (shared.isEmpty()) {
+            drawY = curY + scrollOffset;
+            if (isRowVisible(drawY)) {
+                UIGeometryBatch.addTruncatedText(buffer, "NO COMPONENTS SHARED BY ALL SELECTED", LABEL_X, textTop(drawY - 0.012f, 0.75f),
+                        VALUE_X1, 0.75f, EditorTheme.TEXT_DISABLED, 1.0f);
+            }
+            curY -= TEXT_ROW_ADVANCE;
+        }
+        for (Class<? extends Component> type : shared) {
+            drawY = curY + scrollOffset;
+            curY -= ROW_ADVANCE;
+            if (!isRowVisible(drawY)) continue;
+            float midY = drawY - (CTRL_BELOW - CTRL_ABOVE) * 0.5f;
+            Component sample = primary.getComponent(type);
+            rowLabel(buffer, sample.getComponentName(), midY);
+            if (isRemovable(sample)) button(buffer, "REMOVE ALL", VALUE_X0, VALUE_X1, drawY, EditorTheme.SURFACE_RAISED);
+        }
+        curY -= COMPONENT_GAP;
+
+        float drawAddBtnY = curY + scrollOffset;
+        if (drawAddBtnY + ADD_ABOVE <= VIEW_TOP && drawAddBtnY - ADD_BELOW >= VIEW_BOTTOM) {
+            float y0 = drawAddBtnY - ADD_BELOW, y1 = drawAddBtnY + ADD_ABOVE;
+            UIGeometryBatch.addRoundedQuad(buffer, ADD_X0, y0, ADD_X1, y1, EditorTheme.RADIUS, EditorTheme.ACCENT, 1.0f);
+            centeredTextIn(buffer, "+ ADD COMPONENT TO ALL", ADD_X0, ADD_X1, (y0 + y1) * 0.5f, 0.95f, EditorTheme.TEXT);
+        }
+        curY -= ADD_BUTTON_ADVANCE;
+        finishScroll(buffer, curY);
     }
 
     /** Draws the BONE TRANSFORM rows from {@link #boneTrsScratch}; returns curY below the section. */

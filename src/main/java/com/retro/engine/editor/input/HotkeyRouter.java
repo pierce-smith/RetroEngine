@@ -7,13 +7,18 @@ import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.SceneWorld.PlayState;
 import com.retro.engine.editor.EditorCommands;
 import com.retro.engine.editor.EditorWorkspace;
+import com.retro.engine.editor.ICommand;
 import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.editor.gizmos.GizmoInteractor;
+import com.retro.engine.editor.overlays.BuildExporterOverlay;
 import com.retro.engine.editor.panels.EngineConsolePanel;
 import com.retro.engine.editor.panels.ViewportPanel;
 import com.retro.engine.scripting.Input;
 import com.retro.engine.ui.UISoundPlayer;
 import com.retro.engine.ui.UISoundPlayer.UISound;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.lwjgl.glfw.GLFW.*;
 
@@ -40,6 +45,8 @@ public class HotkeyRouter {
 
     public void processInput(WindowHost window, EditorWorkspace editorManager, ViewportCamera cameraController, float deltaTime) {
         if (window == null || editorManager == null) return;
+        // Consumed up front so a press made while no project is open can't fire later
+        boolean escapePressed = window.consumeEscapePress();
         if (!editorManager.hasActiveProject()) return; // Project launcher owns input until a project is bound
 
         boolean isCtrlDown = window.isKeyDown(GLFW_KEY_LEFT_CONTROL) || window.isKeyDown(GLFW_KEY_RIGHT_CONTROL) || window.isKeyDown(GLFW_KEY_LEFT_SUPER) || window.isKeyDown(GLFW_KEY_RIGHT_SUPER);
@@ -67,9 +74,9 @@ public class HotkeyRouter {
         // Scene-editing commands are disabled outside EDITING so gameplay keys can't save, open, duplicate, or delete
         boolean isEditing = editorManager.getPlayState() == PlayState.EDITING;
 
-        // A focused Inspector text field owns the keyboard: no hotkeys (Backspace would delete the entity), no fly camera,
-        // and during Play no gameplay keys either
-        boolean typing = InspectorInputDelegate.isEditingText();
+        // A focused text field (Inspector, or the Build Exporter's Game Name) owns the keyboard: no hotkeys (Backspace
+        // would delete the entity), no WASDQE fly camera, and during Play no gameplay keys either
+        boolean typing = InspectorInputDelegate.isEditingText() || BuildExporterOverlay.isEditingText(editorManager);
         Input.setKeyboardSuppressed(typing);
         if (typing) {
             if (cameraController != null) cameraController.update(deltaTime, false, false, false, false, false, false);
@@ -101,6 +108,11 @@ public class HotkeyRouter {
             }
         } else {
             graveKeyPressedLastFrame = false;
+        }
+
+        // Escape: clear the entity selection (WindowHost already used it to free a captured cursor, if any)
+        if (escapePressed && isEditing && editorManager.getSceneManager().getSelectedEntity() != null) {
+            editorManager.setSelection(java.util.List.of(), null, false);
         }
 
         // F: Frame Selected in the focused Scene viewport | Shift+F: reset the viewport camera to the startup view.
@@ -176,7 +188,17 @@ public class HotkeyRouter {
         if (isEditing && isDelete) {
             if (!deleteKeyPressedLastFrame) {
                 Entity selected = editorManager.getSelectedEntity();
-                if (selected != null) {
+                int count = editorManager.getSelectionCount();
+                if (count > 1) {
+                    // Whole multi-selection as one undo step
+                    List<ICommand> deletes = new ArrayList<>();
+                    for (Entity e : List.copyOf(editorManager.getSelectedEntities())) {
+                        deletes.add(new EditorCommands.EntityDeleteCommand(editorManager, e));
+                    }
+                    editorManager.getCommandHistory().executeCommand(new EditorCommands.CompositeCommand("Delete " + count + " Entities", deletes));
+                    UISoundPlayer.play(UISound.DELETE);
+                    EngineConsolePanel.log(EngineConsolePanel.LogLevel.INFO, "[Scene] Deleted " + count + " entities.");
+                } else if (selected != null) {
                     String entityName = selected.name;
                     EditorCommands.EntityDeleteCommand cmd = new EditorCommands.EntityDeleteCommand(editorManager, selected);
                     editorManager.getCommandHistory().executeCommand(cmd);
