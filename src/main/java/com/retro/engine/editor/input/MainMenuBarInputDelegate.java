@@ -76,13 +76,25 @@ public class MainMenuBarInputDelegate {
                 } else if (itemIndex == 3) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
-                    com.retro.engine.editor.ui.overlays.BuildExporterOverlay.open(manager);
+                    com.retro.engine.editor.ui.overlays.ProjectSettingsOverlay.open(manager);
                 } else if (itemIndex == 4) {
+                    UISoundPlayer.play(UISound.OPEN_MODAL);
+                    manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
+                    com.retro.engine.editor.ui.overlays.ProjectLauncherOverlay.toggleModWorkspace(manager);
+                } else if (itemIndex == 5) {
+                    // Straight to the folder picker; packaging runs in the background and reports with a native dialog
+                    manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
+                    com.retro.engine.editor.ui.overlays.BuildExporterOverlay.promptPackageMod(manager);
+                } else if (itemIndex == 6) {
+                    UISoundPlayer.play(UISound.OPEN_MODAL);
+                    manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
+                    com.retro.engine.editor.ui.overlays.BuildExporterOverlay.open(manager);
+                } else if (itemIndex == 7) {
                     // Unbind the project and return to the launcher, which clears and re-scans on the next open
                     UISoundPlayer.play(UISound.CLOSE_MODAL);
                     manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
                     manager.closeProject();
-                } else if (itemIndex == 5) {
+                } else if (itemIndex == 8) {
                     // Quit: same path as the OS-level ⌘Q / Alt + F4 (window close request)
                     UISoundPlayer.play(UISound.CLICK);
                     if (manager.getWindowHandle() != 0L) glfwSetWindowShouldClose(manager.getWindowHandle(), true);

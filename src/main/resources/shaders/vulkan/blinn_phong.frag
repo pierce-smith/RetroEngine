@@ -41,7 +41,10 @@ layout(std140, set = 0, binding = 0) uniform LightBuffer {
     mat4 proj;        // byte offset 2176
     mat4 lightSpaceMatrix; // byte offset 2240: directional shadow map view-projection
     mat4 previewViewProj;  // byte offset 2304: selected Camera entity's view-projection (picture-in-picture pass)
-    vec4 previewViewPos;   // byte offset 2368: xyz = that camera's world position (2384 bytes total)
+    vec4 previewViewPos;   // byte offset 2368: xyz = that camera's world position
+    vec4 ambientColor;     // byte offset 2384: rgb = ProjectSettings ambient color * intensity
+    vec4 fogColorDensity;  // byte offset 2400: rgb = fog color, w = fog density (max opacity at fog end; 0 = off)
+    vec4 fogParams;        // byte offset 2416: x = fog start, y = fog end (2432 bytes total)
 } u_Lights;
 
 // Shared linear/repeat sampler for every material channel
@@ -223,7 +226,8 @@ void main() {
         accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
     }
 
-    vec3 ambient = max(u_Lights.dirLight.color.rgb * 0.35, vec3(0.35, 0.35, 0.38)) * lightmap;
+    // Project ambient is the floor; a bright sun lifts it (dirLight.color is zero when there is no sun)
+    vec3 ambient = max(u_Lights.dirLight.color.rgb * 0.35, u_Lights.ambientColor.rgb) * lightmap;
 
     vec3 finalRGB = (ambient + diffuse) * baseColor.rgb + specular;
 
@@ -240,12 +244,11 @@ void main() {
     // Emissive is unlit and unshadowed, but still fogs with distance like everything else
     finalRGB += sampleChannel(u_PushConstants.texIndices2.x, vTexCoord, vec4(0.0)).rgb * u_PushConstants.params.w;
 
-    // Distance Fog Attenuation (20m to 150m)
-    float fogStart = 20.0;
-    float fogEnd = 150.0;
-    float fogFactor = clamp((vViewDist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
-    vec3 fogColor = vec3(0.12, 0.13, 0.16);
-    finalRGB = mix(finalRGB, fogColor, fogFactor);
+    // Linear distance fog from ProjectSettings: ramps from fogStart to fogEnd, reaching fogDensity opacity
+    float fogStart = u_Lights.fogParams.x;
+    float fogEnd = u_Lights.fogParams.y;
+    float fogFactor = clamp((vViewDist - fogStart) / (fogEnd - fogStart), 0.0, 1.0) * u_Lights.fogColorDensity.w;
+    finalRGB = mix(finalRGB, u_Lights.fogColorDensity.rgb, fogFactor);
 
     outFragColor = vec4(finalRGB, baseColor.a);
 }

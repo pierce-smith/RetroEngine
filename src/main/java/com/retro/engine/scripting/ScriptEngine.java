@@ -476,7 +476,8 @@ public class ScriptEngine {
 
         try {
             SimpleCompiler compiler = new SimpleCompiler();
-            compiler.setParentClassLoader(EntityScript.class.getClassLoader());
+            // While mods are loaded this is the mod class loader chain, so scripts can use mod components
+            compiler.setParentClassLoader(com.retro.engine.modding.ModLoader.scriptParentClassLoader());
 
             try (FileReader reader = new FileReader(scriptFile)) {
                 compiler.cook(scriptFile.getAbsolutePath(), reader);

@@ -301,11 +301,7 @@ public class MetalPassEncoder {
                 fbModel.clear(); fbModel.put(modelMat);
 
                 streamer.writeDrawLights(baseAddr, lights);
-
-                MemoryUtil.memPutFloat(baseAddr + 176L, 0.35f);
-                MemoryUtil.memPutFloat(baseAddr + 180L, 0.35f);
-                MemoryUtil.memPutFloat(baseAddr + 184L, 0.38f);
-                MemoryUtil.memPutFloat(baseAddr + 188L, 1.0f);
+                streamer.writeDrawEnvironment(baseAddr, lights.environment());
 
                 MemoryUtil.memPutFloat(baseAddr + 208L, item.reflect);
                 MemoryUtil.memPutFloat(baseAddr + 216L, DirectionalShadowFrustum.SHADOW_BIAS);
@@ -338,8 +334,8 @@ public class MetalPassEncoder {
             }
         }
 
-        // 1C. Dynamic Downward-Raycast Surface Shadow Blobs Pass
-        if (entityCount > 0 && groundQuadBuf != 0L) {
+        // 1C. Dynamic Downward-Raycast Surface Shadow Blobs Pass (ProjectSettings.shadowBlobsEnabled)
+        if (entityCount > 0 && groundQuadBuf != 0L && lights.environment().shadowBlobsEnabled) {
             int shadowIndex = 0;
             bindPipeline(pipeline.getPipelineState3D());
             long shadowDepthState = pipeline.getDepthStencilStateShadow() != 0L ? pipeline.getDepthStencilStateShadow() : pipeline.getDepthStencilState3D();

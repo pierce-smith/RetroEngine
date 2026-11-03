@@ -239,18 +239,6 @@ tasks.named("run") {
 }
 
 // ------------------------------------------------------------------------------------------
-// Editor sounds ship inside the jar: packaged apps start with cwd "/" (macOS Finder) or the
-// install dir, so Assets/Audio/UI is not reachable relative to the working directory.
-// ------------------------------------------------------------------------------------------
-
-tasks.named<ProcessResources>("processResources") {
-    from("Assets/Audio/UI") {
-        include("*.ogg", "*.wav")
-        into("editor/audio/ui")
-    }
-}
-
-// ------------------------------------------------------------------------------------------
 // Standalone Editor packaging (jpackage), one build per host OS/arch:
 //   ./gradlew packageEditor                         -> build/dist/RetroEngine(.app)
 //   ./gradlew packageEditor -PinstallerType=dmg     -> dmg | pkg | msi | exe | deb | rpm

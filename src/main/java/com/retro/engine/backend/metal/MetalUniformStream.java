@@ -1,5 +1,6 @@
 package com.retro.engine.backend.metal;
 
+import com.retro.engine.rhi.RenderEnvironment;
 import com.retro.engine.rhi.SceneLights;
 import org.lwjgl.system.MemoryUtil;
 
@@ -47,8 +48,8 @@ public class MetalUniformStream {
     public static final long OFFSET_DIR_LIGHT = 128L;        // xyz = direction, w = intensity
     public static final long OFFSET_NUM_LIGHTS = 144L;       // x = directional (1.0 = active), y = point count, z = spot count
     public static final long OFFSET_DIR_LIGHT_COLOR = 160L;  // rgb = color
-    public static final long OFFSET_AMBIENT = 176L;
-    public static final long OFFSET_FOG = 192L;
+    public static final long OFFSET_AMBIENT = 176L;          // rgb = ambient color * intensity
+    public static final long OFFSET_FOG = 192L;              // rgb = fog color, w = fog density (0 = fog off)
     public static final long OFFSET_MAT_PARAMS = 208L;
     public static final long OFFSET_MATERIAL_MASK = 224L;
     public static final long OFFSET_IS_UNLIT = 228L;
@@ -59,6 +60,7 @@ public class MetalUniformStream {
     public static final long OFFSET_VIEW_POS = 320L;
     public static final long OFFSET_PICK_ID = 336L;
     public static final long OFFSET_LOCAL_LIGHTS = 344L;      // gpuAddress of the frame's LocalLights block
+    public static final long OFFSET_FOG_PARAMS = 352L;        // x = fog start, y = fog end (368 bytes total)
 
     // materialMask bits: which DrawArgs texture channels the fragment stage samples
     public static final int MATERIAL_ALBEDO = 1;
@@ -188,6 +190,17 @@ public class MetalUniformStream {
             putFloat4(addr + 16L, spot.dirX, spot.dirY, spot.dirZ, 0.0f);
             putFloat4(addr + 32L, spot.r, spot.g, spot.b, spot.intensity);
         }
+    }
+
+    /**
+     * Writes the project render environment (premultiplied ambient, fog color / density and fog start / end) into the
+     * lit uniform slot at baseAddr. Disabled fog is written as density 0, which the shader's mix turns into a no-op.
+     */
+    public void writeDrawEnvironment(long baseAddr, RenderEnvironment env) {
+        float ambient = env.ambientIntensity;
+        putFloat4(baseAddr + OFFSET_AMBIENT, env.ambientR * ambient, env.ambientG * ambient, env.ambientB * ambient, 1.0f);
+        putFloat4(baseAddr + OFFSET_FOG, env.fogR, env.fogG, env.fogB, env.effectiveFogDensity());
+        putFloat4(baseAddr + OFFSET_FOG_PARAMS, env.fogStart, env.safeFogEnd(), 0.0f, 0.0f);
     }
 
     /**

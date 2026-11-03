@@ -6,6 +6,7 @@ import com.retro.engine.assets.importers.MeshBufferData;
 import com.retro.engine.assets.importers.MeshImporter;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ViewportCamera;
+import com.retro.engine.modding.ModLoader;
 import com.retro.engine.editor.ui.batch.UIFont;
 import com.retro.engine.editor.ui.batch.UIGeometryBatch;
 import com.retro.engine.editor.ui.dock.DockPanel;
@@ -16,6 +17,7 @@ import com.retro.engine.render.ui.GameUIRenderer;
 import com.retro.engine.rhi.DirectionalShadowFrustum;
 import com.retro.engine.rhi.IRenderBackend;
 import com.retro.engine.rhi.RenderCommand;
+import com.retro.engine.rhi.RenderEnvironment;
 import com.retro.engine.rhi.RenderQueue;
 import com.retro.engine.rhi.SceneLights;
 import com.retro.engine.scene.entity.Entity;
@@ -35,7 +37,8 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * High-level render pipeline processing 3D scene entities, view-frustum culling,
- * light state, GPU skeletal animation bone palette extraction, and downward-raycast ground shadows
+ * light state, the project's render environment (ambient, distance fog, ground shadow blob toggle from ProjectSettings),
+ * GPU skeletal animation bone palette extraction, and downward-raycast ground shadows
  * through a vendor-agnostic IRenderBackend contract.
  * Fully decoupled from EditorWorkspace via thread-safe RenderSceneSnapshot structures with zero per-frame heap allocations:
  * each snapshot owns a pooled, key-sorted RenderQueue of flat RenderCommands plus the fitted shadow light-space matrix.
@@ -144,6 +147,11 @@ public class SceneRenderPipeline {
         }
         RenderQueue queue = snapshot.renderQueue;
         shadowFrustum.reset();
+
+        // Project-wide ambient / fog / shadow blob settings ride along with the lights (field copies, no allocation)
+        RenderEnvironment environment = snapshot.lights.environment();
+        editorManager.getProjectSettings().applyTo(environment);
+        boolean shadowBlobs = environment.shadowBlobsEnabled;
 
         // Selected Camera entity's preview; its frustum also keeps entities only that camera can see in the queue
         boolean previewActive = cameraPreviewTexture != 0L && !ViewportPanel.isStandaloneFullscreen() && editorManager.getDockSpace().isSceneViewportVisible()
@@ -268,7 +276,8 @@ public class SceneRenderPipeline {
                     cmd.px = wt.px(); cmd.py = wt.py(); cmd.pz = wt.pz();
                     cmd.rx = wt.rx(); cmd.ry = wt.ry(); cmd.rz = wt.rz();
                     cmd.sx = wt.sx(); cmd.sy = wt.sy(); cmd.sz = wt.sz();
-                    cmd.groundY = findGroundSurfaceY(entity, wt, entities, editorManager);
+                    // Blobs off: skip the per-draw downward raycast; an infinite clearance also fades any blob to zero
+                    cmd.groundY = shadowBlobs ? findGroundSurfaceY(entity, wt, entities, editorManager) : Float.NEGATIVE_INFINITY;
                     cmd.bonePalette = (anim != null && anim.skeleton != null) ? anim.bonePaletteMatrices : null;
                     cmd.pickId = ViewportPanel.pickIdFor(entity);
                     if (mat != null) {
@@ -302,6 +311,11 @@ public class SceneRenderPipeline {
                 }
             }
         }
+
+        // Mods: RenderPassEvent may queue extra draws, add lights or tweak this frame's environment before sorting
+        activeSnapshot = snapshot;
+        ModLoader.onRenderPass(this, streamingService, queue, snapshot.lights, environment, ViewportPanel.isStandaloneFullscreen());
+        activeSnapshot = null;
 
         SceneLights.Light sun = snapshot.lights.directional();
         if (snapshot.lights.hasDirectional()) {
@@ -544,6 +558,64 @@ public class SceneRenderPipeline {
     }
 
     /** 15-bit material bucket hashed from the texture set; collisions only weaken batching, never correctness. */
+    // Snapshot being extracted while RenderPassEvent runs; queueCustomDraw is only valid inside that window
+    private RenderSceneSnapshot activeSnapshot;
+    // VFS-resolved paths of mod custom draws, rebuilt when the loaded mod set changes (keeps per-frame lookups allocation-free)
+    private final java.util.HashMap<String, String> customDrawPaths = new java.util.HashMap<>();
+    private Object customDrawPathsOwner;
+
+    /**
+     * Services {@link com.retro.engine.modding.events.RenderPassEvent#drawMesh}: queues one static mesh draw into the
+     * snapshot being extracted, streaming the mesh / texture in on first use. Returns null when called outside the
+     * event or while the mesh is still loading.
+     */
+    public RenderCommand queueCustomDraw(AssetStreamer streamer, String meshPath, String texturePath,
+                                         float px, float py, float pz, float rx, float ry, float rz, float sx, float sy, float sz) {
+        RenderSceneSnapshot snapshot = activeSnapshot;
+        if (snapshot == null || streamer == null || meshPath == null) return null;
+        String mesh = resolveCustomDrawPath(meshPath);
+        String texture = (texturePath != null) ? resolveCustomDrawPath(texturePath) : null;
+
+        streamer.markMeshReferenced(mesh);
+        if (!streamer.isMeshLoaded(mesh)) streamer.requestModelAsync(mesh);
+        if (texture != null) {
+            streamer.markTextureReferenced(texture);
+            if (!streamer.isTextureLoaded(texture)) streamer.requestTextureAsync(texture);
+        }
+        MeshBufferData model = streamer.getModel(mesh);
+        if (model == null || model.vertices == null || model.vertices.length == 0) return null;
+        long meshHandle = streamer.getMeshHandle(mesh);
+        if (meshHandle == 0L) return null;
+
+        RenderCommand cmd = snapshot.renderQueue.add();
+        cmd.meshHandle = meshHandle;
+        cmd.px = px; cmd.py = py; cmd.pz = pz;
+        cmd.rx = rx; cmd.ry = ry; cmd.rz = rz;
+        cmd.sx = sx; cmd.sy = sy; cmd.sz = sz;
+        cmd.groundY = Float.NEGATIVE_INFINITY; // no ground shadow blob for custom draws
+        if (texture != null && streamer.isTextureLoaded(texture)) cmd.albedoTexture = streamer.getTextureHandle(texture);
+        float viewDepth = -(depthRowX * px + depthRowY * py + depthRowZ * pz + depthRowW);
+        cmd.sortKey = RenderQueue.packKey(false, RenderQueue.PASS_SCENE, RenderQueue.PIPELINE_STATIC,
+                materialId(cmd), RenderQueue.quantizeDepth(viewDepth, depthNear, depthFar));
+        float maxScale = Math.max(Math.abs(sx), Math.max(Math.abs(sy), Math.abs(sz)));
+        shadowFrustum.include(px, py, pz, model.boundsRadius() * maxScale);
+        return cmd;
+    }
+
+    private String resolveCustomDrawPath(String path) {
+        Object owner = ModLoader.active();
+        if (owner != customDrawPathsOwner) {
+            customDrawPaths.clear();
+            customDrawPathsOwner = owner;
+        }
+        String resolved = customDrawPaths.get(path);
+        if (resolved == null) {
+            resolved = ModLoader.resolveAssetPath(path);
+            customDrawPaths.put(path, resolved);
+        }
+        return resolved;
+    }
+
     private static int materialId(RenderCommand cmd) {
         long h = cmd.albedoTexture;
         h = h * 31L + cmd.normalTexture;

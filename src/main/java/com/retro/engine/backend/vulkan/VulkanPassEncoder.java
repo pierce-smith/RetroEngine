@@ -57,6 +57,13 @@ public class VulkanPassEncoder {
         this.pickTexelY = texelY;
     }
 
+    // ProjectSettings.shadowBlobsEnabled for the frame being recorded; set by VulkanBackend before recording
+    private boolean shadowBlobsEnabled = true;
+
+    public void setShadowBlobsEnabled(boolean enabled) {
+        this.shadowBlobsEnabled = enabled;
+    }
+
     public void setSceneRect(float minX, float minY, float maxX, float maxY) {
         this.sceneMinX = minX;
         this.sceneMinY = minY;
@@ -336,7 +343,7 @@ public class VulkanPassEncoder {
         long shadowPipeline = pipelineManager.getGraphicsPipelineShadow();
         if (shadowPipeline == 0L) shadowPipeline = pipelineManager.getGraphicsPipeline3D();
 
-        if (shadowPipeline != 0L && bindlessSet != 0L && draws.count > 0 && groundQuadBuf != 0L) {
+        if (shadowBlobsEnabled && shadowPipeline != 0L && bindlessSet != 0L && draws.count > 0 && groundQuadBuf != 0L) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayout3D(), 0, stack.longs(bindlessSet), null);
 

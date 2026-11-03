@@ -1,5 +1,7 @@
 package com.retro.engine.physics;
 
+import com.retro.engine.modding.ModLoader;
+import com.retro.engine.modding.events.TriggerEvent;
 import com.retro.engine.scene.components.gameplay.CharacterControllerComponent;
 import com.retro.engine.scene.components.gameplay.VehicleControllerComponent;
 import com.retro.engine.scene.components.physics.BoxCollider;
@@ -325,15 +327,18 @@ public class PhysicsSystem {
             if (previousTriggerPairs.contains(pair)) {
                 ScriptEngine.dispatchTriggerStay(pair.entityA, pair.entityB);
                 ScriptEngine.dispatchTriggerStay(pair.entityB, pair.entityA);
+                ModLoader.onTrigger(TriggerEvent.Phase.STAY, pair.entityA, pair.entityB);
             } else {
                 ScriptEngine.dispatchTriggerEnter(pair.entityA, pair.entityB);
                 ScriptEngine.dispatchTriggerEnter(pair.entityB, pair.entityA);
+                ModLoader.onTrigger(TriggerEvent.Phase.ENTER, pair.entityA, pair.entityB);
             }
         }
         for (PairKey pair : previousTriggerPairs) {
             if (!currentTriggerPairs.contains(pair)) {
                 ScriptEngine.dispatchTriggerExit(pair.entityA, pair.entityB);
                 ScriptEngine.dispatchTriggerExit(pair.entityB, pair.entityA);
+                ModLoader.onTrigger(TriggerEvent.Phase.EXIT, pair.entityA, pair.entityB);
             }
         }
 

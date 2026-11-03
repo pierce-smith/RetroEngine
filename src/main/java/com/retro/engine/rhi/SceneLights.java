@@ -2,8 +2,9 @@ package com.retro.engine.rhi;
 
 /**
  * Per-frame scene lighting the lit shaders evaluate together in a single forward pass: one Directional light, up to
- * {@link #MAX_POINT_LIGHTS} Point lights and up to {@link #MAX_SPOT_LIGHTS} Spot lights. Every {@link Light} is
- * preallocated, so snapshots and backends fill and copy it without per-frame allocation.
+ * {@link #MAX_POINT_LIGHTS} Point lights and up to {@link #MAX_SPOT_LIGHTS} Spot lights, plus the project-wide
+ * {@link RenderEnvironment} (ambient, fog, shadow blobs). Every {@link Light} is preallocated, so snapshots and
+ * backends fill and copy it without per-frame allocation.
  */
 public final class SceneLights {
 
@@ -44,6 +45,8 @@ public final class SceneLights {
     private int pointCount;
     private final Light[] spots = newLights(MAX_SPOT_LIGHTS);
     private int spotCount;
+    // Not cleared by reset(): it is project state, not something collected from scene entities
+    private final RenderEnvironment environment = new RenderEnvironment();
 
     private static Light[] newLights(int count) {
         Light[] lights = new Light[count];
@@ -58,6 +61,8 @@ public final class SceneLights {
     public Light point(int index) { return points[index]; }
     public int spotCount() { return spotCount; }
     public Light spot(int index) { return spots[index]; }
+    /** Ambient, fog and shadow blob settings for the frame; untouched by {@link #reset()} and {@link #setDefaultSun()}. */
+    public RenderEnvironment environment() { return environment; }
 
     /**
      * Claims the next free light of {@code type} ({@link #DIRECTIONAL}, {@link #POINT} or {@link #SPOT}) for the caller
@@ -99,6 +104,7 @@ public final class SceneLights {
         for (int i = 0; i < pointCount; i++) points[i].copyFrom(other.points[i]);
         spotCount = other.spotCount;
         for (int i = 0; i < spotCount; i++) spots[i].copyFrom(other.spots[i]);
+        environment.copyFrom(other.environment);
     }
 
     /** Engine default sun, used by backends when the scene has no Light entity. */

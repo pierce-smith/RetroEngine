@@ -1,11 +1,12 @@
 package com.retro.engine.editor.build;
 
+import com.retro.engine.modding.ModLoader;
 import com.retro.engine.Main;
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.cooker.RpackCookerCli;
 import com.retro.engine.assets.importers.SkeletonImporter;
 import com.retro.engine.core.ProjectWorkspace;
-import com.retro.engine.core.ProjectWorkspace.ProjectSettings;
+import com.retro.engine.core.ProjectSettings;
 import com.retro.engine.scene.serialization.SceneSerializer;
 
 import javax.imageio.ImageIO;
@@ -163,6 +164,24 @@ public final class StandaloneExporter {
         ProjectSettings settings = ProjectWorkspace.readSettings(req.projectDir);
         settings.startupScene = req.startupScene.replace('\\', '/');
         ProjectWorkspace.writeSettings(gameData, settings);
+
+        createModsFolder(gameData);
+    }
+
+    /**
+     * Empty Game_Data/Mods/ that players drop mod folders or .rmod packages into; ModLoader scans it on every launch.
+     * The project's own development Mods/ folder is deliberately not shipped.
+     */
+    private static void createModsFolder(File gameData) throws IOException {
+        File mods = new File(gameData, ModLoader.MODS_DIR);
+        if (!mods.isDirectory() && !mods.mkdirs()) throw new IOException("Could not create " + mods);
+        Files.writeString(new File(mods, "README.txt").toPath(), String.join(System.lineSeparator(),
+            "Install mods here.",
+            "",
+            "Each mod is either a folder containing mod.json, or a packaged <mod_id>-<version>.rmod file.",
+            "Mods load in dependency order, then by load_priority (higher loads later and wins conflicts).",
+            "Start the game with --no-mods to launch without any mods.",
+            ""), StandardCharsets.UTF_8);
     }
 
     private static final Set<String> COOKED_MESH_EXTENSIONS = Set.of("obj", "fbx", "gltf", "glb");

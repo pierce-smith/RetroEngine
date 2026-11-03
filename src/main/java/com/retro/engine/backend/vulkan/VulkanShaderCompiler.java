@@ -14,7 +14,7 @@ import java.nio.file.StandardCopyOption;
  * atomically, so the asset watcher sees one complete write and triggers the pipeline rebuild. A failed compile leaves
  * the previous .spv (and therefore the live pipelines) untouched.
  */
-final class VulkanShaderCompiler {
+public final class VulkanShaderCompiler {
 
     private static final Object COMPILE_LOCK = new Object();
     private static volatile boolean glslcMissingReported = false;
@@ -26,7 +26,15 @@ final class VulkanShaderCompiler {
     }
 
     private static void compile(File source) {
-        if (!source.isFile()) return;
+        compileTo(source, new File(source.getPath() + ".spv"));
+    }
+
+    /**
+     * Compiles one GLSL source to {@code target} with glslc (synchronously; call from a background thread). Returns
+     * false when glslc is missing or the source has errors, leaving any existing target untouched.
+     */
+    public static boolean compileTo(File source, File target) {
+        if (!source.isFile()) return false;
         String glslc = findGlslc();
         if (glslc == null) {
             if (!glslcMissingReported) {
@@ -34,14 +42,15 @@ final class VulkanShaderCompiler {
                 System.err.println("[VulkanShaderCompiler] glslc not found (VULKAN_SDK or PATH); run ./gradlew compileVulkanShaders "
                         + "after editing GLSL and the rebuilt .spv files will hot reload.");
             }
-            return;
+            return false;
         }
 
-        Path target = new File(source.getPath() + ".spv").toPath();
-        Path temp = target.resolveSibling(target.getFileName() + ".tmp");
+        Path out = target.toPath();
+        Path temp = out.resolveSibling(out.getFileName() + ".tmp");
         // Serialized so two quick saves never interleave writes to the same temp file
         synchronized (COMPILE_LOCK) {
             try {
+                Files.createDirectories(out.toAbsolutePath().getParent());
                 Process process = new ProcessBuilder(glslc, source.getAbsolutePath(), "-o", temp.toString())
                         .redirectErrorStream(true)
                         .start();
@@ -49,18 +58,21 @@ final class VulkanShaderCompiler {
                 if (process.waitFor() != 0) {
                     System.err.println("[VulkanShaderCompiler] " + source.getName() + " failed to compile; keeping the previous SPIR-V.\n" + output);
                     Files.deleteIfExists(temp);
-                    return;
+                    return false;
                 }
                 try {
-                    Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                    Files.move(temp, out, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
                 } catch (AtomicMoveNotSupportedException e) {
-                    Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
+                    Files.move(temp, out, StandardCopyOption.REPLACE_EXISTING);
                 }
-                System.out.println("[VulkanShaderCompiler] Compiled " + source.getName() + " -> " + target.getFileName());
+                System.out.println("[VulkanShaderCompiler] Compiled " + source.getName() + " -> " + out.getFileName());
+                return true;
             } catch (IOException e) {
                 System.err.println("[VulkanShaderCompiler] Could not run glslc for " + source.getName() + ": " + e.getMessage());
+                return false;
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                return false;
             }
         }
     }

@@ -202,7 +202,7 @@ public class SceneSerializer {
         "click.ogg", "open.ogg", "close.ogg", "spawn.ogg", "delete.ogg", "duplicate.ogg", "toggle.ogg"
     };
 
-    /** True for editor-only files (UISoundPlayer clips under Audio/UI/, Editor/ and Engine/ folders). */
+    /** True for editor-only files: legacy copies of UISoundPlayer clips under Audio/UI/ (now bundled in the jar at /audio/ui/), and Editor/ and Engine/ folders. */
     public static boolean isInternalEditorResource(String path) {
         if (path == null) return false;
         String lower = path.replace('\\', '/').toLowerCase();

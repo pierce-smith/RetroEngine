@@ -29,9 +29,12 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Cached reflection descriptor for a component class, built from its {@link InspectorProperty} fields.
@@ -90,7 +93,10 @@ public final class ComponentSchema {
         }
     };
 
-    private static final Map<String, Class<? extends Component>> BY_SERIALIZED_NAME = new HashMap<>();
+    // Concurrent: mods register components at load time while the scene may already be read on other threads
+    private static final Map<String, Class<? extends Component>> BY_SERIALIZED_NAME = new ConcurrentHashMap<>();
+    // Mod component type -> owning mod_id, so a project switch can drop them again
+    private static final Map<Class<? extends Component>, String> MOD_REGISTERED = new ConcurrentHashMap<>();
     static {
         for (Class<? extends Component> type : REGISTERED) {
             String name = type.getSimpleName();
@@ -185,6 +191,50 @@ public final class ComponentSchema {
 
     private static void register(String name, Class<? extends Component> type) {
         BY_SERIALIZED_NAME.putIfAbsent(name.toLowerCase(Locale.ROOT), type);
+    }
+
+    /**
+     * Registers a mod-defined component type under its simple class name (and the Name / NameComponent alias pair
+     * built-ins get), so scene delta patches, prefabs and the Inspector can resolve it. Validates the schema up front:
+     * a public no-arg constructor and only supported {@link InspectorProperty} field types. Names already taken by a
+     * built-in or another mod are rejected rather than shadowed.
+     */
+    public static synchronized void registerModComponent(Class<? extends Component> type, String modId) {
+        if (type == null) throw new IllegalArgumentException("component type is null");
+        ComponentSchema schema = of(type); // throws on unsupported / duplicate-order fields
+        if (schema.constructor == null) {
+            throw new IllegalArgumentException(type.getName() + " needs a no-arg constructor to be registered");
+        }
+        String name = type.getSimpleName();
+        String alias = name.endsWith("Component") ? name.substring(0, name.length() - "Component".length()) : name + "Component";
+        for (String n : new String[] { name, alias }) {
+            Class<? extends Component> existing = BY_SERIALIZED_NAME.get(n.toLowerCase(Locale.ROOT));
+            if (existing != null && existing != type && n.equals(name)) {
+                throw new IllegalArgumentException("Component name '" + name + "' is already registered by " + existing.getName());
+            }
+        }
+        register(name, type);
+        register(alias, type);
+        MOD_REGISTERED.put(type, modId != null ? modId : "");
+    }
+
+    /** Owning mod_id of a mod-registered component type, or null for built-ins and unknown types. */
+    public static String modOwnerOf(Class<?> type) {
+        return MOD_REGISTERED.get(type);
+    }
+
+    /** Drops the component names registered by one mod (it failed to initialize). */
+    public static synchronized void unregisterModComponents(String modId) {
+        Set<Class<? extends Component>> owned = new HashSet<>();
+        MOD_REGISTERED.forEach((type, owner) -> { if (owner.equals(modId)) owned.add(type); });
+        BY_SERIALIZED_NAME.values().removeIf(owned::contains);
+        owned.forEach(MOD_REGISTERED::remove);
+    }
+
+    /** Drops every mod-registered component name (mods unloaded / project closed). Built-ins are untouched. */
+    public static synchronized void unregisterModComponents() {
+        BY_SERIALIZED_NAME.values().removeIf(MOD_REGISTERED::containsKey);
+        MOD_REGISTERED.clear();
     }
 
     // Sorted by @InspectorProperty.order (the binary layout order)

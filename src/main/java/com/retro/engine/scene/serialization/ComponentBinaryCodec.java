@@ -1,5 +1,6 @@
 package com.retro.engine.scene.serialization;
 
+import com.retro.engine.modding.ModLoader;
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.importers.MeshImporter;
 import com.retro.engine.assets.importers.TextureImporter;
@@ -186,7 +187,8 @@ final class ComponentBinaryCodec {
                     String fallbackPath = stringAt(table, dis.readInt(), "");
                     String resolved = (assetDb != null && uuid != null) ? assetDb.resolvePathByUuid(uuid) : null;
                     if (resolved == null || resolved.isEmpty()) resolved = fallbackPath;
-                    p.set(comp, resolveImportedFile(resolved, p.meta.assetType()));
+                    // Mod VFS overlays replace vanilla files at the same Assets/-relative path (no-op without mods)
+                    p.set(comp, ModLoader.resolveAssetOverride(resolveImportedFile(resolved, p.meta.assetType())));
                 }
                 case STRING_MAP -> {
                     @SuppressWarnings("unchecked")

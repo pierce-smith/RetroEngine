@@ -1,0 +1,24 @@
+{
+  // Unique, lowercase id: a-z 0-9 _ . -  (also the "mod://<mod_id>/..." prefix for this mod's files)
+  "mod_id": "example_mod",
+  "name": "Example Mod",
+  "version": "1.0.0",
+  "author": "Your Name",
+  "target_engine": "1.0.0",
+
+  // Higher loads later: its Assets/ overlay sits above lower mods and its .rpatch files apply after theirs
+  "load_priority": 100,
+
+  // Required mod_ids, or objects: { "mod_id": "core_lib", "version": "1.2.0", "optional": true }
+  "dependencies": [],
+
+  // ModScript subclass to run on load, and the sources to compile (in order; later files see earlier ones)
+  "entry_point": "com.example.examplemod.ModScript",
+  "script_sources": ["Scripts/ModScript.java"],
+
+  // VFS overlay roots: files here replace vanilla files at the same path under the game's Assets/
+  "asset_overlays": ["Assets/"],
+
+  // .rpatch files, or folders scanned recursively for them
+  "patches": ["Patches/"]
+}

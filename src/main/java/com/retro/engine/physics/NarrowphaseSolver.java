@@ -1,5 +1,6 @@
 package com.retro.engine.physics;
 
+import com.retro.engine.modding.ModLoader;
 import com.retro.engine.scene.components.physics.BoxCollider;
 import com.retro.engine.scene.components.physics.CapsuleCollider;
 import com.retro.engine.scene.components.physics.RigidBodyComponent;
@@ -42,41 +43,55 @@ public class NarrowphaseSolver {
                 return;
             }
 
-            physicsSystem.recordCollision(a, b);
-
+            // Contact normal (A -> B) along the axis of least penetration
+            float sepX = 0, sepY = 0, sepZ = 0, penetration;
             if (overlapX < overlapY && overlapX < overlapZ) {
-                float sign = dx > 0 ? 1.0f : -1.0f;
-                separateBodies(a, b, sign * overlapX, 0, 0);
+                sepX = dx > 0 ? 1.0f : -1.0f;
+                penetration = overlapX;
             } else if (overlapY < overlapX && overlapY < overlapZ) {
-                float sign = dy > 0 ? 1.0f : -1.0f;
-                separateBodies(a, b, 0, sign * overlapY, 0);
+                sepY = dy > 0 ? 1.0f : -1.0f;
+                penetration = overlapY;
             } else {
-                float sign = dz > 0 ? 1.0f : -1.0f;
-                separateBodies(a, b, 0, 0, sign * overlapZ);
+                sepZ = dz > 0 ? 1.0f : -1.0f;
+                penetration = overlapZ;
             }
+
+            // Mods (CollisionEvent) may change the restitution or cancel the contact; no-op without subscribers
+            float restitution = ModLoader.onCollision(a.entity, b.entity, sepX, sepY, sepZ, penetration, defaultRestitution(a, b));
+            if (Float.isNaN(restitution)) return;
+
+            physicsSystem.recordCollision(a, b);
+            separateBodies(a, b, sepX * penetration, sepY * penetration, sepZ * penetration, restitution);
         }
     }
 
-    private void separateBodies(PhysicsSystem.PhysicsBody a, PhysicsSystem.PhysicsBody b, float sepX, float sepY, float sepZ) {
+    /** Restitution the contact uses unless a mod overrides it: the max of two dynamic bodies, else the dynamic one's. */
+    private static float defaultRestitution(PhysicsSystem.PhysicsBody a, PhysicsSystem.PhysicsBody b) {
+        boolean aDynamic = a.rigidBody != null && a.rigidBody.motionType == RigidBodyComponent.MotionType.DYNAMIC;
+        boolean bDynamic = b.rigidBody != null && b.rigidBody.motionType == RigidBodyComponent.MotionType.DYNAMIC;
+        if (aDynamic && bDynamic) return Math.max(a.rigidBody.restitution, b.rigidBody.restitution);
+        if (aDynamic) return a.rigidBody.restitution;
+        if (bDynamic) return b.rigidBody.restitution;
+        return 0.0f;
+    }
+
+    private void separateBodies(PhysicsSystem.PhysicsBody a, PhysicsSystem.PhysicsBody b, float sepX, float sepY, float sepZ, float restitution) {
         boolean aDynamic = a.rigidBody != null && a.rigidBody.motionType == RigidBodyComponent.MotionType.DYNAMIC;
         boolean bDynamic = b.rigidBody != null && b.rigidBody.motionType == RigidBodyComponent.MotionType.DYNAMIC;
 
         if (aDynamic && bDynamic) {
             a.px -= sepX * 0.5f; a.py -= sepY * 0.5f; a.pz -= sepZ * 0.5f;
             b.px += sepX * 0.5f; b.py += sepY * 0.5f; b.pz += sepZ * 0.5f;
-            float restitution = Math.max(a.rigidBody.restitution, b.rigidBody.restitution);
             if (sepX != 0) { a.vx = -a.vx * restitution; b.vx = -b.vx * restitution; }
             if (sepY != 0) { a.vy = -a.vy * restitution; b.vy = -b.vy * restitution; }
             if (sepZ != 0) { a.vz = -a.vz * restitution; b.vz = -b.vz * restitution; }
         } else if (aDynamic) {
             a.px -= sepX; a.py -= sepY; a.pz -= sepZ;
-            float restitution = a.rigidBody.restitution;
             if (sepX != 0) a.vx = -a.vx * restitution;
             if (sepY != 0) a.vy = -a.vy * restitution;
             if (sepZ != 0) a.vz = -a.vz * restitution;
         } else if (bDynamic) {
             b.px += sepX; b.py += sepY; b.pz += sepZ;
-            float restitution = b.rigidBody.restitution;
             if (sepX != 0) b.vx = -b.vx * restitution;
             if (sepY != 0) b.vy = -b.vy * restitution;
             if (sepZ != 0) b.vz = -b.vz * restitution;

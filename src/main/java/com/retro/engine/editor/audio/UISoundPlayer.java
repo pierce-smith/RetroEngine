@@ -6,7 +6,8 @@ import org.lwjgl.system.MemoryUtil;
 
 import javax.sound.sampled.*;
 import java.io.ByteArrayInputStream;
-import java.io.File;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.ShortBuffer;
 import java.util.Map;
@@ -15,34 +16,51 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Non-blocking fire-and-forget UI Sound Manager for editor button presses,
  * dialog transitions, entity spawning, entity duplication, deletion, and context menus.
- * Hardened with native C-heap memory free for decoded STBVorbis audio buffers.
+ *
+ * Clips are classpath resources under {@code /audio/ui/} (src/main/resources/audio/ui), so they ship inside the
+ * editor jar and never appear as loose files in a project's Assets/ or in exported distributions. Decoded
+ * STBVorbis buffers are freed from the native C heap immediately after conversion to PCM.
  */
 public class UISoundPlayer {
 
+    private static final String RESOURCE_DIR = "/audio/ui/";
+
     public enum UISound {
-        CLICK("Assets/Audio/UI/click.ogg"),
-        OPEN_MODAL("Assets/Audio/UI/open.ogg"),
-        CLOSE_MODAL("Assets/Audio/UI/close.ogg"),
-        SPAWN("Assets/Audio/UI/spawn.ogg"),
-        DELETE("Assets/Audio/UI/delete.ogg"),
-        DUPLICATE("Assets/Audio/UI/duplicate.ogg"),
-        TOGGLE("Assets/Audio/UI/toggle.ogg");
+        CLICK("click.ogg"),
+        OPEN_MODAL("open.ogg"),
+        CLOSE_MODAL("close.ogg"),
+        SPAWN("spawn.ogg"),
+        DELETE("delete.ogg"),
+        DUPLICATE("duplicate.ogg", "spawn.ogg"),
+        TOGGLE("toggle.ogg");
 
-        private final String defaultPath;
+        private final String fileName;
+        private final String fallbackFileName;
 
-        UISound(String defaultPath) {
-            this.defaultPath = defaultPath;
+        UISound(String fileName) {
+            this(fileName, null);
         }
 
-        public String getDefaultPath() {
-            return defaultPath;
+        UISound(String fileName, String fallbackFileName) {
+            this.fileName = fileName;
+            this.fallbackFileName = fallbackFileName;
+        }
+
+        /** Classpath resource path of this clip, e.g. {@code /audio/ui/click.ogg}. */
+        public String getResourcePath() {
+            return RESOURCE_DIR + fileName;
+        }
+
+        /** Resource used when this clip is not bundled (DUPLICATE reuses spawn.ogg), or null. */
+        public String getFallbackResourcePath() {
+            return fallbackFileName != null ? RESOURCE_DIR + fallbackFileName : null;
         }
     }
 
     private static final Map<UISound, byte[]> soundBufferCache = new ConcurrentHashMap<>();
     private static final Map<UISound, AudioFormat> soundFormatCache = new ConcurrentHashMap<>();
-    private static float masterUiVolume = 0.8f;
-    private static boolean soundEnabled = true;
+    private static volatile float masterUiVolume = 0.8f;
+    private static volatile boolean soundEnabled = true;
 
     /**
      * Plays a UI sound effect asynchronously on a background virtual thread.
@@ -93,65 +111,38 @@ public class UISoundPlayer {
     }
 
     private static boolean loadAndCacheSound(UISound sound) {
-        String path = sound.getDefaultPath();
-        File file = new File(path);
+        String resource = sound.getResourcePath();
+        InputStream in = UISoundPlayer.class.getResourceAsStream(resource);
+        if (in == null && sound.getFallbackResourcePath() != null) {
+            resource = sound.getFallbackResourcePath();
+            in = UISoundPlayer.class.getResourceAsStream(resource);
+        }
+        if (in == null) return false;
 
-        if (!file.exists()) {
-            File altFile = new File("Assets/Audio/UI/" + sound.name().toLowerCase() + ".ogg");
-            if (altFile.exists()) {
-                file = altFile;
-            } else if (sound == UISound.DUPLICATE) {
-                // Fallback for DUPLICATE if duplicate.ogg does not exist on disk
-                file = new File(UISound.SPAWN.getDefaultPath());
-                if (!file.exists()) {
-                    file = new File("Assets/Audio/UI/spawn.ogg");
+        try (InputStream stream = in) {
+            byte[] encodedBytes = stream.readAllBytes();
+            String lower = resource.toLowerCase();
+            if (lower.endsWith(".ogg")) {
+                return decodeOggVorbis(sound, encodedBytes);
+            }
+            if (lower.endsWith(".wav") || lower.endsWith(".aiff")) {
+                try (AudioInputStream ais = AudioSystem.getAudioInputStream(new ByteArrayInputStream(encodedBytes))) {
+                    soundBufferCache.put(sound, ais.readAllBytes());
+                    soundFormatCache.put(sound, ais.getFormat());
+                    return true;
                 }
-            }
-        }
-
-        if (!file.exists()) {
-            // Packaged editor: cwd is "/" or the install dir, so use the copies bundled in the jar
-            return loadBundledSound(sound);
-        }
-
-        try {
-            AudioInputStream ais = null;
-            String lowerPath = file.getName().toLowerCase();
-
-            if (lowerPath.endsWith(".ogg")) {
-                ais = loadOggVorbisStream(file.getAbsolutePath());
-            } else if (lowerPath.endsWith(".wav") || lowerPath.endsWith(".aiff")) {
-                ais = AudioSystem.getAudioInputStream(file);
-            }
-
-            if (ais != null) {
-                byte[] pcmBytes = ais.readAllBytes();
-                soundBufferCache.put(sound, pcmBytes);
-                soundFormatCache.put(sound, ais.getFormat());
-                ais.close();
-                return true;
             }
         } catch (Exception ignored) {
         }
         return false;
     }
 
-    private static final String BUNDLED_UI_SOUND_DIR = "/editor/audio/ui/";
-
-    private static boolean loadBundledSound(UISound sound) {
-        String name = sound.getDefaultPath().substring(sound.getDefaultPath().lastIndexOf('/') + 1);
-        java.io.InputStream found = UISoundPlayer.class.getResourceAsStream(BUNDLED_UI_SOUND_DIR + name);
-        if (found == null && sound == UISound.DUPLICATE) {
-            found = UISoundPlayer.class.getResourceAsStream(BUNDLED_UI_SOUND_DIR + "spawn.ogg");
-        }
-        if (found == null) return false;
-        final java.io.InputStream in = found;
-
-        java.nio.ByteBuffer encoded = null;
+    /** Decodes an in-memory Ogg Vorbis clip to 16-bit little-endian PCM and caches it. */
+    private static boolean decodeOggVorbis(UISound sound, byte[] encodedBytes) {
+        ByteBuffer encoded = null;
         ShortBuffer rawAudio = null;
-        try (in; MemoryStack stack = MemoryStack.stackPush()) {
-            byte[] bytes = in.readAllBytes();
-            encoded = MemoryUtil.memAlloc(bytes.length).put(bytes).flip();
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            encoded = MemoryUtil.memAlloc(encodedBytes.length).put(encodedBytes).flip();
             IntBuffer channels = stack.mallocInt(1);
             IntBuffer sampleRate = stack.mallocInt(1);
             rawAudio = STBVorbis.stb_vorbis_decode_memory(encoded, channels, sampleRate);
@@ -171,38 +162,6 @@ public class UISoundPlayer {
         } finally {
             if (rawAudio != null) MemoryUtil.memFree(rawAudio);
             if (encoded != null) MemoryUtil.memFree(encoded);
-        }
-    }
-
-    private static AudioInputStream loadOggVorbisStream(String filePath) {
-        ShortBuffer rawAudio = null;
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            IntBuffer channelsBuffer = stack.mallocInt(1);
-            IntBuffer sampleRateBuffer = stack.mallocInt(1);
-
-            rawAudio = STBVorbis.stb_vorbis_decode_filename(filePath, channelsBuffer, sampleRateBuffer);
-            if (rawAudio == null) return null;
-
-            int channels = channelsBuffer.get(0);
-            int sampleRate = sampleRateBuffer.get(0);
-
-            byte[] pcmBytes = new byte[rawAudio.remaining() * 2];
-            int idx = 0;
-            while (rawAudio.hasRemaining()) {
-                short sample = rawAudio.get();
-                pcmBytes[idx++] = (byte) (sample & 0xFF);
-                pcmBytes[idx++] = (byte) ((sample >> 8) & 0xFF);
-            }
-
-            AudioFormat format = new AudioFormat(sampleRate, 16, channels, true, false);
-            ByteArrayInputStream bais = new ByteArrayInputStream(pcmBytes);
-            return new AudioInputStream(bais, format, pcmBytes.length / format.getFrameSize());
-        } catch (Exception e) {
-            return null;
-        } finally {
-            if (rawAudio != null) {
-                MemoryUtil.memFree(rawAudio);
-            }
         }
     }
 

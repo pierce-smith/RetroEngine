@@ -5,6 +5,7 @@ import com.retro.engine.rhi.DirectionalShadowFrustum;
 import com.retro.engine.rhi.HandleRegistry;
 import com.retro.engine.rhi.RenderCommand;
 import com.retro.engine.rhi.RenderQueue;
+import com.retro.engine.rhi.RenderEnvironment;
 import com.retro.engine.rhi.SceneLights;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryUtil;
@@ -49,7 +50,8 @@ public class VulkanGpuCache {
 
     // LightBuffer (binding 0) std140 layout as float indices: dirLight at 0, pointLights[MAX_POINT_LIGHTS] (12 floats
     // each) at 8, spotLights[MAX_SPOT_LIGHTS] (16 floats each) at 392, then numLights, viewPos, view, proj,
-    // lightSpaceMatrix, previewViewProj and previewViewPos. 2384 bytes total.
+    // lightSpaceMatrix, previewViewProj, previewViewPos, then the ProjectSettings render environment (ambientColor,
+    // fogColorDensity, fogParams). 2432 bytes total.
     public static final int LIGHT_UBO_POINT_LIGHTS_FLOAT_INDEX = 8;
     public static final int LIGHT_UBO_POINT_LIGHT_FLOATS = 12;
     public static final int LIGHT_UBO_SPOT_LIGHTS_FLOAT_INDEX = LIGHT_UBO_POINT_LIGHTS_FLOAT_INDEX + SceneLights.MAX_POINT_LIGHTS * LIGHT_UBO_POINT_LIGHT_FLOATS;
@@ -61,7 +63,10 @@ public class VulkanGpuCache {
     public static final int LIGHT_UBO_LIGHT_SPACE_FLOAT_INDEX = LIGHT_UBO_PROJ_FLOAT_INDEX + 16;
     public static final int LIGHT_UBO_PREVIEW_VIEW_PROJ_FLOAT_INDEX = LIGHT_UBO_LIGHT_SPACE_FLOAT_INDEX + 16;
     public static final int LIGHT_UBO_PREVIEW_VIEW_POS_FLOAT_INDEX = LIGHT_UBO_PREVIEW_VIEW_PROJ_FLOAT_INDEX + 16;
-    public static final int LIGHT_UBO_FLOATS = LIGHT_UBO_PREVIEW_VIEW_POS_FLOAT_INDEX + 4;
+    public static final int LIGHT_UBO_AMBIENT_FLOAT_INDEX = LIGHT_UBO_PREVIEW_VIEW_POS_FLOAT_INDEX + 4;
+    public static final int LIGHT_UBO_FOG_COLOR_FLOAT_INDEX = LIGHT_UBO_AMBIENT_FLOAT_INDEX + 4;
+    public static final int LIGHT_UBO_FOG_PARAMS_FLOAT_INDEX = LIGHT_UBO_FOG_COLOR_FLOAT_INDEX + 4;
+    public static final int LIGHT_UBO_FLOATS = LIGHT_UBO_FOG_PARAMS_FLOAT_INDEX + 4;
     public static final long LIGHT_UBO_SIZE = LIGHT_UBO_FLOATS * 4L;
 
     // Set 0 bindings shared by every 3D pipeline (see blinn_phong.vert/.frag, blinn_phong_skinned.vert, shadow_depth.frag)
@@ -1033,6 +1038,19 @@ public class VulkanGpuCache {
                 putMatrixOrIdentity(floatBuf, LIGHT_UBO_PREVIEW_VIEW_PROJ_FLOAT_INDEX, previewViewProj);
                 int pos = LIGHT_UBO_PREVIEW_VIEW_POS_FLOAT_INDEX;
                 floatBuf.put(pos, previewX); floatBuf.put(pos + 1, previewY); floatBuf.put(pos + 2, previewZ); floatBuf.put(pos + 3, 0.0f);
+
+                // Project render environment: premultiplied ambient, fog color + density (0 = off), fog start / end
+                RenderEnvironment env = lights.environment();
+                int amb = LIGHT_UBO_AMBIENT_FLOAT_INDEX;
+                float ambientScale = env.ambientIntensity;
+                floatBuf.put(amb, env.ambientR * ambientScale); floatBuf.put(amb + 1, env.ambientG * ambientScale);
+                floatBuf.put(amb + 2, env.ambientB * ambientScale); floatBuf.put(amb + 3, 1.0f);
+                int fog = LIGHT_UBO_FOG_COLOR_FLOAT_INDEX;
+                floatBuf.put(fog, env.fogR); floatBuf.put(fog + 1, env.fogG); floatBuf.put(fog + 2, env.fogB);
+                floatBuf.put(fog + 3, env.effectiveFogDensity());
+                int fogParams = LIGHT_UBO_FOG_PARAMS_FLOAT_INDEX;
+                floatBuf.put(fogParams, env.fogStart); floatBuf.put(fogParams + 1, env.safeFogEnd());
+                floatBuf.put(fogParams + 2, 0.0f); floatBuf.put(fogParams + 3, 0.0f);
 
                 vkUnmapMemory(vkDevice, buf.memoryHandle);
             }

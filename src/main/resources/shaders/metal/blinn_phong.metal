@@ -33,8 +33,8 @@ struct Uniforms {
     float4 dirLight;          // 128: directional light xyz = direction, w = intensity
     float4 numLights;         // 144: x = directional (1.0 = active), y = point count, z = spot count
     float4 dirLightColor;     // 160: rgb = directional light color
-    float4 ambientColor;      // 176: rgb = ambient
-    float4 fogColorDensity;   // 192: rgb = fogColor, w = fogDensity
+    float4 ambientColor;      // 176: rgb = ambient color * intensity (ProjectSettings)
+    float4 fogColorDensity;   // 192: rgb = fogColor, w = fogDensity (max opacity at fog end; 0 = fog disabled)
     float4 matParams;         // 208: x = reflectStrength, y = shadowOpacity, z = shadowMapBias
     uint materialMask;        // 224: bit 0 albedo, 1 normal, 2 specular, 3 lightmap, 4 emissive
     uint isUnlit;             // 228: 0 = Lit Model, 1 = Procedural Grid
@@ -44,7 +44,8 @@ struct Uniforms {
     float4 surface;           // 304: x = specularStrength, y = roughness, z = normalStrength, w = emissiveIntensity
     float4 viewPos;           // 320: xyz = camera world position
     uint pickId;              // 336: Color-ID pick value (read only by entity_id.metal)
-    constant LocalLights* localLights; // 344: gpuAddress of this frame's LocalLights block (352 bytes total)
+    constant LocalLights* localLights; // 344: gpuAddress of this frame's LocalLights block
+    float4 fogParams;         // 352: x = fog start, y = fog end (368 bytes total)
 };
 
 // 64-byte argument buffer entry written by MetalPassEncoder (MetalUniformStream.DRAW_ARGS_*).
@@ -373,8 +374,9 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
         accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
     }
 
-    // Matches blinn_phong.frag: a bright sun lifts the ambient floor (dirLightColor is zero when there is no sun)
-    float3 ambient = max(max(uniforms.dirLightColor.rgb * 0.35, uniforms.ambientColor.rgb), float3(0.35, 0.35, 0.38)) * lightmap;
+    // Matches blinn_phong.frag: the project ambient is the floor, and a bright sun lifts it (dirLightColor is zero
+    // when there is no sun)
+    float3 ambient = max(uniforms.dirLightColor.rgb * 0.35, uniforms.ambientColor.rgb) * lightmap;
 
     float3 finalRGB = (ambient + diffuse) * baseColor.rgb + specular;
 
@@ -393,11 +395,11 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
         finalRGB += args.emissive.sample(smp, in.uv).rgb * uniforms.surface.w;
     }
 
-    float fogStart = 20.0;
-    float fogEnd = 150.0;
-    float fogFactor = clamp((in.viewDist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
-    float3 fogColor = float3(0.12, 0.13, 0.16);
-    finalRGB = mix(finalRGB, fogColor, fogFactor);
+    // Linear distance fog from ProjectSettings: ramps from fogStart to fogEnd, reaching fogDensity opacity
+    float fogStart = uniforms.fogParams.x;
+    float fogEnd = uniforms.fogParams.y;
+    float fogFactor = clamp((in.viewDist - fogStart) / (fogEnd - fogStart), 0.0, 1.0) * uniforms.fogColorDensity.w;
+    finalRGB = mix(finalRGB, uniforms.fogColorDensity.rgb, fogFactor);
 
     return float4(finalRGB, baseColor.a);
 }

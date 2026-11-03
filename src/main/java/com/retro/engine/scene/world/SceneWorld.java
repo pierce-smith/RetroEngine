@@ -1,5 +1,6 @@
 package com.retro.engine.scene.world;
 
+import com.retro.engine.modding.ModLoader;
 import com.retro.engine.physics.PhysicsSystem;
 
 import com.retro.engine.animation.AnimationSystem;
@@ -346,6 +347,42 @@ public class SceneWorld {
         if (wasRunning) play();
     }
 
+    /**
+     * Creates an entity in the live scene (Transform, plus MeshFilter + Material when {@code meshAssetPath} is set; the
+     * path resolves through the mod VFS) without changing the selection. Fires {@code EntitySpawnEvent} (source
+     * SCRIPT); returns null when a mod canceled it. A null or duplicate id gets a generated one.
+     */
+    public Entity spawnEntity(String id, String name, String meshAssetPath) {
+        String entityId = (id == null || id.isBlank() || findEntityById(id) != null)
+                ? "entity_" + java.util.UUID.randomUUID().toString().substring(0, 8) : id.trim();
+        String mesh = (meshAssetPath != null && lastAssetDatabase != null) ? lastAssetDatabase.resolveAsset(meshAssetPath)
+                : ModLoader.resolveAssetPath(meshAssetPath);
+        Entity entity = new Entity(entityId, (name != null && !name.isBlank()) ? name : entityId, mesh);
+        List<Entity> single = new ArrayList<>(1);
+        single.add(entity);
+        ModLoader.onScriptSpawned(single);
+        if (single.isEmpty()) return null;
+        sceneEntities.add(entity);
+        registerEntityHandle(entity);
+        graphEvaluator.clearCache();
+        return entity;
+    }
+
+    /** First entity with exactly this name, or null. */
+    public Entity findEntityByName(String name) {
+        if (name == null) return null;
+        for (Entity e : sceneEntities) {
+            if (name.equals(e.name)) return e;
+        }
+        return null;
+    }
+
+    /** Physics raycast that ignores {@code exclude} (typically the caller's own entity). Allocates one RaycastHit. */
+    public com.retro.engine.physics.RaycastHit raycastExcluding(Entity exclude, float originX, float originY, float originZ,
+                                                               float dirX, float dirY, float dirZ, float maxDistance) {
+        return getPhysicsWorld().raycastExcluding(exclude, originX, originY, originZ, dirX, dirY, dirZ, maxDistance);
+    }
+
     public Entity findEntityById(String id) {
         if (id == null || id.isEmpty()) return null;
         for (Entity e : sceneEntities) {
@@ -497,6 +534,7 @@ public class SceneWorld {
 
     public List<Entity> instantiatePrefab(String filePath, AssetDatabase assetDb) {
         List<Entity> spawned = PrefabSerializer.instantiatePrefab(filePath, this, assetDb);
+        ModLoader.onPrefabSpawned(filePath, spawned, this::deleteEntity);
         if (spawned != null && !spawned.isEmpty()) {
             UISoundPlayer.play(UISound.SPAWN);
         }
@@ -546,6 +584,15 @@ public class SceneWorld {
 
     public void saveActiveScene(String filePath, List<AssetMeta> assetDirectory, AssetDatabase assetDb) {
         if (filePath == null || filePath.trim().isEmpty()) return;
+        if (com.retro.engine.modding.ModWorkspace.isActive()) {
+            // Creation Kit mode: vanilla scenes save as .rpatch deltas; scenes inside the mod folder save normally
+            if (com.retro.engine.modding.ModWorkspace.saveScene(this, SceneSerializer.sanitizeScenePath(filePath), assetDb)) return;
+        } else if (ModLoader.isActive()) {
+            // The loaded scene contains .rpatch deltas and mod event edits; saving would bake them into vanilla files
+            System.err.println("[SceneWorld] Scene saving is disabled while mods are loaded (editor started with --mods). "
+                    + "Use File > Open Mod Workspace... to author scene changes as a mod.");
+            return;
+        }
         String sanitized = SceneSerializer.sanitizeScenePath(filePath);
         SceneSerializer.saveScene(sanitized, sceneEntities, assetDirectory, assetDb);
         this.activeScenePath = sanitized;
@@ -562,6 +609,8 @@ public class SceneWorld {
         this.activeScenePath = sanitized;
         SceneSerializer.SceneLoadData data = SceneSerializer.loadSceneData(sanitized, assetDb);
         List<Entity> loadedEntities = (data != null && data.entities() != null) ? data.entities() : new ArrayList<>();
+        // Mods: .rpatch deltas, SceneLoadEvent and EntitySpawnEvent run on the fresh list before it is bound
+        ModLoader.onSceneDeserialized(sanitized, loadedEntities);
         clearRegistryAndRebind(loadedEntities);
         attachAndArmAnimators();
         // A freshly loaded scene starts with nothing selected (rebind may have matched a stale selection by id)

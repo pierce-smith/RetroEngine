@@ -47,7 +47,10 @@ layout(std140, set = 0, binding = 0) uniform LightBuffer {
     mat4 proj;        // byte offset 2176
     mat4 lightSpaceMatrix; // byte offset 2240: directional shadow map view-projection
     mat4 previewViewProj;  // byte offset 2304: selected Camera entity's view-projection (picture-in-picture pass)
-    vec4 previewViewPos;   // byte offset 2368: xyz = that camera's world position (2384 bytes total)
+    vec4 previewViewPos;   // byte offset 2368: xyz = that camera's world position
+    vec4 ambientColor;     // byte offset 2384: rgb = ProjectSettings ambient color * intensity
+    vec4 fogColorDensity;  // byte offset 2400: rgb = fog color, w = fog density (max opacity at fog end; 0 = off)
+    vec4 fogParams;        // byte offset 2416: x = fog start, y = fog end (2432 bytes total)
 } u_Lights;
 
 // 128 bytes: exactly the maxPushConstantsSize every Vulkan implementation guarantees.

@@ -1,0 +1,33 @@
+{
+  "format": "rpatch",
+  "version": 1,
+  // Project-relative path of the vanilla scene this delta applies to (the starter project's main scene)
+  "target_scene": "Assets/Scenes/Main.rscene",
+  "operations": [
+    // New entity: ids must not collide with vanilla ones, so prefix them with your mod_id
+    {
+      "op": "ADD_ENTITY",
+      "id": "example_mod.floating_cube",
+      "name": "Floating Cube",
+      "components": [
+        { "type": "Transform", "properties": { "posX": 2.5, "posY": 1.5, "posZ": 0.0, "scaleX": 0.5, "scaleY": 0.5, "scaleZ": 0.5 } },
+        // Plain "Assets/..." paths resolve through the VFS: a mod overlay copy first, then the vanilla file
+        { "type": "MeshFilter", "properties": { "meshAssetPath": "Assets/Meshes/Cube.obj" } },
+        { "type": "Material", "properties": { "textureAssetPath": "Assets/Textures/Checker.png", "emissiveIntensity": 0.5 } },
+        // Mod-defined component registered by ModScript.onInitialize
+        { "type": "WobbleComponent", "properties": { "amplitude": 0.4, "speed": 3.0 } },
+        // mod:// URIs point at files inside this mod's folder
+        { "type": "ScriptComponent", "properties": { "scriptAssetPath": "mod://example_mod/Scripts/WobbleScript.java", "scriptName": "WobbleScript.java" } }
+      ]
+    },
+
+    // Property overrides on a vanilla component (keys are field names or Inspector labels)
+    { "op": "MODIFY_COMPONENT", "entity": "light_1", "component": "Light", "properties": { "intensity": 1.6, "r": 1.0, "g": 0.85, "b": 0.7 } },
+
+    // Component tweak on a vanilla entity addressed by name instead of id
+    { "op": "MODIFY_COMPONENT", "entity_name": "Cube", "component": "Transform", "properties": { "scaleX": 1.25, "scaleY": 1.25, "scaleZ": 1.25 } },
+
+    // Re-parent the new cube under the vanilla cube and rename it
+    { "op": "MODIFY_ENTITY", "entity": "example_mod.floating_cube", "name": "Orbiting Cube", "parent": "entity_2" }
+  ]
+}

@@ -43,6 +43,7 @@ struct Uniforms {
     float4 viewPos;
     uint pickId;
     constant LocalLights* localLights;
+    float4 fogParams;
 };
 
 // Must stay byte-identical to the struct in blinn_phong.metal

@@ -100,6 +100,30 @@ public class AssetDatabase {
         return activeProjectPath != null && !activeProjectPath.isEmpty();
     }
 
+    /**
+     * Mod VFS: mounts an extra mod folder (a folder with mod.json, or a folder of mod folders) for the active project
+     * and reloads the mod set so it joins the overlay stack in load order. Returns false without an active project.
+     */
+    public boolean mountModVFS(String modFolderPath) {
+        if (!hasActiveProject() || modFolderPath == null || modFolderPath.isBlank()) return false;
+        com.retro.engine.modding.ModLoader.mountModFolder(new java.io.File(modFolderPath.trim()), new java.io.File(activeProjectPath));
+        return true;
+    }
+
+    /**
+     * Final on-disk path of an asset through the mod VFS: {@code mod://} URIs, then the top-most mod overlay copy,
+     * then the project's own Assets/ file. Accepts absolute, {@code Assets/...} and Assets-relative paths.
+     */
+    public String resolveAsset(String path) {
+        if (path == null || path.isBlank()) return path;
+        String resolved = com.retro.engine.modding.ModLoader.resolveAssetPath(path);
+        if (!resolved.equals(path) || new java.io.File(path).isAbsolute() || !hasActiveProject()) return resolved;
+        String rel = path.trim().replace('\\', '/');
+        if (rel.startsWith(ASSETS_DIR + "/")) rel = rel.substring(ASSETS_DIR.length() + 1);
+        java.io.File f = new java.io.File(getProjectAssetsPath(), rel);
+        return f.isFile() ? f.getAbsolutePath() : path;
+    }
+
     /** Absolute path of the active project's Assets/ folder, or "" when no project is open. */
     public String getProjectAssetsPath() {
         return hasActiveProject() ? activeProjectPath + "/" + ASSETS_DIR : "";

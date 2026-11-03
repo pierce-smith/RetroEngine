@@ -69,7 +69,7 @@ public class MainMenuBar {
 
     public static int dropdownItemCount(DropdownMenu menu) {
         return switch (menu) {
-            case FILE -> 6;
+            case FILE -> 9;
             case EDIT -> 3;
             case ENTITY -> 4;
             case VIEW -> 3;
@@ -124,6 +124,8 @@ public class MainMenuBar {
         UIGeometryBatch.addBoundedText(buffer, "SCENE", 0.45f, 0.969f, 0.55f, MENU_TEXT, EditorTheme.TEXT_MUTED, 1.0f);
         sceneSb.setLength(0);
         sceneSb.append(extractSceneName(activeScenePath));
+        com.retro.engine.modding.ModManifest authoring = com.retro.engine.modding.ModWorkspace.activeMod();
+        if (authoring != null) sceneSb.append("  [MOD ").append(authoring.id).append(']');
         UIGeometryBatch.addTruncatedText(buffer, sceneSb, 0.45f + UIGeometryBatch.textWidth(buffer, "SCENE ", MENU_TEXT), 0.969f, 0.98f, MENU_TEXT, EditorTheme.TEXT, 1.0f);
     }
 
@@ -203,11 +205,16 @@ public class MainMenuBar {
                 renderDropdownItem(buffer, menu, 1, hover, "Open Scene...", PlatformShortcuts.OPEN.label(), true);
                 renderDropdownItem(buffer, menu, 2, hover, "Save Scene...", PlatformShortcuts.SAVE.label(), true);
                 renderSeparator(buffer, menu, 3);
-                renderDropdownItem(buffer, menu, 3, hover, "Export Standalone Build...", null, true);
-                renderSeparator(buffer, menu, 4);
-                renderDropdownItem(buffer, menu, 4, hover, "Switch Project...", null, true);
-                renderSeparator(buffer, menu, 5);
-                renderDropdownItem(buffer, menu, 5, hover, PlatformShortcuts.IS_MAC ? "Quit Retro Engine" : "Exit", PlatformShortcuts.QUIT.label(), true);
+                renderDropdownItem(buffer, menu, 3, hover, "Project Settings...", null, true);
+                renderDropdownItem(buffer, menu, 4, hover,
+                        com.retro.engine.modding.ModWorkspace.isActive() ? "Close Mod Workspace" : "Open Mod Workspace...", null, true);
+                renderDropdownItem(buffer, menu, 5, hover, "Package .rmod...", null, true);
+                renderSeparator(buffer, menu, 6);
+                renderDropdownItem(buffer, menu, 6, hover, "Export Standalone Build...", null, true);
+                renderSeparator(buffer, menu, 7);
+                renderDropdownItem(buffer, menu, 7, hover, "Switch Project...", null, true);
+                renderSeparator(buffer, menu, 8);
+                renderDropdownItem(buffer, menu, 8, hover, PlatformShortcuts.IS_MAC ? "Quit Retro Engine" : "Exit", PlatformShortcuts.QUIT.label(), true);
             }
             case EDIT -> {
                 renderDropdownItem(buffer, menu, 0, hover, "Undo", PlatformShortcuts.UNDO.label(), commandHistory.canUndo());

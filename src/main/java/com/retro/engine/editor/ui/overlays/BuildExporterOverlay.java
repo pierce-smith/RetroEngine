@@ -34,6 +34,7 @@ public final class BuildExporterOverlay {
     private static final float ACTION_Y0 = -0.50f, ACTION_Y1 = -0.42f;
     private static final float CANCEL_X0 = 0.04f, CANCEL_X1 = 0.26f;
     private static final float EXPORT_X0 = 0.29f, EXPORT_X1 = 0.52f;
+    private static final float PACKAGE_X0 = -0.52f, PACKAGE_X1 = -0.18f;
     private static final float CLOSE_X0 = CARD_X1 - 0.075f, CLOSE_X1 = CARD_X1 - 0.02f;
     private static final float CLOSE_Y0 = CARD_Y1 - 0.075f, CLOSE_Y1 = CARD_Y1 - 0.02f;
 
@@ -63,7 +64,7 @@ public final class BuildExporterOverlay {
         if (!running) {
             exportDir = new File(project, "Build");
             try {
-                ProjectWorkspace.ProjectSettings settings = ProjectWorkspace.readSettings(project);
+                com.retro.engine.core.ProjectSettings settings = ProjectWorkspace.readSettings(project);
                 executableName = sanitizeName(settings.projectName);
                 startupScene = settings.startupScene != null ? settings.startupScene : "";
             } catch (Exception e) {
@@ -144,6 +145,8 @@ public final class BuildExporterOverlay {
         int actionText = running ? EditorTheme.TEXT_DISABLED : EditorTheme.TEXT;
         UIGeometryBatch.addRoundedCard(buffer, CANCEL_X0, ACTION_Y0, CANCEL_X1, ACTION_Y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
         centeredTextIn(buffer, "CLOSE", CANCEL_X0, CANCEL_X1, (ACTION_Y0 + ACTION_Y1) * 0.5f, 0.9f, actionText);
+        UIGeometryBatch.addRoundedCard(buffer, PACKAGE_X0, ACTION_Y0, PACKAGE_X1, ACTION_Y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
+        centeredTextIn(buffer, "PACKAGE .RMOD...", PACKAGE_X0, PACKAGE_X1, (ACTION_Y0 + ACTION_Y1) * 0.5f, 0.8f, actionText);
         UIGeometryBatch.addRoundedQuad(buffer, EXPORT_X0, ACTION_Y0, EXPORT_X1, ACTION_Y1, EditorTheme.RADIUS_SMALL, EditorTheme.ACCENT, running ? 0.45f : 1.0f);
         centeredTextIn(buffer, running ? "EXPORTING..." : "EXPORT BUILD", EXPORT_X0, EXPORT_X1, (ACTION_Y0 + ACTION_Y1) * 0.5f, 0.9f, actionText);
     }
@@ -215,6 +218,8 @@ public final class BuildExporterOverlay {
             includeHaptics = !includeHaptics;
         } else if (inRect(ndcX, ndcY, EXPORT_X0, ACTION_Y0, EXPORT_X1, ACTION_Y1)) {
             startExport(project);
+        } else if (inRect(ndcX, ndcY, PACKAGE_X0, ACTION_Y0, PACKAGE_X1, ACTION_Y1)) {
+            promptPackageMod(workspace);
         } else {
             for (int i = 0; i < PLATFORMS.length; i++) {
                 if (inRect(ndcX, ndcY, platformX0(i), PLATFORM_Y - ROW_H * 0.5f, platformX1(i), PLATFORM_Y + ROW_H * 0.5f)) {
@@ -259,6 +264,61 @@ public final class BuildExporterOverlay {
                 running = false;
             }
         }, "StandaloneExporter");
+        worker.setDaemon(true);
+        worker.start();
+    }
+
+    /**
+     * FILE > Package .rmod: opens the folder picker straight away (starting in the Creation Kit mod being authored,
+     * else the project's Mods/), then packages the chosen mod into {@code <project>/Build/Mods/} in the background.
+     * The result is reported with a native dialog, and on this modal's status line when it is open.
+     */
+    public static void promptPackageMod(EditorWorkspace workspace) {
+        if (workspace == null || !workspace.hasActiveProject()) return;
+        if (running) {
+            NativeFileDialog.showError("Package .rmod", "A build or mod package is already running.");
+            return;
+        }
+        File project = new File(workspace.getActiveProjectPath()).getAbsoluteFile();
+        File mod = pickModFolder(project);
+        if (mod != null) startPackaging(mod, new File(project, "Build/Mods"));
+    }
+
+    /** Native folder picker for the mod to package; null when cancelled or the folder has no mod.json. */
+    private static File pickModFolder(File project) {
+        UISoundPlayer.play(UISound.OPEN_MODAL);
+        com.retro.engine.modding.ModManifest active = com.retro.engine.modding.ModWorkspace.activeMod();
+        File mods = new File(project, com.retro.engine.modding.ModLoader.MODS_DIR);
+        File start = (active != null) ? active.root : (mods.isDirectory() ? mods : project);
+        String picked = NativeFileDialog.selectFolderDialog("Package .rmod: select the mod folder (contains mod.json)",
+            start.getAbsolutePath() + File.separator);
+        if (picked == null) { UISoundPlayer.play(UISound.CLOSE_MODAL); return null; }
+        File dir = new File(picked).getAbsoluteFile();
+        if (!new File(dir, com.retro.engine.modding.ModManifest.FILE_NAME).isFile()) {
+            setStatus("SELECTED FOLDER HAS NO MOD.JSON", true, 0.0f);
+            NativeFileDialog.showError("Package .rmod", "The selected folder has no mod.json:\n" + dir.getAbsolutePath());
+            return null;
+        }
+        return dir;
+    }
+
+    private static void startPackaging(File modFolder, File outputDir) {
+        UISoundPlayer.play(UISound.SPAWN);
+        running = true;
+        setStatus("PACKAGING " + modFolder.getName().toUpperCase(), false, 0.01f);
+        Thread worker = new Thread(() -> {
+            try {
+                File out = com.retro.engine.modding.ModPackager.packageMod(modFolder, outputDir, (f, msg) -> setStatus(msg, false, f));
+                NativeFileDialog.showInfo("Package .rmod", "Mod packaged:\n" + out.getAbsolutePath());
+            } catch (Exception e) {
+                String msg = (e.getMessage() != null) ? e.getMessage() : e.toString();
+                System.err.println("[ModPackager] Packaging failed: " + msg);
+                setStatus("PACKAGING FAILED: " + msg, true, 1.0f);
+                NativeFileDialog.showError("Package .rmod", "Packaging failed:\n" + msg);
+            } finally {
+                running = false;
+            }
+        }, "ModPackager");
         worker.setDaemon(true);
         worker.start();
     }

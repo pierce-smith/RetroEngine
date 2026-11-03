@@ -104,6 +104,15 @@ public class NativeFileDialog {
     }
 
     public static void showError(String title, String message) {
-        TinyFileDialogs.tinyfd_messageBox(title != null ? title : "Error", message != null ? message : "", "ok", "error", 1);
+        TinyFileDialogs.tinyfd_messageBox(title != null ? title : "Error", dialogSafe(message), "ok", "error", 1);
+    }
+
+    public static void showInfo(String title, String message) {
+        TinyFileDialogs.tinyfd_messageBox(title != null ? title : "Info", dialogSafe(message), "ok", "info", 1);
+    }
+
+    /** tinyfd rejects quotes in message text (it shells out on macOS/Linux). */
+    private static String dialogSafe(String message) {
+        return (message != null) ? message.replace('"', ' ').replace('\'', ' ') : "";
     }
 }

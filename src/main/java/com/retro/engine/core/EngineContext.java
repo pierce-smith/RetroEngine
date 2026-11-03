@@ -179,6 +179,10 @@ public class EngineContext {
 
         streamingService.bindRenderBackend(rhi);
 
+        // Mod shader overrides rebuild pipelines through the same frame-boundary path as editor shader hot reload
+        com.retro.engine.modding.ModShaders.bind(rhi != null ? rhi.getAPI() : null,
+            files -> { if (renderSubmitter != null) renderSubmitter.requestShaderReload(files); });
+
         if (rhi != null && rhi.getAPI() != null) {
             String apiName = rhi.getAPI().name().toUpperCase();
             ViewportPanel.setRhiCanvasTitle("3D VIEWPORT [" + apiName + " RHI CANVAS]");
@@ -186,6 +190,10 @@ public class EngineContext {
 
         // Editor boots into the ProjectLauncherOverlay unless --project <dir> binds a project up front.
         // Runtime builds bind their exported Game_Data/ (or --project <dir>) and load its startup scene.
+        // Mods: runtime builds load Game_Data/Mods/ unless --no-mods; the editor loads <project>/Mods/ only with --mods
+        com.retro.engine.modding.ModLoader.setRuntimeModsEnabled(!hasCliFlag(cliArgs, "--no-mods"));
+        com.retro.engine.modding.ModLoader.setEditorModsEnabled(hasCliFlag(cliArgs, "--mods"));
+
         if (isRuntimeOnly) {
             java.io.File gameData = resolveRuntimeGameData(cliArgs);
             if (gameData == null) {
@@ -240,6 +248,14 @@ public class EngineContext {
             if (ProjectWorkspace.isProjectDirectory(dir)) return dir;
         }
         return null;
+    }
+
+    private static boolean hasCliFlag(String[] args, String flag) {
+        if (args == null) return false;
+        for (String a : args) {
+            if (flag.equalsIgnoreCase(a)) return true;
+        }
+        return false;
     }
 
     private static String findCliValue(String[] args, String flag) {

@@ -229,6 +229,7 @@ public class MetalBackend implements IRenderBackend {
     public void setSceneLights(SceneLights lights) {
         if (lights == null || lights.isEmpty()) {
             sceneLights.setDefaultSun();
+            if (lights != null) sceneLights.environment().copyFrom(lights.environment());
         } else {
             sceneLights.copyFrom(lights);
         }

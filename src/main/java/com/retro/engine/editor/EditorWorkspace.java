@@ -1,5 +1,6 @@
 package com.retro.engine.editor;
 
+import com.retro.engine.core.ProjectSettings;
 import com.retro.engine.animation.AnimationSystem;
 import com.retro.engine.animation.clips.AnimationClip;
 import com.retro.engine.animation.clips.AnimationClipIO;
@@ -25,6 +26,7 @@ import com.retro.engine.editor.ui.overlays.ContextMenuOverlay;
 import com.retro.engine.editor.ui.overlays.ModalDialogOverlay;
 import com.retro.engine.editor.ui.overlays.OverlaySystem;
 import com.retro.engine.editor.ui.overlays.ProjectLauncherOverlay;
+import com.retro.engine.editor.ui.overlays.ProjectSettingsOverlay;
 import com.retro.engine.editor.ui.panels.*;
 import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scene.entity.EntitySpawner;
@@ -45,7 +47,7 @@ public class EditorWorkspace {
     public enum GizmoMode { TRANSLATE, ROTATE, SCALE }
     public enum GizmoAxis { NONE, X, Y, Z, CENTER }
     public enum DropdownMenu { NONE, FILE, EDIT, ENTITY, VIEW }
-    public enum ModalState { NONE, ASSET_PICKER, PARENT_PICKER, BUILD_EXPORTER }
+    public enum ModalState { NONE, ASSET_PICKER, PARENT_PICKER, BUILD_EXPORTER, PROJECT_SETTINGS }
     public enum WorkspaceTab { SCENE_3D, ANIMATOR }
 
     // Domain Subsystem Managers (Service Registry)
@@ -445,6 +447,15 @@ public class EditorWorkspace {
     public boolean hasActiveProject() { return assetDirectoryManager.hasActiveProject(); }
     public String getActiveProjectPath() { return assetDirectoryManager.getActiveProjectPath(); }
 
+    // Active project's ProjectSettings.bin contents; defaults while no project is bound. Read every frame by
+    // SceneRenderPipeline (render environment) and edited in place by the Project Settings modal.
+    private volatile ProjectSettings projectSettings = ProjectSettings.defaults();
+
+    public ProjectSettings getProjectSettings() { return projectSettings; }
+    public void setProjectSettings(ProjectSettings settings) {
+        this.projectSettings = (settings != null) ? settings : ProjectSettings.defaults();
+    }
+
     /** Unbinds the active project (flushing its manifest) and resets the scene; the launcher takes over the UI. */
     public void closeProject() {
         sceneManager.newScene();
@@ -455,6 +466,9 @@ public class EditorWorkspace {
         overlayManager.closeDropdownMenu();
         assetDirectoryManager.saveManifest();
         assetDirectoryManager.clear();
+        projectSettings = ProjectSettings.defaults();
+        com.retro.engine.modding.ModWorkspace.onProjectClosed();
+        com.retro.engine.modding.ModLoader.unloadActive();
         ProjectLauncherOverlay.setStatus("", false);
     }
 
@@ -527,6 +541,8 @@ public class EditorWorkspace {
             ModalDialogOverlay.renderEntityParentPickerModal(uiGeometryBuffer, overlayManager.getParentPickerTargetEntity(), sceneManager.getSceneEntities());
         } else if (overlayManager.getActiveModal() == ModalState.BUILD_EXPORTER) {
             com.retro.engine.editor.ui.overlays.BuildExporterOverlay.render(uiGeometryBuffer);
+        } else if (overlayManager.getActiveModal() == ModalState.PROJECT_SETTINGS) {
+            ProjectSettingsOverlay.render(uiGeometryBuffer, projectSettings, lastNdcX, lastNdcY);
         }
 
         if (overlayManager.isContextMenuVisible()) {

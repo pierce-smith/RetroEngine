@@ -2,6 +2,7 @@ package com.retro.engine.core;
 
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.editor.EditorWorkspace;
+import com.retro.engine.modding.ModLoader;
 import com.retro.engine.scene.components.gameplay.ScriptComponent;
 import com.retro.engine.scene.components.rendering.Light;
 import com.retro.engine.scene.components.rendering.Material;
@@ -11,10 +12,6 @@ import com.retro.engine.scene.serialization.SceneSerializer;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -37,12 +34,9 @@ import java.util.List;
  */
 public final class ProjectWorkspace {
 
-    public static final String SETTINGS_FILE = "ProjectSettings.bin";
+    public static final String SETTINGS_FILE = ProjectSettings.FILE_NAME;
     public static final String ENGINE_VERSION = "1.0.0";
     public static final String STARTER_SCENE = "Assets/Scenes/Main.rscene";
-
-    private static final int SETTINGS_MAGIC = 0x5250524A; // 'RPRJ'
-    private static final int SETTINGS_VERSION = 1;
 
     private static final String STARTER_RESOURCE_ROOT = "/starter/";
     private static final String[] STARTER_RESOURCES = {
@@ -55,23 +49,6 @@ public final class ProjectWorkspace {
 
     private ProjectWorkspace() {}
 
-    public static final class ProjectSettings {
-        public String projectName;
-        public String engineVersion;
-        public long createdAtMillis;
-        public long lastOpenedAtMillis;
-        /** Project-relative scene loaded when the project opens; empty for none. */
-        public String startupScene;
-
-        public ProjectSettings(String projectName, String startupScene) {
-            this.projectName = projectName;
-            this.engineVersion = ENGINE_VERSION;
-            this.createdAtMillis = System.currentTimeMillis();
-            this.lastOpenedAtMillis = createdAtMillis;
-            this.startupScene = (startupScene != null) ? startupScene : "";
-        }
-    }
-
     // --- Settings I/O ---
 
     public static boolean isProjectDirectory(File dir) {
@@ -79,31 +56,11 @@ public final class ProjectWorkspace {
     }
 
     public static void writeSettings(File projectDir, ProjectSettings settings) throws IOException {
-        File file = new File(projectDir, SETTINGS_FILE);
-        try (DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(file.toPath())))) {
-            dos.writeInt(SETTINGS_MAGIC);
-            dos.writeInt(SETTINGS_VERSION);
-            dos.writeUTF(settings.projectName != null ? settings.projectName : projectDir.getName());
-            dos.writeUTF(settings.engineVersion != null ? settings.engineVersion : ENGINE_VERSION);
-            dos.writeLong(settings.createdAtMillis);
-            dos.writeLong(settings.lastOpenedAtMillis);
-            dos.writeUTF(settings.startupScene != null ? settings.startupScene : "");
-        }
+        settings.write(projectDir);
     }
 
     public static ProjectSettings readSettings(File projectDir) throws IOException {
-        File file = new File(projectDir, SETTINGS_FILE);
-        try (DataInputStream dis = new DataInputStream(new BufferedInputStream(Files.newInputStream(file.toPath())))) {
-            if (dis.readInt() != SETTINGS_MAGIC) throw new IOException("Not a RetroEngine ProjectSettings.bin: " + file);
-            int version = dis.readInt();
-            if (version > SETTINGS_VERSION) throw new IOException("ProjectSettings.bin version " + version + " is newer than this editor supports");
-            ProjectSettings s = new ProjectSettings(dis.readUTF(), "");
-            s.engineVersion = dis.readUTF();
-            s.createdAtMillis = dis.readLong();
-            s.lastOpenedAtMillis = dis.readLong();
-            s.startupScene = dis.readUTF();
-            return s;
-        }
+        return ProjectSettings.read(projectDir);
     }
 
     // --- Create / Open ---
@@ -150,7 +107,10 @@ public final class ProjectWorkspace {
         } else {
             writeBlankScene(projectDir, workspace.getAssetDatabase());
         }
-        loadStartupScene(workspace, projectDir, readSettings(projectDir));
+        ProjectSettings created = readSettings(projectDir);
+        workspace.setProjectSettings(created);
+        loadStartupScene(workspace, projectDir, created);
+        RecentProjects.record(projectDir);
         System.out.println("[Project] Created project '" + cleanName + "' at " + projectDir.getAbsolutePath()
             + (includeStarterContent ? " with starter content." : "."));
         return projectDir;
@@ -171,7 +131,15 @@ public final class ProjectWorkspace {
         if (!workspace.getAssetDatabase().openProject(dir.getAbsolutePath())) {
             throw new IOException("Could not bind asset registry to " + dir.getAbsolutePath());
         }
+        workspace.setProjectSettings(settings);
+        // Editor mods are opt-in (--mods); without it any previously loaded set is dropped
+        if (ModLoader.isEditorModsEnabled()) {
+            ModLoader.loadForProject(dir);
+        } else {
+            ModLoader.unloadActive();
+        }
         loadStartupScene(workspace, dir, settings);
+        RecentProjects.record(dir);
         System.out.println("[Project] Opened project '" + settings.projectName + "' (" + dir.getAbsolutePath() + ")");
     }
 
@@ -186,6 +154,8 @@ public final class ProjectWorkspace {
             throw new IOException("Could not bind asset registry to " + dir.getAbsolutePath());
         }
         com.retro.engine.assets.AssetStreamer.setCookedMirror(new File(dir, AssetDatabase.ASSETS_DIR), new File(dir, AssetDatabase.COOKED_DIR));
+        workspace.setProjectSettings(settings);
+        if (ModLoader.isRuntimeModsEnabled()) ModLoader.loadForProject(dir);
         loadStartupScene(workspace, dir, settings);
         System.out.println("[Runtime] Loaded game '" + settings.projectName + "' (startup scene: " + settings.startupScene + ")");
     }

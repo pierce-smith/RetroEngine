@@ -228,6 +228,7 @@ public class VulkanBackend implements IRenderBackend {
 
             vkBeginCommandBuffer(cmd, beginInfo);
 
+            passEncoder.setShadowBlobsEnabled(sceneLights.environment().shadowBlobsEnabled);
             passEncoder.record4PhasePipeline(
                     cmd,
                     targetPass,
@@ -499,6 +500,7 @@ public class VulkanBackend implements IRenderBackend {
     public void setSceneLights(SceneLights lights) {
         if (lights == null || lights.isEmpty()) {
             sceneLights.setDefaultSun();
+            if (lights != null) sceneLights.environment().copyFrom(lights.environment());
         } else {
             sceneLights.copyFrom(lights);
         }

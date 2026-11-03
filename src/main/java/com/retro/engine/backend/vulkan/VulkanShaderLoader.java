@@ -29,8 +29,17 @@ public class VulkanShaderLoader {
             System.err.println("[VulkanShaderLoader] ERROR: Null device or resource path.");
             return 0L;
         }
+        long module = createShaderModule(device, resourcePath, ShaderSources.read(resourcePath));
+        if (module == 0L && ShaderSources.isModOverridden(resourcePath)) {
+            // Fallback registry: a broken mod shader never takes the pipeline down
+            System.err.println("[VulkanShaderLoader] Mod shader override for " + resourcePath + " is invalid; using the built-in shader.");
+            module = createShaderModule(device, resourcePath, ShaderSources.readBuiltin(resourcePath));
+        }
+        return module;
+    }
 
-        ByteBuffer buffer = loadResourceToDirectBuffer(resourcePath);
+    private static long createShaderModule(VkDevice device, String resourcePath, byte[] bytes) {
+        ByteBuffer buffer = toDirectBuffer(bytes);
         if (buffer == null) {
             System.err.println("[VulkanShaderLoader] ERROR: Could not load bytecode from " + resourcePath);
             return 0L;
@@ -57,9 +66,9 @@ public class VulkanShaderLoader {
         }
     }
 
-    private static ByteBuffer loadResourceToDirectBuffer(String resourcePath) {
-        byte[] bytes = ShaderSources.read(resourcePath);
-        if (bytes == null) return null;
+    private static ByteBuffer toDirectBuffer(byte[] bytes) {
+        // SPIR-V is a stream of 32-bit words; anything else would make vkCreateShaderModule undefined behaviour
+        if (bytes == null || bytes.length == 0 || bytes.length % 4 != 0) return null;
         ByteBuffer directBuffer = MemoryUtil.memAlloc(bytes.length);
         directBuffer.put(bytes);
         directBuffer.flip();

@@ -183,7 +183,16 @@ public class MetalPipeline {
 
     /** Loads {@code name.metal} from the classpath, preferring a matching precompiled {@code name.metallib}. */
     private long loadLibrary(MetalDevice device, String name) {
-        byte[] source = readResource(SHADER_DIR + name + ".metal");
+        long lib = loadLibrary(device, name, readResource(SHADER_DIR + name + ".metal"));
+        if (lib == 0L && ShaderSources.isModOverridden(SHADER_DIR + name + ".metal")) {
+            // Fallback registry: a broken mod shader never takes the pipeline down
+            System.err.println("[MetalPipeline] Mod shader override " + name + ".metal failed to compile; using the built-in shader.");
+            lib = loadLibrary(device, name, ShaderSources.readBuiltin(SHADER_DIR + name + ".metal"));
+        }
+        return lib;
+    }
+
+    private long loadLibrary(MetalDevice device, String name, byte[] source) {
         if (source == null) {
             System.err.println("[MetalPipeline] ERROR: Missing shader resource " + SHADER_DIR + name + ".metal");
             return 0L;

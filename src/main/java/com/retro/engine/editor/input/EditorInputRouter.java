@@ -1,6 +1,7 @@
 package com.retro.engine.editor.input;
 
 import com.retro.engine.editor.ui.overlays.BuildExporterOverlay;
+import com.retro.engine.editor.ui.overlays.ProjectSettingsOverlay;
 
 import com.retro.engine.editor.ui.overlays.ProjectLauncherOverlay;
 import com.retro.engine.editor.EditorWorkspace;
@@ -149,6 +150,11 @@ public class EditorInputRouter {
                 return true;
             }
 
+            if (overlayManager.getActiveModal() == EditorWorkspace.ModalState.PROJECT_SETTINGS) {
+                if (button == 0) ProjectSettingsOverlay.handleClick(ndcX, ndcY, workspace);
+                return true;
+            }
+
             if (overlayManager.getActiveModal() == EditorWorkspace.ModalState.PARENT_PICKER) {
                 overlayManager.processParentPickerModalClick(ndcX, ndcY, workspace);
                 return true;
@@ -182,6 +188,7 @@ public class EditorInputRouter {
             InspectorInputDelegate.onMouseRelease(workspace);
             AssetBrowserInputDelegate.onMouseRelease(workspace);
             overlayManager.onModalMouseRelease();
+            ProjectSettingsOverlay.onMouseRelease();
             if (button == 1) {
                 overlayManager.onRightClickRelease(
                     refX, refY, workspace, cameraController,
@@ -314,6 +321,9 @@ public class EditorInputRouter {
                 AnimatorGraphPanel.handleInspectorCursorPos(workspace.getDockSpace().toDesignX(DockPanel.ANIMATOR_INSPECTOR, coords.ndcX), workspace.getDockSpace().toDesignY(DockPanel.ANIMATOR_INSPECTOR, coords.ndcY), workspace);
             }
             if (workspace.getOverlayManager().processModalDrag(coords.ndcY)) {
+                return true;
+            }
+            if (ProjectSettingsOverlay.handleDrag(coords.ndcX, workspace)) {
                 return true;
             }
             if (workspace.getDockSpace().isVisible(DockPanel.HIERARCHY)
