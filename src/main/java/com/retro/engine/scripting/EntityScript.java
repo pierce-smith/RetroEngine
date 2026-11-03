@@ -1,5 +1,6 @@
 package com.retro.engine.scripting;
 
+import com.retro.engine.audio.AudioEngine;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.SceneWorld;
@@ -29,6 +30,7 @@ public abstract class EntityScript {
     public void init(Entity entity, SceneWorld sceneWorld) {
         this.entity = entity;
         this.sceneWorld = sceneWorld;
+        SceneManager.bind(sceneWorld);
         onAwake();
     }
 
@@ -245,6 +247,51 @@ public abstract class EntityScript {
 
     public AudioSource getAudioSource() {
         return getComponent(AudioSource.class);
+    }
+
+    // =========================================================================
+    // Audio
+    // =========================================================================
+
+    /** Plays a clip once at full volume from this entity's position. */
+    public boolean playSound(String path) {
+        return playSound(path, 1.0f, true);
+    }
+
+    /**
+     * Plays a clip once (fire-and-forget; .ogg/.wav). Spatial clips play from this entity's current world position,
+     * using its AudioSource's MIN/MAX DIST when it has one (else 1 / 25); non-spatial clips play flat (music, UI).
+     * Returns false when the clip could not be loaded or audio is unavailable.
+     */
+    public boolean playSound(String path, float volume, boolean spatial) {
+        float x = 0.0f, y = 0.0f, z = 0.0f;
+        if (spatial && entity != null) {
+            SceneWorld.WorldTransform wt = (sceneWorld != null) ? sceneWorld.getComputedWorldTransform(entity) : null;
+            if (wt != null) {
+                x = wt.px(); y = wt.py(); z = wt.pz();
+            } else if (entity.getTransform() != null) {
+                Transform t = entity.getTransform();
+                x = t.posX; y = t.posY; z = t.posZ;
+            }
+        }
+        return playSoundAt(path, volume, x, y, z, spatial);
+    }
+
+    /** Plays a spatial clip once at an arbitrary world position. */
+    public boolean playSoundAt(String path, float volume, float x, float y, float z) {
+        return playSoundAt(path, volume, x, y, z, true);
+    }
+
+    private boolean playSoundAt(String path, float volume, float x, float y, float z, boolean spatial) {
+        AudioSource src = (entity != null) ? entity.getComponent(AudioSource.class) : null;
+        float min = (src != null) ? src.minDistance : 1.0f;
+        float max = (src != null) ? src.maxDistance : 25.0f;
+        return AudioEngine.playOneShot(path, volume, spatial, x, y, z, min, max);
+    }
+
+    /** Stops every clip started with playSound / playSoundAt (component AudioSources are unaffected). */
+    public void stopAllSounds() {
+        AudioEngine.stopAllOneShots();
     }
 
     public CharacterControllerComponent getCharacterController() {

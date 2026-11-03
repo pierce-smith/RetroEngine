@@ -130,8 +130,7 @@ public class EngineContext {
 
         window.setOnFileDropListener(filePaths -> {
             if (editorManager != null && editorManager.hasActiveProject()) {
-                editorManager.getAssetDatabase().onFilesDropped(filePaths);
-                System.out.println("[Asset Directory] Ingested " + filePaths.size() + " asset(s).");
+                editorManager.handleFileDrop(filePaths);
             }
         });
 
@@ -310,6 +309,7 @@ public class EngineContext {
             editorManager.dispose();
             editorManager = null;
         }
+        com.retro.engine.audio.AudioEngine.shutdown();
         if (streamingService != null) {
             streamingService.shutdown();
             streamingService = null;

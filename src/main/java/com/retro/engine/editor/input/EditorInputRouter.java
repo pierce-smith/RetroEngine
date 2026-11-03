@@ -163,8 +163,9 @@ public class EditorInputRouter {
                 if (ndcY >= 0.92f) {
                     MainMenuBarInputDelegate.processTopBarClick(ndcX, workspace);
                 } else {
+                    boolean keepOpen = MainMenuBarInputDelegate.keepsDropdownOpen(ndcX, ndcY, workspace);
                     MainMenuBarInputDelegate.processDropdownOverlayClick(ndcX, ndcY, workspace);
-                    overlayManager.setActiveDropdownMenu(EditorWorkspace.DropdownMenu.NONE);
+                    if (!keepOpen) overlayManager.setActiveDropdownMenu(EditorWorkspace.DropdownMenu.NONE);
                 }
                 return true;
             }

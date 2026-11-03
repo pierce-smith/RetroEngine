@@ -35,6 +35,7 @@ dependencies {
     implementation("org.lwjgl:lwjgl-assimp")
     implementation("org.lwjgl:lwjgl-stb")
     implementation("org.lwjgl:lwjgl-tinyfd")
+    implementation("org.lwjgl:lwjgl-openal") // 3D positional audio (bundles OpenAL Soft)
 
     // In-Memory Janino Scripting Compiler
     implementation("org.codehaus.janino:janino:3.1.12")
@@ -46,6 +47,7 @@ dependencies {
         runtimeOnly("org.lwjgl:lwjgl-assimp::$platformNative")
         runtimeOnly("org.lwjgl:lwjgl-stb::$platformNative")
         runtimeOnly("org.lwjgl:lwjgl-tinyfd::$platformNative")
+        runtimeOnly("org.lwjgl:lwjgl-openal::$platformNative")
     }
 }
 

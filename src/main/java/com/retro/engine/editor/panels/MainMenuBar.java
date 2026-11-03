@@ -3,6 +3,7 @@ package com.retro.engine.editor.panels;
 import com.retro.engine.ecs.SceneWorld.PlayState;
 import com.retro.engine.editor.CommandStack;
 import com.retro.engine.editor.EditorTheme;
+import com.retro.engine.editor.RecentProjectsMenu;
 import com.retro.engine.editor.EditorWorkspace.DropdownMenu;
 import com.retro.engine.editor.input.PlatformShortcuts;
 import com.retro.engine.ui.UIGeometryBatch;
@@ -69,12 +70,59 @@ public class MainMenuBar {
 
     public static int dropdownItemCount(DropdownMenu menu) {
         return switch (menu) {
-            case FILE -> 9;
+            case FILE -> FILE_QUIT + 1;
             case EDIT -> 3;
             case ENTITY -> 4;
             case VIEW -> 3;
             default -> 0;
         };
+    }
+
+    /** FILE rows: 0 = New Project, 1-7 scene/project/mod/export actions, 8 = "Recent Projects >" (side flyout on hover), 9 = Quit. */
+    public static final int FILE_RECENT = 8, FILE_QUIT = 9;
+    // Submenu width hugs its longest project name (like a native submenu), clamped to [MIN, parent width].
+    // Measured each frame the FILE menu is drawn; hit-testing reuses the last measured value.
+    public static final float FLYOUT_MIN_WIDTH = 0.20f;
+    private static float flyoutWidth = DROPDOWN_WIDTH;
+
+    private static void measureFlyout(UIGeometryBatch.Buffer buffer) {
+        float widest = 0.0f;
+        for (String p : RecentProjectsMenu.entries()) widest = Math.max(widest, UIGeometryBatch.textWidth(buffer, RecentProjectsMenu.label(p), ITEM_TEXT));
+        // Same insets as a dropdown row: 0.026 before the label, 0.022 after it, plus a little breathing room
+        flyoutWidth = Math.max(FLYOUT_MIN_WIDTH, Math.min(DROPDOWN_WIDTH, widest + 0.026f + 0.022f + 0.03f));
+    }
+
+    // Flyout open state: opened by hovering the Recent Projects row, kept while the cursor is on the flyout,
+    // closed by hovering any other FILE row or by the FILE menu closing
+    private static boolean recentFlyoutOpen;
+
+    public static boolean isRecentFlyoutOpen() { return recentFlyoutOpen; }
+
+    public static float flyoutMinX() { return dropdownMaxX(DropdownMenu.FILE) - 0.004f; }
+    public static float flyoutMaxX() { return flyoutMinX() + flyoutWidth; }
+    public static float flyoutMaxY() { return itemTop(FILE_RECENT) + DROPDOWN_PAD; }
+    public static float flyoutMinY() { return flyoutMaxY() - DROPDOWN_PAD * 2.0f - RecentProjectsMenu.entries().size() * DROPDOWN_ITEM_H; }
+
+    public static boolean flyoutContains(float ndcX, float ndcY) {
+        return recentFlyoutOpen && ndcX >= flyoutMinX() && ndcX <= flyoutMaxX() && ndcY >= flyoutMinY() && ndcY <= flyoutMaxY();
+    }
+
+    /** Index into RecentProjectsMenu.entries() of the flyout row under the point, or -1. */
+    public static int flyoutItemAt(float ndcX, float ndcY) {
+        if (!flyoutContains(ndcX, ndcY)) return -1;
+        float fromTop = flyoutMaxY() - DROPDOWN_PAD - ndcY;
+        if (fromTop < 0.0f) return -1;
+        int idx = (int) (fromTop / DROPDOWN_ITEM_H);
+        return idx < RecentProjectsMenu.entries().size() ? idx : -1;
+    }
+
+    /** Updates the flyout open state from the cursor; called each frame the dropdown is drawn and before clicks. */
+    public static void updateRecentFlyout(DropdownMenu menu, float ndcX, float ndcY) {
+        if (menu != DropdownMenu.FILE || RecentProjectsMenu.entries().isEmpty()) { recentFlyoutOpen = false; return; }
+        if (flyoutContains(ndcX, ndcY)) return;
+        int row = dropdownItemAt(menu, ndcX, ndcY);
+        if (row == FILE_RECENT) recentFlyoutOpen = true;
+        else if (row >= 0) recentFlyoutOpen = false;
     }
 
     public static float dropdownMinX(DropdownMenu menu) { return titleMinX(menu); }
@@ -106,6 +154,7 @@ public class MainMenuBar {
     // ------------------------------------------------------------------------------------------
 
     public static void render(UIGeometryBatch.Buffer buffer, DropdownMenu activeMenu, String activeScenePath, PlayState playState) {
+        if (activeMenu != DropdownMenu.FILE) recentFlyoutOpen = false;
         UIGeometryBatch.addQuad(buffer, -1.0f, BAR_Y0, 1.0f, BAR_Y1, EditorTheme.SURFACE, 1.0f);
         UIGeometryBatch.addQuad(buffer, -1.0f, BAR_Y0, 1.0f, BAR_Y0 + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
 
@@ -195,26 +244,32 @@ public class MainMenuBar {
         float minY = dropdownMinY(menu), maxY = dropdownMaxY();
         int hover = dropdownItemAt(menu, hoverX, hoverY);
 
-        // Soft drop shadow, then the rounded menu surface
-        UIGeometryBatch.addRoundedQuad(buffer, minX + 0.004f, minY - 0.010f, maxX + 0.004f, maxY - 0.004f, EditorTheme.RADIUS * 1.4f, 0x000000, 0.35f);
-        UIGeometryBatch.addRoundedCard(buffer, minX, minY, maxX, maxY, EditorTheme.RADIUS * 1.4f, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 0.98f);
+        renderMenuSurface(buffer, minX, minY, maxX, maxY);
 
         switch (menu) {
             case FILE -> {
-                renderDropdownItem(buffer, menu, 0, hover, "New Scene", null, true);
-                renderDropdownItem(buffer, menu, 1, hover, "Open Scene...", PlatformShortcuts.OPEN.label(), true);
-                renderDropdownItem(buffer, menu, 2, hover, "Save Scene...", PlatformShortcuts.SAVE.label(), true);
-                renderSeparator(buffer, menu, 3);
-                renderDropdownItem(buffer, menu, 3, hover, "Project Settings...", null, true);
-                renderDropdownItem(buffer, menu, 4, hover,
+                renderDropdownItem(buffer, menu, 0, hover, "New Project...", null, true);
+                renderSeparator(buffer, menu, 1);
+                renderDropdownItem(buffer, menu, 1, hover, "New Scene", null, true);
+                renderDropdownItem(buffer, menu, 2, hover, "Open Scene...", PlatformShortcuts.OPEN.label(), true);
+                renderDropdownItem(buffer, menu, 3, hover, "Save Scene...", PlatformShortcuts.SAVE.label(), true);
+                renderSeparator(buffer, menu, 4);
+                renderDropdownItem(buffer, menu, 4, hover, "Project Settings...", null, true);
+                renderDropdownItem(buffer, menu, 5, hover,
                         com.retro.engine.modding.ModWorkspace.isActive() ? "Close Mod Workspace" : "Open Mod Workspace...", null, true);
-                renderDropdownItem(buffer, menu, 5, hover, "Package .rmod...", null, true);
-                renderSeparator(buffer, menu, 6);
-                renderDropdownItem(buffer, menu, 6, hover, "Export Standalone Build...", null, true);
+                renderDropdownItem(buffer, menu, 6, hover, "Package .rmod...", null, true);
                 renderSeparator(buffer, menu, 7);
-                renderDropdownItem(buffer, menu, 7, hover, "Switch Project...", null, true);
-                renderSeparator(buffer, menu, 8);
-                renderDropdownItem(buffer, menu, 8, hover, PlatformShortcuts.IS_MAC ? "Quit RetroEngine" : "Exit", PlatformShortcuts.QUIT.label(), true);
+                renderDropdownItem(buffer, menu, 7, hover, "Export Standalone Build...", null, true);
+                renderSeparator(buffer, menu, FILE_RECENT);
+                measureFlyout(buffer);
+                updateRecentFlyout(menu, hoverX, hoverY);
+                boolean hasRecent = !RecentProjectsMenu.entries().isEmpty();
+                // Keep the parent row lit while the cursor is over its flyout, like a native submenu
+                int recentHover = recentFlyoutOpen ? FILE_RECENT : hover;
+                renderDropdownItem(buffer, menu, FILE_RECENT, recentHover, hasRecent ? "Recent Projects" : "No Recent Projects", hasRecent ? ">" : null, hasRecent);
+                int quit = FILE_QUIT;
+                renderSeparator(buffer, menu, quit);
+                renderDropdownItem(buffer, menu, quit, hover, PlatformShortcuts.IS_MAC ? "Quit RetroEngine" : "Exit", PlatformShortcuts.QUIT.label(), true);
             }
             case EDIT -> {
                 renderDropdownItem(buffer, menu, 0, hover, "Undo", PlatformShortcuts.UNDO.label(), commandHistory.canUndo());
@@ -237,6 +292,25 @@ public class MainMenuBar {
             }
             default -> {}
         }
+        if (menu == DropdownMenu.FILE && recentFlyoutOpen) renderRecentFlyout(buffer, hoverX, hoverY);
+    }
+
+    /** Recent Projects submenu: drawn with the same surface and row renderer as the parent dropdown. */
+    private static void renderRecentFlyout(UIGeometryBatch.Buffer buffer, float hoverX, float hoverY) {
+        List<String> recent = RecentProjectsMenu.entries();
+        float minX = flyoutMinX(), maxX = flyoutMaxX();
+        renderMenuSurface(buffer, minX, flyoutMinY(), maxX, flyoutMaxY());
+        int hover = flyoutItemAt(hoverX, hoverY);
+        float firstTop = flyoutMaxY() - DROPDOWN_PAD;
+        for (int i = 0; i < recent.size(); i++) {
+            renderRow(buffer, minX, maxX, firstTop - i * DROPDOWN_ITEM_H, i == hover, RecentProjectsMenu.label(recent.get(i)), null, true);
+        }
+    }
+
+    /** Soft drop shadow, then the rounded menu surface. */
+    private static void renderMenuSurface(UIGeometryBatch.Buffer buffer, float minX, float minY, float maxX, float maxY) {
+        UIGeometryBatch.addRoundedQuad(buffer, minX + 0.004f, minY - 0.010f, maxX + 0.004f, maxY - 0.004f, EditorTheme.RADIUS * 1.4f, 0x000000, 0.35f);
+        UIGeometryBatch.addRoundedCard(buffer, minX, minY, maxX, maxY, EditorTheme.RADIUS * 1.4f, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 0.98f);
     }
 
     public static void renderDropdownMenuOverlay(List<Float> verts, DropdownMenu menu, CommandStack commandHistory, boolean show3DGrid) {
@@ -247,10 +321,13 @@ public class MainMenuBar {
 
     private static void renderDropdownItem(UIGeometryBatch.Buffer buffer, DropdownMenu menu, int index, int hover,
                                            String label, String shortcut, boolean enabled) {
-        float minX = dropdownMinX(menu), maxX = dropdownMaxX(menu);
-        float top = itemTop(index), bottom = top - DROPDOWN_ITEM_H;
-        boolean hot = enabled && index == hover;
+        renderRow(buffer, dropdownMinX(menu), dropdownMaxX(menu), itemTop(index), enabled && index == hover, label, shortcut, enabled);
+    }
 
+    /** One menu row (accent highlight, label, optional right-aligned shortcut) shared by dropdowns and submenus. */
+    private static void renderRow(UIGeometryBatch.Buffer buffer, float minX, float maxX, float top, boolean hot,
+                                  String label, String shortcut, boolean enabled) {
+        float bottom = top - DROPDOWN_ITEM_H;
         if (hot) {
             UIGeometryBatch.addRoundedQuad(buffer, minX + 0.008f, bottom + 0.006f, maxX - 0.008f, top - 0.006f, EditorTheme.RADIUS_SMALL, EditorTheme.ACCENT, 1.0f);
         }

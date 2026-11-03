@@ -99,6 +99,35 @@ public class EditorWorkspace {
         this.sceneManager = (sceneManager != null) ? sceneManager : new SceneWorld();
         overlayManager.setDockSpace(dockSpace);
         EngineConsolePanel.installConsoleRedirect();
+        autoSaveSystem.start();
+    }
+
+    private final AutoSaveSystem autoSaveSystem = new AutoSaveSystem(this);
+    public AutoSaveSystem getAutoSaveSystem() { return autoSaveSystem; }
+
+    /**
+     * OS drag-and-drop entry point (GLFW drop callback). Supported files (.png/.obj/.gltf/.rscene) go to the panel
+     * under the cursor (Viewport or Asset Browser); anything else, or drops elsewhere, keeps the plain asset import.
+     */
+    public void handleFileDrop(List<String> files) {
+        if (files == null || files.isEmpty() || !hasActiveProject()) return;
+        List<String> supported = new java.util.ArrayList<>(), other = new java.util.ArrayList<>();
+        for (String f : files) (AssetBrowserPanel.isSupportedDrop(f) ? supported : other).add(f);
+
+        PanelRegion region = PanelRegion.ASSET_DIRECTORY;
+        if (windowHandle != 0L && windowWidth > 0 && windowHeight > 0) {
+            double[] cx = new double[1], cy = new double[1];
+            org.lwjgl.glfw.GLFW.glfwGetCursorPos(windowHandle, cx, cy);
+            float ndcX = (float) (cx[0] / windowWidth * 2.0 - 1.0);
+            float ndcY = (float) (1.0 - cy[0] / windowHeight * 2.0);
+            region = PanelRegion.getRegionAt(ndcX, ndcY, overlayManager, dockSpace);
+        }
+        if (!supported.isEmpty()) {
+            if (region == PanelRegion.VIEWPORT) ViewportPanel.handleFileDrop(this, supported);
+            else if (region == PanelRegion.ASSET_DIRECTORY) AssetBrowserPanel.handleFileDrop(this, supported);
+            else other.addAll(supported);
+        }
+        if (!other.isEmpty()) assetDirectoryManager.onFilesDropped(other);
     }
 
     // --- Subsystem Service Registry Getters ---
@@ -548,6 +577,7 @@ public class EditorWorkspace {
         this.lastDeltaTime = deltaTime;
         assetDirectoryManager.pollFileChanges();
         sceneManager.update(deltaTime);
+        autoSaveSystem.tick();
     }
 
     public float getLastDeltaTime() { return lastDeltaTime; }

@@ -20,6 +20,27 @@ import java.util.Map;
  */
 public class AssetBrowserPanel {
 
+    /** File extensions the editor panels accept from OS drag-and-drop. */
+    public static final String[] DROP_EXTENSIONS = { ".png", ".obj", ".gltf", ".rscene" };
+
+    public static boolean isSupportedDrop(String path) {
+        if (path == null) return false;
+        String lower = path.toLowerCase(Locale.ROOT);
+        for (String ext : DROP_EXTENSIONS) if (lower.endsWith(ext)) return true;
+        return false;
+    }
+
+    /**
+     * Files dropped onto the Asset Browser: copies them into the folder currently shown (files already inside Assets/
+     * are just referenced) and returns their resolved project paths.
+     */
+    public static List<String> handleFileDrop(com.retro.engine.editor.EditorWorkspace workspace, List<String> files) {
+        if (workspace == null || files == null || files.isEmpty() || !workspace.hasActiveProject()) return List.of();
+        List<String> resolved = workspace.getAssetDatabase().onFilesDropped(files);
+        System.out.println("[Asset Browser] Imported " + resolved.size() + " dropped file(s) into /" + workspace.getCurrentFolderPath());
+        return resolved;
+    }
+
     // --- Shared layout (design-space NDC) ---
     public static final float HEADER_Y0 = -0.50f, HEADER_Y1 = -0.42f;
     public static final float NEW_FOLDER_X0 = 0.30f, NEW_FOLDER_X1 = 0.62f;

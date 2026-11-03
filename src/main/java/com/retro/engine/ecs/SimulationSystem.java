@@ -1,8 +1,8 @@
 package com.retro.engine.ecs;
 
+import com.retro.engine.audio.AudioEngine;
 import com.retro.engine.ecs.SceneWorld.PlayState;
 import com.retro.engine.ecs.components.AudioSource;
-import com.retro.engine.ecs.components.Camera;
 import com.retro.engine.ecs.components.Transform;
 import com.retro.engine.ecs.serialization.EntityStateBackupManager;
 import com.retro.engine.physics.PhysicsSystem;
@@ -22,6 +22,8 @@ public class SimulationSystem {
     private PlayState playState = PlayState.EDITING;
     private final PhysicsSystem physicsWorld = new PhysicsSystem();
     private final EntityStateBackupManager backupManager = new EntityStateBackupManager();
+    // Sources the pause button paused; resume restarts only these, not ones a script paused itself
+    private final List<AudioSource> pausedAudioSources = new ArrayList<>();
 
     public PlayState getPlayState() {
         return playState;
@@ -46,17 +48,28 @@ public class SimulationSystem {
             // Initialize 3D Physics World
             physicsWorld.initWorld(activeEntities);
 
+            // Start PLAY ON START audio before scripts so their onAwake/onStart can stop or retune it
+            if (activeEntities != null) startAudioOnPlay(activeEntities, sceneWorld);
+
             ScriptEngine.initializeScripts(activeEntities, sceneWorld);
             System.out.println("[SimulationSystem] Simulation started; scene snapshot taken, physics and scripts started.");
         } else if (playState == PlayState.PAUSED) {
             this.playState = PlayState.SIMULATING;
+            AudioEngine.setOneShotsPaused(false);
+            resumeAudioSources();
             if (Input.isCursorLockWanted()) Input.setCursorCaptured(true);
         }
     }
 
     public void pause() {
+        pause(null);
+    }
+
+    public void pause(List<Entity> activeEntities) {
         if (playState == PlayState.SIMULATING) {
             this.playState = PlayState.PAUSED;
+            AudioEngine.setOneShotsPaused(true);
+            pauseAudioSources(activeEntities);
             Input.stopVibration();
             Input.setCursorCaptured(false); // Keeps the lock wanted, so resuming re-locks
             System.out.println("[SimulationSystem] Simulation paused.");
@@ -67,6 +80,8 @@ public class SimulationSystem {
         if (playState == PlayState.SIMULATING || playState == PlayState.PAUSED) {
             ScriptEngine.destroyScripts(activeEntities);
             physicsWorld.cleanup();
+            AudioEngine.stopAllOneShots();
+            pausedAudioSources.clear();
             Input.stopVibration();
             Input.setCursorLocked(false);
 
@@ -92,60 +107,58 @@ public class SimulationSystem {
             // 2. Execute gameplay script frame ticks
             ScriptEngine.updateScripts(activeEntities, deltaTime, sceneWorld);
 
-            // 3. Evaluate 3D Spatial Audio Gain Attenuation
-            updateSpatialAudio(activeEntities);
+            // 3. Sync 3D audio source positions to OpenAL
+            updateSpatialAudio(activeEntities, sceneWorld);
         }
     }
 
-    private void updateSpatialAudio(List<Entity> activeEntities) {
-        // Find active listener position (Primary Camera or default origin)
-        float listenerX = 0.0f, listenerY = 0.0f, listenerZ = 0.0f;
-        boolean listenerFound = false;
-
+    private void pauseAudioSources(List<Entity> activeEntities) {
+        pausedAudioSources.clear();
+        if (activeEntities == null) return;
         for (int i = 0; i < activeEntities.size(); i++) {
             Entity entity = activeEntities.get(i);
             if (entity == null) continue;
-            Camera cam = entity.getComponent(Camera.class);
-            if (cam != null && cam.isPrimary) {
-                Transform tc = entity.getTransform();
-                if (tc != null) {
-                    listenerX = tc.posX;
-                    listenerY = tc.posY;
-                    listenerZ = tc.posZ;
-                    listenerFound = true;
-                    break;
-                }
-            }
-        }
-
-        if (!listenerFound) {
-            for (int i = 0; i < activeEntities.size(); i++) {
-                Entity entity = activeEntities.get(i);
-                if (entity == null) continue;
-                Camera cam = entity.getComponent(Camera.class);
-                if (cam != null) {
-                    Transform tc = entity.getTransform();
-                    if (tc != null) {
-                        listenerX = tc.posX;
-                        listenerY = tc.posY;
-                        listenerZ = tc.posZ;
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Continuous 3D Spatial Audio Attenuation Tick
-        for (int i = 0; i < activeEntities.size(); i++) {
-            Entity entity = activeEntities.get(i);
-            if (entity == null) continue;
-            Transform tc = entity.getTransform();
             AudioSource audioSource = entity.getComponent(AudioSource.class);
-            if (audioSource != null && tc != null) {
-                audioSource.applySpatialGain(
-                    listenerX, listenerY, listenerZ,
-                    tc.posX, tc.posY, tc.posZ
-                );
+            if (audioSource != null && audioSource.state == AudioSource.PlaybackState.PLAYING) {
+                audioSource.pause();
+                pausedAudioSources.add(audioSource);
+            }
+        }
+    }
+
+    private void resumeAudioSources() {
+        for (AudioSource audioSource : pausedAudioSources) {
+            if (audioSource.state == AudioSource.PlaybackState.PAUSED) audioSource.play(); // Continues from the pause point
+        }
+        pausedAudioSources.clear();
+    }
+
+    private void startAudioOnPlay(List<Entity> activeEntities, SceneWorld sceneWorld) {
+        for (int i = 0; i < activeEntities.size(); i++) {
+            Entity entity = activeEntities.get(i);
+            if (entity == null) continue;
+            AudioSource audioSource = entity.getComponent(AudioSource.class);
+            if (audioSource != null && audioSource.playOnStart) audioSource.play();
+        }
+        updateSpatialAudio(activeEntities, sceneWorld); // Place sources before the first mixed frame
+    }
+
+    /**
+     * Pushes each AudioSource's world position (and live inspector/script edits) to OpenAL. The listener itself is
+     * synced to the active viewport camera by SceneRenderPipeline every frame.
+     */
+    private void updateSpatialAudio(List<Entity> activeEntities, SceneWorld sceneWorld) {
+        for (int i = 0; i < activeEntities.size(); i++) {
+            Entity entity = activeEntities.get(i);
+            if (entity == null) continue;
+            AudioSource audioSource = entity.getComponent(AudioSource.class);
+            if (audioSource == null || audioSource.getSourceHandle() == 0) continue;
+            SceneWorld.WorldTransform wt = (sceneWorld != null) ? sceneWorld.getComputedWorldTransform(entity) : null;
+            if (wt != null) {
+                audioSource.updateSpatial(wt.px(), wt.py(), wt.pz());
+            } else {
+                Transform tc = entity.getTransform();
+                if (tc != null) audioSource.updateSpatial(tc.posX, tc.posY, tc.posZ);
             }
         }
     }

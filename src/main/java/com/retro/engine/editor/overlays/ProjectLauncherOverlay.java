@@ -1,5 +1,6 @@
 package com.retro.engine.editor.overlays;
 
+import com.retro.engine.editor.templates.TemplateManager;
 import com.retro.engine.core.NativeFileDialog;
 import com.retro.engine.core.ProjectWorkspace;
 import com.retro.engine.core.RecentProjects;
@@ -15,7 +16,7 @@ import java.util.List;
 
 /**
  * Fullscreen startup launcher shown whenever the editor has no bound project directory.
- * Left column: New Project (name + location + optional starter content), Open Project (folder picker) and Open Mod
+ * Left column: New Project (name + location + baseline template), Open Project (folder picker) and Open Mod
  * Workspace (Creation Kit mode: a vanilla project with one mod as the authoring target). Right column: cards for the
  * most recently opened projects (project name + folder); clicking one opens it.
  * Rendering and hit-testing share the layout constants below.
@@ -206,7 +207,8 @@ public final class ProjectLauncherOverlay {
         }
     }
 
-    private static void promptNewProject(EditorWorkspace workspace) {
+    /** Name -> location -> template prompts, then creates and opens the project (closing any open one first). */
+    public static void promptNewProject(EditorWorkspace workspace) {
         String name = NativeFileDialog.promptInput("New Project", "Project name:", "MyRetroProject");
         if (name == null) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
         name = name.trim();
@@ -218,16 +220,49 @@ public final class ProjectLauncherOverlay {
         String parent = NativeFileDialog.selectFolderDialog("Choose Project Root Location", System.getProperty("user.home") + File.separator);
         if (parent == null) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
 
-        boolean starter = NativeFileDialog.confirm("New Project",
-            "Include Starter Content?\n\nPrimitive models, a default material and texture, a test script and Main.rscene will be copied into Assets/.", true);
+        TemplateManager.ProjectTemplate template = promptTemplate();
+        if (template == null) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
+
+        // Fail before unbinding the current project if creation would be refused anyway
+        File target = new File(parent, name);
+        String[] existing = target.list();
+        if (target.exists() && (!target.isDirectory() || (existing != null && existing.length > 0))) {
+            fail("Target folder already exists and is not empty: " + target.getAbsolutePath());
+            return;
+        }
 
         try {
-            File dir = ProjectWorkspace.createProject(workspace, new File(parent), name, starter);
+            if (workspace.hasActiveProject()) workspace.closeProject();
+            File dir = ProjectWorkspace.createProject(workspace, new File(parent), name, template);
             setStatus("", false);
             UISoundPlayer.play(UISound.SPAWN);
             System.out.println("[Launcher] Project ready: " + dir.getAbsolutePath());
         } catch (IOException e) {
             fail(e.getMessage());
+        }
+    }
+
+    /** Template picker: accepts a template name or its list number. Returns null on cancel; re-prompts on bad input. */
+    private static TemplateManager.ProjectTemplate promptTemplate() {
+        java.util.List<TemplateManager.ProjectTemplate> templates = TemplateManager.getTemplates();
+        StringBuilder msg = new StringBuilder("Choose a baseline template (name or number):\n");
+        for (int i = 0; i < templates.size(); i++) {
+            TemplateManager.ProjectTemplate t = templates.get(i);
+            msg.append("\n").append(i + 1).append(". ").append(t.displayName()).append(" - ").append(t.description());
+        }
+        String fallback = TemplateManager.STARTER_CONTENT.displayName();
+        while (true) {
+            String answer = NativeFileDialog.promptInput("New Project", msg.toString(), fallback);
+            if (answer == null) return null;
+            answer = answer.trim();
+            try {
+                int idx = Integer.parseInt(answer) - 1;
+                if (idx >= 0 && idx < templates.size()) return templates.get(idx);
+            } catch (NumberFormatException ignored) {
+                TemplateManager.ProjectTemplate byName = TemplateManager.byDisplayName(answer);
+                if (byName != null) return byName;
+            }
+            fallback = answer;
         }
     }
 

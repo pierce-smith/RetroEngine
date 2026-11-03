@@ -49,18 +49,42 @@ public class MainMenuBarInputDelegate {
         }
     }
 
+    /** Clicks that should leave the dropdown open: the Recent Projects submenu row and the flyout's padding. */
+    public static boolean keepsDropdownOpen(float ndcX, float ndcY, EditorWorkspace manager) {
+        DropdownMenu menu = manager.getOverlayManager().getActiveDropdownMenu();
+        if (menu != DropdownMenu.FILE) return false;
+        if (MainMenuBar.flyoutContains(ndcX, ndcY)) return MainMenuBar.flyoutItemAt(ndcX, ndcY) < 0;
+        return MainMenuBar.dropdownItemAt(menu, ndcX, ndcY) == MainMenuBar.FILE_RECENT
+                && !com.retro.engine.editor.RecentProjectsMenu.entries().isEmpty();
+    }
+
     public static boolean processDropdownOverlayClick(float ndcX, float ndcY, EditorWorkspace manager) {
         if (manager == null) return false;
         DropdownMenu activeDropdownMenu = manager.getOverlayManager().getActiveDropdownMenu();
+
+        if (activeDropdownMenu == DropdownMenu.FILE && MainMenuBar.flyoutContains(ndcX, ndcY)) {
+            int recent = MainMenuBar.flyoutItemAt(ndcX, ndcY);
+            if (recent >= 0) {
+                UISoundPlayer.play(UISound.SPAWN);
+                manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
+                com.retro.engine.editor.RecentProjectsMenu.open(manager, recent);
+            }
+            return true;
+        }
 
         if (MainMenuBar.dropdownContains(activeDropdownMenu, ndcX, ndcY)) {
             int itemIndex = MainMenuBar.dropdownItemAt(activeDropdownMenu, ndcX, ndcY);
 
             if (activeDropdownMenu == DropdownMenu.FILE) {
                 if (itemIndex == 0) {
+                    // New project from inside the editor: same prompts as the launcher, then switches straight to it
+                    UISoundPlayer.play(UISound.OPEN_MODAL);
+                    manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
+                    com.retro.engine.editor.overlays.ProjectLauncherOverlay.promptNewProject(manager);
+                } else if (itemIndex == 1) {
                     UISoundPlayer.play(UISound.CLICK);
                     manager.getSceneManager().newScene();
-                } else if (itemIndex == 1) {
+                } else if (itemIndex == 2) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     String defaultDir = manager.getProjectScenesDir();
                     String importedPath = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.rscene)", "rscene");
@@ -70,31 +94,29 @@ public class MainMenuBarInputDelegate {
                     } else {
                         UISoundPlayer.play(UISound.CLOSE_MODAL);
                     }
-                } else if (itemIndex == 2) {
-                    UISoundPlayer.play(UISound.OPEN_MODAL);
-                    manager.getSceneManager().promptSaveSceneWithNativeDialog(manager.getAssetDatabase().getMutableAssetDirectory(), manager.getAssetDatabase());
                 } else if (itemIndex == 3) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
-                    manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
-                    com.retro.engine.editor.overlays.ProjectSettingsOverlay.open(manager);
+                    manager.getSceneManager().promptSaveSceneWithNativeDialog(manager.getAssetDatabase().getMutableAssetDirectory(), manager.getAssetDatabase());
                 } else if (itemIndex == 4) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
-                    com.retro.engine.editor.overlays.ProjectLauncherOverlay.toggleModWorkspace(manager);
+                    com.retro.engine.editor.overlays.ProjectSettingsOverlay.open(manager);
                 } else if (itemIndex == 5) {
+                    UISoundPlayer.play(UISound.OPEN_MODAL);
+                    manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
+                    com.retro.engine.editor.overlays.ProjectLauncherOverlay.toggleModWorkspace(manager);
+                } else if (itemIndex == 6) {
                     // Straight to the folder picker; packaging runs in the background and reports with a native dialog
                     manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
                     com.retro.engine.editor.overlays.BuildExporterOverlay.promptPackageMod(manager);
-                } else if (itemIndex == 6) {
+                } else if (itemIndex == 7) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
                     com.retro.engine.editor.overlays.BuildExporterOverlay.open(manager);
-                } else if (itemIndex == 7) {
-                    // Unbind the project and return to the launcher, which clears and re-scans on the next open
-                    UISoundPlayer.play(UISound.CLOSE_MODAL);
-                    manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
-                    manager.closeProject();
-                } else if (itemIndex == 8) {
+                } else if (itemIndex == MainMenuBar.FILE_RECENT) {
+                    // Submenu parent: opens the flyout (hover does too); the router keeps the menu open
+                    MainMenuBar.updateRecentFlyout(activeDropdownMenu, ndcX, ndcY);
+                } else if (itemIndex == MainMenuBar.FILE_QUIT) {
                     // Quit: same path as the OS-level ⌘Q / Alt + F4 (window close request)
                     UISoundPlayer.play(UISound.CLICK);
                     if (manager.getWindowHandle() != 0L) glfwSetWindowShouldClose(manager.getWindowHandle(), true);

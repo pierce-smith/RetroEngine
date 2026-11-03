@@ -267,7 +267,7 @@ public class SceneWorld {
     }
 
     public void pause() {
-        simulationEngine.pause();
+        simulationEngine.pause(sceneEntities);
         syncAnimationPlayState();
     }
 

@@ -1,0 +1,224 @@
+package com.retro.engine.editor.templates;
+
+import com.retro.engine.assets.AssetDatabase;
+import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.components.BoxCollider;
+import com.retro.engine.ecs.components.Camera;
+import com.retro.engine.ecs.components.CapsuleCollider;
+import com.retro.engine.ecs.components.Light;
+import com.retro.engine.ecs.components.Material;
+import com.retro.engine.ecs.components.RigidBodyComponent;
+import com.retro.engine.ecs.components.ScriptComponent;
+import com.retro.engine.ecs.components.SphereCollider;
+import com.retro.engine.ecs.components.Transform;
+import com.retro.engine.ecs.serialization.SceneSerializer;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * Registry of New Project baseline templates. Bundled templates live under /templates/&lt;id&gt;/ with a project.json
+ * manifest (file list + scene descriptor) and are installed on top of the shared starter content (meshes, material,
+ * checker texture). The template's text scene descriptor is baked into a binary .rscene once the project's
+ * AssetDatabase is bound, since binary scenes reference per-project asset GUIDs.
+ */
+public final class TemplateManager {
+
+    /** A selectable baseline. {@code resourceId} is null for templates built in code (Blank / Starter Content). */
+    public record ProjectTemplate(String id, String displayName, String description, boolean starterContent, String resourceId) {
+        public boolean isBundled() { return resourceId != null; }
+    }
+
+    public static final ProjectTemplate BLANK = new ProjectTemplate("blank", "Blank",
+        "An empty Main.rscene with no assets.", false, null);
+    public static final ProjectTemplate STARTER_CONTENT = new ProjectTemplate("starter_content", "Starter Content",
+        "Primitive models, a default material and texture, a test script and a spinning-cube Main.rscene.", true, null);
+    /*public static final ProjectTemplate STARTER_GAME = new ProjectTemplate("starter_game", "Starter Game",
+        "Playable collect-a-thon: first-person player controller, bobbing collectibles, score, victory and restart.", true, "starter_game");*/
+
+    private static final List<ProjectTemplate> TEMPLATES = List.of(BLANK, STARTER_CONTENT/*, STARTER_GAME*/);
+    private static final String ROOT = "/templates/";
+
+    private TemplateManager() {}
+
+    public static List<ProjectTemplate> getTemplates() { return TEMPLATES; }
+
+    public static ProjectTemplate byId(String id) {
+        for (ProjectTemplate t : TEMPLATES) if (t.id().equals(id)) return t;
+        return null;
+    }
+
+    public static ProjectTemplate byDisplayName(String name) {
+        for (ProjectTemplate t : TEMPLATES) if (t.displayName().equalsIgnoreCase(name)) return t;
+        return null;
+    }
+
+    /** Copies every file listed in the template manifest into assetsDir (paths are relative to Assets/). */
+    public static void installFiles(ProjectTemplate template, File assetsDir) throws IOException {
+        if (!template.isBundled()) return;
+        for (String rel : manifestFiles(readManifest(template))) {
+            File target = new File(assetsDir, rel);
+            if (!target.getParentFile().isDirectory() && !target.getParentFile().mkdirs()) {
+                throw new IOException("Could not create " + target.getParentFile());
+            }
+            try (InputStream in = open(template, rel)) {
+                Files.copy(in, target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
+    }
+
+    /** Bakes the template's scene descriptor into a binary scene at sceneFile. Requires a bound AssetDatabase. */
+    public static void writeScene(ProjectTemplate template, File assetsDir, File sceneFile, AssetDatabase assetDb) throws IOException {
+        String descriptorName = jsonString(readManifest(template), "scene");
+        if (descriptorName == null) throw new IOException("Template '" + template.id() + "' has no scene descriptor.");
+        List<Entity> entities = parseScene(new String(readAll(open(template, descriptorName)), StandardCharsets.UTF_8), assetsDir);
+        sceneFile.getParentFile().mkdirs();
+        if (!SceneSerializer.saveScene(sceneFile.getAbsolutePath(), entities, new ArrayList<>(), assetDb)) {
+            throw new IOException("Failed to write template scene " + sceneFile);
+        }
+        assetDb.rescanProjectAssets();
+    }
+
+    // --- Manifest / descriptor parsing ---
+
+    private static String readManifest(ProjectTemplate template) throws IOException {
+        return new String(readAll(open(template, "project.json")), StandardCharsets.UTF_8);
+    }
+
+    private static List<String> manifestFiles(String json) {
+        List<String> out = new ArrayList<>();
+        Matcher arr = Pattern.compile("\"files\"\\s*:\\s*\\[(.*?)]", Pattern.DOTALL).matcher(json);
+        if (arr.find()) {
+            Matcher item = Pattern.compile("\"([^\"]+)\"").matcher(arr.group(1));
+            while (item.find()) out.add(item.group(1));
+        }
+        return out;
+    }
+
+    private static String jsonString(String json, String key) {
+        Matcher m = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*\"([^\"]*)\"").matcher(json);
+        return m.find() ? m.group(1) : null;
+    }
+
+    static List<Entity> parseScene(String text, File assetsDir) throws IOException {
+        List<Entity> entities = new ArrayList<>();
+        java.util.Map<Entity, String> parentNames = new java.util.LinkedHashMap<>();
+        int lineNo = 0;
+        for (String raw : text.split("\\R")) {
+            lineNo++;
+            String line = raw.trim();
+            if (line.isEmpty() || line.startsWith("#")) continue;
+            String[] parts = line.split("\\|");
+            String head = parts[0].trim();
+            if (!head.startsWith("entity ")) throw new IOException("Scene descriptor line " + lineNo + ": expected 'entity <Name>'");
+            String name = head.substring(7).trim();
+
+            String mesh = null;
+            for (int i = 1; i < parts.length; i++) {
+                String p = parts[i].trim();
+                if (p.startsWith("mesh=")) mesh = asset(assetsDir, p.substring(5));
+            }
+            Entity e = new Entity("entity_" + (entities.size() + 1), name, mesh);
+            Transform t = e.getComponent(Transform.class);
+            if (t == null) { t = new Transform(); e.addComponent(t); }
+
+            try {
+                for (int i = 1; i < parts.length; i++) {
+                    String p = parts[i].trim();
+                    int eq = p.indexOf('=');
+                    String key = eq < 0 ? p : p.substring(0, eq);
+                    String val = eq < 0 ? "" : p.substring(eq + 1).trim();
+                    switch (key) {
+                        case "mesh" -> {}
+                        case "pos" -> { float[] v = floats(val, 3); t.posX = v[0]; t.posY = v[1]; t.posZ = v[2]; }
+                        case "rot" -> { float[] v = floats(val, 3); t.rotX = v[0]; t.rotY = v[1]; t.rotZ = v[2]; }
+                        case "scale" -> { float[] v = floats(val, 3); t.scaleX = v[0]; t.scaleY = v[1]; t.scaleZ = v[2]; }
+                        case "texture" -> {
+                            Material m = e.getComponent(Material.class);
+                            if (m != null) m.textureAssetPath = asset(assetsDir, val);
+                        }
+                        case "box" -> {
+                            BoxCollider b = new BoxCollider();
+                            float[] v = floats(val.replace(",trigger", ""), 3);
+                            b.sizeX = v[0]; b.sizeY = v[1]; b.sizeZ = v[2];
+                            b.isTrigger = val.endsWith(",trigger");
+                            e.addComponent(b);
+                        }
+                        case "sphere" -> {
+                            SphereCollider s = new SphereCollider();
+                            s.radius = floats(val.replace(",trigger", ""), 1)[0];
+                            s.isTrigger = val.endsWith(",trigger");
+                            e.addComponent(s);
+                        }
+                        case "capsule" -> {
+                            CapsuleCollider c = new CapsuleCollider();
+                            float[] v = floats(val, 2);
+                            c.radius = v[0]; c.height = v[1];
+                            e.addComponent(c);
+                        }
+                        case "body" -> {
+                            RigidBodyComponent rb = new RigidBodyComponent();
+                            rb.motionType = RigidBodyComponent.MotionType.valueOf(val.toUpperCase());
+                            rb.useGravity = rb.motionType == RigidBodyComponent.MotionType.DYNAMIC;
+                            e.addComponent(rb);
+                        }
+                        case "script" -> e.addComponent(new ScriptComponent(asset(assetsDir, val), new File(val).getName()));
+                        case "camera" -> e.addComponent(new Camera());
+                        case "light" -> e.addComponent(new Light());
+                        case "parent" -> parentNames.put(e, val);
+                        default -> {
+                            if (!key.startsWith("prop.")) throw new IOException("unknown key '" + key + "'");
+                            ScriptComponent sc = e.getComponent(ScriptComponent.class);
+                            if (sc == null) throw new IOException("'" + key + "' requires a script= before it");
+                            sc.propertyOverrides.put(key.substring(5), val);
+                        }
+                    }
+                }
+            } catch (IOException | IllegalArgumentException ex) {
+                throw new IOException("Scene descriptor line " + lineNo + " (" + name + "): " + ex.getMessage(), ex);
+            }
+            entities.add(e);
+        }
+        for (java.util.Map.Entry<Entity, String> link : parentNames.entrySet()) {
+            Entity parent = entities.stream().filter(x -> x.name.equals(link.getValue())).findFirst()
+                .orElseThrow(() -> new IOException("Scene descriptor: parent '" + link.getValue() + "' of '" + link.getKey().name + "' not found"));
+            link.getKey().parentId = parent.id;
+        }
+        return entities;
+    }
+
+    private static String asset(File assetsDir, String rel) {
+        return new File(assetsDir, rel.trim()).getAbsolutePath();
+    }
+
+    private static float[] floats(String csv, int n) {
+        String[] s = csv.split(",");
+        if (s.length != n) throw new IllegalArgumentException("expected " + n + " values, got '" + csv + "'");
+        float[] out = new float[n];
+        for (int i = 0; i < n; i++) out[i] = Float.parseFloat(s[i].trim());
+        return out;
+    }
+
+    // --- Resource I/O ---
+
+    private static InputStream open(ProjectTemplate template, String rel) throws IOException {
+        InputStream in = TemplateManager.class.getResourceAsStream(ROOT + template.resourceId() + "/" + rel);
+        if (in == null) throw new IOException("Missing bundled template resource: " + template.resourceId() + "/" + rel);
+        return in;
+    }
+
+    private static byte[] readAll(InputStream in) throws IOException {
+        try (in; ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            in.transferTo(out);
+            return out.toByteArray();
+        }
+    }
+}

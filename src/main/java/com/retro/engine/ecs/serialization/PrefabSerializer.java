@@ -17,7 +17,7 @@ public class PrefabSerializer {
 
     public static final int PREFAB_MAGIC = 0x50524546; // 'PREF' in ASCII
     // Version 2 layout: no asset UUIDs, reduced Material record (fields gated with prefabSince = 3 are omitted)
-    public static final int PREFAB_VERSION = 4;
+    public static final int PREFAB_VERSION = 5; // Version 5 (AudioSource play on start)
 
     public record PrefabTemplate(List<Entity> entities, String rootEntityId) {}
 

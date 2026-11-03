@@ -5,20 +5,18 @@ import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
 
-import org.lwjgl.stb.STBVorbis;
-import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
+import com.retro.engine.audio.AudioEngine;
 
-import java.io.ByteArrayInputStream;
-import java.io.File;
-import java.nio.IntBuffer;
-import java.nio.ShortBuffer;
-import javax.sound.sampled.*;
+import static org.lwjgl.openal.AL10.*;
 
 /**
- * Encapsulates spatial 3D audio playback parameters, attenuation state,
- * and hardware audio streaming driver (supporting both .wav and .ogg Vorbis clips).
- * Updated with non-destructive spatial gain calculation and STBVorbis buffer cleanup.
+ * 3D positional audio source backed by an OpenAL source. The clip is decoded once (.ogg via STBVorbis, .wav/.aiff/.au
+ * via javax.sound), downmixed to mono so OpenAL can spatialize it, and shared through {@link AudioEngine}'s buffer
+ * cache. SimulationSystem pushes the entity's world position each tick; OpenAL applies linear-clamped attenuation
+ * between MIN DIST (full volume) and MAX DIST, scaled by ATTENUATION (rolloff), plus panning against the listener.
+ *
+ * Persisted fields are written positionally by ComponentBinaryCodec: append new ones last, gated with since /
+ * prefabSince and a format version bump.
  */
 public class AudioSource extends Component {
     public enum PlaybackState { PLAYING, PAUSED, STOPPED }
@@ -27,7 +25,7 @@ public class AudioSource extends Component {
     public String audioAssetPath = "";
 
     @InspectorProperty(order = 1, label = "VOLUME", min = 0.0f, max = 2.0f, step = 0.05f)
-    public float volume = 1.0f;       // User-configured base volume (0.0f to 1.0f)
+    public float volume = 1.0f;       // User-configured base volume (0.0f to 2.0f; above 1 amplifies)
 
     @InspectorProperty(order = 2, label = "PITCH", min = 0.1f, max = 3.0f, step = 0.1f)
     public float pitch = 1.0f;        // 0.5f to 2.0f
@@ -47,8 +45,17 @@ public class AudioSource extends Component {
     @InspectorProperty(order = 7, label = "STATE", hidden = true)
     public PlaybackState state = PlaybackState.STOPPED;
 
-    // Native Audio Line Handle
-    private transient Clip audioClip = null;
+    // Scenes saved before v6 / prefabs before v5 lack this field and load with the default (true)
+    @InspectorProperty(order = 8, label = "PLAY ON START", type = PropertyType.TOGGLE, since = 6, prefabSince = 5)
+    public boolean playOnStart = true;
+
+    /** Matches the inspector's VOLUME slider range. */
+    public static final float MAX_VOLUME = 2.0f;
+
+    // OpenAL handles (0 = not created); buffers are owned by AudioEngine's cache, sources by this component
+    private transient int sourceHandle = 0;
+    private transient int bufferHandle = 0;
+    private transient String loadedPath = null;
 
     public AudioSource() {}
 
@@ -56,72 +63,62 @@ public class AudioSource extends Component {
         this.audioAssetPath = (audioAssetPath != null) ? audioAssetPath : "";
     }
 
+    /** OpenAL buffer name for the current clip, or 0 when nothing is loaded. */
+    public int getBufferHandle() {
+        return bufferHandle;
+    }
+
+    /** OpenAL source name, or 0 before the first play. */
+    public int getSourceHandle() {
+        return sourceHandle;
+    }
+
     public void play() {
         if (audioAssetPath == null || audioAssetPath.trim().isEmpty()) return;
-
-        try {
-            if (audioClip == null || !audioClip.isOpen()) {
-                if (!loadAudioClip(audioAssetPath)) {
-                    System.err.println("[AudioSource] Failed to load audio clip: " + audioAssetPath);
-                    return;
-                }
-            }
-
-            if (audioClip != null) {
-                updateClipGain(this.volume);
-                if (loop) {
-                    audioClip.loop(Clip.LOOP_CONTINUOUSLY);
-                } else {
-                    audioClip.setFramePosition(0);
-                    audioClip.start();
-                }
-                this.state = PlaybackState.PLAYING;
-            }
-        } catch (Exception e) {
-            System.err.println("[AudioSource] Playback error on: " + audioAssetPath);
-            e.printStackTrace();
+        if (!ensureSource()) {
+            System.err.println("[AudioSource] Failed to load audio clip: " + audioAssetPath);
+            return;
         }
+        applySourceParams();
+        if (state != PlaybackState.PAUSED) alSourceRewind(sourceHandle);
+        alSourcePlay(sourceHandle);
+        this.state = PlaybackState.PLAYING;
     }
 
     public void pause() {
-        if (audioClip != null && audioClip.isRunning()) {
-            audioClip.stop();
-        }
+        if (sourceHandle != 0) alSourcePause(sourceHandle);
         this.state = PlaybackState.PAUSED;
     }
 
     public void stop() {
-        if (audioClip != null) {
-            audioClip.stop();
-            audioClip.setFramePosition(0);
-        }
+        if (sourceHandle != 0) alSourceStop(sourceHandle);
         this.state = PlaybackState.STOPPED;
     }
 
     public void dispose() {
-        if (audioClip != null) {
-            try {
-                if (audioClip.isRunning()) {
-                    audioClip.stop();
-                }
-                audioClip.close();
-            } catch (Exception ignored) {}
-            audioClip = null;
+        if (sourceHandle != 0 && AudioEngine.isAvailable()) {
+            alSourceStop(sourceHandle);
+            alSourcei(sourceHandle, AL_BUFFER, 0);
+            alDeleteSources(sourceHandle);
         }
+        sourceHandle = 0;
+        bufferHandle = 0;
+        loadedPath = null;
         this.state = PlaybackState.STOPPED;
     }
 
     public void setVolume(float volume) {
-        this.volume = Math.max(0.0f, Math.min(1.0f, volume));
+        this.volume = Math.max(0.0f, Math.min(MAX_VOLUME, volume));
         assert (!Float.isNaN(this.volume) && !Float.isInfinite(this.volume))
             : "[FATAL] Invalid volume assigned to AudioSource: " + volume;
-        updateClipGain(this.volume);
+        if (sourceHandle != 0) applySourceParams();
     }
 
     public void setPitch(float pitch) {
         this.pitch = Math.max(0.5f, Math.min(2.0f, pitch));
         assert (!Float.isNaN(this.pitch) && !Float.isInfinite(this.pitch))
             : "[FATAL] Invalid pitch assigned to AudioSource: " + pitch;
+        if (sourceHandle != 0) alSourcef(sourceHandle, AL_PITCH, this.pitch);
     }
 
     public void setDistances(float minDistance, float maxDistance) {
@@ -129,124 +126,52 @@ public class AudioSource extends Component {
         this.maxDistance = Math.max(this.minDistance, maxDistance);
         assert (this.maxDistance >= this.minDistance)
             : "[FATAL] AudioSource maxDistance (" + this.maxDistance + ") cannot be less than minDistance (" + this.minDistance + ")";
+        if (sourceHandle != 0) applySourceParams();
     }
 
     /**
-     * Updates hardware audio clip gain without modifying base user-configured volume.
+     * Per-tick sync: moves the source to the entity's world position, re-applies inspector/script edits
+     * (volume, pitch, loop, distances) and moves state to STOPPED once a non-looping clip finishes.
      */
-    public void updateClipGain(float effectiveVolume) {
-        if (audioClip != null && audioClip.isControlSupported(FloatControl.Type.MASTER_GAIN)) {
-            FloatControl gainControl = (FloatControl) audioClip.getControl(FloatControl.Type.MASTER_GAIN);
-            float targetGain = Math.max(0.0001f, Math.min(1.0f, effectiveVolume));
-            float dB = (float) (Math.log10(targetGain) * 20.0);
-            dB = Math.max(gainControl.getMinimum(), Math.min(gainControl.getMaximum(), dB));
-            gainControl.setValue(dB);
+    public void updateSpatial(float worldX, float worldY, float worldZ) {
+        if (sourceHandle == 0) return;
+        if (!Float.isFinite(worldX + worldY + worldZ)) return;
+        alSource3f(sourceHandle, AL_POSITION, worldX, worldY, worldZ);
+        applySourceParams();
+        if (state == PlaybackState.PLAYING && alGetSourcei(sourceHandle, AL_SOURCE_STATE) == AL_STOPPED) {
+            state = PlaybackState.STOPPED;
         }
     }
 
-    /**
-     * Evaluates spatial gain based on distance to active listener and applies it to hardware clip.
-     */
-    public void applySpatialGain(float listenerX, float listenerY, float listenerZ,
-                                 float sourceX, float sourceY, float sourceZ) {
-        float effectiveGain = calculateSpatialGain(listenerX, listenerY, listenerZ, sourceX, sourceY, sourceZ);
-        updateClipGain(effectiveGain);
+    private void applySourceParams() {
+        float min = Math.max(0.1f, minDistance);
+        alSourcef(sourceHandle, AL_MAX_GAIN, MAX_VOLUME); // OpenAL clamps source gain to 1.0 by default
+        alSourcef(sourceHandle, AL_GAIN, Math.max(0.0f, Math.min(MAX_VOLUME, volume)));
+        alSourcef(sourceHandle, AL_PITCH, Math.max(0.1f, pitch));
+        alSourcei(sourceHandle, AL_LOOPING, loop ? AL_TRUE : AL_FALSE);
+        alSourcef(sourceHandle, AL_REFERENCE_DISTANCE, min);
+        alSourcef(sourceHandle, AL_MAX_DISTANCE, Math.max(min, maxDistance));
+        alSourcef(sourceHandle, AL_ROLLOFF_FACTOR, Math.max(0.0f, attenuation));
     }
 
-    /**
-     * Calculates spatial audio gain based on Euclidean distance to the active listener.
-     */
-    public float calculateSpatialGain(float listenerX, float listenerY, float listenerZ,
-                                      float sourceX, float sourceY, float sourceZ) {
-        assert (!Float.isNaN(listenerX) && !Float.isInfinite(listenerX) &&
-                !Float.isNaN(listenerY) && !Float.isInfinite(listenerY) &&
-                !Float.isNaN(listenerZ) && !Float.isInfinite(listenerZ) &&
-                !Float.isNaN(sourceX) && !Float.isInfinite(sourceX) &&
-                !Float.isNaN(sourceY) && !Float.isInfinite(sourceY) &&
-                !Float.isNaN(sourceZ) && !Float.isInfinite(sourceZ))
-            : "[FATAL] NaN or Infinity detected in spatial audio listener/source coordinates";
-
-        float dx = sourceX - listenerX;
-        float dy = sourceY - listenerY;
-        float dz = sourceZ - listenerZ;
-        float dist = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-        if (dist <= minDistance) {
-            return volume;
-        }
-        if (dist >= maxDistance) {
-            return 0.0f;
-        }
-
-        float factor = 1.0f + attenuation * (dist - minDistance);
-        float gain = (factor > 0.0001f) ? (volume / factor) : 0.0f;
-        gain = Math.max(0.0f, Math.min(1.0f, gain));
-
-        assert (!Float.isNaN(gain) && !Float.isInfinite(gain) && gain >= 0.0f && gain <= 1.0f)
-            : "[FATAL] Degenerate spatial audio gain calculated: " + gain;
-
-        return gain;
-    }
-
-    private boolean loadAudioClip(String filePath) {
-        File file = new File(filePath);
-        if (!file.exists()) return false;
-
-        String lowerPath = filePath.toLowerCase();
-        try {
-            AudioInputStream ais = null;
-
-            if (lowerPath.endsWith(".ogg")) {
-                ais = loadOggVorbisStream(filePath);
-            } else if (lowerPath.endsWith(".wav") || lowerPath.endsWith(".au") || lowerPath.endsWith(".aiff")) {
-                ais = AudioSystem.getAudioInputStream(file);
-            }
-
-            if (ais == null) return false;
-
-            audioClip = AudioSystem.getClip();
-            audioClip.open(ais);
-            return true;
-        } catch (Exception e) {
-            e.printStackTrace();
-            return false;
-        }
-    }
-
-    private AudioInputStream loadOggVorbisStream(String filePath) {
-        ShortBuffer rawAudio = null;
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            IntBuffer channelsBuffer = stack.mallocInt(1);
-            IntBuffer sampleRateBuffer = stack.mallocInt(1);
-
-            rawAudio = STBVorbis.stb_vorbis_decode_filename(filePath, channelsBuffer, sampleRateBuffer);
-            if (rawAudio == null) {
-                System.err.println("[AudioSource] STBVorbis failed to decode .ogg file: " + filePath);
-                return null;
-            }
-
-            int channels = channelsBuffer.get(0);
-            int sampleRate = sampleRateBuffer.get(0);
-
-            byte[] pcmBytes = new byte[rawAudio.remaining() * 2];
-            int idx = 0;
-            while (rawAudio.hasRemaining()) {
-                short sample = rawAudio.get();
-                pcmBytes[idx++] = (byte) (sample & 0xFF);
-                pcmBytes[idx++] = (byte) ((sample >> 8) & 0xFF);
-            }
-
-            AudioFormat format = new AudioFormat(sampleRate, 16, channels, true, false);
-            ByteArrayInputStream bais = new ByteArrayInputStream(pcmBytes);
-            return new AudioInputStream(bais, format, pcmBytes.length / format.getFrameSize());
-        } catch (Exception e) {
-            e.printStackTrace();
-            return null;
-        } finally {
-            if (rawAudio != null) {
-                MemoryUtil.memFree(rawAudio);
+    /** Creates the AL source on demand and (re)binds the buffer when the clip path changed. */
+    private boolean ensureSource() {
+        if (!AudioEngine.ensureInitialized()) return false;
+        if (sourceHandle == 0) {
+            sourceHandle = alGenSources();
+            if (alGetError() != AL_NO_ERROR) {
+                sourceHandle = 0;
+                return false;
             }
         }
+        if (bufferHandle == 0 || !audioAssetPath.equals(loadedPath)) {
+            alSourceStop(sourceHandle);
+            bufferHandle = AudioEngine.getBuffer(audioAssetPath, true);
+            loadedPath = (bufferHandle != 0) ? audioAssetPath : null;
+            alSourcei(sourceHandle, AL_BUFFER, bufferHandle);
+            if (state == PlaybackState.PAUSED) state = PlaybackState.STOPPED;
+        }
+        return bufferHandle != 0;
     }
 
     @Override

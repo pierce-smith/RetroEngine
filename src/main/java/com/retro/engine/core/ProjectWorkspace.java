@@ -8,6 +8,7 @@ import com.retro.engine.ecs.components.ScriptComponent;
 import com.retro.engine.ecs.components.Transform;
 import com.retro.engine.ecs.serialization.SceneSerializer;
 import com.retro.engine.editor.EditorWorkspace;
+import com.retro.engine.editor.templates.TemplateManager;
 import com.retro.engine.modding.ModLoader;
 
 import java.awt.image.BufferedImage;
@@ -80,6 +81,14 @@ public final class ProjectWorkspace {
      * then binds the editor to it. Returns the project directory.
      */
     public static File createProject(EditorWorkspace workspace, File parentDir, String projectName, boolean includeStarterContent) throws IOException {
+        return createProject(workspace, parentDir, projectName,
+            includeStarterContent ? TemplateManager.STARTER_CONTENT : TemplateManager.BLANK);
+    }
+
+    /** Creates a new project from a baseline template (see {@link TemplateManager#getTemplates()}). */
+    public static File createProject(EditorWorkspace workspace, File parentDir, String projectName, TemplateManager.ProjectTemplate template) throws IOException {
+        if (template == null) template = TemplateManager.BLANK;
+        boolean includeStarterContent = template.starterContent();
         String cleanName = projectName.trim();
         File projectDir = new File(parentDir, cleanName).getAbsoluteFile();
         if (projectDir.exists()) {
@@ -97,13 +106,17 @@ public final class ProjectWorkspace {
         if (includeStarterContent) {
             copyStarterAssets(new File(projectDir, AssetDatabase.ASSETS_DIR));
         }
+        TemplateManager.installFiles(template, new File(projectDir, AssetDatabase.ASSETS_DIR));
 
         workspace.getSceneManager().newScene();
         workspace.getCommandHistory().clear();
         if (!workspace.getAssetDatabase().openProject(projectDir.getAbsolutePath())) {
             throw new IOException("Could not bind asset registry to " + projectDir.getAbsolutePath());
         }
-        if (includeStarterContent) {
+        if (template.isBundled()) {
+            TemplateManager.writeScene(template, new File(projectDir, AssetDatabase.ASSETS_DIR),
+                new File(projectDir, STARTER_SCENE), workspace.getAssetDatabase());
+        } else if (includeStarterContent) {
             writeStarterScene(projectDir, workspace.getAssetDatabase());
         } else {
             writeBlankScene(projectDir, workspace.getAssetDatabase());
@@ -112,8 +125,9 @@ public final class ProjectWorkspace {
         workspace.setProjectSettings(created);
         loadStartupScene(workspace, projectDir, created);
         RecentProjects.record(projectDir);
+        com.retro.engine.editor.RecentProjectsMenu.record(projectDir);
         System.out.println("[Project] Created project '" + cleanName + "' at " + projectDir.getAbsolutePath()
-            + (includeStarterContent ? " with starter content." : "."));
+            + " from template '" + template.displayName() + "'.");
         return projectDir;
     }
 
@@ -141,6 +155,7 @@ public final class ProjectWorkspace {
         }
         loadStartupScene(workspace, dir, settings);
         RecentProjects.record(dir);
+        com.retro.engine.editor.RecentProjectsMenu.record(dir);
         System.out.println("[Project] Opened project '" + settings.projectName + "' (" + dir.getAbsolutePath() + ")");
     }
 

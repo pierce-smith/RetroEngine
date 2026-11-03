@@ -33,6 +33,57 @@ import java.util.function.IntConsumer;
  */
 public class ViewportPanel {
 
+    /**
+     * Files dropped onto the 3D viewport are imported into the project, then acted on: {@code .obj}/{@code .gltf}
+     * spawn a mesh entity (undoable), {@code .png} becomes the selected entity's albedo texture (undoable), and the last
+     * {@code .rscene} dropped is opened.
+     */
+    public static void handleFileDrop(EditorWorkspace workspace, List<String> files) {
+        if (workspace == null || files == null || files.isEmpty() || !workspace.hasActiveProject()) return;
+        if (workspace.getPlayState() != PlayState.EDITING) {
+            System.err.println("[Viewport] Stop Play mode before dropping files into the scene.");
+            return;
+        }
+        com.retro.engine.assets.AssetDatabase db = workspace.getAssetDatabase();
+        String sceneToOpen = null;
+        for (String path : db.onFilesDropped(files)) {
+            String lower = path.toLowerCase(java.util.Locale.ROOT);
+            if (lower.endsWith(".rscene")) {
+                sceneToOpen = path;
+                continue;
+            }
+            com.retro.engine.assets.AssetMeta asset = db.getAssetByUuid(db.resolveUuidByPath(path));
+            if (asset == null) {
+                System.err.println("[Viewport] Dropped file is not a registered asset: " + path);
+            } else if (lower.endsWith(".obj") || lower.endsWith(".gltf")) {
+                workspace.getSceneManager().spawnEntityFromAsset(asset);
+                Entity spawned = workspace.getSelectedEntity();
+                if (spawned != null) {
+                    workspace.getCommandHistory().executeCommand(new com.retro.engine.editor.EditorCommands.EntitySpawnCommand(workspace, spawned));
+                }
+            } else if (lower.endsWith(".png")) {
+                applyDroppedTexture(workspace, asset);
+            }
+        }
+        if (sceneToOpen != null) workspace.getSceneManager().loadSceneFromFile(sceneToOpen, db);
+    }
+
+    private static void applyDroppedTexture(EditorWorkspace workspace, com.retro.engine.assets.AssetMeta asset) {
+        Entity selected = workspace.getSelectedEntity();
+        com.retro.engine.ecs.components.Material mat = (selected != null) ? selected.getComponent(com.retro.engine.ecs.components.Material.class) : null;
+        if (mat == null) {
+            System.out.println("[Viewport] Imported " + asset.name + "; select an entity with a Material to apply dropped textures.");
+            return;
+        }
+        try {
+            java.lang.reflect.Field field = com.retro.engine.ecs.components.Material.class.getDeclaredField("textureAssetPath");
+            workspace.getCommandHistory().executeCommand(new com.retro.engine.editor.EditorCommands.ModifyPropertyCommand(
+                    mat, field, mat.textureAssetPath, asset.absolutePath, "TEXTURE"));
+        } catch (ReflectiveOperationException e) {
+            e.printStackTrace();
+        }
+    }
+
     // Frames a click waits for the asynchronous pick readback before it is dropped (selection left unchanged)
     private static final int PICK_TIMEOUT_FRAMES = 15;
 

@@ -7,6 +7,7 @@ import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.SceneWorld;
 import com.retro.engine.ecs.SceneWorld.WorldTransform;
 import com.retro.engine.ecs.components.AnimatorComponent;
+import com.retro.engine.audio.AudioEngine;
 import com.retro.engine.ecs.components.Camera;
 import com.retro.engine.ecs.components.Light;
 import com.retro.engine.ecs.components.Material;
@@ -97,6 +98,7 @@ public class SceneRenderPipeline {
     private final FrustumCuller previewCuller = new FrustumCuller();
     private final GameUIRenderer gameUiRenderer = new GameUIRenderer();
     private final float[] viewScratch = new float[16];
+    private final float[] listenerEye = new float[3];
 
     // Backend camera preview target (0L = unsupported); refreshed every submitFrame
     private long cameraPreviewTexture = 0L;
@@ -136,6 +138,7 @@ public class SceneRenderPipeline {
                 System.arraycopy(viewScratch, 0, snapshot.cameraView, 0, 16);
                 camera.computeEyePosition(snapshot.cameraEye);
             }
+            syncAudioListener(camera);
         } else {
             depthRowX = depthRowY = depthRowZ = depthRowW = 0.0f;
         }
@@ -506,6 +509,18 @@ public class SceneRenderPipeline {
         snapshot.cameraPreviewPosZ = wt.pz();
         snapshot.cameraPreviewActive = true;
         return true;
+    }
+
+    /**
+     * Moves the OpenAL listener to the active viewport camera (orbit pose while editing, the Camera entity's view in
+     * Play). Rows 1 and 2 of the column-major view matrix are the camera's up and back axes in world space.
+     */
+    private void syncAudioListener(ViewportCamera camera) {
+        if (!AudioEngine.isAvailable()) return;
+        camera.computeEyePosition(listenerEye);
+        AudioEngine.updateListener(listenerEye[0], listenerEye[1], listenerEye[2],
+                -viewScratch[2], -viewScratch[6], -viewScratch[10],
+                viewScratch[1], viewScratch[5], viewScratch[9]);
     }
 
     /**
