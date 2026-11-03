@@ -1,11 +1,11 @@
 package com.retro.engine.modding.events;
 
 import com.retro.engine.assets.AssetStreamer;
-import com.retro.engine.editor.render.SceneRenderPipeline;
-import com.retro.engine.rhi.RenderCommand;
-import com.retro.engine.rhi.RenderEnvironment;
-import com.retro.engine.rhi.RenderQueue;
-import com.retro.engine.rhi.SceneLights;
+import com.retro.engine.graphics.RenderCommand;
+import com.retro.engine.graphics.RenderEnvironment;
+import com.retro.engine.graphics.RenderQueue;
+import com.retro.engine.graphics.SceneLights;
+import com.retro.engine.graphics.SceneRenderPipeline;
 
 /**
  * Posted by SceneRenderPipeline once per frame, after the scene's draws and lights are collected and before the

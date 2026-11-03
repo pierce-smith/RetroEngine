@@ -1,9 +1,11 @@
 package com.retro.engine.scripting;
 
+import com.retro.engine.ecs.Component;
+import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.SceneWorld;
+import com.retro.engine.ecs.components.ScriptComponent;
 import com.retro.engine.physics.PhysicsSystem;
-import com.retro.engine.scene.entity.Entity;
-import com.retro.engine.scene.world.SceneWorld;
-import com.retro.engine.scene.components.gameplay.ScriptComponent;
+
 import org.codehaus.janino.SimpleCompiler;
 
 import java.io.BufferedReader;
@@ -16,7 +18,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.BiConsumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -85,12 +86,20 @@ public class ScriptEngine {
         return resolveScriptClass(rawName, sc.scriptAssetPath);
     }
 
+    /*
+     * Hot loops below index into the live lists instead of using iterators or Entity.getComponents (which builds a new
+     * list): no per-frame allocation, and a script that spawns entities or adds components mid-tick cannot trigger a
+     * ConcurrentModificationException. Newly spawned entities are picked up in the same pass.
+     */
+
     public static void initializeScripts(List<Entity> entities, SceneWorld sceneWorld) {
         if (entities == null) return;
-        for (Entity entity : entities) {
+        for (int i = 0; i < entities.size(); i++) {
+            Entity entity = entities.get(i);
             if (entity == null) continue;
-            for (ScriptComponent sc : entity.getComponents(ScriptComponent.class)) {
-                if (sc.enabled && sc.activeScriptInstance == null) {
+            List<Component> comps = entity.getAllComponents();
+            for (int c = 0; c < comps.size(); c++) {
+                if (comps.get(c) instanceof ScriptComponent sc && sc.enabled && sc.activeScriptInstance == null) {
                     instantiateAndStartScript(entity, sc, sceneWorld);
                 }
             }
@@ -100,24 +109,54 @@ public class ScriptEngine {
     public static void updateScripts(List<Entity> entities, float deltaTime, SceneWorld sceneWorld) {
         if (entities == null) return;
         if (!pendingHotSwaps.isEmpty()) hotSwapScripts(entities, sceneWorld);
-        for (Entity entity : entities) {
+        for (int i = 0; i < entities.size(); i++) {
+            Entity entity = entities.get(i);
             if (entity == null) continue;
-            for (ScriptComponent sc : entity.getComponents(ScriptComponent.class)) {
-                if (!sc.enabled) continue;
+            List<Component> comps = entity.getAllComponents();
+            for (int c = 0; c < comps.size(); c++) {
+                if (!(comps.get(c) instanceof ScriptComponent sc) || !sc.enabled) continue;
                 if (sc.activeScriptInstance == null) {
                     instantiateAndStartScript(entity, sc, sceneWorld);
                 }
-                if (sc.activeScriptInstance != null) {
-                    try {
-                        sc.activeScriptInstance.onUpdate(deltaTime);
-                    } catch (Exception e) {
-                        System.err.println("[ScriptEngine] Exception during onUpdate() on Entity '" + entity.name + "': " + e.getMessage());
-                        sc.activeScriptInstance = null;
-                        sc.enabled = false;
-                    }
+                EntityScript script = sc.activeScriptInstance;
+                if (script == null) continue;
+                try {
+                    script.onUpdate(deltaTime);
+                } catch (Throwable t) {
+                    disableFailedScript(entity, sc, "onUpdate", t);
                 }
             }
         }
+    }
+
+    /**
+     * Turns off one script instance that threw, leaving every other script and the engine loop running. The error and
+     * a trimmed stack trace go to System.err, which the editor console shows. The component's enabled flag is part
+     * of the Play snapshot, so the script runs again after Stop.
+     */
+    private static void disableFailedScript(Entity entity, ScriptComponent sc, String callback, Throwable t) {
+        if (t instanceof VirtualMachineError && !(t instanceof StackOverflowError)) throw (VirtualMachineError) t;
+        EntityScript script = sc.activeScriptInstance;
+        String scriptName = script != null ? script.getClass().getSimpleName() : String.valueOf(sc.scriptName);
+        sc.activeScriptInstance = null;
+        sc.enabled = false;
+        logScriptError("[ScriptEngine] " + scriptName + "." + callback + "() threw on Entity '" + entity.name
+                + "'; the script is disabled until Play is stopped.", t);
+    }
+
+    private static final int MAX_LOGGED_FRAMES = 8;
+
+    /** Header, the exception, and its first frames (the console shows few rows, so full traces would bury the cause). */
+    static void logScriptError(String header, Throwable t) {
+        StringBuilder sb = new StringBuilder(512).append(header);
+        for (Throwable cause = t; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
+            sb.append(cause == t ? "\n  " : "\n  Caused by: ").append(cause);
+            StackTraceElement[] frames = cause.getStackTrace();
+            int shown = Math.min(frames.length, MAX_LOGGED_FRAMES);
+            for (int i = 0; i < shown; i++) sb.append("\n    at ").append(frames[i]);
+            if (frames.length > shown) sb.append("\n    ... ").append(frames.length - shown).append(" more");
+        }
+        System.err.println(sb);
     }
 
     /**
@@ -133,7 +172,8 @@ public class ScriptEngine {
             it.remove();
         }
 
-        for (Entity entity : entities) {
+        for (int i = 0; i < entities.size(); i++) {
+            Entity entity = entities.get(i);
             if (entity == null) continue;
             for (ScriptComponent sc : entity.getComponents(ScriptComponent.class)) {
                 EntityScript previous = sc.activeScriptInstance;
@@ -152,15 +192,17 @@ public class ScriptEngine {
                 EntityScript replacement;
                 try {
                     replacement = (EntityScript) clazz.getDeclaredConstructor().newInstance();
-                } catch (Exception e) {
-                    System.err.println("[ScriptEngine] Hot reload could not construct '" + className + "' on Entity '" + entity.name + "': " + e.getMessage() + "; keeping the previous version.");
+                } catch (Throwable t) {
+                    if (t instanceof VirtualMachineError && !(t instanceof StackOverflowError)) throw (VirtualMachineError) t;
+                    logScriptError("[ScriptEngine] Hot reload could not construct '" + className + "' on Entity '" + entity.name + "'; keeping the previous version.", t);
                     continue;
                 }
 
                 try {
                     previous.onDestroy();
-                } catch (Exception e) {
-                    System.err.println("[ScriptEngine] Exception during onDestroy() on Entity '" + entity.name + "' (hot reload): " + e.getMessage());
+                } catch (Throwable t) {
+                    if (t instanceof VirtualMachineError && !(t instanceof StackOverflowError)) throw (VirtualMachineError) t;
+                    logScriptError("[ScriptEngine] " + className + ".onDestroy() threw during hot reload on Entity '" + entity.name + "'.", t);
                 }
 
                 sc.activeScriptInstance = replacement;
@@ -169,10 +211,8 @@ public class ScriptEngine {
                     injectPropertyOverrides(replacement, sc.propertyOverrides);
                     replacement.onStart();
                     System.out.println("[ScriptEngine] Hot reloaded script '" + className + "' on Entity '" + entity.name + "'");
-                } catch (Exception e) {
-                    System.err.println("[ScriptEngine] Exception starting hot-reloaded '" + className + "' on Entity '" + entity.name + "': " + e.getMessage());
-                    sc.activeScriptInstance = null;
-                    sc.enabled = false;
+                } catch (Throwable t) {
+                    disableFailedScript(entity, sc, "onStart (hot reload)", t);
                 }
             }
         }
@@ -183,70 +223,78 @@ public class ScriptEngine {
         for (int i = 0; i < activeBodies.size(); i++) {
             PhysicsSystem.PhysicsBody body = activeBodies.get(i);
             if (body == null || body.entity == null) continue;
-            for (ScriptComponent sc : body.entity.getComponents(ScriptComponent.class)) {
-                if (sc.enabled && sc.activeScriptInstance != null) {
-                    try {
-                        sc.activeScriptInstance.onPhysicsUpdate(fixedDeltaTime);
-                    } catch (Exception e) {
-                        System.err.println("[ScriptEngine] Exception during onPhysicsUpdate() on Entity '" + body.entity.name + "': " + e.getMessage());
-                        sc.activeScriptInstance = null;
-                        sc.enabled = false;
-                    }
-                }
-            }
-        }
-    }
-
-    public static void dispatchCollisionEnter(Entity entity, Entity other) {
-        dispatchContact(entity, other, "onCollisionEnter", EntityScript::onCollisionEnter);
-    }
-
-    public static void dispatchCollisionStay(Entity entity, Entity other) {
-        dispatchContact(entity, other, "onCollisionStay", EntityScript::onCollisionStay);
-    }
-
-    public static void dispatchCollisionExit(Entity entity, Entity other) {
-        dispatchContact(entity, other, "onCollisionExit", EntityScript::onCollisionExit);
-    }
-
-    public static void dispatchTriggerEnter(Entity entity, Entity other) {
-        dispatchContact(entity, other, "onTriggerEnter", EntityScript::onTriggerEnter);
-    }
-
-    public static void dispatchTriggerStay(Entity entity, Entity other) {
-        dispatchContact(entity, other, "onTriggerStay", EntityScript::onTriggerStay);
-    }
-
-    public static void dispatchTriggerExit(Entity entity, Entity other) {
-        dispatchContact(entity, other, "onTriggerExit", EntityScript::onTriggerExit);
-    }
-
-    /** Delivers a collision / trigger event to every enabled, running script on {@code entity}. */
-    private static void dispatchContact(Entity entity, Entity other, String callbackName, BiConsumer<EntityScript, Entity> callback) {
-        if (entity == null || other == null) return;
-        for (ScriptComponent sc : entity.getComponents(ScriptComponent.class)) {
-            if (sc.enabled && sc.activeScriptInstance != null) {
+            List<Component> comps = body.entity.getAllComponents();
+            for (int c = 0; c < comps.size(); c++) {
+                if (!(comps.get(c) instanceof ScriptComponent sc) || !sc.enabled) continue;
+                EntityScript script = sc.activeScriptInstance;
+                if (script == null) continue;
                 try {
-                    callback.accept(sc.activeScriptInstance, other);
-                } catch (Exception e) {
-                    System.err.println("[ScriptEngine] Exception during " + callbackName + "() on Entity '" + entity.name + "': " + e.getMessage());
+                    script.onPhysicsUpdate(fixedDeltaTime);
+                } catch (Throwable t) {
+                    disableFailedScript(body.entity, sc, "onPhysicsUpdate", t);
                 }
             }
         }
+    }
+
+    private enum Contact { COLLISION_ENTER, COLLISION_STAY, COLLISION_EXIT, TRIGGER_ENTER, TRIGGER_STAY, TRIGGER_EXIT }
+
+    public static void dispatchCollisionEnter(Entity entity, Entity other) { dispatchContact(entity, other, Contact.COLLISION_ENTER); }
+    public static void dispatchCollisionStay(Entity entity, Entity other) { dispatchContact(entity, other, Contact.COLLISION_STAY); }
+    public static void dispatchCollisionExit(Entity entity, Entity other) { dispatchContact(entity, other, Contact.COLLISION_EXIT); }
+    public static void dispatchTriggerEnter(Entity entity, Entity other) { dispatchContact(entity, other, Contact.TRIGGER_ENTER); }
+    public static void dispatchTriggerStay(Entity entity, Entity other) { dispatchContact(entity, other, Contact.TRIGGER_STAY); }
+    public static void dispatchTriggerExit(Entity entity, Entity other) { dispatchContact(entity, other, Contact.TRIGGER_EXIT); }
+
+    /** Delivers a collision / trigger event to every enabled, running script on {@code entity}. A script that throws is disabled. */
+    private static void dispatchContact(Entity entity, Entity other, Contact contact) {
+        if (entity == null || other == null) return;
+        List<Component> comps = entity.getAllComponents();
+        for (int c = 0; c < comps.size(); c++) {
+            if (!(comps.get(c) instanceof ScriptComponent sc) || !sc.enabled) continue;
+            EntityScript script = sc.activeScriptInstance;
+            if (script == null) continue;
+            try {
+                switch (contact) {
+                    case COLLISION_ENTER -> script.onCollisionEnter(other);
+                    case COLLISION_STAY -> script.onCollisionStay(other);
+                    case COLLISION_EXIT -> script.onCollisionExit(other);
+                    case TRIGGER_ENTER -> script.onTriggerEnter(other);
+                    case TRIGGER_STAY -> script.onTriggerStay(other);
+                    case TRIGGER_EXIT -> script.onTriggerExit(other);
+                }
+            } catch (Throwable t) {
+                disableFailedScript(entity, sc, callbackName(contact), t);
+            }
+        }
+    }
+
+    private static String callbackName(Contact contact) {
+        return switch (contact) {
+            case COLLISION_ENTER -> "onCollisionEnter";
+            case COLLISION_STAY -> "onCollisionStay";
+            case COLLISION_EXIT -> "onCollisionExit";
+            case TRIGGER_ENTER -> "onTriggerEnter";
+            case TRIGGER_STAY -> "onTriggerStay";
+            case TRIGGER_EXIT -> "onTriggerExit";
+        };
     }
 
     public static void destroyScripts(List<Entity> entities) {
         if (entities == null) return;
-        for (Entity entity : entities) {
+        for (int i = 0; i < entities.size(); i++) {
+            Entity entity = entities.get(i);
             if (entity == null) continue;
-            for (ScriptComponent sc : entity.getComponents(ScriptComponent.class)) {
-                if (sc.activeScriptInstance != null) {
-                    try {
-                        sc.activeScriptInstance.onDestroy();
-                    } catch (Exception e) {
-                        System.err.println("[ScriptEngine] Exception during onDestroy() on Entity '" + entity.name + "': " + e.getMessage());
-                    }
-                    sc.activeScriptInstance = null;
+            List<Component> comps = entity.getAllComponents();
+            for (int c = 0; c < comps.size(); c++) {
+                if (!(comps.get(c) instanceof ScriptComponent sc) || sc.activeScriptInstance == null) continue;
+                EntityScript script = sc.activeScriptInstance;
+                sc.activeScriptInstance = null;
+                try {
+                    script.onDestroy();
+                } catch (Throwable t) {
+                    if (t instanceof VirtualMachineError && !(t instanceof StackOverflowError)) throw (VirtualMachineError) t;
+                    logScriptError("[ScriptEngine] " + script.getClass().getSimpleName() + ".onDestroy() threw on Entity '" + entity.name + "'.", t);
                 }
             }
         }
@@ -271,23 +319,7 @@ public class ScriptEngine {
 
         String declaredPackage = parsePackageDeclaration(diskScriptFile);
 
-        String[] candidateClassNames;
-        if (declaredPackage != null && !declaredPackage.isEmpty()) {
-            candidateClassNames = new String[]{
-                declaredPackage + "." + cleanClassName,
-                "com.retro.engine.scripting.user." + cleanClassName,
-                "com.retro.engine.scripting." + cleanClassName,
-                "com.retro.engine.scene.components.gameplay." + cleanClassName,
-                cleanClassName
-            };
-        } else {
-            candidateClassNames = new String[]{
-                "com.retro.engine.scripting.user." + cleanClassName,
-                "com.retro.engine.scripting." + cleanClassName,
-                "com.retro.engine.scene.components.gameplay." + cleanClassName,
-                cleanClassName
-            };
-        }
+        String[] candidateClassNames = candidateNames(declaredPackage, cleanClassName);
 
         for (String candidate : candidateClassNames) {
             try {
@@ -309,6 +341,13 @@ public class ScriptEngine {
 
         failedScriptCache.add(cleanClassName);
         return null;
+    }
+
+    /** Fully qualified names a script class may have: its declared package, the default script packages, then none. */
+    private static String[] candidateNames(String declaredPackage, String className) {
+        String[] defaults = { "com.retro.engine.scripting.user." + className, "com.retro.engine.scripting." + className, className };
+        if (declaredPackage == null || declaredPackage.isEmpty()) return defaults;
+        return new String[] { declaredPackage + "." + className, defaults[0], defaults[1], defaults[2] };
     }
 
     /** Simple class name (the class cache key) for a script name or path: file name without .java / .class. */
@@ -405,29 +444,34 @@ public class ScriptEngine {
 
         Class<?> clazz = resolveScriptClass(sc);
 
+        // Unresolvable or wrong-type scripts are switched off for this Play session (restored by Stop), so the
+        // per-frame tick does not retry them and print the same error every frame
         if (clazz == null) {
-            System.err.println("[ScriptEngine] Could not resolve or compile script class for '" + rawName + "'. Skipping further attempts.");
+            sc.enabled = false;
+            System.err.println("[ScriptEngine] Could not resolve or compile script class for '" + rawName + "'; disabled until Play is stopped.");
+            return;
+        }
+        if (!EntityScript.class.isAssignableFrom(clazz)) {
+            sc.enabled = false;
+            System.err.println("[ScriptEngine] Class '" + clazz.getName() + "' does not extend EntityScript; disabled until Play is stopped.");
             return;
         }
 
+        EntityScript script;
         try {
-            if (EntityScript.class.isAssignableFrom(clazz)) {
-                EntityScript script = (EntityScript) clazz.getDeclaredConstructor().newInstance();
-                script.init(entity, sceneWorld);
-                sc.activeScriptInstance = script;
-
-                // Pillar 3: Inject reflected property overrides before calling onStart()
-                injectPropertyOverrides(script, sc.propertyOverrides);
-
-                script.onStart();
-                System.out.println("[ScriptEngine] Successfully initialized script '" + clazz.getSimpleName() + "' on Entity '" + entity.name + "'");
-            } else {
-                failedScriptCache.add(clazz.getSimpleName());
-                System.err.println("[ScriptEngine] Class '" + clazz.getName() + "' does not extend EntityScript!");
-            }
-        } catch (Exception e) {
-            failedScriptCache.add(clazz.getSimpleName());
-            System.err.println("[ScriptEngine] Failed to instantiate script '" + clazz.getName() + "' on Entity '" + entity.name + "': " + e.getMessage());
+            script = (EntityScript) clazz.getDeclaredConstructor().newInstance();
+        } catch (Throwable t) {
+            disableFailedScript(entity, sc, "<init>", t);
+            return;
+        }
+        sc.activeScriptInstance = script;
+        try {
+            script.init(entity, sceneWorld);
+            injectPropertyOverrides(script, sc.propertyOverrides);
+            script.onStart();
+            System.out.println("[ScriptEngine] Started script '" + clazz.getSimpleName() + "' on Entity '" + entity.name + "'");
+        } catch (Throwable t) {
+            disableFailedScript(entity, sc, "onAwake/onStart", t);
         }
     }
 
@@ -484,21 +528,7 @@ public class ScriptEngine {
             }
 
             ClassLoader cl = compiler.getClassLoader();
-            String[] candidates;
-            if (declaredPackage != null && !declaredPackage.isEmpty()) {
-                candidates = new String[]{
-                    declaredPackage + "." + className,
-                    "com.retro.engine.scripting.user." + className,
-                    "com.retro.engine.scripting." + className,
-                    className
-                };
-            } else {
-                candidates = new String[]{
-                    "com.retro.engine.scripting.user." + className,
-                    "com.retro.engine.scripting." + className,
-                    className
-                };
-            }
+            String[] candidates = candidateNames(declaredPackage, className);
 
             for (String c : candidates) {
                 try {

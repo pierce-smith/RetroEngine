@@ -1,12 +1,13 @@
 package com.retro.engine.modding;
 
+import com.retro.engine.ecs.ComponentSchema;
+import com.retro.engine.ecs.Entity;
 import com.retro.engine.modding.events.EntitySpawnEvent;
 import com.retro.engine.modding.events.ModsLoadedEvent;
 import com.retro.engine.modding.events.SceneLoadEvent;
-import com.retro.engine.scene.components.ComponentSchema;
-import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scripting.EntityScript;
 import com.retro.engine.scripting.ScriptEngine;
+
 import org.codehaus.janino.SimpleCompiler;
 
 import java.io.File;
@@ -585,9 +586,9 @@ public final class ModLoader {
     private final com.retro.engine.modding.events.TriggerEvent triggerEvent = new com.retro.engine.modding.events.TriggerEvent();
 
     /** SceneRenderPipeline, once per frame before sorting. Allocation-free; a no-op without subscribers. */
-    public static void onRenderPass(com.retro.engine.editor.render.SceneRenderPipeline pipeline, com.retro.engine.assets.AssetStreamer streamer,
-                                    com.retro.engine.rhi.RenderQueue queue, com.retro.engine.rhi.SceneLights lights,
-                                    com.retro.engine.rhi.RenderEnvironment environment, boolean standalone) {
+    public static void onRenderPass(com.retro.engine.graphics.SceneRenderPipeline pipeline, com.retro.engine.assets.AssetStreamer streamer,
+                                    com.retro.engine.graphics.RenderQueue queue, com.retro.engine.graphics.SceneLights lights,
+                                    com.retro.engine.graphics.RenderEnvironment environment, boolean standalone) {
         ModLoader l = active;
         if (l == null || !l.eventBus.hasSubscribers(com.retro.engine.modding.events.RenderPassEvent.class)) return;
         com.retro.engine.modding.events.RenderPassEvent e = l.renderPassEvent;
@@ -635,11 +636,11 @@ public final class ModLoader {
     }
 
     private static boolean hasTriggerCollider(Entity e) {
-        com.retro.engine.scene.components.physics.BoxCollider box = e.getComponent(com.retro.engine.scene.components.physics.BoxCollider.class);
+        com.retro.engine.ecs.components.BoxCollider box = e.getComponent(com.retro.engine.ecs.components.BoxCollider.class);
         if (box != null && box.isTrigger) return true;
-        com.retro.engine.scene.components.physics.SphereCollider sphere = e.getComponent(com.retro.engine.scene.components.physics.SphereCollider.class);
+        com.retro.engine.ecs.components.SphereCollider sphere = e.getComponent(com.retro.engine.ecs.components.SphereCollider.class);
         if (sphere != null && sphere.isTrigger) return true;
-        com.retro.engine.scene.components.physics.CapsuleCollider capsule = e.getComponent(com.retro.engine.scene.components.physics.CapsuleCollider.class);
+        com.retro.engine.ecs.components.CapsuleCollider capsule = e.getComponent(com.retro.engine.ecs.components.CapsuleCollider.class);
         return capsule != null && capsule.isTrigger;
     }
 

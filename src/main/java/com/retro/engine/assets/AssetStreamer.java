@@ -1,12 +1,7 @@
 package com.retro.engine.assets;
 
-import com.retro.engine.assets.cooker.RpackCooker;
-import com.retro.engine.assets.importers.MeshBufferData;
-import com.retro.engine.assets.importers.MeshImporter;
-import com.retro.engine.assets.importers.PixelBufferData;
-import com.retro.engine.rhi.IRenderBackend;
+import com.retro.engine.graphics.IRenderBackend;
 
-import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.util.ArrayList;
@@ -14,9 +9,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import javax.imageio.ImageIO;
 
 /**
- * Ultra-high-performance Asset Streaming Engine leveraging JDK 21+ Virtual Threads
+ * Asset streaming on JDK 25 virtual threads
  * (Executors.newVirtualThreadPerTaskExecutor()) for non-blocking asynchronous disk I/O,
  * background Assimp model parsing, ImageIO texture decoding, and pre-cooked .rpack VRAM archive loading.
  *
@@ -54,7 +50,7 @@ public class AssetStreamer {
         if (assetsRoot == null || cookedRoot == null) return null;
         File raw = new File(filePath).getAbsoluteFile();
         if (!raw.toPath().normalize().startsWith(assetsRoot.toPath().normalize())) return null;
-        File cooked = com.retro.engine.assets.cooker.RpackCookerCli.cookedPathFor(assetsRoot, cookedRoot, raw);
+        File cooked = com.retro.engine.assets.RpackCookerCli.cookedPathFor(assetsRoot, cookedRoot, raw);
         return cooked.isFile() ? cooked.getPath() : null;
     }
 
@@ -169,14 +165,18 @@ public class AssetStreamer {
             Residency entry = trackedResidency.get(i);
             if (frame - entry.lastReferencedFrame < EVICTION_GRACE_FRAMES) continue;
 
+            // Entries no longer in their table (superseded by a newer load) are just untracked, otherwise they would be
+            // re-checked on every sweep forever
             if (entry.texture) {
-                if (!textureResidency.remove(entry.key, entry)) continue;
-                textureCache.remove(entry.key);
-                unregisterTextureHandle(entry.key);
+                if (textureResidency.remove(entry.key, entry)) {
+                    textureCache.remove(entry.key);
+                    unregisterTextureHandle(entry.key);
+                }
             } else {
-                if (!meshResidency.remove(entry.key, entry)) continue;
-                modelCache.remove(entry.key);
-                unregisterMeshHandle(entry.key);
+                if (meshResidency.remove(entry.key, entry)) {
+                    modelCache.remove(entry.key);
+                    unregisterMeshHandle(entry.key);
+                }
             }
             // Swap-remove keeps the sweep allocation-free and O(1) per eviction
             int last = trackedResidency.size() - 1;

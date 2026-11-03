@@ -1,38 +1,36 @@
 package com.retro.engine.editor;
 
-import com.retro.engine.core.ProjectSettings;
+import com.retro.engine.animation.AnimationClip;
+import com.retro.engine.animation.AnimationClipIO;
 import com.retro.engine.animation.AnimationSystem;
-import com.retro.engine.animation.clips.AnimationClip;
-import com.retro.engine.animation.clips.AnimationClipIO;
-import com.retro.engine.animation.skeleton.Skeleton;
-import com.retro.engine.animation.state.AnimatorController;
-import com.retro.engine.animation.state.AnimatorState;
-import com.retro.engine.animation.state.AnimatorTransition;
+import com.retro.engine.animation.AnimatorController;
+import com.retro.engine.animation.AnimatorState;
+import com.retro.engine.animation.AnimatorTransition;
+import com.retro.engine.animation.Skeleton;
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
-import com.retro.engine.editor.commands.CommandStack;
-import com.retro.engine.editor.dialogs.NativeFileDialog;
+import com.retro.engine.core.NativeFileDialog;
+import com.retro.engine.core.ProjectSettings;
+import com.retro.engine.ecs.*;
+import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.EntitySpawner;
+import com.retro.engine.ecs.SceneWorld;
+import com.retro.engine.ecs.SceneWorld.PlayState;
+import com.retro.engine.ecs.components.AnimatorComponent;
+import com.retro.engine.editor.animator.AnimatorGraphPanel;
 import com.retro.engine.editor.gizmos.ColliderDebugRenderer;
 import com.retro.engine.editor.gizmos.GizmoRenderer;
 import com.retro.engine.editor.gizmos.GizmoState;
-import com.retro.engine.editor.gizmos.GizmoSystem;
-import com.retro.engine.editor.ui.UIContext;
-import com.retro.engine.editor.ui.animator.AnimatorGraphPanel;
-import com.retro.engine.editor.ui.batch.UIGeometryBatch;
-import com.retro.engine.editor.ui.dock.DockPanel;
-import com.retro.engine.editor.ui.dock.DockSpace;
-import com.retro.engine.editor.ui.overlays.ContextMenuOverlay;
-import com.retro.engine.editor.ui.overlays.ModalDialogOverlay;
-import com.retro.engine.editor.ui.overlays.OverlaySystem;
-import com.retro.engine.editor.ui.overlays.ProjectLauncherOverlay;
-import com.retro.engine.editor.ui.overlays.ProjectSettingsOverlay;
-import com.retro.engine.editor.ui.panels.*;
-import com.retro.engine.scene.entity.Entity;
-import com.retro.engine.scene.entity.EntitySpawner;
-import com.retro.engine.scene.world.SceneWorld;
-import com.retro.engine.scene.world.SceneWorld.PlayState;
-import com.retro.engine.scene.components.media.AnimatorComponent;
+import com.retro.engine.editor.overlays.ContextMenuOverlay;
+import com.retro.engine.editor.overlays.ModalDialogOverlay;
+import com.retro.engine.editor.overlays.OverlaySystem;
+import com.retro.engine.editor.overlays.ProjectLauncherOverlay;
+import com.retro.engine.editor.overlays.ProjectSettingsOverlay;
+import com.retro.engine.editor.panels.*;
+import com.retro.engine.editor.panels.DockPanel;
+import com.retro.engine.editor.panels.DockSpace;
+import com.retro.engine.ui.UIGeometryBatch;
 
 import java.util.List;
 
@@ -540,7 +538,7 @@ public class EditorWorkspace {
         } else if (overlayManager.getActiveModal() == ModalState.PARENT_PICKER && overlayManager.getParentPickerTargetEntity() != null) {
             ModalDialogOverlay.renderEntityParentPickerModal(uiGeometryBuffer, overlayManager.getParentPickerTargetEntity(), sceneManager.getSceneEntities());
         } else if (overlayManager.getActiveModal() == ModalState.BUILD_EXPORTER) {
-            com.retro.engine.editor.ui.overlays.BuildExporterOverlay.render(uiGeometryBuffer);
+            com.retro.engine.editor.overlays.BuildExporterOverlay.render(uiGeometryBuffer);
         } else if (overlayManager.getActiveModal() == ModalState.PROJECT_SETTINGS) {
             ProjectSettingsOverlay.render(uiGeometryBuffer, projectSettings, lastNdcX, lastNdcY);
         }
@@ -587,7 +585,7 @@ public class EditorWorkspace {
 
                 if (selected != null && overlayManager.getActiveModal() == ModalState.NONE) {
                     float[] anchor = gizmoStateController.getGizmoAnchor(this);
-                    GizmoSystem.render3DGizmosAtWorldPosition(
+                    GizmoRenderer.render3DGizmosAtWorldPosition(
                         uiGeometryBuffer, anchor[0], anchor[1], anchor[2], gizmoStateController.getGizmoMode(),
                         gizmoStateController.getActiveAxis(), cameraController, gizmoStateController.getCamPanX(),
                         gizmoStateController.getCamPanY(), gizmoStateController.getCamZoom(),

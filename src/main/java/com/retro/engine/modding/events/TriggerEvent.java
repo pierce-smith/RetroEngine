@@ -1,6 +1,6 @@
 package com.retro.engine.modding.events;
 
-import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.ecs.Entity;
 
 /**
  * Posted once per trigger-volume pair and phase each physics step, alongside the EntityScript

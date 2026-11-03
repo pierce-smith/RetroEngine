@@ -1,17 +1,17 @@
 package com.retro.engine.editor.gizmos;
 
-import com.retro.engine.animation.skeleton.Skeleton;
+import com.retro.engine.animation.Skeleton;
+import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.SceneWorld;
+import com.retro.engine.ecs.components.AnimatorComponent;
+import com.retro.engine.ecs.components.MeshFilter;
+import com.retro.engine.ecs.components.Transform;
 import com.retro.engine.editor.EditorWorkspace.GizmoAxis;
 import com.retro.engine.editor.EditorWorkspace.GizmoMode;
 import com.retro.engine.editor.ViewportCamera;
-import com.retro.engine.editor.ui.batch.UIGeometryBatch;
-import com.retro.engine.editor.ui.panels.ViewportPanel;
-import com.retro.engine.rhi.IRenderBackend;
-import com.retro.engine.scene.components.media.AnimatorComponent;
-import com.retro.engine.scene.components.rendering.MeshFilter;
-import com.retro.engine.scene.entity.Entity;
-import com.retro.engine.scene.world.SceneWorld;
-import com.retro.engine.scene.components.transform.Transform;
+import com.retro.engine.editor.panels.ViewportPanel;
+import com.retro.engine.graphics.IRenderBackend;
+import com.retro.engine.ui.UIGeometryBatch;
 
 import java.util.List;
 

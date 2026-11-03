@@ -1,6 +1,6 @@
 package com.retro.engine.core;
 
-import com.retro.engine.rhi.RenderEnvironment;
+import com.retro.engine.graphics.RenderEnvironment;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -14,7 +14,7 @@ import java.nio.file.StandardCopyOption;
 /**
  * Per-project settings persisted as {@code <Project>/ProjectSettings.bin}: project identity, the startup scene, and
  * the global render environment (ground shadow blobs, distance fog, ambient light) that
- * {@link com.retro.engine.editor.render.SceneRenderPipeline} hands to the lit shaders every frame.
+ * {@link com.retro.engine.graphics.SceneRenderPipeline} hands to the lit shaders every frame.
  *
  * <p>Binary layout (big-endian, {@link DataOutputStream}):
  * <pre>

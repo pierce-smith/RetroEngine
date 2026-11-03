@@ -1,16 +1,15 @@
 package com.retro.engine.core;
 
 import com.retro.engine.assets.AssetDatabase;
+import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.components.Light;
+import com.retro.engine.ecs.components.Material;
+import com.retro.engine.ecs.components.ScriptComponent;
+import com.retro.engine.ecs.components.Transform;
+import com.retro.engine.ecs.serialization.SceneSerializer;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.modding.ModLoader;
-import com.retro.engine.scene.components.gameplay.ScriptComponent;
-import com.retro.engine.scene.components.rendering.Light;
-import com.retro.engine.scene.components.rendering.Material;
-import com.retro.engine.scene.components.transform.Transform;
-import com.retro.engine.scene.entity.Entity;
-import com.retro.engine.scene.serialization.SceneSerializer;
 
-import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
@@ -19,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
+import javax.imageio.ImageIO;
 
 /**
  * Project directory layout, ProjectSettings.bin persistence, starter content, and the
@@ -44,7 +44,8 @@ public final class ProjectWorkspace {
         "Meshes/Plane.obj",
         "Meshes/Sphere.obj",
         "Materials/Default.rmat",
-        "Scripts/StarterRotateScript.java"
+        "Scripts/StarterRotateScript.java",
+        "Scripts/LevelPortalScript.java"
     };
 
     private ProjectWorkspace() {}

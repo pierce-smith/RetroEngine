@@ -1,6 +1,6 @@
 package com.retro.engine.modding.events;
 
-import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.ecs.Entity;
 
 /**
  * Posted for every entity instantiated by a scene load (after .rpatch deltas), a prefab spawn, or

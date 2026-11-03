@@ -1,20 +1,20 @@
 package com.retro.engine.scripting;
 
-import com.retro.engine.physics.RaycastHit;
+import com.retro.engine.ecs.Component;
+import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.SceneWorld;
+import com.retro.engine.ecs.components.AnimatorComponent;
+import com.retro.engine.ecs.components.AudioSource;
+import com.retro.engine.ecs.components.Camera;
+import com.retro.engine.ecs.components.CharacterControllerComponent;
+import com.retro.engine.ecs.components.Light;
+import com.retro.engine.ecs.components.Material;
+import com.retro.engine.ecs.components.MeshFilter;
+import com.retro.engine.ecs.components.RigidBodyComponent;
+import com.retro.engine.ecs.components.Transform;
+import com.retro.engine.ecs.components.VehicleControllerComponent;
 import com.retro.engine.physics.PhysicsSystem;
-import com.retro.engine.scene.entity.Entity;
-import com.retro.engine.scene.world.SceneWorld;
-import com.retro.engine.scene.components.Component;
-import com.retro.engine.scene.components.transform.Transform;
-import com.retro.engine.scene.components.rendering.MeshFilter;
-import com.retro.engine.scene.components.rendering.Material;
-import com.retro.engine.scene.components.rendering.Light;
-import com.retro.engine.scene.components.rendering.Camera;
-import com.retro.engine.scene.components.media.AudioSource;
-import com.retro.engine.scene.components.media.AnimatorComponent;
-import com.retro.engine.scene.components.physics.RigidBodyComponent;
-import com.retro.engine.scene.components.gameplay.CharacterControllerComponent;
-import com.retro.engine.scene.components.gameplay.VehicleControllerComponent;
+import com.retro.engine.physics.RaycastHit;
 
 /**
  * Base class for all user gameplay scripts in RetroEngine.
@@ -154,20 +154,39 @@ public abstract class EntityScript {
         }
     }
 
+    /** Unit forward vector as a new array. In onUpdate prefer {@link #getForward(float[])}, which does not allocate. */
     public float[] getForward() {
-        Transform t = getTransform();
-        if (t == null) return new float[]{0.0f, 0.0f, 1.0f};
-        float radY = (float) Math.toRadians(t.rotY);
-        float radX = (float) Math.toRadians(t.rotX);
-        float x = (float) (Math.sin(radY) * Math.cos(radX));
-        float y = (float) (-Math.sin(radX));
-        float z = (float) (Math.cos(radY) * Math.cos(radX));
-        return new float[]{x, y, z};
+        return getForward(new float[3]);
     }
 
+    /** Writes the unit forward vector into {@code out[0..2]} and returns {@code out}. Allocation-free. */
+    public float[] getForward(float[] out) {
+        Transform t = getTransform();
+        if (t == null) {
+            out[0] = 0.0f; out[1] = 0.0f; out[2] = 1.0f;
+            return out;
+        }
+        float radY = (float) Math.toRadians(t.rotY);
+        float radX = (float) Math.toRadians(t.rotX);
+        out[0] = (float) (Math.sin(radY) * Math.cos(radX));
+        out[1] = (float) (-Math.sin(radX));
+        out[2] = (float) (Math.cos(radY) * Math.cos(radX));
+        return out;
+    }
+
+    /** Right vector as a new array. In onUpdate prefer {@link #getRight(float[])}, which does not allocate. */
     public float[] getRight() {
-        float[] f = getForward();
-        return new float[]{f[2], 0.0f, -f[0]};
+        return getRight(new float[3]);
+    }
+
+    /** Writes the right vector (forward turned 90 degrees about Y) into {@code out[0..2]} and returns {@code out}. */
+    public float[] getRight(float[] out) {
+        getForward(out);
+        float fx = out[0];
+        out[0] = out[2];
+        out[1] = 0.0f;
+        out[2] = -fx;
+        return out;
     }
 
     public float[] getUp() {
@@ -250,6 +269,23 @@ public abstract class EntityScript {
             return sceneWorld.getPhysicsWorld().raycastExcluding(entity, rayOriginX, rayOriginY, rayOriginZ, rayDirX, rayDirY, rayDirZ, maxDistance);
         }
         return new RaycastHit();
+    }
+
+    /**
+     * Allocation-free raycast for per-frame use: fills {@code out} (reuse one RaycastHit field per script) and returns
+     * whether something was hit. Ignores this script's own entity.
+     */
+    public boolean raycast(float rayOriginX, float rayOriginY, float rayOriginZ,
+                           float rayDirX, float rayDirY, float rayDirZ, float maxDistance, RaycastHit out) {
+        if (out == null) return false;
+        if (sceneWorld == null || sceneWorld.getPhysicsWorld() == null) {
+            out.hit = false;
+            out.entity = null;
+            out.distance = Float.MAX_VALUE;
+            return false;
+        }
+        sceneWorld.getPhysicsWorld().raycastExcludingInPlace(entity, rayOriginX, rayOriginY, rayOriginZ, rayDirX, rayDirY, rayDirZ, maxDistance, out);
+        return out.hit;
     }
 
     // =========================================================================

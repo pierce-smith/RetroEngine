@@ -1,12 +1,13 @@
 package com.retro.engine.core;
 
 import com.retro.engine.assets.AssetStreamer;
+import com.retro.engine.ecs.SceneWorld;
+import com.retro.engine.ecs.SceneWorld.PlayState;
 import com.retro.engine.editor.ViewportCamera;
-import com.retro.engine.editor.render.SceneRenderPipeline;
-import com.retro.engine.editor.ui.panels.ViewportPanel;
-import com.retro.engine.rhi.IRenderBackend;
-import com.retro.engine.scene.world.SceneWorld;
-import com.retro.engine.scene.world.SceneWorld.PlayState;
+import com.retro.engine.editor.panels.ViewportPanel;
+import com.retro.engine.graphics.GameView;
+import com.retro.engine.graphics.IRenderBackend;
+import com.retro.engine.graphics.SceneRenderPipeline;
 
 /**
  * Decoupled Standalone Game Runtime Execution Loop.
@@ -16,7 +17,6 @@ import com.retro.engine.scene.world.SceneWorld.PlayState;
  */
 public class RuntimeLoop {
 
-    private static final float MAX_FRAME_TIME = 0.1f; // 100 ms sanity cap
     private static final float TARGET_HEADLESS_TICK_TIME = 1.0f / 60.0f; // 60 Hz headless tick
 
     private boolean running = false;
@@ -75,7 +75,7 @@ public class RuntimeLoop {
             float rawDeltaTime = (currentTime - lastTime) / 1_000_000_000.0f;
             lastTime = currentTime;
 
-            float deltaTime = Math.min(Math.max(rawDeltaTime, 0.0001f), MAX_FRAME_TIME);
+            float deltaTime = Math.min(Math.max(rawDeltaTime, 0.0001f), EngineLoop.MAX_FRAME_DELTA);
 
             if (!headless) {
                 // 1. Poll Native Window & Hardware Input Events
@@ -87,7 +87,7 @@ public class RuntimeLoop {
                 sceneWorld.update(deltaTime);
 
                 // 3. Fullscreen viewport at the WindowHost size, viewed through the scene's Main Camera
-                if (window != null) ViewportPanel.setStandaloneFullscreen(window.getWidth(), window.getHeight());
+                if (window != null) GameView.setFullscreen(window.getWidth(), window.getHeight());
                 if (camera != null && rhi != null) {
                     ViewportPanel.syncPlayCamera(context.getEditorManager(), camera);
                     rhi.setCameraTransform(camera.getPanX(), camera.getPanY(), camera.getZoom(), camera.getPitch(), camera.getYaw());

@@ -2,10 +2,10 @@ package com.retro.engine.modding;
 
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.core.ProjectWorkspace;
+import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.SceneWorld;
+import com.retro.engine.ecs.serialization.SceneSerializer;
 import com.retro.engine.editor.EditorWorkspace;
-import com.retro.engine.scene.entity.Entity;
-import com.retro.engine.scene.serialization.SceneSerializer;
-import com.retro.engine.scene.world.SceneWorld;
 
 import java.io.File;
 import java.io.IOException;

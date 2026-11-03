@@ -1,0 +1,167 @@
+package com.retro.engine.ecs;
+
+import com.retro.engine.ecs.components.Material;
+import com.retro.engine.ecs.components.MeshFilter;
+import com.retro.engine.ecs.components.Transform;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Standalone Entity domain class with 64-bit Generational Entity Handle support
+ * and parent-child scene graph hierarchy capabilities.
+ */
+public class Entity {
+    public EntityHandle handle = EntityHandle.NULL;
+    public String id;
+    public String name;
+    public boolean selected = false;
+    public String parentId = null;
+    public boolean expandedInHierarchy = true;
+    private final List<String> childIds = new ArrayList<>();
+    private final List<Component> components = new ArrayList<>();
+
+    public Entity(String id, String name, String meshAssetPath) {
+        this.id = id;
+        this.name = name;
+        addComponent(new Transform());
+        if (meshAssetPath != null) {
+            addComponent(new MeshFilter(meshAssetPath));
+            addComponent(new Material());
+        }
+    }
+
+    public EntityHandle getHandle() { return handle; }
+    public void setHandle(EntityHandle handle) { this.handle = (handle != null) ? handle : EntityHandle.NULL; }
+
+    public void addComponent(Component component) {
+        if (component != null) {
+            components.add(component);
+        }
+    }
+
+    public <T extends Component> boolean removeComponent(Class<T> componentClass) {
+        if (componentClass == null) return false;
+        return components.removeIf(componentClass::isInstance);
+    }
+
+    /** Removes exactly this component instance (by reference), leaving other components of the same type attached. */
+    public boolean removeComponentInstance(Component component) {
+        if (component == null) return false;
+        for (int i = 0; i < components.size(); i++) {
+            if (components.get(i) == component) {
+                components.remove(i);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @SuppressWarnings("unchecked")
+    public <T extends Component> T getComponent(Class<T> componentClass) {
+        for (int i = 0; i < components.size(); i++) {
+            Component c = components.get(i);
+            if (componentClass.isInstance(c)) {
+                return (T) c;
+            }
+        }
+        return null;
+    }
+
+    /** Every attached component of the given type, in attachment order (empty when there are none). */
+    @SuppressWarnings("unchecked")
+    public <T extends Component> List<T> getComponents(Class<T> componentClass) {
+        List<T> result = new ArrayList<>();
+        if (componentClass == null) return result;
+        for (int i = 0; i < components.size(); i++) {
+            Component c = components.get(i);
+            if (componentClass.isInstance(c)) {
+                result.add((T) c);
+            }
+        }
+        return result;
+    }
+
+    public List<Component> getAllComponents() {
+        return components;
+    }
+
+    public Transform getTransform() {
+        return getComponent(Transform.class);
+    }
+
+    public String getMeshAssetPath() {
+        MeshFilter mc = getComponent(MeshFilter.class);
+        return (mc != null) ? mc.meshAssetPath : null;
+    }
+
+    public void setMeshAssetPath(String path) {
+        MeshFilter mc = getComponent(MeshFilter.class);
+        if (mc == null && path != null) {
+            mc = new MeshFilter(path);
+            addComponent(mc);
+            if (getComponent(Material.class) == null) {
+                addComponent(new Material());
+            }
+        } else if (mc != null) {
+            mc.meshAssetPath = path;
+        }
+    }
+
+    public void setTextureAsset(String path, String name) {
+        Material mat = getComponent(Material.class);
+        if (mat == null) {
+            mat = new Material(path, name);
+            addComponent(mat);
+        } else {
+            mat.textureAssetPath = path;
+            if (name != null) mat.textureName = name;
+        }
+    }
+
+    // --- Hierarchy Methods ---
+    public List<String> getChildIds() {
+        return childIds;
+    }
+
+    public void addChildId(String childId) {
+        if (childId != null && !childId.equals(this.id) && !childIds.contains(childId)) {
+            childIds.add(childId);
+        }
+    }
+
+    public void removeChildId(String childId) {
+        if (childId != null) {
+            childIds.remove(childId);
+            assert (!childIds.contains(childId)) : "[FATAL] Failed to remove child ID " + childId + " from parent " + this.id;
+        }
+    }
+
+    public boolean hasChild(String childId) {
+        return childIds.contains(childId);
+    }
+
+    /**
+     * True when {@code potentialAncestor} appears anywhere up this entity's parent chain (any depth). The walk is
+     * bounded by the scene size, so a corrupt parent loop that does not include the ancestor terminates.
+     */
+    public boolean isDescendantOf(Entity potentialAncestor, List<Entity> allEntities) {
+        if (potentialAncestor == null || potentialAncestor.id == null || allEntities == null) return false;
+        String currentParentId = this.parentId;
+        for (int steps = 0; steps <= allEntities.size(); steps++) {
+            if (currentParentId == null || currentParentId.isEmpty()) return false;
+            if (currentParentId.equalsIgnoreCase(potentialAncestor.id)) return true;
+
+            String nextParentId = null;
+            for (int i = 0; i < allEntities.size(); i++) {
+                Entity e = allEntities.get(i);
+                if (e != null && e.id != null && e.id.equalsIgnoreCase(currentParentId)) {
+                    nextParentId = e.parentId;
+                    break;
+                }
+            }
+            currentParentId = nextParentId;
+        }
+        return false;
+    }
+}

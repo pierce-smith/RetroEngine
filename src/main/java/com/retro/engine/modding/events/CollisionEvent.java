@@ -1,6 +1,6 @@
 package com.retro.engine.modding.events;
 
-import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.ecs.Entity;
 
 /**
  * Posted by NarrowphaseSolver for every solid (non-trigger) contact in a 60 Hz physics step, before the bodies are

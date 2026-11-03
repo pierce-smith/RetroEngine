@@ -1,18 +1,8 @@
 package com.retro.engine.animation;
 
-import com.retro.engine.animation.clips.AnimationClip;
-import com.retro.engine.animation.clips.AnimationClipIO;
-import com.retro.engine.animation.clips.KeyframeTrack;
-import com.retro.engine.animation.skeleton.Skeleton;
-import com.retro.engine.animation.state.AnimatorCondition;
-import com.retro.engine.animation.state.AnimatorController;
-import com.retro.engine.animation.state.AnimatorParameter;
-import com.retro.engine.animation.state.AnimatorState;
-import com.retro.engine.animation.state.AnimatorTransition;
-import com.retro.engine.animation.state.BlendTree;
-import com.retro.engine.assets.importers.MeshImporter;
-import com.retro.engine.scene.components.media.AnimatorComponent;
-import com.retro.engine.scene.world.SceneWorld.PlayState;
+import com.retro.engine.assets.MeshImporter;
+import com.retro.engine.ecs.SceneWorld.PlayState;
+import com.retro.engine.ecs.components.AnimatorComponent;
 
 import java.io.File;
 import java.io.IOException;
@@ -336,7 +326,8 @@ public class AnimationSystem {
         // Evaluate outgoing transitions if not already crossfading
         if (!animator.transitioning) {
             float normalizedTime = current.getNormalizedTime(animator.currentTime, parameters);
-            for (AnimatorTransition transition : current.transitions) {
+            for (int t = 0, n = current.transitions.size(); t < n; t++) {
+                AnimatorTransition transition = current.transitions.get(t);
                 if (!transition.canTransition(normalizedTime, parameters)) continue;
                 AnimatorState next = controller.getState(transition.destinationStateName);
                 if (next != null && next != current) {
@@ -353,7 +344,8 @@ public class AnimationSystem {
     }
 
     private static void resetTriggersUsedIn(AnimatorTransition transition, Map<String, AnimatorParameter> parameters) {
-        for (AnimatorCondition cond : transition.conditions) {
+        for (int c = 0, n = transition.conditions.size(); c < n; c++) {
+            AnimatorCondition cond = transition.conditions.get(c);
             AnimatorParameter param = parameters.get(cond.parameterName);
             if (param != null && param.type == AnimatorParameter.ParameterType.TRIGGER) param.resetTrigger();
         }

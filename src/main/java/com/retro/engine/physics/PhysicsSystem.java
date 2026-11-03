@@ -1,23 +1,21 @@
 package com.retro.engine.physics;
 
+import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.components.BoxCollider;
+import com.retro.engine.ecs.components.CapsuleCollider;
+import com.retro.engine.ecs.components.CharacterControllerComponent;
+import com.retro.engine.ecs.components.RigidBodyComponent;
+import com.retro.engine.ecs.components.SphereCollider;
+import com.retro.engine.ecs.components.Transform;
+import com.retro.engine.ecs.components.VehicleControllerComponent;
 import com.retro.engine.modding.ModLoader;
 import com.retro.engine.modding.events.TriggerEvent;
-import com.retro.engine.scene.components.gameplay.CharacterControllerComponent;
-import com.retro.engine.scene.components.gameplay.VehicleControllerComponent;
-import com.retro.engine.scene.components.physics.BoxCollider;
-import com.retro.engine.scene.components.physics.CapsuleCollider;
-import com.retro.engine.scene.components.physics.RigidBodyComponent;
-import com.retro.engine.scene.components.physics.SphereCollider;
-import com.retro.engine.scene.components.transform.Transform;
-import com.retro.engine.scene.entity.Entity;
 import com.retro.engine.scripting.ScriptEngine;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Modern 60 Hz 3D Physics Step Solver Orchestrator.
@@ -87,40 +85,6 @@ public class PhysicsSystem {
         public PhysicsBody bodyB;
     }
 
-    public static class PairKey {
-        public final Entity entityA;
-        public final Entity entityB;
-        private final String idA;
-        private final String idB;
-
-        public PairKey(Entity a, Entity b) {
-            if (a.id.compareTo(b.id) <= 0) {
-                this.idA = a.id;
-                this.idB = b.id;
-                this.entityA = a;
-                this.entityB = b;
-            } else {
-                this.idA = b.id;
-                this.idB = a.id;
-                this.entityA = b;
-                this.entityB = a;
-            }
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof PairKey)) return false;
-            PairKey pairKey = (PairKey) o;
-            return idA.equals(pairKey.idA) && idB.equals(pairKey.idB);
-        }
-
-        @Override
-        public int hashCode() {
-            return 31 * idA.hashCode() + idB.hashCode();
-        }
-    }
-
     private final Map<String, PhysicsBody> bodyMap = new HashMap<>();
     private final List<PhysicsBody> activeBodies = new ArrayList<>();
 
@@ -133,11 +97,11 @@ public class PhysicsSystem {
     private final List<BodyPair> broadphasePairs = new ArrayList<>();
     private int activePairCount = 0;
 
-    // Frame-to-frame collision & trigger state pairs
-    private Set<PairKey> previousCollisionPairs = new HashSet<>();
-    private Set<PairKey> currentCollisionPairs = new HashSet<>();
-    private Set<PairKey> previousTriggerPairs = new HashSet<>();
-    private Set<PairKey> currentTriggerPairs = new HashSet<>();
+    // Contacts from this step and the previous one, compared to raise Enter / Stay / Exit (swapped every step)
+    private ContactPairSet previousCollisionPairs = new ContactPairSet();
+    private ContactPairSet currentCollisionPairs = new ContactPairSet();
+    private ContactPairSet previousTriggerPairs = new ContactPairSet();
+    private ContactPairSet currentTriggerPairs = new ContactPairSet();
 
     private float accumulator = 0.0f;
     private final RaycastHit sharedRaycastHit = new RaycastHit();
@@ -189,7 +153,8 @@ public class PhysicsSystem {
             initWorld(sceneEntities);
         }
 
-        for (PhysicsBody body : activeBodies) {
+        for (int i = 0, n = activeBodies.size(); i < n; i++) {
+            PhysicsBody body = activeBodies.get(i);
             body.syncFromTransform();
             if (body.treeNodeId != -1) {
                 float minX = body.px - getHalfWidthX(body);
@@ -219,7 +184,8 @@ public class PhysicsSystem {
         }
 
         if (physicsRan) {
-            for (PhysicsBody body : activeBodies) {
+            for (int i = 0, n = activeBodies.size(); i < n; i++) {
+                PhysicsBody body = activeBodies.get(i);
                 if (body.rigidBody != null && body.rigidBody.motionType == RigidBodyComponent.MotionType.DYNAMIC) {
                     body.syncToTransform();
                 } else if (body.characterController != null || body.vehicleController != null) {
@@ -231,13 +197,13 @@ public class PhysicsSystem {
 
     public void recordCollision(PhysicsBody a, PhysicsBody b) {
         if (a != null && b != null && a.entity != null && b.entity != null) {
-            currentCollisionPairs.add(new PairKey(a.entity, b.entity));
+            currentCollisionPairs.add(a.entity, b.entity);
         }
     }
 
     public void recordTrigger(PhysicsBody a, PhysicsBody b) {
         if (a != null && b != null && a.entity != null && b.entity != null) {
-            currentTriggerPairs.add(new PairKey(a.entity, b.entity));
+            currentTriggerPairs.add(a.entity, b.entity);
         }
     }
 
@@ -249,7 +215,8 @@ public class PhysicsSystem {
         ScriptEngine.physicsUpdateScripts(activeBodies, dt);
 
         // 2. Step RigidBodies Motion Integration
-        for (PhysicsBody body : activeBodies) {
+        for (int i = 0, n = activeBodies.size(); i < n; i++) {
+            PhysicsBody body = activeBodies.get(i);
             RigidBodyComponent rb = body.rigidBody;
             if (rb == null || rb.motionType == RigidBodyComponent.MotionType.STATIC) continue;
 
@@ -306,48 +273,52 @@ public class PhysicsSystem {
         }
 
         // 7. Dispatch Collision Lifecycle Events
-        for (PairKey pair : currentCollisionPairs) {
-            if (previousCollisionPairs.contains(pair)) {
-                ScriptEngine.dispatchCollisionStay(pair.entityA, pair.entityB);
-                ScriptEngine.dispatchCollisionStay(pair.entityB, pair.entityA);
+        for (int i = 0; i < currentCollisionPairs.size(); i++) {
+            Entity a = currentCollisionPairs.first(i), b = currentCollisionPairs.second(i);
+            if (previousCollisionPairs.contains(a, b)) {
+                ScriptEngine.dispatchCollisionStay(a, b);
+                ScriptEngine.dispatchCollisionStay(b, a);
             } else {
-                ScriptEngine.dispatchCollisionEnter(pair.entityA, pair.entityB);
-                ScriptEngine.dispatchCollisionEnter(pair.entityB, pair.entityA);
+                ScriptEngine.dispatchCollisionEnter(a, b);
+                ScriptEngine.dispatchCollisionEnter(b, a);
             }
         }
-        for (PairKey pair : previousCollisionPairs) {
-            if (!currentCollisionPairs.contains(pair)) {
-                ScriptEngine.dispatchCollisionExit(pair.entityA, pair.entityB);
-                ScriptEngine.dispatchCollisionExit(pair.entityB, pair.entityA);
+        for (int i = 0; i < previousCollisionPairs.size(); i++) {
+            Entity a = previousCollisionPairs.first(i), b = previousCollisionPairs.second(i);
+            if (!currentCollisionPairs.contains(a, b)) {
+                ScriptEngine.dispatchCollisionExit(a, b);
+                ScriptEngine.dispatchCollisionExit(b, a);
             }
         }
 
         // 8. Dispatch Trigger Lifecycle Events
-        for (PairKey pair : currentTriggerPairs) {
-            if (previousTriggerPairs.contains(pair)) {
-                ScriptEngine.dispatchTriggerStay(pair.entityA, pair.entityB);
-                ScriptEngine.dispatchTriggerStay(pair.entityB, pair.entityA);
-                ModLoader.onTrigger(TriggerEvent.Phase.STAY, pair.entityA, pair.entityB);
+        for (int i = 0; i < currentTriggerPairs.size(); i++) {
+            Entity a = currentTriggerPairs.first(i), b = currentTriggerPairs.second(i);
+            if (previousTriggerPairs.contains(a, b)) {
+                ScriptEngine.dispatchTriggerStay(a, b);
+                ScriptEngine.dispatchTriggerStay(b, a);
+                ModLoader.onTrigger(TriggerEvent.Phase.STAY, a, b);
             } else {
-                ScriptEngine.dispatchTriggerEnter(pair.entityA, pair.entityB);
-                ScriptEngine.dispatchTriggerEnter(pair.entityB, pair.entityA);
-                ModLoader.onTrigger(TriggerEvent.Phase.ENTER, pair.entityA, pair.entityB);
+                ScriptEngine.dispatchTriggerEnter(a, b);
+                ScriptEngine.dispatchTriggerEnter(b, a);
+                ModLoader.onTrigger(TriggerEvent.Phase.ENTER, a, b);
             }
         }
-        for (PairKey pair : previousTriggerPairs) {
-            if (!currentTriggerPairs.contains(pair)) {
-                ScriptEngine.dispatchTriggerExit(pair.entityA, pair.entityB);
-                ScriptEngine.dispatchTriggerExit(pair.entityB, pair.entityA);
-                ModLoader.onTrigger(TriggerEvent.Phase.EXIT, pair.entityA, pair.entityB);
+        for (int i = 0; i < previousTriggerPairs.size(); i++) {
+            Entity a = previousTriggerPairs.first(i), b = previousTriggerPairs.second(i);
+            if (!currentTriggerPairs.contains(a, b)) {
+                ScriptEngine.dispatchTriggerExit(a, b);
+                ScriptEngine.dispatchTriggerExit(b, a);
+                ModLoader.onTrigger(TriggerEvent.Phase.EXIT, a, b);
             }
         }
 
         // 9. Swap state sets for next step
-        Set<PairKey> tempColl = previousCollisionPairs;
+        ContactPairSet tempColl = previousCollisionPairs;
         previousCollisionPairs = currentCollisionPairs;
         currentCollisionPairs = tempColl;
 
-        Set<PairKey> tempTrig = previousTriggerPairs;
+        ContactPairSet tempTrig = previousTriggerPairs;
         previousTriggerPairs = currentTriggerPairs;
         currentTriggerPairs = tempTrig;
     }

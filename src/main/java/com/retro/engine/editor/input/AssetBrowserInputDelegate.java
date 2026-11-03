@@ -1,22 +1,22 @@
 package com.retro.engine.editor.input;
 
-import com.retro.engine.editor.ui.panels.InspectorPanel;
-import com.retro.engine.scene.entity.Entity;
-import com.retro.engine.scene.components.rendering.Material;
-import com.retro.engine.scene.components.gameplay.ScriptComponent;
-import com.retro.engine.editor.EditorWorkspace;
+import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
-import com.retro.engine.editor.audio.UISoundPlayer;
-import com.retro.engine.editor.audio.UISoundPlayer.UISound;
-import com.retro.engine.editor.ui.panels.AssetBrowserPanel;
-import com.retro.engine.editor.ui.panels.HierarchyPanel;
-import com.retro.engine.editor.commands.EditorCommands;
-import com.retro.engine.editor.dialogs.NativeFileDialog;
-import com.retro.engine.editor.ui.panels.MenuItem;
-import com.retro.engine.assets.AssetDatabase;
-import com.retro.engine.assets.cooker.RpackCooker;
-import com.retro.engine.assets.cooker.RpackCookerCli;
+import com.retro.engine.assets.RpackCooker;
+import com.retro.engine.assets.RpackCookerCli;
+import com.retro.engine.core.NativeFileDialog;
+import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.components.Material;
+import com.retro.engine.ecs.components.ScriptComponent;
+import com.retro.engine.editor.EditorCommands;
+import com.retro.engine.editor.EditorWorkspace;
+import com.retro.engine.editor.panels.AssetBrowserPanel;
+import com.retro.engine.editor.panels.HierarchyPanel;
+import com.retro.engine.editor.panels.InspectorPanel;
+import com.retro.engine.editor.panels.MenuItem;
+import com.retro.engine.ui.UISoundPlayer;
+import com.retro.engine.ui.UISoundPlayer.UISound;
 
 import java.io.File;
 import java.io.IOException;

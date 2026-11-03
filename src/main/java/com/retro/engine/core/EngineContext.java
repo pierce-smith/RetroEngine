@@ -2,14 +2,15 @@ package com.retro.engine.core;
 
 import com.retro.engine.assets.AssetStreamer;
 import com.retro.engine.editor.EditorWorkspace;
-import com.retro.engine.editor.input.EditorInputRouter;
 import com.retro.engine.editor.ViewportCamera;
+import com.retro.engine.editor.input.EditorInputRouter;
 import com.retro.engine.editor.input.HotkeyRouter;
 import com.retro.engine.editor.input.InspectorInputDelegate;
-import com.retro.engine.editor.render.SceneRenderPipeline;
-import com.retro.engine.editor.ui.panels.ViewportPanel;
-import com.retro.engine.rhi.IRenderBackend;
-import com.retro.engine.rhi.ShaderSources;
+import com.retro.engine.editor.panels.ViewportPanel;
+import com.retro.engine.graphics.IRenderBackend;
+import com.retro.engine.graphics.SceneRenderPipeline;
+import com.retro.engine.graphics.ShaderSources;
+
 import org.lwjgl.glfw.GLFW;
 
 /**
@@ -238,8 +239,8 @@ public class EngineContext {
     private static java.io.File resolveRuntimeGameData(String[] cliArgs) {
         String[] candidates = {
             findCliValue(cliArgs, "--project"),
-            System.getProperty(com.retro.engine.editor.build.StandaloneExporter.GAME_DATA_PROPERTY),
-            new java.io.File(System.getProperty("user.dir"), com.retro.engine.editor.build.StandaloneExporter.GAME_DATA_DIR).getPath(),
+            System.getProperty(com.retro.engine.editor.StandaloneExporter.GAME_DATA_PROPERTY),
+            new java.io.File(System.getProperty("user.dir"), com.retro.engine.editor.StandaloneExporter.GAME_DATA_DIR).getPath(),
             System.getProperty("user.dir")
         };
         for (String c : candidates) {
@@ -270,7 +271,7 @@ public class EngineContext {
     /** Re-captures the cursor when gameplay wants mouse-look but Escape freed it; true if it did. */
     private boolean relockCursorForPlay() {
         if (window == null || window.isCursorCaptured() || !com.retro.engine.scripting.Input.isCursorLockWanted()) return false;
-        if (editorManager == null || editorManager.getPlayState() != com.retro.engine.scene.world.SceneWorld.PlayState.SIMULATING) return false;
+        if (editorManager == null || editorManager.getPlayState() != com.retro.engine.ecs.SceneWorld.PlayState.SIMULATING) return false;
         window.setCursorCaptured(true);
         return true;
     }

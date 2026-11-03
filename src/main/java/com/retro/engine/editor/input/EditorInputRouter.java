@@ -1,24 +1,23 @@
 package com.retro.engine.editor.input;
 
-import com.retro.engine.editor.ui.overlays.BuildExporterOverlay;
-import com.retro.engine.editor.ui.overlays.ProjectSettingsOverlay;
-
-import com.retro.engine.editor.ui.overlays.ProjectLauncherOverlay;
+import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.components.Transform;
+import com.retro.engine.editor.EditorCommands;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ViewportCamera;
-import com.retro.engine.editor.audio.UISoundPlayer;
-import com.retro.engine.editor.audio.UISoundPlayer.UISound;
-import com.retro.engine.editor.commands.EditorCommands;
+import com.retro.engine.editor.animator.AnimatorGraphPanel;
 import com.retro.engine.editor.gizmos.GizmoState;
-import com.retro.engine.editor.ui.animator.AnimatorGraphPanel;
-import com.retro.engine.editor.ui.batch.PanelRegion;
-import com.retro.engine.editor.ui.dock.DockPanel;
-import com.retro.engine.editor.ui.dock.DockSpace;
-import com.retro.engine.editor.ui.overlays.ContextMenuOverlay;
-import com.retro.engine.editor.ui.overlays.OverlaySystem;
-import com.retro.engine.editor.ui.panels.InspectorPanel;
-import com.retro.engine.scene.components.transform.Transform;
-import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.editor.overlays.BuildExporterOverlay;
+import com.retro.engine.editor.overlays.ContextMenuOverlay;
+import com.retro.engine.editor.overlays.OverlaySystem;
+import com.retro.engine.editor.overlays.ProjectLauncherOverlay;
+import com.retro.engine.editor.overlays.ProjectSettingsOverlay;
+import com.retro.engine.editor.panels.DockPanel;
+import com.retro.engine.editor.panels.DockSpace;
+import com.retro.engine.editor.panels.InspectorPanel;
+import com.retro.engine.editor.panels.PanelRegion;
+import com.retro.engine.ui.UISoundPlayer;
+import com.retro.engine.ui.UISoundPlayer.UISound;
 
 /**
  * Single Authority for GLFW/LWJGL Editor Input Event Routing.

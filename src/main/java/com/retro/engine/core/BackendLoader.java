@@ -1,12 +1,12 @@
 package com.retro.engine.core;
 
-import com.retro.engine.rhi.IRenderBackend;
-import com.retro.engine.rhi.ViewportSpec;
+import com.retro.engine.graphics.IRenderBackend;
+import com.retro.engine.graphics.ViewportSpec;
 
 public class BackendLoader {
 
-    private static final String VULKAN_CLASS = "com.retro.engine.backend.vulkan.VulkanBackend";
-    private static final String METAL_CLASS  = "com.retro.engine.backend.metal.MetalBackend";
+    private static final String VULKAN_CLASS = "com.retro.engine.graphics.vulkan.VulkanBackend";
+    private static final String METAL_CLASS  = "com.retro.engine.graphics.metal.MetalBackend";
 
     private IRenderBackend activeBackend = null;
 

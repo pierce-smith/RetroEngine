@@ -1,6 +1,6 @@
 package com.retro.engine.physics;
 
-import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.ecs.Entity;
 
 /**
  * Encapsulates the results of a 3D raycast spatial query into the physics world.

@@ -1,6 +1,6 @@
 package com.retro.engine.modding.events;
 
-import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.ecs.Entity;
 
 import java.util.List;
 

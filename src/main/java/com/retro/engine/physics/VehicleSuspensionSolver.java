@@ -1,6 +1,6 @@
 package com.retro.engine.physics;
 
-import com.retro.engine.scene.components.gameplay.VehicleControllerComponent;
+import com.retro.engine.ecs.components.VehicleControllerComponent;
 
 import java.util.List;
 
@@ -12,7 +12,8 @@ import java.util.List;
 public class VehicleSuspensionSolver {
 
     public void updateVehicles(List<PhysicsSystem.PhysicsBody> activeBodies, float dt, PhysicsSystem physicsSystem, RaycastHit sharedRaycastHit) {
-        for (PhysicsSystem.PhysicsBody body : activeBodies) {
+        for (int b = 0, n = activeBodies.size(); b < n; b++) {
+            PhysicsSystem.PhysicsBody body = activeBodies.get(b);
             VehicleControllerComponent vc = body.vehicleController;
             if (vc == null) continue;
 

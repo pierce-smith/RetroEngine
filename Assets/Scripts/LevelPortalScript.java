@@ -1,6 +1,6 @@
 package com.retro.engine.scripting.user;
 
-import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.ecs.Entity;
 import com.retro.engine.scripting.EntityScript;
 import com.retro.engine.scripting.Input;
 

@@ -229,7 +229,7 @@ tasks.register<JavaExec>("cookAssets") {
     description = "Automatically bakes raw Assets/ into binary .rpack packages using RpackCookerCli."
     dependsOn(tasks.named("classes"))
 
-    mainClass.set("com.retro.engine.assets.cooker.RpackCookerCli")
+    mainClass.set("com.retro.engine.assets.RpackCookerCli")
     classpath = sourceSets["main"].runtimeClasspath
     args = listOf("--dir", "Assets", "--out", "Cooked")
 }

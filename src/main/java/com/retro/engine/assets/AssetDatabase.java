@@ -1,10 +1,8 @@
 package com.retro.engine.assets;
 
-import com.retro.engine.assets.importers.TextureImporter;
-import com.retro.engine.assets.importers.MeshImporter;
-import com.retro.engine.editor.dialogs.NativeFileDialog;
-import com.retro.engine.rhi.ShaderSources;
-import com.retro.engine.scene.serialization.SceneSerializer;
+import com.retro.engine.core.NativeFileDialog;
+import com.retro.engine.ecs.serialization.SceneSerializer;
+import com.retro.engine.graphics.ShaderSources;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -241,7 +239,7 @@ public class AssetDatabase {
 
         clear();
         this.activeProjectPath = normalizePath(root.getAbsolutePath());
-        com.retro.engine.assets.importers.ProjectFileLocator.setProjectRoot(root);
+        com.retro.engine.assets.ProjectFileLocator.setProjectRoot(root);
         new File(root, ASSETS_DIR).mkdirs();
         new File(root, INTERNAL_DIR).mkdirs();
 
@@ -350,7 +348,7 @@ public class AssetDatabase {
         if (!storedPath.startsWith(ASSETS_DIR + "/")) return;
         File raw = new File(activeProjectPath, storedPath);
         if (raw.exists()) return;
-        File cooked = com.retro.engine.assets.cooker.RpackCookerCli.cookedPathFor(
+        File cooked = com.retro.engine.assets.RpackCookerCli.cookedPathFor(
             new File(activeProjectPath, ASSETS_DIR), new File(activeProjectPath, COOKED_DIR), raw);
         if (cooked.isFile()) cookedOnlyAssets.put(storedPath, uuid);
     }
@@ -921,7 +919,7 @@ public class AssetDatabase {
         this.currentFolderPath = "";
         if (hasActiveProject()) com.retro.engine.scripting.ScriptEngine.setProjectAssetsRoot(null);
         this.activeProjectPath = "";
-        com.retro.engine.assets.importers.ProjectFileLocator.setProjectRoot(null);
+        com.retro.engine.assets.ProjectFileLocator.setProjectRoot(null);
     }
 
     private static String normalizePath(String path) {

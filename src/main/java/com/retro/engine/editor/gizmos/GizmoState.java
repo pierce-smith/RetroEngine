@@ -1,19 +1,19 @@
 package com.retro.engine.editor.gizmos;
 
 import com.retro.engine.animation.AnimationSystem;
-import com.retro.engine.animation.skeleton.Skeleton;
+import com.retro.engine.animation.Skeleton;
+import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.SceneWorld;
+import com.retro.engine.ecs.components.AnimatorComponent;
+import com.retro.engine.ecs.components.Transform;
+import com.retro.engine.editor.EditorCommands;
 import com.retro.engine.editor.EditorWorkspace;
-import com.retro.engine.editor.commands.EditorCommands;
 import com.retro.engine.editor.EditorWorkspace.GizmoAxis;
 import com.retro.engine.editor.EditorWorkspace.GizmoMode;
-import com.retro.engine.editor.ui.dock.DockPanel;
-import com.retro.engine.editor.ui.dock.DockSpace;
-import com.retro.engine.editor.ui.overlays.OverlaySystem;
-import com.retro.engine.editor.ui.panels.ViewportPanel;
-import com.retro.engine.scene.components.media.AnimatorComponent;
-import com.retro.engine.scene.entity.Entity;
-import com.retro.engine.scene.world.SceneWorld;
-import com.retro.engine.scene.components.transform.Transform;
+import com.retro.engine.editor.overlays.OverlaySystem;
+import com.retro.engine.editor.panels.DockPanel;
+import com.retro.engine.editor.panels.DockSpace;
+import com.retro.engine.editor.panels.ViewportPanel;
 
 import java.util.Arrays;
 

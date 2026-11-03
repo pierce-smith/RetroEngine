@@ -1,11 +1,10 @@
 package com.retro.engine.physics;
 
 import com.retro.engine.core.GamepadManager;
-import com.retro.engine.scene.components.gameplay.CharacterControllerComponent;
-import com.retro.engine.scene.components.rendering.Camera;
-import com.retro.engine.scene.components.transform.Transform;
-import com.retro.engine.scene.entity.Entity;
-
+import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.components.Camera;
+import com.retro.engine.ecs.components.CharacterControllerComponent;
+import com.retro.engine.ecs.components.Transform;
 import com.retro.engine.scripting.Input;
 
 import java.util.ArrayList;
@@ -65,13 +64,14 @@ public class CharacterControllerSolver {
         final Transform camera;
         final boolean onCharacter; // Camera on the character entity itself: the stick turns the whole body
         float yaw, pitch, distance, pivotX, pivotY, pivotZ;
+        final float[] dir = new float[3]; // Scratch view direction, reused every orbit step
 
         OrbitState(Transform camera, boolean onCharacter) {
             this.camera = camera;
             this.onCharacter = onCharacter;
             this.yaw = camera.rotY;
             this.pitch = camera.rotX;
-            float[] f = forward(yaw, pitch);
+            float[] f = forward(yaw, pitch, dir);
             distance = Math.max(0.0f, -(camera.posX * f[0] + camera.posY * f[1] + camera.posZ * f[2]));
             pivotX = camera.posX + f[0] * distance;
             pivotY = camera.posY + f[1] * distance;
@@ -148,11 +148,17 @@ public class CharacterControllerSolver {
         boolean jump = jumpRequested;
         jumpRequested = false;
 
-        for (PhysicsSystem.PhysicsBody body : activeBodies) {
+        for (int i = 0, n = activeBodies.size(); i < n; i++) {
+            PhysicsSystem.PhysicsBody body = activeBodies.get(i);
             CharacterControllerComponent cc = body.characterController;
             if (cc == null) continue;
 
-            CameraRig rig = rigs.computeIfAbsent(cc, k -> resolveCameraRig(body.entity));
+            // get/put rather than computeIfAbsent: the capturing lambda would allocate every step
+            CameraRig rig = rigs.get(cc);
+            if (rig == null) {
+                rig = resolveCameraRig(body.entity);
+                rigs.put(cc, rig);
+            }
             if (rig.orbit() != null && !cursorLockRequested) {
                 cursorLockRequested = true; // Once per session, so a script that frees the cursor keeps it free
                 Input.setCursorLocked(true);
@@ -238,7 +244,7 @@ public class CharacterControllerSolver {
         // An authored pitch outside the range is kept rather than snapped; the stick only moves it back toward the range
         float lo = Math.min(MIN_PITCH, orbit.pitch), hi = Math.max(MAX_PITCH, orbit.pitch);
         orbit.pitch = Math.max(lo, Math.min(hi, orbit.pitch + pitchDelta));
-        float[] f = forward(orbit.yaw, orbit.pitch);
+        float[] f = forward(orbit.yaw, orbit.pitch, orbit.dir);
         Transform t = orbit.camera;
         t.setPosition(orbit.pivotX - f[0] * orbit.distance, orbit.pivotY - f[1] * orbit.distance, orbit.pivotZ - f[2] * orbit.distance);
         t.setRotation(orbit.pitch, orbit.yaw, t.rotZ);
@@ -296,10 +302,13 @@ public class CharacterControllerSolver {
     }
 
     /** View direction for a camera rotation, matching SceneRenderPipeline.computeCameraView (R = Ry * Rx, looks down -Z). */
-    private static float[] forward(float yawDeg, float pitchDeg) {
+    private static float[] forward(float yawDeg, float pitchDeg, float[] out) {
         float yaw = (float) Math.toRadians(yawDeg), pitch = (float) Math.toRadians(pitchDeg);
         float cp = (float) Math.cos(pitch);
-        return new float[]{(float) Math.sin(yaw) * cp, (float) -Math.sin(pitch), (float) -Math.cos(yaw) * cp};
+        out[0] = (float) Math.sin(yaw) * cp;
+        out[1] = (float) -Math.sin(pitch);
+        out[2] = (float) -Math.cos(yaw) * cp;
+        return out;
     }
 
     private static float wrapDegrees(float deg) {

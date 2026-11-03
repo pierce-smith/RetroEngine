@@ -1,7 +1,8 @@
 package com.retro.engine.modding;
 
-import com.retro.engine.assets.cooker.RpackCooker;
+import com.retro.engine.assets.RpackCooker;
 import com.retro.engine.scripting.EntityScript;
+
 import org.codehaus.janino.SimpleCompiler;
 
 import java.io.File;

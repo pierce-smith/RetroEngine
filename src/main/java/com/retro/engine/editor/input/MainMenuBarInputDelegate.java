@@ -1,22 +1,22 @@
 package com.retro.engine.editor.input;
 
-import com.retro.engine.editor.ui.overlays.ModalDialogOverlay;
-import com.retro.engine.scene.entity.Entity;
-import com.retro.engine.scene.components.Component;
-import com.retro.engine.scene.components.rendering.Material;
-import com.retro.engine.scene.components.gameplay.ScriptComponent;
-import com.retro.engine.scene.components.media.AudioSource;
-import com.retro.engine.editor.EditorWorkspace;
-import com.retro.engine.editor.EditorWorkspace.DropdownMenu;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
-import com.retro.engine.editor.audio.UISoundPlayer;
-import com.retro.engine.editor.audio.UISoundPlayer.UISound;
-import com.retro.engine.editor.dialogs.NativeFileDialog;
-import com.retro.engine.editor.commands.EditorCommands;
-import com.retro.engine.editor.ui.dock.DockSpace;
-import com.retro.engine.editor.ui.panels.MainMenuBar;
-import com.retro.engine.editor.ui.panels.InspectorPanel;
+import com.retro.engine.core.NativeFileDialog;
+import com.retro.engine.ecs.Component;
+import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.components.AudioSource;
+import com.retro.engine.ecs.components.Material;
+import com.retro.engine.ecs.components.ScriptComponent;
+import com.retro.engine.editor.EditorCommands;
+import com.retro.engine.editor.EditorWorkspace;
+import com.retro.engine.editor.EditorWorkspace.DropdownMenu;
+import com.retro.engine.editor.overlays.ModalDialogOverlay;
+import com.retro.engine.editor.panels.DockSpace;
+import com.retro.engine.editor.panels.InspectorPanel;
+import com.retro.engine.editor.panels.MainMenuBar;
+import com.retro.engine.ui.UISoundPlayer;
+import com.retro.engine.ui.UISoundPlayer.UISound;
 
 import java.lang.reflect.Field;
 import java.util.List;
@@ -76,19 +76,19 @@ public class MainMenuBarInputDelegate {
                 } else if (itemIndex == 3) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
-                    com.retro.engine.editor.ui.overlays.ProjectSettingsOverlay.open(manager);
+                    com.retro.engine.editor.overlays.ProjectSettingsOverlay.open(manager);
                 } else if (itemIndex == 4) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
-                    com.retro.engine.editor.ui.overlays.ProjectLauncherOverlay.toggleModWorkspace(manager);
+                    com.retro.engine.editor.overlays.ProjectLauncherOverlay.toggleModWorkspace(manager);
                 } else if (itemIndex == 5) {
                     // Straight to the folder picker; packaging runs in the background and reports with a native dialog
                     manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
-                    com.retro.engine.editor.ui.overlays.BuildExporterOverlay.promptPackageMod(manager);
+                    com.retro.engine.editor.overlays.BuildExporterOverlay.promptPackageMod(manager);
                 } else if (itemIndex == 6) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
-                    com.retro.engine.editor.ui.overlays.BuildExporterOverlay.open(manager);
+                    com.retro.engine.editor.overlays.BuildExporterOverlay.open(manager);
                 } else if (itemIndex == 7) {
                     // Unbind the project and return to the launcher, which clears and re-scans on the next open
                     UISoundPlayer.play(UISound.CLOSE_MODAL);

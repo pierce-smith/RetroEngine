@@ -1,12 +1,12 @@
 package com.retro.engine.editor.gizmos;
 
 import com.retro.engine.animation.AnimationSystem;
+import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.SceneWorld;
+import com.retro.engine.ecs.components.AnimatorComponent;
+import com.retro.engine.ecs.components.MeshFilter;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ViewportCamera;
-import com.retro.engine.scene.components.media.AnimatorComponent;
-import com.retro.engine.scene.components.rendering.MeshFilter;
-import com.retro.engine.scene.entity.Entity;
-import com.retro.engine.scene.world.SceneWorld;
 
 /**
  * Pure Mathematical Delegate for 3D World-to-NDC Projection,

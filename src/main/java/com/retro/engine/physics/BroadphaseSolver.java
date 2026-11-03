@@ -1,6 +1,7 @@
 package com.retro.engine.physics;
 
-import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.ecs.Entity;
+
 import java.util.List;
 
 /**

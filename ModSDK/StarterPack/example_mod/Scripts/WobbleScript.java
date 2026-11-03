@@ -1,6 +1,6 @@
 package com.example.examplemod;
 
-import com.retro.engine.scene.components.transform.Transform;
+import com.retro.engine.ecs.components.Transform;
 import com.retro.engine.scripting.EntityScript;
 
 /**

@@ -1,14 +1,14 @@
 package com.retro.engine.editor.gizmos;
 
+import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.SceneWorld;
+import com.retro.engine.ecs.components.AnimatorComponent;
+import com.retro.engine.ecs.components.Transform;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.EditorWorkspace.GizmoAxis;
 import com.retro.engine.editor.EditorWorkspace.GizmoMode;
 import com.retro.engine.editor.ViewportCamera;
-import com.retro.engine.rhi.IRenderBackend;
-import com.retro.engine.scene.components.media.AnimatorComponent;
-import com.retro.engine.scene.entity.Entity;
-import com.retro.engine.scene.world.SceneWorld;
-import com.retro.engine.scene.components.transform.Transform;
+import com.retro.engine.graphics.IRenderBackend;
 
 /**
  * Single-Responsibility Interactor Delegate for 3D Gizmo GPU Color-ID Axis Picking,
@@ -18,7 +18,10 @@ public class GizmoInteractor {
 
     private static double lastRotateAngle = 0.0;
     private static boolean isRotateStart = true;
-    private static boolean snapEnabled = true;     // Snapping ENABLED by default
+    // Snapping is the user's default (snapByDefault, flipped by toggleSnap); holding Cmd/Ctrl inverts it for as long as
+    // the key is down, so snapped scenes get free placement and free-placement users get snapping on demand
+    private static boolean snapByDefault = true;
+    private static boolean snapInverted = false;
     private static float gridSnapSize = 0.5f;     // 0.5u translation steps
     private static float angleSnapStep = 15.0f;    // 15.0 deg rotation steps
     private static float scaleSnapStep = 0.25f;    // 0.25x scale steps
@@ -31,9 +34,13 @@ public class GizmoInteractor {
     private static double accumDragY = 0.0;
     private static double accumDragZ = 0.0;
 
-    public static void setSnapEnabled(boolean enable) { snapEnabled = enable; }
-    public static boolean isSnapEnabled() { return snapEnabled; }
-    public static void toggleSnap() { snapEnabled = !snapEnabled; }
+    /** Called every frame by HotkeyRouter with whether Cmd/Ctrl is held. */
+    public static void setSnapInverted(boolean inverted) { snapInverted = inverted; }
+    public static void setSnapByDefault(boolean enable) { snapByDefault = enable; }
+    public static boolean isSnapByDefault() { return snapByDefault; }
+    public static void toggleSnap() { snapByDefault = !snapByDefault; }
+    /** Whether the drag in progress snaps right now: the default, inverted while Cmd/Ctrl is held. */
+    public static boolean isSnapEnabled() { return snapByDefault != snapInverted; }
 
     public static float getGridSnapSize() { return gridSnapSize; }
     public static void setGridSnapSize(float size) { gridSnapSize = Math.max(0.05f, size); }
@@ -53,7 +60,7 @@ public class GizmoInteractor {
     }
 
     private static float snapTranslation(float offset) {
-        return snapEnabled ? Math.round(offset / gridSnapSize) * gridSnapSize : offset;
+        return isSnapEnabled() ? Math.round(offset / gridSnapSize) * gridSnapSize : offset;
     }
 
     public static void startDrag(Transform tc) {
@@ -119,22 +126,22 @@ public class GizmoInteractor {
             if (activeGizmoAxis == GizmoAxis.CENTER) {
                 // Uniform scale: every axis keeps its proportion to the drag-start scale
                 accumDragX += ds;
-                float factor = snapEnabled ? 1.0f + Math.round((float) accumDragX / scaleSnapStep) * scaleSnapStep : 1.0f + (float) accumDragX;
+                float factor = isSnapEnabled() ? 1.0f + Math.round((float) accumDragX / scaleSnapStep) * scaleSnapStep : 1.0f + (float) accumDragX;
                 factor = Math.max(0.01f, factor);
                 tc.scaleX = Math.max(0.01f, startSx * factor);
                 tc.scaleY = Math.max(0.01f, startSy * factor);
                 tc.scaleZ = Math.max(0.01f, startSz * factor);
             } else if (activeGizmoAxis == GizmoAxis.X) {
                 accumDragX += ds;
-                if (snapEnabled) tc.scaleX = Math.max(0.01f, startSx + Math.round((float) accumDragX / scaleSnapStep) * scaleSnapStep);
+                if (isSnapEnabled()) tc.scaleX = Math.max(0.01f, startSx + Math.round((float) accumDragX / scaleSnapStep) * scaleSnapStep);
                 else tc.scaleX = Math.max(0.01f, startSx + (float) accumDragX);
             } else if (activeGizmoAxis == GizmoAxis.Y) {
                 accumDragY += ds;
-                if (snapEnabled) tc.scaleY = Math.max(0.01f, startSy + Math.round((float) accumDragY / scaleSnapStep) * scaleSnapStep);
+                if (isSnapEnabled()) tc.scaleY = Math.max(0.01f, startSy + Math.round((float) accumDragY / scaleSnapStep) * scaleSnapStep);
                 else tc.scaleY = Math.max(0.01f, startSy + (float) accumDragY);
             } else if (activeGizmoAxis == GizmoAxis.Z) {
                 accumDragZ += ds;
-                if (snapEnabled) tc.scaleZ = Math.max(0.01f, startSz + Math.round((float) accumDragZ / scaleSnapStep) * scaleSnapStep);
+                if (isSnapEnabled()) tc.scaleZ = Math.max(0.01f, startSz + Math.round((float) accumDragZ / scaleSnapStep) * scaleSnapStep);
                 else tc.scaleZ = Math.max(0.01f, startSz + (float) accumDragZ);
             }
             return true;
@@ -145,15 +152,15 @@ public class GizmoInteractor {
 
             if (activeGizmoAxis == GizmoAxis.X) {
                 accumDragX += angleDelta;
-                if (snapEnabled) tc.rotX = (startRx + Math.round((float) accumDragX / angleSnapStep) * angleSnapStep) % 360.0f;
+                if (isSnapEnabled()) tc.rotX = (startRx + Math.round((float) accumDragX / angleSnapStep) * angleSnapStep) % 360.0f;
                 else tc.rotX = (startRx + (float) accumDragX) % 360.0f;
             } else if (activeGizmoAxis == GizmoAxis.Y) {
                 accumDragY += angleDelta;
-                if (snapEnabled) tc.rotY = (startRy + Math.round((float) accumDragY / angleSnapStep) * angleSnapStep) % 360.0f;
+                if (isSnapEnabled()) tc.rotY = (startRy + Math.round((float) accumDragY / angleSnapStep) * angleSnapStep) % 360.0f;
                 else tc.rotY = (startRy + (float) accumDragY) % 360.0f;
             } else if (activeGizmoAxis == GizmoAxis.Z) {
                 accumDragZ += angleDelta;
-                if (snapEnabled) tc.rotZ = (startRz + Math.round((float) accumDragZ / angleSnapStep) * angleSnapStep) % 360.0f;
+                if (isSnapEnabled()) tc.rotZ = (startRz + Math.round((float) accumDragZ / angleSnapStep) * angleSnapStep) % 360.0f;
                 else tc.rotZ = (startRz + (float) accumDragZ) % 360.0f;
             }
             return true;
@@ -248,7 +255,7 @@ public class GizmoInteractor {
             if (axis == GizmoAxis.CENTER) return false;
             double angleDelta = nextRotateAngleDelta(refX, refY, wx, wy, wz, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
             if (!Double.isNaN(angleDelta)) accumDragX += angleDelta;
-            float degrees = snapEnabled ? Math.round((float) accumDragX / angleSnapStep) * angleSnapStep : (float) accumDragX;
+            float degrees = isSnapEnabled() ? Math.round((float) accumDragX / angleSnapStep) * angleSnapStep : (float) accumDragX;
 
             // Counter-clockwise on screen is a positive turn about the axis pointing at the viewer
             float ax = axis == GizmoAxis.X ? 1.0f : 0.0f, ay = axis == GizmoAxis.Y ? 1.0f : 0.0f, az = axis == GizmoAxis.Z ? 1.0f : 0.0f;
@@ -296,7 +303,7 @@ public class GizmoInteractor {
     }
 
     private static float scaleFactor(double accum) {
-        float offset = snapEnabled ? Math.round((float) accum / scaleSnapStep) * scaleSnapStep : (float) accum;
+        float offset = isSnapEnabled() ? Math.round((float) accum / scaleSnapStep) * scaleSnapStep : (float) accum;
         return Math.max(0.01f, 1.0f + offset);
     }
 

@@ -1,6 +1,6 @@
 package com.example.examplemod;
 
-import com.retro.engine.editor.ui.panels.InspectorProperty;
+import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.modding.ModContext;
 import com.retro.engine.modding.ModEventListener;
 import com.retro.engine.modding.SubscribeEvent;
@@ -8,9 +8,9 @@ import com.retro.engine.modding.events.EntitySpawnEvent;
 import com.retro.engine.modding.events.CollisionEvent;
 import com.retro.engine.modding.events.ModsLoadedEvent;
 import com.retro.engine.modding.events.SceneLoadEvent;
-import com.retro.engine.scene.components.Component;
-import com.retro.engine.scene.components.gameplay.ScriptComponent;
-import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.ecs.Component;
+import com.retro.engine.ecs.components.ScriptComponent;
+import com.retro.engine.ecs.Entity;
 
 /**
  * Example mod entry point (mod.json "entry_point"). Compiled in memory by Janino when the game starts.

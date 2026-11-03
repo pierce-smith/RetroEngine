@@ -1,19 +1,19 @@
 package com.retro.engine.editor.input;
 
+import com.retro.engine.core.GamepadManager;
+import com.retro.engine.core.NativeFileDialog;
+import com.retro.engine.core.WindowHost;
+import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.SceneWorld.PlayState;
+import com.retro.engine.editor.EditorCommands;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ViewportCamera;
-import com.retro.engine.editor.audio.UISoundPlayer;
-import com.retro.engine.editor.audio.UISoundPlayer.UISound;
-import com.retro.engine.core.GamepadManager;
-import com.retro.engine.core.WindowHost;
 import com.retro.engine.editor.gizmos.GizmoInteractor;
-import com.retro.engine.editor.ui.panels.EngineConsolePanel;
-import com.retro.engine.editor.ui.panels.ViewportPanel;
-import com.retro.engine.scene.entity.Entity;
-import com.retro.engine.editor.commands.EditorCommands;
-import com.retro.engine.editor.dialogs.NativeFileDialog;
-import com.retro.engine.scene.world.SceneWorld.PlayState;
-
+import com.retro.engine.editor.panels.EngineConsolePanel;
+import com.retro.engine.editor.panels.ViewportPanel;
+import com.retro.engine.scripting.Input;
+import com.retro.engine.ui.UISoundPlayer;
+import com.retro.engine.ui.UISoundPlayer.UISound;
 
 import static org.lwjgl.glfw.GLFW.*;
 
@@ -45,8 +45,8 @@ public class HotkeyRouter {
         boolean isCtrlDown = window.isKeyDown(GLFW_KEY_LEFT_CONTROL) || window.isKeyDown(GLFW_KEY_RIGHT_CONTROL) || window.isKeyDown(GLFW_KEY_LEFT_SUPER) || window.isKeyDown(GLFW_KEY_RIGHT_SUPER);
         boolean isShiftDown = window.isKeyDown(GLFW_KEY_LEFT_SHIFT) || window.isKeyDown(GLFW_KEY_RIGHT_SHIFT);
 
-        // Snapping is DEFAULT (!isCtrlDown). Holding Cmd/Ctrl disables snapping for free movement.
-        GizmoInteractor.setSnapEnabled(!isCtrlDown);
+        // Holding Cmd/Ctrl inverts the default grid / angle / scale snapping while dragging a gizmo
+        GizmoInteractor.setSnapInverted(isCtrlDown);
 
         // Chords fire only on the frame the letter goes down, and only if the OS reported Ctrl/Cmd on that press.
         // Polled modifier state can latch (e.g. a key-up swallowed by a native dialog), so a bare S/D held for
@@ -67,9 +67,15 @@ public class HotkeyRouter {
         // Scene-editing commands are disabled outside EDITING so gameplay keys can't save, open, duplicate, or delete
         boolean isEditing = editorManager.getPlayState() == PlayState.EDITING;
 
-        // A focused Inspector text field owns the keyboard: no hotkeys (Backspace would delete the entity), no fly camera
-        if (InspectorInputDelegate.isEditingText()) {
+        // A focused Inspector text field owns the keyboard: no hotkeys (Backspace would delete the entity), no fly camera,
+        // and during Play no gameplay keys either
+        boolean typing = InspectorInputDelegate.isEditingText();
+        Input.setKeyboardSuppressed(typing);
+        if (typing) {
             if (cameraController != null) cameraController.update(deltaTime, false, false, false, false, false, false);
+            // Keys held while typing count as already handled, so Backspace still held when the field commits (Enter or
+            // a click away) does not fire Delete on the selected entity the next frame
+            latchHeldKeys(window);
             return;
         }
 
@@ -198,6 +204,15 @@ public class HotkeyRouter {
         if (pad != null && pad.isConnected() && window.isFocused()) {
             processGamepad(pad, editorManager, cameraController, deltaTime);
         }
+    }
+
+    private void latchHeldKeys(WindowHost window) {
+        deleteKeyPressedLastFrame = window.isKeyDown(GLFW_KEY_DELETE) || window.isKeyDown(GLFW_KEY_BACKSPACE);
+        graveKeyPressedLastFrame = window.isKeyDown(GLFW_KEY_GRAVE_ACCENT);
+        fKeyPressedLastFrame = window.isKeyDown(GLFW_KEY_F);
+        kKeyPressedLastFrame = window.isKeyDown(GLFW_KEY_K);
+        commaPressedLastFrame = window.isKeyDown(GLFW_KEY_COMMA);
+        periodPressedLastFrame = window.isKeyDown(GLFW_KEY_PERIOD);
     }
 
     private static boolean isChordPressed(WindowHost window, int key, boolean isDown, boolean wasDown) {

@@ -1,6 +1,7 @@
 package com.retro.engine.core;
 
-import com.retro.engine.rhi.ViewportSpec;
+import com.retro.engine.graphics.ViewportSpec;
+
 import org.lwjgl.glfw.GLFWVidMode;
 import org.lwjgl.system.MemoryStack;
 

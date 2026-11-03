@@ -1,8 +1,8 @@
 package com.retro.engine.modding;
 
-import com.retro.engine.backend.vulkan.VulkanShaderCompiler;
-import com.retro.engine.rhi.GraphicsAPI;
-import com.retro.engine.rhi.ShaderSources;
+import com.retro.engine.graphics.GraphicsAPI;
+import com.retro.engine.graphics.ShaderSources;
+import com.retro.engine.graphics.vulkan.VulkanShaderCompiler;
 
 import java.io.File;
 import java.io.IOException;

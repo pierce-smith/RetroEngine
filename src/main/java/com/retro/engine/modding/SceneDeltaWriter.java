@@ -1,8 +1,8 @@
 package com.retro.engine.modding;
 
-import com.retro.engine.scene.components.Component;
-import com.retro.engine.scene.components.ComponentSchema;
-import com.retro.engine.scene.entity.Entity;
+import com.retro.engine.ecs.Component;
+import com.retro.engine.ecs.ComponentSchema;
+import com.retro.engine.ecs.Entity;
 
 import java.io.File;
 import java.nio.file.Path;
