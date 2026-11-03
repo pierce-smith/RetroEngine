@@ -204,6 +204,53 @@ public class WindowHost {
         this.textInputCapture = capture;
     }
 
+    private static final String ICON_FILE = "Assets/Editor/icon.png";
+    private static final String ICON_RESOURCE = "/icons/icon.png";
+
+    /**
+     * Sets the window/taskbar icon from {@value #ICON_FILE} (next to the working directory), falling back to the
+     * bundled {@value #ICON_RESOURCE} resource. macOS has no per-window icon (the bundle icon is used), so it is skipped.
+     */
+    private void applyWindowIcon() {
+        if (System.getProperty("os.name", "").toLowerCase().contains("mac")) return;
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            IntBuffer w = stack.mallocInt(1), h = stack.mallocInt(1), channels = stack.mallocInt(1);
+            java.nio.ByteBuffer pixels = null;
+            java.io.File file = new java.io.File(ICON_FILE);
+            if (file.isFile()) {
+                pixels = org.lwjgl.stb.STBImage.stbi_load(file.getAbsolutePath(), w, h, channels, 4);
+            }
+            if (pixels == null) {
+                try (java.io.InputStream in = WindowHost.class.getResourceAsStream(ICON_RESOURCE)) {
+                    if (in != null) {
+                        byte[] bytes = in.readAllBytes();
+                        java.nio.ByteBuffer encoded = org.lwjgl.system.MemoryUtil.memAlloc(bytes.length);
+                        try {
+                            encoded.put(bytes).flip();
+                            pixels = org.lwjgl.stb.STBImage.stbi_load_from_memory(encoded, w, h, channels, 4);
+                        } finally {
+                            org.lwjgl.system.MemoryUtil.memFree(encoded);
+                        }
+                    }
+                }
+            }
+            if (pixels == null) {
+                System.err.println("[GLFW] Window icon not loaded (" + ICON_FILE + " / " + ICON_RESOURCE + "): "
+                    + org.lwjgl.stb.STBImage.stbi_failure_reason());
+                return;
+            }
+            try {
+                org.lwjgl.glfw.GLFWImage.Buffer images = org.lwjgl.glfw.GLFWImage.malloc(1, stack);
+                images.get(0).set(w.get(0), h.get(0), pixels);
+                glfwSetWindowIcon(windowHandle, images);
+            } finally {
+                org.lwjgl.stb.STBImage.stbi_image_free(pixels);
+            }
+        } catch (java.io.IOException | RuntimeException e) {
+            System.err.println("[GLFW] Window icon setup failed: " + e);
+        }
+    }
+
     public boolean create() {
         GLFWErrorCallback.createPrint(System.err).set();
         if (!glfwInit()) {
@@ -219,6 +266,8 @@ public class WindowHost {
             System.err.println("[GLFW] Failed to create GLFW window!");
             return false;
         }
+
+        applyWindowIcon();
 
         gamepadManager = new GamepadManager();
 

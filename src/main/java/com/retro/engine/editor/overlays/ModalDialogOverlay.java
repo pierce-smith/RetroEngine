@@ -111,17 +111,26 @@ public class ModalDialogOverlay {
     /**
      * [+ IMPORT DISK...]: opens the OS file dialog filtered to {@code filterType}, imports the chosen file into the
      * project's Assets/ folder and returns its registered asset (so the caller can bind it as the picker's choice).
-     * Returns null when the dialog is cancelled, the type has no importable files, or the import did not register.
+     * The picker runs off the main thread; {@code onImported} gets null (on the main thread) when the dialog is
+     * cancelled, the type has no importable files, or the import did not register.
      */
-    public static AssetMeta importPickerAssetFromDisk(AssetType filterType, AssetDatabase assetDb) {
-        if (filterType == null || assetDb == null) return null;
+    public static void importPickerAssetFromDisk(com.retro.engine.editor.EditorWorkspace workspace, AssetType filterType,
+                                                 java.util.function.Consumer<AssetMeta> onImported) {
+        if (workspace == null || filterType == null) { onImported.accept(null); return; }
+        AssetDatabase assetDb = workspace.getAssetDatabase();
         String[] extensions = importExtensions(filterType);
-        if (extensions.length == 0) return null;
+        if (extensions.length == 0) { onImported.accept(null); return; }
 
-        String chosen = NativeFileDialog.openFileDialog("Import " + filterType.name() + " Asset", "",
-                importFilterDescription(filterType, extensions), extensions);
+        String filter = importFilterDescription(filterType, extensions);
+        boolean started = workspace.runNativeDialogAsync(
+            () -> NativeFileDialog.openFileDialog("Import " + filterType.name() + " Asset", "", filter, extensions),
+            chosen -> onImported.accept(registerImported(chosen, filterType, assetDb)));
+        if (!started) onImported.accept(null);
+    }
+
+    /** Main thread: copies {@code chosen} into Assets/ and returns its registered picker entry, or null. */
+    private static AssetMeta registerImported(String chosen, AssetType filterType, AssetDatabase assetDb) {
         if (chosen == null || chosen.trim().isEmpty()) return null;
-
         // Copies outside files into the current Assets/ folder and rescans, so the picker list refreshes on the next frame
         List<String> imported = assetDb.onFilesDropped(List.of(chosen));
         if (imported.isEmpty()) return null;

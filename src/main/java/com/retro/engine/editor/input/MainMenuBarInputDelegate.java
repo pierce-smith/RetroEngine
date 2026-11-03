@@ -2,7 +2,6 @@ package com.retro.engine.editor.input;
 
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
-import com.retro.engine.core.NativeFileDialog;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.components.AudioSource;
@@ -86,17 +85,10 @@ public class MainMenuBarInputDelegate {
                     manager.getSceneManager().newScene();
                 } else if (itemIndex == 2) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
-                    String defaultDir = manager.getProjectScenesDir();
-                    String importedPath = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.rscene)", "rscene");
-                    if (importedPath != null && !importedPath.trim().isEmpty()) {
-                        UISoundPlayer.play(UISound.SPAWN);
-                        manager.getSceneManager().loadSceneFromFile(importedPath, manager.getAssetDatabase());
-                    } else {
-                        UISoundPlayer.play(UISound.CLOSE_MODAL);
-                    }
+                    manager.promptOpenScene();
                 } else if (itemIndex == 3) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
-                    manager.getSceneManager().promptSaveSceneWithNativeDialog(manager.getAssetDatabase().getMutableAssetDirectory(), manager.getAssetDatabase());
+                    manager.promptSaveScene();
                 } else if (itemIndex == 4) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     manager.getOverlayManager().setActiveDropdownMenu(DropdownMenu.NONE);
@@ -149,7 +141,7 @@ public class MainMenuBarInputDelegate {
                     UISoundPlayer.play(UISound.SPAWN);
                 } else if (itemIndex == 3) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
-                    manager.getSceneManager().promptSaveSelectedAsPrefab(manager.getAssetDatabase().getMutableAssetDirectory(), manager.getAssetDatabase());
+                    manager.promptSaveSelectedAsPrefab();
                 }
             } else if (activeDropdownMenu == DropdownMenu.VIEW) {
                 if (itemIndex == 0) { UISoundPlayer.play(UISound.CLICK); manager.resetViewportCamera(); }
@@ -209,15 +201,17 @@ public class MainMenuBarInputDelegate {
         // [+ IMPORT DISK...]: import a file from disk, then bind it exactly as if its row had been clicked
         if (ModalDialogOverlay.isOverPickerImportButton(ndcX, ndcY)) {
             UISoundPlayer.play(UISound.OPEN_MODAL);
-            AssetMeta imported = ModalDialogOverlay.importPickerAssetFromDisk(pickerFilterType, manager.getAssetDatabase());
-            if (imported == null) {
-                // Cancelled or not importable: keep the picker open
-                UISoundPlayer.play(UISound.CLOSE_MODAL);
-                return;
-            }
-            UISoundPlayer.play(UISound.SPAWN);
-            applyPickedAsset(manager, pickerFilterType, imported);
-            manager.getOverlayManager().closeModal();
+            AssetType filterType = pickerFilterType;
+            ModalDialogOverlay.importPickerAssetFromDisk(manager, filterType, imported -> {
+                if (imported == null) {
+                    // Cancelled or not importable: keep the picker open
+                    UISoundPlayer.play(UISound.CLOSE_MODAL);
+                    return;
+                }
+                UISoundPlayer.play(UISound.SPAWN);
+                applyPickedAsset(manager, filterType, imported);
+                manager.getOverlayManager().closeModal();
+            });
             return;
         }
 

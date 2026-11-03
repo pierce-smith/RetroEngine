@@ -4,7 +4,6 @@ import com.retro.engine.animation.AnimationSystem;
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
-import com.retro.engine.core.NativeFileDialog;
 import com.retro.engine.ecs.components.AnimatorComponent;
 import com.retro.engine.ecs.components.AudioSource;
 import com.retro.engine.ecs.components.Camera;
@@ -431,6 +430,11 @@ public class SceneWorld {
         String path = pendingScenePath;
         if (path == null) return;
         pendingScenePath = null;
+        // Abort before tearing anything down: a bad path must not swap the running scene for an empty one
+        if (resolveScenePath(path) == null) {
+            System.err.println("[SceneWorld] Scene transition aborted: '" + path + "' could not be resolved through the project VFS.");
+            return;
+        }
 
         boolean wasRunning = simulationEngine.getPlayState() != PlayState.EDITING;
         // Tear down the running scene without jumping back to the origin; this restores it to its pre-play state
@@ -616,19 +620,12 @@ public class SceneWorld {
     }
 
     // --- PREFAB BLUEPRINT SERIALIZATION & INSTANTIATION ---
-    public void promptSaveSelectedAsPrefab(List<AssetMeta> assetDirectory, AssetDatabase assetDb) {
-        Entity selected = getSelectedEntity();
-        if (selected == null) return;
-        String defaultDir = projectSubDir(assetDb, "Prefabs");
-        String targetPath = NativeFileDialog.saveFileDialog("Save Entity Prefab Blueprint", defaultDir, "Prefab Blueprint (*.prefab.bin)", "prefab.bin", "prefab");
-        if (targetPath != null && !targetPath.trim().isEmpty()) {
-            UISoundPlayer.play(UISound.SPAWN);
-            PrefabSerializer.savePrefab(targetPath, selected, sceneEntities, assetDb);
-            if (assetDb != null) {
-                assetDb.addAssetDirectoryIfNotExists(targetPath, AssetType.PREFAB);
-            }
-        } else {
-            UISoundPlayer.play(UISound.CLOSE_MODAL);
+    /** Writes {@code entity} (and its children) as a prefab blueprint and registers it in the asset browser. */
+    public void saveEntityAsPrefab(Entity entity, String targetPath, AssetDatabase assetDb) {
+        if (entity == null || targetPath == null || targetPath.isBlank()) return;
+        PrefabSerializer.savePrefab(targetPath, entity, sceneEntities, assetDb);
+        if (assetDb != null) {
+            assetDb.addAssetDirectoryIfNotExists(targetPath, AssetType.PREFAB);
         }
     }
 
@@ -642,7 +639,7 @@ public class SceneWorld {
     }
 
     /** Dialog start directory inside the active project's Assets/ folder, falling back to the working directory. */
-    private static String projectSubDir(AssetDatabase assetDb, String sub) {
+    public static String projectSubDir(AssetDatabase assetDb, String sub) {
         String assetsRoot = (assetDb != null && assetDb.hasActiveProject()) ? assetDb.getProjectAssetsPath() : "Assets";
         File dir = new File(assetsRoot, sub);
         return (dir.isDirectory() ? dir : new File(assetsRoot)).getAbsolutePath() + File.separator;
@@ -654,28 +651,6 @@ public class SceneWorld {
         pendingScenePath = null;
         clearRegistryAndRebind(new ArrayList<>());
         this.activeScenePath = "Assets/Scenes/Untitled.rscene";
-    }
-
-    public void promptOpenSceneWithNativeDialog() {
-        String defaultDir = new File("Assets/Scenes").getAbsolutePath();
-        String importedPath = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.rscene)", "rscene");
-        if (importedPath != null && !importedPath.trim().isEmpty()) {
-            UISoundPlayer.play(UISound.SPAWN);
-            loadSceneFromFile(importedPath, null);
-        } else {
-            UISoundPlayer.play(UISound.CLOSE_MODAL);
-        }
-    }
-
-    public void promptSaveSceneWithNativeDialog(List<AssetMeta> assetDirectory, AssetDatabase assetDb) {
-        String defaultDir = projectSubDir(assetDb, "Scenes");
-        String targetPath = NativeFileDialog.saveFileDialog("Save Scene File", defaultDir, "Retro Scene (*.rscene)", "rscene");
-        if (targetPath != null && !targetPath.trim().isEmpty()) {
-            UISoundPlayer.play(UISound.SPAWN);
-            saveActiveScene(targetPath, assetDirectory, assetDb);
-        } else {
-            UISoundPlayer.play(UISound.CLOSE_MODAL);
-        }
     }
 
     public void saveActiveScene(String filePath, List<AssetMeta> assetDirectory) {
@@ -698,6 +673,18 @@ public class SceneWorld {
         this.activeScenePath = sanitized;
     }
 
+    /**
+     * On-disk file for a scene path ({@code Assets/...}, Assets-relative, {@code mod://} or absolute; the .rscene
+     * extension is optional) through the project/mod VFS, or null when no such file exists.
+     */
+    public String resolveScenePath(String scenePath) {
+        if (scenePath == null || scenePath.isBlank()) return null;
+        String sanitized = SceneSerializer.sanitizeScenePath(scenePath);
+        String resolved = (lastAssetDatabase != null) ? lastAssetDatabase.resolveAsset(sanitized) : ModLoader.resolveAssetPath(sanitized);
+        if (resolved != null && new java.io.File(resolved).isFile()) return new java.io.File(resolved).getAbsolutePath();
+        return null;
+    }
+
     public SceneSerializer.SceneLoadData loadSceneFromFile(String filePath) {
         return loadSceneFromFile(filePath, null);
     }
@@ -707,7 +694,13 @@ public class SceneWorld {
         if (assetDb != null) this.lastAssetDatabase = assetDb;
         String sanitized = SceneSerializer.sanitizeScenePath(filePath);
         this.activeScenePath = sanitized;
-        SceneSerializer.SceneLoadData data = SceneSerializer.loadSceneData(sanitized, assetDb);
+        // Read from the VFS-resolved file, never relative to user.dir (the packaged editor's install folder)
+        String diskPath = resolveScenePath(sanitized);
+        if (diskPath == null) {
+            System.err.println("[SceneWorld] Scene '" + sanitized + "' could not be resolved through the project VFS; loading an empty scene.");
+            diskPath = sanitized;
+        }
+        SceneSerializer.SceneLoadData data = SceneSerializer.loadSceneData(diskPath, assetDb);
         List<Entity> loadedEntities = (data != null && data.entities() != null) ? data.entities() : new ArrayList<>();
         // Mods: .rpatch deltas, SceneLoadEvent and EntitySpawnEvent run on the fresh list before it is bound
         ModLoader.onSceneDeserialized(sanitized, loadedEntities);

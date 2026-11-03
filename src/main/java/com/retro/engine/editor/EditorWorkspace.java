@@ -31,6 +31,8 @@ import com.retro.engine.editor.panels.*;
 import com.retro.engine.editor.panels.DockPanel;
 import com.retro.engine.editor.panels.DockSpace;
 import com.retro.engine.ui.UIGeometryBatch;
+import com.retro.engine.ui.UISoundPlayer;
+import com.retro.engine.ui.UISoundPlayer.UISound;
 
 import java.util.List;
 
@@ -575,12 +577,103 @@ public class EditorWorkspace {
 
     public void update(float deltaTime) {
         this.lastDeltaTime = deltaTime;
+        drainDialogResults();
         assetDirectoryManager.pollFileChanges();
         sceneManager.update(deltaTime);
         autoSaveSystem.tick();
     }
 
     public float getLastDeltaTime() { return lastDeltaTime; }
+
+    // --- Off-thread native dialogs ---
+    // Native file/folder pickers block their calling thread until dismissed. Run on the GLFW main thread they stall
+    // event pumping (Windows flags the window "Not Responding" and the shell folder picker can deadlock when the main
+    // thread's COM apartment is not STA). They run instead on a dedicated thread, which starts with no COM apartment
+    // so tinyfd's own CoInitializeEx(COINIT_APARTMENTTHREADED) succeeds and pairs with its CoUninitialize. Results are
+    // handed back to the main thread at the start of the next update().
+    private static final java.util.concurrent.ExecutorService DIALOG_EXECUTOR =
+        java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "RetroEngine-NativeDialog");
+            t.setDaemon(true);
+            return t;
+        });
+    private final java.util.concurrent.ConcurrentLinkedQueue<Runnable> dialogResults = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private final java.util.concurrent.atomic.AtomicBoolean dialogOpen = new java.util.concurrent.atomic.AtomicBoolean();
+
+    /** True while an off-thread native dialog is showing; UI should ignore clicks that would open another. */
+    public boolean isNativeDialogOpen() { return dialogOpen.get(); }
+
+    /**
+     * Runs {@code dialog} (tinyfd prompts/pickers only, no GL or editor state) on the dialog thread and delivers its
+     * result to {@code onMainThread} during a later update(). A null result means canceled. A dialog failure is logged
+     * and delivered as null. Returns false (and runs nothing) if a dialog is already open.
+     */
+    public <T> boolean runNativeDialogAsync(java.util.function.Supplier<T> dialog, java.util.function.Consumer<T> onMainThread) {
+        if (!dialogOpen.compareAndSet(false, true)) return false;
+        java.util.concurrent.CompletableFuture
+            .supplyAsync(dialog, DIALOG_EXECUTOR)
+            .handle((result, error) -> {
+                if (error != null) {
+                    System.err.println("[EditorWorkspace] Native dialog failed: " + error);
+                    result = null;
+                }
+                T delivered = result;
+                dialogResults.add(() -> {
+                    dialogOpen.set(false);
+                    onMainThread.accept(delivered);
+                });
+                return null;
+            });
+        return true;
+    }
+
+    private static final String[] SCENE_EXT = {"rscene"};
+    private static final String SCENE_FILTER = "Retro Scene (*.rscene)";
+
+    /** File > Open Scene / Ctrl+O: native picker off-thread, then loads the chosen scene. */
+    public void promptOpenScene() {
+        String defaultDir = getProjectScenesDir();
+        runNativeDialogAsync(() -> NativeFileDialog.openFileDialog("Open Scene File", defaultDir, SCENE_FILTER, SCENE_EXT), path -> {
+            if (path == null || path.isBlank()) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
+            UISoundPlayer.play(UISound.SPAWN);
+            sceneManager.loadSceneFromFile(path, assetDirectoryManager);
+        });
+    }
+
+    /** File > Save Scene / Ctrl+S: native save dialog off-thread, then writes the active scene. */
+    public void promptSaveScene() {
+        String defaultDir = SceneWorld.projectSubDir(assetDirectoryManager, "Scenes");
+        runNativeDialogAsync(() -> NativeFileDialog.saveFileDialog("Save Scene File", defaultDir, SCENE_FILTER, SCENE_EXT), path -> {
+            if (path == null || path.isBlank()) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
+            UISoundPlayer.play(UISound.SPAWN);
+            sceneManager.saveActiveScene(path, assetDirectoryManager.getMutableAssetDirectory(), assetDirectoryManager);
+        });
+    }
+
+    /** Saves the entity selected when the dialog opened as a prefab blueprint. */
+    public void promptSaveSelectedAsPrefab() {
+        Entity selected = getSelectedEntity();
+        if (selected == null) return;
+        String defaultDir = SceneWorld.projectSubDir(assetDirectoryManager, "Prefabs");
+        runNativeDialogAsync(() -> NativeFileDialog.saveFileDialog("Save Entity Prefab Blueprint", defaultDir,
+                "Prefab Blueprint (*.prefab.bin)", "prefab.bin", "prefab"), path -> {
+            if (path == null || path.isBlank()) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
+            UISoundPlayer.play(UISound.SPAWN);
+            sceneManager.saveEntityAsPrefab(selected, path, assetDirectoryManager);
+        });
+    }
+
+    private void drainDialogResults() {
+        Runnable r;
+        while ((r = dialogResults.poll()) != null) {
+            try {
+                r.run();
+            } catch (RuntimeException e) {
+                System.err.println("[EditorWorkspace] Dialog result handler failed: " + e);
+                e.printStackTrace();
+            }
+        }
+    }
 
     // --- UI Panel Geometry Batch Orchestration ---
     public float[] getUiVertices() { return generateUiVertices(); }

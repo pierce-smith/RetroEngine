@@ -1,7 +1,6 @@
 package com.retro.engine.editor.input;
 
 import com.retro.engine.core.GamepadManager;
-import com.retro.engine.core.NativeFileDialog;
 import com.retro.engine.core.WindowHost;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.SceneWorld.PlayState;
@@ -154,23 +153,13 @@ public class HotkeyRouter {
         // Cmd+S / Ctrl+S: Save Scene
         if (isEditing && saveChord) {
             UISoundPlayer.play(UISound.OPEN_MODAL);
-            editorManager.getSceneManager().promptSaveSceneWithNativeDialog(
-                editorManager.getAssetDatabase().getMutableAssetDirectory(),
-                editorManager.getAssetDatabase()
-            );
+            editorManager.promptSaveScene();
         }
 
         // Cmd+O / Ctrl+O: Load Scene
         if (isEditing && openChord) {
             UISoundPlayer.play(UISound.OPEN_MODAL);
-            String defaultDir = editorManager.getProjectScenesDir();
-            String importedPath = NativeFileDialog.openFileDialog("Open Scene File", defaultDir, "Retro Scene (*.rscene)", "rscene");
-            if (importedPath != null && !importedPath.trim().isEmpty()) {
-                UISoundPlayer.play(UISound.SPAWN);
-                editorManager.getSceneManager().loadSceneFromFile(importedPath, editorManager.getAssetDatabase());
-            } else {
-                UISoundPlayer.play(UISound.CLOSE_MODAL);
-            }
+            editorManager.promptOpenScene();
         }
 
         // Cmd+D / Ctrl+D: Duplicate Selected Entity

@@ -25,6 +25,11 @@ public final class SceneManager {
             System.err.println("[SceneManager] loadScene('" + scenePath + "') ignored: no active SceneWorld.");
             return;
         }
+        if (w.resolveScenePath(scenePath) == null) {
+            // System.err is captured by the Engine Console panel
+            System.err.println("[SceneManager] loadScene('" + scenePath + "') failed: scene not found in the project VFS (Assets/ or mod overlays). The current scene stays loaded.");
+            return;
+        }
         w.requestSceneLoad(scenePath);
     }
 

@@ -228,9 +228,10 @@ public final class BuildExporterOverlay {
             workspace.getOverlayManager().setActiveModal(ModalState.NONE);
         } else if (inRow(ndcX, ndcY, PATH_Y)) {
             UISoundPlayer.play(UISound.OPEN_MODAL);
-            String picked = NativeFileDialog.selectFolderDialog("Select Target Export Folder",
-                (exportDir != null && exportDir.isDirectory() ? exportDir : project).getAbsolutePath() + File.separator);
-            if (picked != null) exportDir = new File(picked).getAbsoluteFile();
+            String start = (exportDir != null && exportDir.isDirectory() ? exportDir : project).getAbsolutePath() + File.separator;
+            workspace.runNativeDialogAsync(() -> NativeFileDialog.selectFolderDialog("Select Target Export Folder", start), picked -> {
+                if (picked != null) exportDir = new File(picked).getAbsoluteFile();
+            });
         } else if (inRow(ndcX, ndcY, NAME_Y)) {
             UISoundPlayer.play(UISound.CLICK);
             nameBuffer.setLength(0);
@@ -240,23 +241,24 @@ public final class BuildExporterOverlay {
             UISoundPlayer.play(UISound.CLICK);
             iconFile = null;
         } else if (inRow(ndcX, ndcY, ICON_Y)) {
-            browseIcon(project);
+            browseIcon(workspace, project);
         } else if (inRow(ndcX, ndcY, SCENE_Y)) {
             UISoundPlayer.play(UISound.OPEN_MODAL);
-            String picked = NativeFileDialog.openFileDialog("Select Startup Scene", workspace.getProjectScenesDir(), "Retro Scene (*.rscene)", "rscene");
-            if (picked != null) {
+            String scenesDir = workspace.getProjectScenesDir();
+            workspace.runNativeDialogAsync(() -> NativeFileDialog.openFileDialog("Select Startup Scene", scenesDir, "Retro Scene (*.rscene)", "rscene"), picked -> {
+                if (picked == null) return;
                 String rel = projectRelative(project, picked);
                 if (rel == null) {
                     setStatus("STARTUP SCENE MUST BE INSIDE THIS PROJECT'S ASSETS/ FOLDER", true, 0.0f);
                 } else {
                     startupScene = rel;
                 }
-            }
+            });
         } else if (inRow(ndcX, ndcY, HAPTICS_Y)) {
             UISoundPlayer.play(UISound.CLICK);
             includeHaptics = !includeHaptics;
         } else if (inRect(ndcX, ndcY, EXPORT_X0, ACTION_Y0, EXPORT_X1, ACTION_Y1)) {
-            startExport(project);
+            startExport(workspace, project);
         } else if (inRect(ndcX, ndcY, PACKAGE_X0, ACTION_Y0, PACKAGE_X1, ACTION_Y1)) {
             promptPackageMod(workspace);
         } else {
@@ -269,22 +271,24 @@ public final class BuildExporterOverlay {
         }
     }
 
-    private static void browseIcon(File project) {
+    private static void browseIcon(EditorWorkspace workspace, File project) {
         UISoundPlayer.play(UISound.OPEN_MODAL);
         File start = (iconFile != null && iconFile.getParentFile() != null) ? iconFile.getParentFile() : project;
-        String ext = platform.iconExtension();
-        String picked = NativeFileDialog.openFileDialog("Select Application Icon (." + ext + " for " + platform.label + ")",
-            start.getAbsolutePath() + File.separator, "Application Icon (*.icns, *.ico, *.png)", "icns", "ico", "png");
-        if (picked == null) return;
-        File f = new File(picked).getAbsoluteFile();
-        if (!f.isFile()) {
-            setStatus("ICON FILE NOT FOUND", true, 0.0f);
-        } else {
-            iconFile = f;
-            if (!StandaloneExporter.isValidIconFor(f, platform)) {
-                setStatus(platform.label + " NEEDS A ." + ext.toUpperCase() + " ICON", true, 0.0f);
+        String title = "Select Application Icon (." + platform.iconExtension() + " for " + platform.label + ")";
+        workspace.runNativeDialogAsync(() -> NativeFileDialog.openFileDialog(title,
+                start.getAbsolutePath() + File.separator, "Application Icon (*.icns, *.ico, *.png)", "icns", "ico", "png"), picked -> {
+            if (picked == null) return;
+            File f = new File(picked).getAbsoluteFile();
+            if (!f.isFile()) {
+                setStatus("ICON FILE NOT FOUND", true, 0.0f);
+            } else {
+                iconFile = f;
+                // Platform may have changed while the dialog was open; validate against the current one
+                if (!StandaloneExporter.isValidIconFor(f, platform)) {
+                    setStatus(platform.label + " NEEDS A ." + platform.iconExtension().toUpperCase() + " ICON", true, 0.0f);
+                }
             }
-        }
+        });
     }
 
     // ------------------------------------------------------------------------------------------
@@ -336,7 +340,7 @@ public final class BuildExporterOverlay {
         }
     }
 
-    private static void startExport(File project) {
+    private static void startExport(EditorWorkspace workspace, File project) {
         if (exportDir == null) { setStatus("SELECT AN EXPORT PATH", true, 0.0f); return; }
         if (startupScene.isEmpty()) { setStatus("SELECT A STARTUP SCENE", true, 0.0f); return; }
         if (iconFile != null && !StandaloneExporter.isValidIconFor(iconFile, platform)) {
@@ -344,18 +348,27 @@ public final class BuildExporterOverlay {
             return;
         }
 
-        File targetJdk = null;
-        if (platform != Platform.host()) {
-            String jdk = NativeFileDialog.selectFolderDialog("Select " + platform.label + " JDK home (contains jmods/) for the embedded runtime",
-                System.getProperty("user.home") + File.separator);
+        if (platform == Platform.host()) {
+            launchExport(project, platform, null);
+            return;
+        }
+        // Cross-platform builds embed the target's runtime; pick its JDK off the main thread, then launch
+        Platform target = platform;
+        workspace.runNativeDialogAsync(() -> NativeFileDialog.selectFolderDialog(
+                "Select " + target.label + " JDK home (contains jmods/) for the embedded runtime",
+                System.getProperty("user.home") + File.separator), jdk -> {
             if (jdk == null) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
-            targetJdk = new File(jdk);
+            File targetJdk = new File(jdk);
             if (!new File(targetJdk, "jmods").isDirectory()) {
                 setStatus("SELECTED FOLDER HAS NO JMODS/ DIRECTORY", true, 0.0f);
                 return;
             }
-        }
+            if (running) return;
+            launchExport(project, target, targetJdk);
+        });
+    }
 
+    private static void launchExport(File project, Platform platform, File targetJdk) {
         UISoundPlayer.play(UISound.SPAWN);
         StandaloneExporter.Request request = new StandaloneExporter.Request(project, exportDir, gameName, platform, startupScene,
             targetJdk, includeHaptics, iconFile);
@@ -390,26 +403,23 @@ public final class BuildExporterOverlay {
             return;
         }
         File project = new File(workspace.getActiveProjectPath()).getAbsoluteFile();
-        File mod = pickModFolder(project);
-        if (mod != null) startPackaging(mod, new File(project, "Build/Mods"));
-    }
-
-    /** Native folder picker for the mod to package; null when cancelled or the folder has no mod.json. */
-    private static File pickModFolder(File project) {
         UISoundPlayer.play(UISound.OPEN_MODAL);
         com.retro.engine.modding.ModManifest active = com.retro.engine.modding.ModWorkspace.activeMod();
         File mods = new File(project, com.retro.engine.modding.ModLoader.MODS_DIR);
         File start = (active != null) ? active.root : (mods.isDirectory() ? mods : project);
-        String picked = NativeFileDialog.selectFolderDialog("Package .rmod: select the mod folder (contains mod.json)",
-            start.getAbsolutePath() + File.separator);
-        if (picked == null) { UISoundPlayer.play(UISound.CLOSE_MODAL); return null; }
-        File dir = new File(picked).getAbsoluteFile();
-        if (!new File(dir, com.retro.engine.modding.ModManifest.FILE_NAME).isFile()) {
-            setStatus("SELECTED FOLDER HAS NO MOD.JSON", true, 0.0f);
-            NativeFileDialog.showError("Package .rmod", "The selected folder has no mod.json:\n" + dir.getAbsolutePath());
-            return null;
-        }
-        return dir;
+        // Folder picker off the main thread; packaging itself already runs on its own worker
+        workspace.runNativeDialogAsync(() -> NativeFileDialog.selectFolderDialog(
+                "Package .rmod: select the mod folder (contains mod.json)", start.getAbsolutePath() + File.separator), picked -> {
+            if (picked == null) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
+            File dir = new File(picked).getAbsoluteFile();
+            if (!new File(dir, com.retro.engine.modding.ModManifest.FILE_NAME).isFile()) {
+                setStatus("SELECTED FOLDER HAS NO MOD.JSON", true, 0.0f);
+                NativeFileDialog.showError("Package .rmod", "The selected folder has no mod.json:\n" + dir.getAbsolutePath());
+                return;
+            }
+            if (running) return;
+            startPackaging(dir, new File(project, "Build/Mods"));
+        });
     }
 
     private static void startPackaging(File modFolder, File outputDir) {

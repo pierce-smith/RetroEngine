@@ -323,7 +323,7 @@ public class ScriptEngine {
 
         for (String candidate : candidateClassNames) {
             try {
-                clazz = Class.forName(candidate);
+                clazz = Class.forName(candidate, true, scriptParentLoader());
                 if (clazz != null) {
                     compiledClassCache.put(cleanClassName, clazz);
                     return clazz;
@@ -515,16 +515,30 @@ public class ScriptEngine {
         return null;
     }
 
+    /** Active mod class loader chain, falling back to the engine's own class loader. */
+    private static ClassLoader scriptParentLoader() {
+        ClassLoader l = com.retro.engine.modding.ModLoader.scriptParentClassLoader();
+        return (l != null) ? l : com.retro.engine.core.EngineContext.class.getClassLoader();
+    }
+
     private static Class<?> compileAndLoadJavaFile(File scriptFile, String className, String declaredPackage) {
         System.out.println("[ScriptEngine] Dynamic in-memory Janino compilation triggered for script: " + scriptFile.getAbsolutePath());
 
         try {
             SimpleCompiler compiler = new SimpleCompiler();
-            // While mods are loaded this is the mod class loader chain, so scripts can use mod components
-            compiler.setParentClassLoader(com.retro.engine.modding.ModLoader.scriptParentClassLoader());
+            // Explicit parent: the mod class loader chain while mods are loaded (so scripts can use mod components),
+            // else the engine's own loader. Never Janino's default (the thread context loader), which in a packaged
+            // app may not see engine classes.
+            ClassLoader parent = scriptParentLoader();
+            compiler.setParentClassLoader(parent);
 
+            Thread thread = Thread.currentThread();
+            ClassLoader previousContext = thread.getContextClassLoader();
+            thread.setContextClassLoader(parent);
             try (FileReader reader = new FileReader(scriptFile)) {
                 compiler.cook(scriptFile.getAbsolutePath(), reader);
+            } finally {
+                thread.setContextClassLoader(previousContext);
             }
 
             ClassLoader cl = compiler.getClassLoader();

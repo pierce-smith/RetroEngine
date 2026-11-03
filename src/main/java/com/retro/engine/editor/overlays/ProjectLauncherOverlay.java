@@ -124,7 +124,7 @@ public final class ProjectLauncherOverlay {
 
     /** Handles a left-button press while the launcher is visible. */
     public static void handleClick(float ndcX, float ndcY, EditorWorkspace workspace) {
-        if (workspace == null) return;
+        if (workspace == null || workspace.isNativeDialogOpen()) return;
         if (inRect(ndcX, ndcY, BTN_X0, NEW_Y0, BTN_X1, NEW_Y1)) {
             UISoundPlayer.play(UISound.OPEN_MODAL);
             promptNewProject(workspace);
@@ -170,76 +170,90 @@ public final class ProjectLauncherOverlay {
         }
     }
 
+    /** Outcome of an off-thread prompt chain: {@code error} set means show it; all-null fields mean canceled. */
+    private record ModPick(File dir, String newModId, String error) {}
+    private record NewProjectPick(String name, String parent, TemplateManager.ProjectTemplate template, String error) {}
+    private record OpenProjectPick(File dir, boolean initialize) {}
+
     /**
      * Creation Kit mode: pick a mod folder inside {@code <Project>/Mods/} (or a project's Mods/ folder to create a new
-     * mod in it). Folders without mod.json can be turned into a new mod skeleton.
+     * mod in it). Folders without mod.json can be turned into a new mod skeleton. Prompts run off the main thread.
      */
     public static void promptOpenModWorkspace(EditorWorkspace workspace) {
         String start = workspace.hasActiveProject()
             ? new File(workspace.getActiveProjectPath(), com.retro.engine.modding.ModLoader.MODS_DIR).getAbsolutePath()
             : System.getProperty("user.home");
         new File(start).mkdirs();
-        String picked = NativeFileDialog.selectFolderDialog("Select a mod folder in <Project>/Mods/ (or a Mods/ folder to create one)", start + File.separator);
-        if (picked == null) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
-        File dir = new File(picked).getAbsoluteFile();
-
-        try {
+        workspace.runNativeDialogAsync(() -> {
+            String picked = NativeFileDialog.selectFolderDialog("Select a mod folder in <Project>/Mods/ (or a Mods/ folder to create one)", start + File.separator);
+            if (picked == null) return null;
+            File dir = new File(picked).getAbsoluteFile();
             if (dir.getName().equals(com.retro.engine.modding.ModLoader.MODS_DIR) && ProjectWorkspace.isProjectDirectory(dir.getParentFile())) {
                 String name = NativeFileDialog.promptInput("New Mod", "Mod folder name:", "MyMod");
-                if (name == null || name.isBlank()) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
+                if (name == null || name.isBlank()) return null;
                 dir = new File(dir, name.trim().replaceAll("[^A-Za-z0-9 _.-]", ""));
             }
-            if (!new File(dir, com.retro.engine.modding.ModManifest.FILE_NAME).isFile()) {
-                if (com.retro.engine.modding.ModWorkspace.projectOf(dir) == null) {
-                    fail("Mod folders must be inside a project's Mods/ folder: " + dir.getAbsolutePath());
-                    return;
-                }
-                String suggested = dir.getName().toLowerCase().replaceAll("[^a-z0-9_.-]", "_");
-                String id = NativeFileDialog.promptInput("New Mod", "mod_id (a-z, 0-9, _ . -):", suggested);
-                if (id == null || id.isBlank()) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
-                com.retro.engine.modding.ModWorkspace.createMod(dir, id.trim(), dir.getName());
+            if (new File(dir, com.retro.engine.modding.ModManifest.FILE_NAME).isFile()) return new ModPick(dir, null, null);
+            if (com.retro.engine.modding.ModWorkspace.projectOf(dir) == null) {
+                return new ModPick(null, null, "Mod folders must be inside a project's Mods/ folder: " + dir.getAbsolutePath());
             }
-            com.retro.engine.modding.ModWorkspace.open(workspace, dir);
-            setStatus("", false);
-            UISoundPlayer.play(UISound.SPAWN);
-        } catch (IOException e) {
-            fail(e.getMessage());
-        }
+            String suggested = dir.getName().toLowerCase().replaceAll("[^a-z0-9_.-]", "_");
+            String id = NativeFileDialog.promptInput("New Mod", "mod_id (a-z, 0-9, _ . -):", suggested);
+            if (id == null || id.isBlank()) return null;
+            return new ModPick(dir, id.trim(), null);
+        }, pick -> {
+            if (pick == null) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
+            if (pick.error() != null) { fail(pick.error()); return; }
+            try {
+                if (pick.newModId() != null) com.retro.engine.modding.ModWorkspace.createMod(pick.dir(), pick.newModId(), pick.dir().getName());
+                com.retro.engine.modding.ModWorkspace.open(workspace, pick.dir());
+                setStatus("", false);
+                UISoundPlayer.play(UISound.SPAWN);
+            } catch (IOException e) {
+                fail(e.getMessage());
+            }
+        });
     }
 
-    /** Name -> location -> template prompts, then creates and opens the project (closing any open one first). */
+    /**
+     * Name -> location -> template prompts (off the main thread), then creates and opens the project on the main
+     * thread (closing any open one first). Canceling any prompt returns to the launcher untouched.
+     */
     public static void promptNewProject(EditorWorkspace workspace) {
-        String name = NativeFileDialog.promptInput("New Project", "Project name:", "MyRetroProject");
-        if (name == null) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
-        name = name.trim();
-        if (name.isEmpty() || !name.matches("[A-Za-z0-9 _.-]+") || name.startsWith(".")) {
-            fail("Invalid project name. Use letters, digits, spaces, dot, dash or underscore.");
-            return;
-        }
+        workspace.runNativeDialogAsync(() -> {
+            String name = NativeFileDialog.promptInput("New Project", "Project name:", "MyRetroProject");
+            if (name == null) return null;
+            name = name.trim();
+            if (name.isEmpty() || !name.matches("[A-Za-z0-9 _.-]+") || name.startsWith(".")) {
+                return new NewProjectPick(null, null, null, "Invalid project name. Use letters, digits, spaces, dot, dash or underscore.");
+            }
+            String parent = NativeFileDialog.selectFolderDialog("Choose Project Root Location", System.getProperty("user.home") + File.separator);
+            if (parent == null) return null;
+            TemplateManager.ProjectTemplate template = promptTemplate();
+            if (template == null) return null;
+            return new NewProjectPick(name, parent, template, null);
+        }, pick -> {
+            if (pick == null) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
+            if (pick.error() != null) { fail(pick.error()); return; }
 
-        String parent = NativeFileDialog.selectFolderDialog("Choose Project Root Location", System.getProperty("user.home") + File.separator);
-        if (parent == null) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
+            // Fail before unbinding the current project if creation would be refused anyway
+            File target = new File(pick.parent(), pick.name());
+            String[] existing = target.list();
+            if (target.exists() && (!target.isDirectory() || (existing != null && existing.length > 0))) {
+                fail("Target folder already exists and is not empty: " + target.getAbsolutePath());
+                return;
+            }
 
-        TemplateManager.ProjectTemplate template = promptTemplate();
-        if (template == null) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
-
-        // Fail before unbinding the current project if creation would be refused anyway
-        File target = new File(parent, name);
-        String[] existing = target.list();
-        if (target.exists() && (!target.isDirectory() || (existing != null && existing.length > 0))) {
-            fail("Target folder already exists and is not empty: " + target.getAbsolutePath());
-            return;
-        }
-
-        try {
-            if (workspace.hasActiveProject()) workspace.closeProject();
-            File dir = ProjectWorkspace.createProject(workspace, new File(parent), name, template);
-            setStatus("", false);
-            UISoundPlayer.play(UISound.SPAWN);
-            System.out.println("[Launcher] Project ready: " + dir.getAbsolutePath());
-        } catch (IOException e) {
-            fail(e.getMessage());
-        }
+            try {
+                if (workspace.hasActiveProject()) workspace.closeProject();
+                File dir = ProjectWorkspace.createProject(workspace, new File(pick.parent()), pick.name(), pick.template());
+                setStatus("", false);
+                UISoundPlayer.play(UISound.SPAWN);
+                System.out.println("[Launcher] Project ready: " + dir.getAbsolutePath());
+            } catch (IOException e) {
+                fail(e.getMessage());
+            }
+        });
     }
 
     /** Template picker: accepts a template name or its list number. Returns null on cancel; re-prompts on bad input. */
@@ -267,23 +281,25 @@ public final class ProjectLauncherOverlay {
     }
 
     private static void promptOpenProject(EditorWorkspace workspace) {
-        String picked = NativeFileDialog.selectFolderDialog("Open RetroEngine Project Folder", System.getProperty("user.home") + File.separator);
-        if (picked == null) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
-        File dir = new File(picked).getAbsoluteFile();
-
-        try {
-            if (!ProjectWorkspace.isProjectDirectory(dir)) {
-                boolean init = NativeFileDialog.confirm("Open Project",
-                    "No ProjectSettings.bin was found in\n" + dir.getAbsolutePath() + "\n\nInitialize this folder as a RetroEngine project?", false);
-                if (!init) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
-                ProjectWorkspace.initializeLayout(dir, dir.getName(), "");
+        workspace.runNativeDialogAsync(() -> {
+            String picked = NativeFileDialog.selectFolderDialog("Open RetroEngine Project Folder", System.getProperty("user.home") + File.separator);
+            if (picked == null) return null;
+            File dir = new File(picked).getAbsoluteFile();
+            if (ProjectWorkspace.isProjectDirectory(dir)) return new OpenProjectPick(dir, false);
+            boolean init = NativeFileDialog.confirm("Open Project",
+                "No ProjectSettings.bin was found in\n" + dir.getAbsolutePath() + "\n\nInitialize this folder as a RetroEngine project?", false);
+            return init ? new OpenProjectPick(dir, true) : null;
+        }, pick -> {
+            if (pick == null) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
+            try {
+                if (pick.initialize()) ProjectWorkspace.initializeLayout(pick.dir(), pick.dir().getName(), "");
+                ProjectWorkspace.openProject(workspace, pick.dir());
+                setStatus("", false);
+                UISoundPlayer.play(UISound.SPAWN);
+            } catch (IOException e) {
+                fail(e.getMessage());
             }
-            ProjectWorkspace.openProject(workspace, dir);
-            setStatus("", false);
-            UISoundPlayer.play(UISound.SPAWN);
-        } catch (IOException e) {
-            fail(e.getMessage());
-        }
+        });
     }
 
     private static void fail(String message) {

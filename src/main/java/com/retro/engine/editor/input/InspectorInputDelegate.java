@@ -67,10 +67,7 @@ public class InspectorInputDelegate {
         // Top Header: "+ PREFAB" Button
         if (ndcX >= InspectorPanel.PREFAB_X0 && ndcX <= InspectorPanel.PREFAB_X1 && ndcY >= InspectorPanel.PREFAB_Y0 && ndcY <= InspectorPanel.PREFAB_Y1) {
             UISoundPlayer.play(UISound.OPEN_MODAL);
-            manager.getSceneManager().promptSaveSelectedAsPrefab(
-                manager.getAssetDatabase().getMutableAssetDirectory(),
-                manager.getAssetDatabase()
-            );
+            manager.promptSaveSelectedAsPrefab();
             return;
         }
 
@@ -688,18 +685,24 @@ public class InspectorInputDelegate {
         boneDragStartLocal = null;
     }
 
+    /**
+     * Native multi-file picker off the main thread; on the main thread the picked files are imported into Assets/
+     * (outside files are copied in) and {@code onImported} receives the in-project path of the first one.
+     */
+    private static void importFilesAsync(EditorWorkspace manager, String title, String filter, String[] extensions,
+                                         java.util.function.Consumer<String> onImported) {
+        manager.runNativeDialogAsync(() -> NativeFileDialog.openMultipleFileDialogs(title, "", filter, extensions), picked -> {
+            if (picked == null || picked.isEmpty()) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
+            UISoundPlayer.play(UISound.SPAWN);
+            List<String> imported = manager.getAssetDatabase().onFilesDropped(picked);
+            if (!imported.isEmpty() && onImported != null) onImported.accept(imported.get(0));
+        });
+    }
+
     public static void promptImportAssetForDirectory(EditorWorkspace manager) {
         if (manager == null) return;
-        List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
-            "Import Workspace Asset(s)", "", "All Supported Assets (*.png, *.jpg, *.obj, *.fbx, *.wav, *.mp3, *.java)",
-            "png", "jpg", "jpeg", "obj", "fbx", "gltf", "glb", "wav", "mp3", "java"
-        );
-        if (importedPaths != null && !importedPaths.isEmpty()) {
-            UISoundPlayer.play(UISound.SPAWN);
-            manager.getAssetDatabase().onFilesDropped(importedPaths);
-        } else {
-            UISoundPlayer.play(UISound.CLOSE_MODAL);
-        }
+        importFilesAsync(manager, "Import Workspace Asset(s)", "All Supported Assets (*.png, *.jpg, *.obj, *.fbx, *.wav, *.mp3, *.java)",
+            new String[] {"png", "jpg", "jpeg", "obj", "fbx", "gltf", "glb", "wav", "mp3", "java"}, null);
     }
 
     public static void promptImportAudio(EditorWorkspace manager) {
@@ -709,25 +712,14 @@ public class InspectorInputDelegate {
     /** Imports an audio file into {@code target}, or the entity's first AudioSource (adding one if none) when target is null. */
     public static void promptImportAudio(EditorWorkspace manager, AudioSource target) {
         if (manager == null) return;
-        List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
-            "Select Audio Asset(s)", "", "Audio Files (*.wav, *.mp3, *.ogg)", "wav", "mp3", "ogg"
-        );
-        if (importedPaths != null && !importedPaths.isEmpty()) {
-            UISoundPlayer.play(UISound.SPAWN);
-            // Files outside the project are copied into the current Assets/ folder; bind the in-project copy
-            importedPaths = manager.getAssetDatabase().onFilesDropped(importedPaths);
-            if (importedPaths.isEmpty()) return;
-            String primaryPath = importedPaths.get(0);
-            Entity selected = manager.getSelectedEntity();
-            if (selected != null) {
-                AudioSource ac = (target != null && selected.getComponents(AudioSource.class).contains(target))
-                        ? target : selected.getComponent(AudioSource.class);
-                manager.getCommandHistory().executeCommand(new EditorCommands.AudioClipAssignCommand(selected, ac, primaryPath));
-                InspectorPanel.resetScroll();
-            }
-        } else {
-            UISoundPlayer.play(UISound.CLOSE_MODAL);
-        }
+        Entity selected = manager.getSelectedEntity();
+        importFilesAsync(manager, "Select Audio Asset(s)", "Audio Files (*.wav, *.mp3, *.ogg)", new String[] {"wav", "mp3", "ogg"}, primaryPath -> {
+            if (selected == null) return;
+            AudioSource ac = (target != null && selected.getComponents(AudioSource.class).contains(target))
+                    ? target : selected.getComponent(AudioSource.class);
+            manager.getCommandHistory().executeCommand(new EditorCommands.AudioClipAssignCommand(selected, ac, primaryPath));
+            InspectorPanel.resetScroll();
+        });
     }
 
     public static void promptImportScript(EditorWorkspace manager) {
@@ -737,33 +729,22 @@ public class InspectorInputDelegate {
     /** Imports a script and assigns it to {@code target}, or to the entity's first ScriptComponent when target is null. */
     public static void promptImportScript(EditorWorkspace manager, ScriptComponent target) {
         if (manager == null) return;
-        List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
-            "Select Script Asset(s)", "", "Java Scripts (*.java)", "java"
-        );
-        if (importedPaths != null && !importedPaths.isEmpty()) {
-            UISoundPlayer.play(UISound.SPAWN);
-            // Files outside the project are copied into the current Assets/ folder; bind the in-project copy
-            importedPaths = manager.getAssetDatabase().onFilesDropped(importedPaths);
-            if (importedPaths.isEmpty()) return;
-            String primaryPath = importedPaths.get(0);
+        Entity selected = manager.getSelectedEntity();
+        importFilesAsync(manager, "Select Script Asset(s)", "Java Scripts (*.java)", new String[] {"java"}, primaryPath -> {
+            if (selected == null) return;
             File file = new File(primaryPath);
-            Entity selected = manager.getSelectedEntity();
-            if (selected != null) {
-                EditorCommands.ScriptAssignCommand cmd;
-                if (target != null && selected.getComponents(ScriptComponent.class).contains(target)) {
-                    cmd = new EditorCommands.ScriptAssignCommand(selected, target, primaryPath, file.getName());
-                } else {
-                    ScriptComponent sc = selected.getComponent(ScriptComponent.class);
-                    String oldPath = (sc != null) ? sc.scriptAssetPath : null;
-                    String oldName = (sc != null) ? sc.scriptName : null;
-                    cmd = new EditorCommands.ScriptAssignCommand(selected, oldPath, oldName, primaryPath, file.getName());
-                }
-                manager.getCommandHistory().executeCommand(cmd);
-                InspectorPanel.resetScroll();
+            EditorCommands.ScriptAssignCommand cmd;
+            if (target != null && selected.getComponents(ScriptComponent.class).contains(target)) {
+                cmd = new EditorCommands.ScriptAssignCommand(selected, target, primaryPath, file.getName());
+            } else {
+                ScriptComponent sc = selected.getComponent(ScriptComponent.class);
+                String oldPath = (sc != null) ? sc.scriptAssetPath : null;
+                String oldName = (sc != null) ? sc.scriptName : null;
+                cmd = new EditorCommands.ScriptAssignCommand(selected, oldPath, oldName, primaryPath, file.getName());
             }
-        } else {
-            UISoundPlayer.play(UISound.CLOSE_MODAL);
-        }
+            manager.getCommandHistory().executeCommand(cmd);
+            InspectorPanel.resetScroll();
+        });
     }
 
     public static void promptImportTexture(EditorWorkspace manager) {
@@ -772,61 +753,35 @@ public class InspectorInputDelegate {
 
     public static void promptImportTexture(EditorWorkspace manager, String materialFieldName) {
         if (manager == null) return;
-        List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
-            "Select Texture Asset(s)", "", "Image Files (*.png, *.jpg, *.jpeg, *.tga)", "png", "jpg", "jpeg", "tga"
-        );
-        if (importedPaths != null && !importedPaths.isEmpty()) {
-            UISoundPlayer.play(UISound.SPAWN);
-            // Files outside the project are copied into the current Assets/ folder; bind the in-project copy
-            importedPaths = manager.getAssetDatabase().onFilesDropped(importedPaths);
-            if (importedPaths.isEmpty()) return;
-            String primaryPath = importedPaths.get(0);
-            Entity selected = manager.getSelectedEntity();
-            if (selected != null) {
-                Material mat = selected.getComponent(Material.class);
-                if (mat != null) {
-                    try {
-                        Field field = Material.class.getDeclaredField(materialFieldName);
-                        EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(mat, field, field.get(mat), primaryPath, "TEXTURE");
-                        manager.getCommandHistory().executeCommand(cmd);
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
-                }
+        Entity selected = manager.getSelectedEntity();
+        importFilesAsync(manager, "Select Texture Asset(s)", "Image Files (*.png, *.jpg, *.jpeg, *.tga)",
+                new String[] {"png", "jpg", "jpeg", "tga"}, primaryPath -> {
+            Material mat = (selected != null) ? selected.getComponent(Material.class) : null;
+            if (mat == null) return;
+            try {
+                Field field = Material.class.getDeclaredField(materialFieldName);
+                manager.getCommandHistory().executeCommand(new EditorCommands.ModifyPropertyCommand(mat, field, field.get(mat), primaryPath, "TEXTURE"));
+            } catch (Exception e) {
+                e.printStackTrace();
             }
-        } else {
-            UISoundPlayer.play(UISound.CLOSE_MODAL);
-        }
+        });
     }
 
     public static void promptImportMesh(EditorWorkspace manager) {
         if (manager == null) return;
-        List<String> importedPaths = NativeFileDialog.openMultipleFileDialogs(
-            "Select 3D Mesh Asset(s)", "", "3D Models (*.obj, *.fbx, *.gltf, *.glb)", "obj", "fbx", "gltf", "glb"
-        );
-        if (importedPaths != null && !importedPaths.isEmpty()) {
-            UISoundPlayer.play(UISound.SPAWN);
-            // Files outside the project are copied into the current Assets/ folder; bind the in-project copy
-            importedPaths = manager.getAssetDatabase().onFilesDropped(importedPaths);
-            if (importedPaths.isEmpty()) return;
-            String primaryPath = importedPaths.get(0);
-            Entity selected = manager.getSelectedEntity();
-            if (selected != null) {
-                MeshFilter mc = selected.getComponent(MeshFilter.class);
-                if (mc != null) {
-                    try {
-                        Field field = MeshFilter.class.getDeclaredField("meshAssetPath");
-                        EditorCommands.ModifyPropertyCommand cmd = new EditorCommands.ModifyPropertyCommand(mc, field, mc.meshAssetPath, primaryPath, "MESH_3D");
-                        manager.getCommandHistory().executeCommand(cmd);
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
-                    EntitySpawner.attachAnimatorIfRigged(selected, primaryPath);
-                }
+        Entity selected = manager.getSelectedEntity();
+        importFilesAsync(manager, "Select 3D Mesh Asset(s)", "3D Models (*.obj, *.fbx, *.gltf, *.glb)",
+                new String[] {"obj", "fbx", "gltf", "glb"}, primaryPath -> {
+            MeshFilter mc = (selected != null) ? selected.getComponent(MeshFilter.class) : null;
+            if (mc == null) return;
+            try {
+                Field field = MeshFilter.class.getDeclaredField("meshAssetPath");
+                manager.getCommandHistory().executeCommand(new EditorCommands.ModifyPropertyCommand(mc, field, mc.meshAssetPath, primaryPath, "MESH_3D"));
+            } catch (Exception e) {
+                e.printStackTrace();
             }
-        } else {
-            UISoundPlayer.play(UISound.CLOSE_MODAL);
-        }
+            EntitySpawner.attachAnimatorIfRigged(selected, primaryPath);
+        });
     }
 
     public static void promptAddComponentMenu(EditorWorkspace manager, Entity entity) {
