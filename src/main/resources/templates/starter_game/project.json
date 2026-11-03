@@ -1,14 +1,15 @@
 {
   "id": "starter_game",
   "name": "Starter Game",
-  "description": "Playable collect-a-thon: first-person player controller, bobbing collectibles, score + victory + restart.",
+  "description": "Collect-a-thon microgame: FPS arms prefab on the CharacterController, punch/guard animations, bobbing collectibles, score + victory + restart.",
   "startupScene": "Assets/Scenes/Main.rscene",
   "scene": "main.rscene",
   "files": [
-    "Scripts/PlayerControllerScript.java",
-    "Scripts/CollectibleScript.java",
-    "Scripts/GameManagerScript.java",
     "Meshes/arms_rig.glb",
-    "Textures/arms_gloves_01.png"
+    "Textures/arms_gloves_01.png",
+    "Prefabs/FPSController.prefab.bin",
+    "Scripts/PlayerCombatScript.java",
+    "Scripts/CollectibleScript.java",
+    "Scripts/GameManagerScript.java"
   ]
 }

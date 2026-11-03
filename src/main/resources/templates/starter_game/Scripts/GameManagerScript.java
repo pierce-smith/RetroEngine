@@ -13,7 +13,7 @@ import com.retro.engine.scripting.SceneManager;
 public class GameManagerScript extends EntityScript {
 
     public String collectibleScriptName = "CollectibleScript.java";
-    public String playerName = "Player";
+    public String playerName = "";           // empty = the entity with a CharacterController
     public float restartDelay = 3.0f;
     public float killPlaneY = -20.0f;
 
@@ -61,12 +61,23 @@ public class GameManagerScript extends EntityScript {
             if (victoryTimer <= 0.0f) restart();
             return;
         }
-        Entity player = sceneWorld != null ? sceneWorld.findEntityByName(playerName) : null;
+        Entity player = findPlayer();
         com.retro.engine.ecs.components.Transform t = player != null ? (com.retro.engine.ecs.components.Transform) player.getComponent(com.retro.engine.ecs.components.Transform.class) : null;
         if (t != null && t.posY < killPlaneY) {
             logInfo("Fell out of the world. Restarting...");
             restart();
         }
+    }
+
+    private Entity findPlayer() {
+        if (sceneWorld == null) return null;
+        if (playerName != null && !playerName.isEmpty()) return sceneWorld.findEntityByName(playerName);
+        java.util.List entities = sceneWorld.getSceneEntities();
+        for (int i = 0; i < entities.size(); i++) {
+            Entity e = (Entity) entities.get(i);
+            if (e.getComponent(com.retro.engine.ecs.components.CharacterControllerComponent.class) != null) return e;
+        }
+        return null;
     }
 
     private void restart() {

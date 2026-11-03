@@ -115,7 +115,7 @@ public final class ProjectWorkspace {
         }
         if (template.isBundled()) {
             TemplateManager.writeScene(template, new File(projectDir, AssetDatabase.ASSETS_DIR),
-                new File(projectDir, STARTER_SCENE), workspace.getAssetDatabase());
+                new File(projectDir, STARTER_SCENE), workspace.getAssetDatabase(), workspace.getSceneManager());
         } else if (includeStarterContent) {
             writeStarterScene(projectDir, workspace.getAssetDatabase());
         } else {

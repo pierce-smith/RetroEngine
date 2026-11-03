@@ -685,6 +685,7 @@ public class EditorWorkspace {
         // No bound project: the launcher replaces the entire editor UI
         if (!hasActiveProject()) {
             ProjectLauncherOverlay.render(uiGeometryBuffer, lastNdcX, lastNdcY);
+            com.retro.engine.editor.overlays.TemplatePickerOverlay.render(uiGeometryBuffer, lastNdcX, lastNdcY);
             return commitUiVertices();
         }
 
@@ -726,6 +727,8 @@ public class EditorWorkspace {
         if (overlayManager.isContextMenuVisible()) {
             ContextMenuOverlay.render(uiGeometryBuffer, overlayManager.getContextMenuNdcX(), overlayManager.getContextMenuNdcY(), overlayManager.getContextMenuItems());
         }
+        // FILE > New Project while a project is open: the template picker sits above everything
+        com.retro.engine.editor.overlays.TemplatePickerOverlay.render(uiGeometryBuffer, lastNdcX, lastNdcY);
 
         return commitUiVertices();
     }

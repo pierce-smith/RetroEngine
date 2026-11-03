@@ -2,6 +2,7 @@ package com.retro.engine.editor.templates;
 
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.SceneWorld;
 import com.retro.engine.ecs.components.BoxCollider;
 import com.retro.engine.ecs.components.Camera;
 import com.retro.engine.ecs.components.CapsuleCollider;
@@ -11,6 +12,7 @@ import com.retro.engine.ecs.components.RigidBodyComponent;
 import com.retro.engine.ecs.components.ScriptComponent;
 import com.retro.engine.ecs.components.SphereCollider;
 import com.retro.engine.ecs.components.Transform;
+import com.retro.engine.ecs.serialization.PrefabSerializer;
 import com.retro.engine.ecs.serialization.SceneSerializer;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -21,6 +23,7 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -41,10 +44,10 @@ public final class TemplateManager {
         "An empty Main.rscene with no assets.", false, null);
     public static final ProjectTemplate STARTER_CONTENT = new ProjectTemplate("starter_content", "Starter Content",
         "Primitive models, a default material and texture, a test script and a spinning-cube Main.rscene.", true, null);
-    /*public static final ProjectTemplate STARTER_GAME = new ProjectTemplate("starter_game", "Starter Game",
-        "Playable collect-a-thon: first-person player controller, bobbing collectibles, score, victory and restart.", true, "starter_game");*/
+    public static final ProjectTemplate STARTER_GAME = new ProjectTemplate("starter_game", "Starter Game",
+        "Collect-a-thon microgame: FPS arms prefab on the CharacterController, punch/guard, collectibles, score, victory and restart.", true, "starter_game");
 
-    private static final List<ProjectTemplate> TEMPLATES = List.of(BLANK, STARTER_CONTENT/*, STARTER_GAME*/);
+    private static final List<ProjectTemplate> TEMPLATES = List.of(BLANK, STARTER_CONTENT, STARTER_GAME);
     private static final String ROOT = "/templates/";
 
     private TemplateManager() {}
@@ -75,14 +78,28 @@ public final class TemplateManager {
         }
     }
 
-    /** Bakes the template's scene descriptor into a binary scene at sceneFile. Requires a bound AssetDatabase. */
-    public static void writeScene(ProjectTemplate template, File assetsDir, File sceneFile, AssetDatabase assetDb) throws IOException {
+    /**
+     * Bakes the template's scene descriptor into a binary scene at sceneFile. Builds it inside {@code world} (prefabs
+     * can only be instantiated into a live SceneWorld), saves, then clears the world again. Requires the new
+     * project's AssetDatabase to be bound and scanned so prefab asset references resolve.
+     */
+    public static void writeScene(ProjectTemplate template, File assetsDir, File sceneFile, AssetDatabase assetDb, SceneWorld world) throws IOException {
         String descriptorName = jsonString(readManifest(template), "scene");
         if (descriptorName == null) throw new IOException("Template '" + template.id() + "' has no scene descriptor.");
-        List<Entity> entities = parseScene(new String(readAll(open(template, descriptorName)), StandardCharsets.UTF_8), assetsDir);
-        sceneFile.getParentFile().mkdirs();
-        if (!SceneSerializer.saveScene(sceneFile.getAbsolutePath(), entities, new ArrayList<>(), assetDb)) {
-            throw new IOException("Failed to write template scene " + sceneFile);
+        String text = new String(readAll(open(template, descriptorName)), StandardCharsets.UTF_8);
+        if (text.startsWith("RETR")) {
+            throw new IOException("Template scene '" + descriptorName + "' is a binary .rscene; it must be the text descriptor.");
+        }
+        world.newScene();
+        try {
+            List<Entity> built = parseScene(text, assetsDir, prefabFile -> PrefabSerializer.instantiatePrefab(prefabFile, world, assetDb));
+            for (Entity e : built) world.addEntity(e, -1); // no-op for prefab entities, already added
+            sceneFile.getParentFile().mkdirs();
+            if (!SceneSerializer.saveScene(sceneFile.getAbsolutePath(), new ArrayList<>(world.getSceneEntities()), new ArrayList<>(), assetDb)) {
+                throw new IOException("Failed to write template scene " + sceneFile);
+            }
+        } finally {
+            world.newScene();
         }
         assetDb.rescanProjectAssets();
     }
@@ -108,7 +125,8 @@ public final class TemplateManager {
         return m.find() ? m.group(1) : null;
     }
 
-    static List<Entity> parseScene(String text, File assetsDir) throws IOException {
+    /** Builds descriptor entities. {@code prefabLoader} instantiates a prefab file and returns all its entities. */
+    static List<Entity> parseScene(String text, File assetsDir, Function<String, List<Entity>> prefabLoader) throws IOException {
         List<Entity> entities = new ArrayList<>();
         java.util.Map<Entity, String> parentNames = new java.util.LinkedHashMap<>();
         int lineNo = 0;
@@ -121,12 +139,27 @@ public final class TemplateManager {
             if (!head.startsWith("entity ")) throw new IOException("Scene descriptor line " + lineNo + ": expected 'entity <Name>'");
             String name = head.substring(7).trim();
 
-            String mesh = null;
+            String mesh = null, prefab = null;
             for (int i = 1; i < parts.length; i++) {
                 String p = parts[i].trim();
                 if (p.startsWith("mesh=")) mesh = asset(assetsDir, p.substring(5));
+                if (p.startsWith("prefab=")) prefab = asset(assetsDir, p.substring(7));
             }
-            Entity e = new Entity("entity_" + (entities.size() + 1), name, mesh);
+            Entity e;
+            if (prefab != null) {
+                if (prefabLoader == null) throw new IOException("Scene descriptor line " + lineNo + ": prefabs need a SceneWorld");
+                if (!new File(prefab).isFile()) throw new IOException("Scene descriptor line " + lineNo + ": prefab not found: " + prefab);
+                List<Entity> inst = prefabLoader.apply(prefab);
+                final int ln = lineNo;
+                final String pf = prefab;
+                e = inst.stream().filter(x -> x.parentId == null).findFirst()
+                    .orElseThrow(() -> new IOException("Scene descriptor line " + ln + ": prefab produced no root entity: " + pf));
+                e.name = name;
+                entities.addAll(inst);
+                entities.remove(e); // re-added below so the root keeps descriptor order semantics
+            } else {
+                e = new Entity("entity_" + (entities.size() + 1), name, mesh);
+            }
             Transform t = e.getComponent(Transform.class);
             if (t == null) { t = new Transform(); e.addComponent(t); }
 
@@ -137,7 +170,7 @@ public final class TemplateManager {
                     String key = eq < 0 ? p : p.substring(0, eq);
                     String val = eq < 0 ? "" : p.substring(eq + 1).trim();
                     switch (key) {
-                        case "mesh" -> {}
+                        case "mesh", "prefab" -> {}
                         case "pos" -> { float[] v = floats(val, 3); t.posX = v[0]; t.posY = v[1]; t.posZ = v[2]; }
                         case "rot" -> { float[] v = floats(val, 3); t.rotX = v[0]; t.rotY = v[1]; t.rotZ = v[2]; }
                         case "scale" -> { float[] v = floats(val, 3); t.scaleX = v[0]; t.scaleY = v[1]; t.scaleZ = v[2]; }

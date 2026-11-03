@@ -16,7 +16,7 @@ import java.util.List;
 
 /**
  * Fullscreen startup launcher shown whenever the editor has no bound project directory.
- * Left column: New Project (name + location + baseline template), Open Project (folder picker) and Open Mod
+ * Left column: New Project (template list, then name + location), Open Project (folder picker) and Open Mod
  * Workspace (Creation Kit mode: a vanilla project with one mod as the authoring target). Right column: cards for the
  * most recently opened projects (project name + folder); clicking one opens it.
  * Rendering and hit-testing share the layout constants below.
@@ -125,6 +125,7 @@ public final class ProjectLauncherOverlay {
     /** Handles a left-button press while the launcher is visible. */
     public static void handleClick(float ndcX, float ndcY, EditorWorkspace workspace) {
         if (workspace == null || workspace.isNativeDialogOpen()) return;
+        if (TemplatePickerOverlay.isOpen()) { TemplatePickerOverlay.handleClick(ndcX, ndcY); return; }
         if (inRect(ndcX, ndcY, BTN_X0, NEW_Y0, BTN_X1, NEW_Y1)) {
             UISoundPlayer.play(UISound.OPEN_MODAL);
             promptNewProject(workspace);
@@ -216,12 +217,16 @@ public final class ProjectLauncherOverlay {
     }
 
     /**
-     * Name -> location -> template prompts (off the main thread), then creates and opens the project on the main
-     * thread (closing any open one first). Canceling any prompt returns to the launcher untouched.
+     * Template list first (in-engine picker), then name -> location prompts (off the main thread), then creates and
+     * opens the project on the main thread (closing any open one first). Canceling any step changes nothing.
      */
     public static void promptNewProject(EditorWorkspace workspace) {
+        TemplatePickerOverlay.show(template -> promptNameAndLocation(workspace, template));
+    }
+
+    private static void promptNameAndLocation(EditorWorkspace workspace, TemplateManager.ProjectTemplate template) {
         workspace.runNativeDialogAsync(() -> {
-            String name = NativeFileDialog.promptInput("New Project", "Project name:", "MyRetroProject");
+            String name = NativeFileDialog.promptInput("New Project (" + template.displayName() + ")", "Project name:", "MyRetroProject");
             if (name == null) return null;
             name = name.trim();
             if (name.isEmpty() || !name.matches("[A-Za-z0-9 _.-]+") || name.startsWith(".")) {
@@ -229,8 +234,6 @@ public final class ProjectLauncherOverlay {
             }
             String parent = NativeFileDialog.selectFolderDialog("Choose Project Root Location", System.getProperty("user.home") + File.separator);
             if (parent == null) return null;
-            TemplateManager.ProjectTemplate template = promptTemplate();
-            if (template == null) return null;
             return new NewProjectPick(name, parent, template, null);
         }, pick -> {
             if (pick == null) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
@@ -254,30 +257,6 @@ public final class ProjectLauncherOverlay {
                 fail(e.getMessage());
             }
         });
-    }
-
-    /** Template picker: accepts a template name or its list number. Returns null on cancel; re-prompts on bad input. */
-    private static TemplateManager.ProjectTemplate promptTemplate() {
-        java.util.List<TemplateManager.ProjectTemplate> templates = TemplateManager.getTemplates();
-        StringBuilder msg = new StringBuilder("Choose a baseline template (name or number):\n");
-        for (int i = 0; i < templates.size(); i++) {
-            TemplateManager.ProjectTemplate t = templates.get(i);
-            msg.append("\n").append(i + 1).append(". ").append(t.displayName()).append(" - ").append(t.description());
-        }
-        String fallback = TemplateManager.STARTER_CONTENT.displayName();
-        while (true) {
-            String answer = NativeFileDialog.promptInput("New Project", msg.toString(), fallback);
-            if (answer == null) return null;
-            answer = answer.trim();
-            try {
-                int idx = Integer.parseInt(answer) - 1;
-                if (idx >= 0 && idx < templates.size()) return templates.get(idx);
-            } catch (NumberFormatException ignored) {
-                TemplateManager.ProjectTemplate byName = TemplateManager.byDisplayName(answer);
-                if (byName != null) return byName;
-            }
-            fallback = answer;
-        }
     }
 
     private static void promptOpenProject(EditorWorkspace workspace) {

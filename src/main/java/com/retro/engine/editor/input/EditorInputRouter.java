@@ -92,6 +92,14 @@ public class EditorInputRouter {
         float ndcX = coords.ndcX;
         float ndcY = coords.ndcY;
 
+        // Template picker is modal over everything (launcher or editor) while open
+        if (com.retro.engine.editor.overlays.TemplatePickerOverlay.isOpen()) {
+            if (button == 0 && action == 1 && !workspace.isNativeDialogOpen()) {
+                com.retro.engine.editor.overlays.TemplatePickerOverlay.handleClick(ndcX, ndcY);
+            }
+            return true;
+        }
+
         // Project launcher is modal over the whole window until a project is bound
         if (!workspace.hasActiveProject()) {
             if (button == 0 && action == 1) ProjectLauncherOverlay.handleClick(ndcX, ndcY, workspace);

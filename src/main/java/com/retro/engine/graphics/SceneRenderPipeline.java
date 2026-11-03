@@ -219,9 +219,20 @@ public class SceneRenderPipeline {
 
                 WorldTransform wt = editorManager.getSceneManager().getComputedWorldTransform(entity);
 
-                // View-Frustum Culling Test (Bounding Sphere check)
+                // View-Frustum Culling Test (Bounding Sphere check). The sphere must enclose the mesh's real extent:
+                // a guess from scale alone culled large meshes (e.g. a 10x10 plane scaled 3x, radius ~21) as a
+                // 4.5-unit sphere, so floors vanished whenever their origin left the view.
                 float scaleRadius = Math.max(Math.abs(wt.sx()), Math.max(Math.abs(wt.sy()), Math.abs(wt.sz())));
-                float sphereRadius = Math.max(scaleRadius * 1.5f, 1.0f);
+                MeshBufferData boundsSource = mc.meshAssetPath != null ? streamingService.getModel(mc.meshAssetPath) : null;
+                float sphereRadius = (boundsSource != null && boundsSource.vertices != null && boundsSource.vertices.length > 0)
+                        ? Math.max(boundsSource.boundsRadius() * scaleRadius, 0.01f)
+                        : Math.max(scaleRadius * 1.5f, 1.0f); // not streamed in yet: conservative unit-mesh guess
+                if (anim != null && anim.skeleton != null) {
+                    // Bind-pose bounds don't cover the animated pose, and first-person rigs put the camera at the edge
+                    // of them (arms_rig: radius 1.67, eye 1.76 above the origin), so a tight sphere culls the arms
+                    // whenever the player looks up. Animation can at most swing limbs across the rig, so double it.
+                    sphereRadius *= 2.0f;
+                }
                 if (!frustumCuller.isSphereVisible(wt.px(), wt.py(), wt.pz(), sphereRadius)
                         && !(previewActive && previewCuller.isSphereVisible(wt.px(), wt.py(), wt.pz(), sphereRadius))) {
                     continue;

@@ -1,11 +1,13 @@
 package com.retro.engine.scripting.user;
 
 import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.components.CharacterControllerComponent;
 import com.retro.engine.ecs.components.ScriptComponent;
 import com.retro.engine.scripting.EntityScript;
 
 /**
- * Spins around Y, bobs on a sine wave, and reports to the GameManager entity when the Player enters its trigger.
+ * Spins around Y, bobs on a sine wave, and reports to the GameManager entity when the player walks into its
+ * trigger (any entity with a CharacterController, or the entity named collectorName if set) or punches it.
  */
 public class CollectibleScript extends EntityScript {
 
@@ -13,7 +15,7 @@ public class CollectibleScript extends EntityScript {
     public float bobHeight = 0.25f;
     public float bobFrequency = 1.5f;    // cycles per second
     public int points = 1;
-    public String collectorName = "Player";
+    public String collectorName = "";        // empty = any entity with a CharacterController
     public String gameManagerName = "GameManager";
     public String pickupSound = "";      // optional, e.g. "Assets/Audio/pickup.wav"
 
@@ -38,7 +40,16 @@ public class CollectibleScript extends EntityScript {
 
     @Override
     public void onTriggerEnter(Entity other) {
-        if (collected || other == null || !collectorName.equals(other.name)) return;
+        if (other == null) return;
+        boolean isCollector = (collectorName == null || collectorName.isEmpty())
+            ? other.getComponent(CharacterControllerComponent.class) != null
+            : collectorName.equals(other.name);
+        if (isCollector) collect(other);
+    }
+
+    /** Collects this pickup once (called on trigger touch, or by PlayerCombatScript on a punch). */
+    public void collect(Entity by) {
+        if (collected) return;
         collected = true;
         if (pickupSound != null && !pickupSound.isEmpty()) playSound(pickupSound);
         notifyGameManager();
@@ -56,7 +67,7 @@ public class CollectibleScript extends EntityScript {
         Object inst = sc != null ? sc.activeScriptInstance : null;
         if (inst == null) { logWarning("No '" + gameManagerName + "' script found; pickup not scored."); return; }
         try {
-            inst.getClass().getMethod("addScore", int.class).invoke(inst, points);
+            inst.getClass().getMethod("addScore", new Class[] { int.class }).invoke(inst, new Object[] { Integer.valueOf(points) });
         } catch (ReflectiveOperationException e) {
             logError("GameManager has no addScore(int): " + e);
         }
