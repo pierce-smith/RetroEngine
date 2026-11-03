@@ -136,14 +136,23 @@ public class EngineContext {
 
         if (isRuntimeOnly) {
             window.setOnMouseClickListener((mouseX, mouseY, button, action) -> {
-                if (action == GLFW.GLFW_PRESS) relockCursorForPlay();
+                // The click that re-captures an Escape-freed cursor is consumed, not delivered to scripts
+                if (action == GLFW.GLFW_PRESS && relockCursorForPlay()) return;
+                com.retro.engine.scripting.Input.setMouseButtonState(button, action != GLFW.GLFW_RELEASE);
             });
+            window.setOnKeyListener((key, action, mods) ->
+                com.retro.engine.scripting.Input.setKeyState(key, action != GLFW.GLFW_RELEASE));
         } else {
             window.setOnMouseClickListener((mouseX, mouseY, button, action) -> {
                 if (selectionController == null || cameraController == null) return;
                 boolean inViewport = selectionController.isCursorInViewport(mouseX, mouseY);
                 // Clicking the game view during Play re-locks a mouse-look cursor that Escape freed; the click is consumed
                 if (action == GLFW.GLFW_PRESS && inViewport && relockCursorForPlay()) return;
+                // Scripts see presses aimed at the game (viewport, or anywhere while the cursor is captured);
+                // releases always go through so a button can't stick down
+                if (action == GLFW.GLFW_RELEASE || inViewport || window.isCursorCaptured()) {
+                    com.retro.engine.scripting.Input.setMouseButtonState(button, action != GLFW.GLFW_RELEASE);
+                }
                 boolean handled = selectionController.handleMouseClick(mouseX, mouseY, button, action);
                 
                 // Forward to camera controller if not handled by UI, OR if right-clicking inside the 3D viewport.
@@ -167,6 +176,8 @@ public class EngineContext {
             // Inline Inspector text fields own the keyboard while focused
             // The Build Exporter's Game Name field gets first claim on typing while it is focused
             window.setOnKeyListener((key, action, mods) -> {
+                // Scripts' isKeyPressed() edge detection; text-field focus is handled by Input's keyboard suppression
+                com.retro.engine.scripting.Input.setKeyState(key, action != GLFW.GLFW_RELEASE);
                 if (!BuildExporterOverlay.handleKey(key, action, editorManager)) InspectorInputDelegate.handleKey(key, action, editorManager);
             });
             window.setCharListener(cp -> {

@@ -62,7 +62,7 @@ public class PlayerCombatScript extends EntityScript {
         boolean guarding = Input.isMouseButtonDown(MOUSE_RIGHT);
         if (animator != null) animator.setBool("Guard", guarding);
 
-        if (!guarding && cooldown <= 0.0f && Input.isCursorLocked() && Input.isMouseButtonPressed(MOUSE_LEFT)) {
+        if (!guarding && cooldown <= 0.0f && Input.isMouseButtonPressed(MOUSE_LEFT)) {
             cooldown = punchCooldown;
             pendingHit = punchImpactDelay;
             if (animator != null) animator.setTrigger(nextIsLeft ? "PunchL" : "PunchR");

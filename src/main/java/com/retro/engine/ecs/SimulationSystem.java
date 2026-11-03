@@ -110,6 +110,9 @@ public class SimulationSystem {
             // 3. Sync 3D audio source positions to OpenAL
             updateSpatialAudio(activeEntities, sceneWorld);
         }
+        // Clear this frame's pressed edges (isKeyPressed / isMouseButtonPressed) after scripts have seen them, and
+        // every frame outside Play too, so editor clicks don't arrive as a burst of presses on the first Play frame
+        com.retro.engine.scripting.Input.endFrame();
     }
 
     private void pauseAudioSources(List<Entity> activeEntities) {
