@@ -3,6 +3,7 @@ package com.retro.engine.editor.templates;
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.SceneWorld;
+import com.retro.engine.ecs.components.AudioSource;
 import com.retro.engine.ecs.components.BoxCollider;
 import com.retro.engine.ecs.components.Camera;
 import com.retro.engine.ecs.components.CapsuleCollider;
@@ -12,6 +13,10 @@ import com.retro.engine.ecs.components.RigidBodyComponent;
 import com.retro.engine.ecs.components.ScriptComponent;
 import com.retro.engine.ecs.components.SphereCollider;
 import com.retro.engine.ecs.components.Transform;
+import com.retro.engine.ecs.components.UIPanel;
+import com.retro.engine.ecs.components.UIProgressBar;
+import com.retro.engine.ecs.components.UIText;
+import com.retro.engine.ecs.components.VehicleControllerComponent;
 import com.retro.engine.ecs.serialization.PrefabSerializer;
 import com.retro.engine.ecs.serialization.SceneSerializer;
 import java.io.ByteArrayOutputStream;
@@ -44,10 +49,12 @@ public final class TemplateManager {
         "An empty Main.rscene with no assets.", false, null);
     public static final ProjectTemplate STARTER_CONTENT = new ProjectTemplate("starter_content", "Starter Content",
         "Primitive models, a default material and texture, a test script and a spinning-cube Main.rscene.", true, null);
-    public static final ProjectTemplate STARTER_GAME = new ProjectTemplate("starter_game", "Starter Game",
-        "Collect-a-thon microgame: FPS arms prefab on the CharacterController, punch/guard, collectibles, score, victory and restart.", true, "starter_game");
+    public static final ProjectTemplate FIRST_PERSON_EXAMPLE = new ProjectTemplate("first_person_example", "First Person Example",
+        "Collect-a-thon microgame: FPS arms prefab on the CharacterController, punch/guard, collectibles, score, victory and restart.", true, "first_person_example");
+    public static final ProjectTemplate INFINITE_DRIVER = new ProjectTemplate("infinite_driver", "Infinite Driver",
+        "Endless highway microgame: steer a PSX car smoothly around procedurally spawned obstacles as the speed ramps up.", true, "infinite_driver");
 
-    private static final List<ProjectTemplate> TEMPLATES = List.of(BLANK, STARTER_CONTENT, STARTER_GAME);
+    private static final List<ProjectTemplate> TEMPLATES = List.of(BLANK, STARTER_CONTENT, FIRST_PERSON_EXAMPLE, INFINITE_DRIVER);
     private static final String ROOT = "/templates/";
 
     private TemplateManager() {}
@@ -204,7 +211,51 @@ public final class TemplateManager {
                             e.addComponent(rb);
                         }
                         case "script" -> e.addComponent(new ScriptComponent(asset(assetsDir, val), new File(val).getName()));
-                        case "camera" -> e.addComponent(new Camera());
+                        case "camera" -> {
+                            Camera cam = new Camera();
+                            if (!val.isEmpty()) cam.fov = floats(val, 1)[0];
+                            e.addComponent(cam);
+                        }
+                        case "audio" -> {
+                            String[] a = val.split(",");
+                            AudioSource src = new AudioSource(asset(assetsDir, a[0]));
+                            for (int k = 1; k < a.length; k++) {
+                                String opt = a[k].trim();
+                                if (opt.equals("loop")) src.loop = true;
+                                else if (opt.equals("manual")) src.playOnStart = false;
+                                else if (opt.startsWith("vol:")) src.volume = Float.parseFloat(opt.substring(4));
+                                else throw new IllegalArgumentException("unknown audio option '" + opt + "'");
+                            }
+                            src.minDistance = 8.0f;
+                            src.maxDistance = 60.0f;
+                            e.addComponent(src);
+                        }
+                        case "vehicle" -> e.addComponent(new VehicleControllerComponent());
+                        case "uipanel" -> { // ax,ay,w,h,r,g,b,alpha (drawn behind text)
+                            float[] v = floats(val, 8);
+                            UIPanel ui = new UIPanel();
+                            ui.anchorX = v[0]; ui.anchorY = v[1]; ui.width = v[2]; ui.height = v[3];
+                            ui.colorR = v[4]; ui.colorG = v[5]; ui.colorB = v[6]; ui.alpha = v[7];
+                            ui.cornerRadius = 8.0f; ui.sortOrder = -1.0f;
+                            e.addComponent(ui);
+                        }
+                        case "uibar" -> { // ax,ay,w,h,r,g,b
+                            float[] v = floats(val, 7);
+                            UIProgressBar ui = new UIProgressBar();
+                            ui.anchorX = v[0]; ui.anchorY = v[1]; ui.width = v[2]; ui.height = v[3];
+                            ui.fillR = v[4]; ui.fillG = v[5]; ui.fillB = v[6];
+                            ui.colorR = 0.1f; ui.colorG = 0.1f; ui.colorB = 0.12f; ui.alpha = 0.8f;
+                            ui.value = 0.0f;
+                            e.addComponent(ui);
+                        }
+                        case "uitext" -> {
+                            float[] v = floats(val, 3);
+                            UIText ui = new UIText();
+                            ui.anchorX = v[0]; ui.anchorY = v[1]; ui.fontSize = v[2];
+                            ui.width = 900.0f; ui.height = v[2] * 1.5f;
+                            ui.text = "";
+                            e.addComponent(ui);
+                        }
                         case "light" -> e.addComponent(new Light());
                         case "parent" -> parentNames.put(e, val);
                         default -> {

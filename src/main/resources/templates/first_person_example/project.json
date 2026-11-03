@@ -1,6 +1,6 @@
 {
-  "id": "starter_game",
-  "name": "Starter Game",
+  "id": "first_person_example",
+  "name": "First Person Example",
   "description": "Collect-a-thon microgame: FPS arms prefab on the CharacterController, punch/guard animations, bobbing collectibles, score + victory + restart.",
   "startupScene": "Assets/Scenes/Main.rscene",
   "scene": "main.rscene",

@@ -37,7 +37,7 @@ public final class TemplatePickerOverlay {
     public static void show(Consumer<TemplateManager.ProjectTemplate> onCreateCallback) {
         onCreate = onCreateCallback;
         List<TemplateManager.ProjectTemplate> templates = TemplateManager.getTemplates();
-        int idx = templates.indexOf(TemplateManager.STARTER_GAME);
+        int idx = templates.indexOf(TemplateManager.FIRST_PERSON_EXAMPLE);
         selected = idx >= 0 ? idx : 0;
         lastClickRow = -1;
         open = true;

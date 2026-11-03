@@ -1,4 +1,4 @@
-# Starter Game scene descriptor (TEXT, not a binary scene). TemplateManager bakes it into the binary
+# First Person Example scene descriptor (TEXT, not a binary scene). TemplateManager bakes it into the binary
 # Assets/Scenes/Main.rscene when a project is created: binary scenes/prefabs only resolve once the new
 # project's AssetDatabase exists, so author scenes in the editor and keep this file as the recipe.
 # Format: entity <Name> | key=value | ...   (asset paths are relative to Assets/)

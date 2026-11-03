@@ -1,0 +1,208 @@
+# Infinite Driver scene descriptor (TEXT recipe, baked into Assets/Scenes/Main.rscene by TemplateManager).
+# Format: entity <Name> | key=value | ...   (asset paths relative to Assets/). See TemplateManager.parseScene for keys;
+# extra keys used here: camera=<fov>, audio=<file>[,loop][,manual][,vol:<v>], vehicle, uitext=<ax>,<ay>,<fontSize>,
+#   uipanel=<ax>,<ay>,<w>,<h>,<r>,<g>,<b>,<alpha>, uibar=<ax>,<ay>,<w>,<h>,<r>,<g>,<b>  (UI anchors: 0,0 bottom-left, 1,1 top-right).
+# The car is moved by the built-in VehicleController (CarDriverScript feeds it speed/steering). HighwayGameScript keeps
+# the car at the origin (floating origin: the world shifts by the car's forward travel each frame), recycles the RoadSeg* roots
+# (each with its children) and re-uses the Obstacle* pool, so the highway is endless and procedurally varied.
+
+entity GameManager | pos=0,0,0 | script=Scripts/HighwayGameScript.java
+entity Sun         | pos=0,30,0 | rot=55,35,0 | light
+
+# Player car (GGBot PSX Car 03). Model nose points +Z, so it is yawed 180 to face down the road (-Z).
+entity Car         | mesh=Meshes/Car3.obj | pos=0,0,0 | rot=0,180,0 | scale=0.7,0.7,0.7 | texture=Textures/car3_red.png | vehicle | audio=Audio/Car2_Engine_Loop.ogg,loop,vol:0.6 | script=Scripts/CarDriverScript.java
+entity SFX_StartUp | pos=0,0.5,0 | parent=Car | audio=Audio/Car2_Engine_Start_Up.ogg,manual,vol:0.9
+entity SFX_Horn    | pos=0,0.5,0 | parent=Car | audio=Audio/Car_Horn.ogg,manual
+entity SFX_Boost   | pos=0,0.5,0 | parent=Car | audio=Audio/Car_Acceleration.ogg,manual,vol:0.8
+entity SFX_Crash   | pos=0,0.5,0 | parent=Car | audio=Audio/Car_Door_Close.ogg,manual,vol:1.6
+
+entity Main Camera | pos=0,3.4,8 | rot=12,0,0 | camera=65
+entity Music          | parent=Main Camera | audio=Audio/Music_Loop.ogg,loop,manual,vol:0.5
+entity HUD TopBar     | parent=Main Camera | uipanel=0.5,0.92,520,96,0.05,0.05,0.08,0.6
+entity HUD Score      | parent=Main Camera | uitext=0.5,0.94,40
+entity HUD Best       | parent=Main Camera | uitext=0.5,0.895,20
+entity HUD SpeedPanel | parent=Main Camera | uipanel=0.86,0.08,300,70,0.05,0.05,0.08,0.6
+entity HUD Speed      | parent=Main Camera | uitext=0.86,0.1,30
+entity HUD SpeedBar   | parent=Main Camera | uibar=0.86,0.055,260,12,1.0,0.55,0.1
+entity HUD MsgPanel   | parent=Main Camera | uipanel=0.5,0.5,760,190,0.05,0.05,0.08,0.7
+entity HUD Message    | parent=Main Camera | uitext=0.5,0.53,48
+entity HUD SubMessage | parent=Main Camera | uitext=0.5,0.46,22
+entity HUD Controls   | parent=Main Camera | uitext=0.17,0.05,18
+
+entity RoadSeg1 | pos=0,0,20
+entity RoadSeg1 Road    | parent=RoadSeg1 | mesh=Meshes/Cube.obj | pos=0,-0.1,0 | scale=13,0.2,20 | texture=Textures/Asphalt.png
+entity RoadSeg1 Grass   | parent=RoadSeg1 | mesh=Meshes/Cube.obj | pos=0,-0.3,0 | scale=110,0.2,20 | texture=Textures/Grass.png
+entity RoadSeg1 LaneA   | parent=RoadSeg1 | mesh=Meshes/Cube.obj | pos=-2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg1 LaneB   | parent=RoadSeg1 | mesh=Meshes/Cube.obj | pos=2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg1 EdgeL   | parent=RoadSeg1 | mesh=Meshes/Cube.obj | pos=-5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg1 EdgeR   | parent=RoadSeg1 | mesh=Meshes/Cube.obj | pos=5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg1 RailL   | parent=RoadSeg1 | mesh=Meshes/Cube.obj | pos=-6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg1 RailR   | parent=RoadSeg1 | mesh=Meshes/Cube.obj | pos=6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg1 TreeL   | parent=RoadSeg1 | pos=-13,0,-5
+entity RoadSeg1 TreeL Trunk  | parent=RoadSeg1 TreeL | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg1 TreeL Canopy | parent=RoadSeg1 TreeL | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+entity RoadSeg1 TreeR   | parent=RoadSeg1 | pos=13,0,5
+entity RoadSeg1 TreeR Trunk  | parent=RoadSeg1 TreeR | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg1 TreeR Canopy | parent=RoadSeg1 TreeR | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+
+entity RoadSeg2 | pos=0,0,0
+entity RoadSeg2 Road    | parent=RoadSeg2 | mesh=Meshes/Cube.obj | pos=0,-0.1,0 | scale=13,0.2,20 | texture=Textures/Asphalt.png
+entity RoadSeg2 Grass   | parent=RoadSeg2 | mesh=Meshes/Cube.obj | pos=0,-0.3,0 | scale=110,0.2,20 | texture=Textures/Grass.png
+entity RoadSeg2 LaneA   | parent=RoadSeg2 | mesh=Meshes/Cube.obj | pos=-2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg2 LaneB   | parent=RoadSeg2 | mesh=Meshes/Cube.obj | pos=2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg2 EdgeL   | parent=RoadSeg2 | mesh=Meshes/Cube.obj | pos=-5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg2 EdgeR   | parent=RoadSeg2 | mesh=Meshes/Cube.obj | pos=5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg2 RailL   | parent=RoadSeg2 | mesh=Meshes/Cube.obj | pos=-6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg2 RailR   | parent=RoadSeg2 | mesh=Meshes/Cube.obj | pos=6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg2 TreeL   | parent=RoadSeg2 | pos=-13,0,5
+entity RoadSeg2 TreeL Trunk  | parent=RoadSeg2 TreeL | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg2 TreeL Canopy | parent=RoadSeg2 TreeL | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+entity RoadSeg2 TreeR   | parent=RoadSeg2 | pos=13,0,-5
+entity RoadSeg2 TreeR Trunk  | parent=RoadSeg2 TreeR | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg2 TreeR Canopy | parent=RoadSeg2 TreeR | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+
+entity RoadSeg3 | pos=0,0,-20
+entity RoadSeg3 Road    | parent=RoadSeg3 | mesh=Meshes/Cube.obj | pos=0,-0.1,0 | scale=13,0.2,20 | texture=Textures/Asphalt.png
+entity RoadSeg3 Grass   | parent=RoadSeg3 | mesh=Meshes/Cube.obj | pos=0,-0.3,0 | scale=110,0.2,20 | texture=Textures/Grass.png
+entity RoadSeg3 LaneA   | parent=RoadSeg3 | mesh=Meshes/Cube.obj | pos=-2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg3 LaneB   | parent=RoadSeg3 | mesh=Meshes/Cube.obj | pos=2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg3 EdgeL   | parent=RoadSeg3 | mesh=Meshes/Cube.obj | pos=-5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg3 EdgeR   | parent=RoadSeg3 | mesh=Meshes/Cube.obj | pos=5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg3 RailL   | parent=RoadSeg3 | mesh=Meshes/Cube.obj | pos=-6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg3 RailR   | parent=RoadSeg3 | mesh=Meshes/Cube.obj | pos=6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg3 TreeL   | parent=RoadSeg3 | pos=-13,0,-5
+entity RoadSeg3 TreeL Trunk  | parent=RoadSeg3 TreeL | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg3 TreeL Canopy | parent=RoadSeg3 TreeL | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+entity RoadSeg3 TreeR   | parent=RoadSeg3 | pos=13,0,5
+entity RoadSeg3 TreeR Trunk  | parent=RoadSeg3 TreeR | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg3 TreeR Canopy | parent=RoadSeg3 TreeR | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+
+entity RoadSeg4 | pos=0,0,-40
+entity RoadSeg4 Road    | parent=RoadSeg4 | mesh=Meshes/Cube.obj | pos=0,-0.1,0 | scale=13,0.2,20 | texture=Textures/Asphalt.png
+entity RoadSeg4 Grass   | parent=RoadSeg4 | mesh=Meshes/Cube.obj | pos=0,-0.3,0 | scale=110,0.2,20 | texture=Textures/Grass.png
+entity RoadSeg4 LaneA   | parent=RoadSeg4 | mesh=Meshes/Cube.obj | pos=-2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg4 LaneB   | parent=RoadSeg4 | mesh=Meshes/Cube.obj | pos=2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg4 EdgeL   | parent=RoadSeg4 | mesh=Meshes/Cube.obj | pos=-5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg4 EdgeR   | parent=RoadSeg4 | mesh=Meshes/Cube.obj | pos=5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg4 RailL   | parent=RoadSeg4 | mesh=Meshes/Cube.obj | pos=-6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg4 RailR   | parent=RoadSeg4 | mesh=Meshes/Cube.obj | pos=6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg4 TreeL   | parent=RoadSeg4 | pos=-13,0,5
+entity RoadSeg4 TreeL Trunk  | parent=RoadSeg4 TreeL | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg4 TreeL Canopy | parent=RoadSeg4 TreeL | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+entity RoadSeg4 TreeR   | parent=RoadSeg4 | pos=13,0,-5
+entity RoadSeg4 TreeR Trunk  | parent=RoadSeg4 TreeR | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg4 TreeR Canopy | parent=RoadSeg4 TreeR | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+
+entity RoadSeg5 | pos=0,0,-60
+entity RoadSeg5 Road    | parent=RoadSeg5 | mesh=Meshes/Cube.obj | pos=0,-0.1,0 | scale=13,0.2,20 | texture=Textures/Asphalt.png
+entity RoadSeg5 Grass   | parent=RoadSeg5 | mesh=Meshes/Cube.obj | pos=0,-0.3,0 | scale=110,0.2,20 | texture=Textures/Grass.png
+entity RoadSeg5 LaneA   | parent=RoadSeg5 | mesh=Meshes/Cube.obj | pos=-2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg5 LaneB   | parent=RoadSeg5 | mesh=Meshes/Cube.obj | pos=2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg5 EdgeL   | parent=RoadSeg5 | mesh=Meshes/Cube.obj | pos=-5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg5 EdgeR   | parent=RoadSeg5 | mesh=Meshes/Cube.obj | pos=5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg5 RailL   | parent=RoadSeg5 | mesh=Meshes/Cube.obj | pos=-6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg5 RailR   | parent=RoadSeg5 | mesh=Meshes/Cube.obj | pos=6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg5 TreeL   | parent=RoadSeg5 | pos=-13,0,-5
+entity RoadSeg5 TreeL Trunk  | parent=RoadSeg5 TreeL | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg5 TreeL Canopy | parent=RoadSeg5 TreeL | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+entity RoadSeg5 TreeR   | parent=RoadSeg5 | pos=13,0,5
+entity RoadSeg5 TreeR Trunk  | parent=RoadSeg5 TreeR | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg5 TreeR Canopy | parent=RoadSeg5 TreeR | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+
+entity RoadSeg6 | pos=0,0,-80
+entity RoadSeg6 Road    | parent=RoadSeg6 | mesh=Meshes/Cube.obj | pos=0,-0.1,0 | scale=13,0.2,20 | texture=Textures/Asphalt.png
+entity RoadSeg6 Grass   | parent=RoadSeg6 | mesh=Meshes/Cube.obj | pos=0,-0.3,0 | scale=110,0.2,20 | texture=Textures/Grass.png
+entity RoadSeg6 LaneA   | parent=RoadSeg6 | mesh=Meshes/Cube.obj | pos=-2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg6 LaneB   | parent=RoadSeg6 | mesh=Meshes/Cube.obj | pos=2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg6 EdgeL   | parent=RoadSeg6 | mesh=Meshes/Cube.obj | pos=-5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg6 EdgeR   | parent=RoadSeg6 | mesh=Meshes/Cube.obj | pos=5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg6 RailL   | parent=RoadSeg6 | mesh=Meshes/Cube.obj | pos=-6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg6 RailR   | parent=RoadSeg6 | mesh=Meshes/Cube.obj | pos=6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg6 TreeL   | parent=RoadSeg6 | pos=-13,0,5
+entity RoadSeg6 TreeL Trunk  | parent=RoadSeg6 TreeL | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg6 TreeL Canopy | parent=RoadSeg6 TreeL | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+entity RoadSeg6 TreeR   | parent=RoadSeg6 | pos=13,0,-5
+entity RoadSeg6 TreeR Trunk  | parent=RoadSeg6 TreeR | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg6 TreeR Canopy | parent=RoadSeg6 TreeR | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+
+entity RoadSeg7 | pos=0,0,-100
+entity RoadSeg7 Road    | parent=RoadSeg7 | mesh=Meshes/Cube.obj | pos=0,-0.1,0 | scale=13,0.2,20 | texture=Textures/Asphalt.png
+entity RoadSeg7 Grass   | parent=RoadSeg7 | mesh=Meshes/Cube.obj | pos=0,-0.3,0 | scale=110,0.2,20 | texture=Textures/Grass.png
+entity RoadSeg7 LaneA   | parent=RoadSeg7 | mesh=Meshes/Cube.obj | pos=-2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg7 LaneB   | parent=RoadSeg7 | mesh=Meshes/Cube.obj | pos=2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg7 EdgeL   | parent=RoadSeg7 | mesh=Meshes/Cube.obj | pos=-5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg7 EdgeR   | parent=RoadSeg7 | mesh=Meshes/Cube.obj | pos=5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg7 RailL   | parent=RoadSeg7 | mesh=Meshes/Cube.obj | pos=-6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg7 RailR   | parent=RoadSeg7 | mesh=Meshes/Cube.obj | pos=6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg7 TreeL   | parent=RoadSeg7 | pos=-13,0,-5
+entity RoadSeg7 TreeL Trunk  | parent=RoadSeg7 TreeL | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg7 TreeL Canopy | parent=RoadSeg7 TreeL | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+entity RoadSeg7 TreeR   | parent=RoadSeg7 | pos=13,0,5
+entity RoadSeg7 TreeR Trunk  | parent=RoadSeg7 TreeR | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg7 TreeR Canopy | parent=RoadSeg7 TreeR | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+
+entity RoadSeg8 | pos=0,0,-120
+entity RoadSeg8 Road    | parent=RoadSeg8 | mesh=Meshes/Cube.obj | pos=0,-0.1,0 | scale=13,0.2,20 | texture=Textures/Asphalt.png
+entity RoadSeg8 Grass   | parent=RoadSeg8 | mesh=Meshes/Cube.obj | pos=0,-0.3,0 | scale=110,0.2,20 | texture=Textures/Grass.png
+entity RoadSeg8 LaneA   | parent=RoadSeg8 | mesh=Meshes/Cube.obj | pos=-2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg8 LaneB   | parent=RoadSeg8 | mesh=Meshes/Cube.obj | pos=2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg8 EdgeL   | parent=RoadSeg8 | mesh=Meshes/Cube.obj | pos=-5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg8 EdgeR   | parent=RoadSeg8 | mesh=Meshes/Cube.obj | pos=5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg8 RailL   | parent=RoadSeg8 | mesh=Meshes/Cube.obj | pos=-6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg8 RailR   | parent=RoadSeg8 | mesh=Meshes/Cube.obj | pos=6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg8 TreeL   | parent=RoadSeg8 | pos=-13,0,5
+entity RoadSeg8 TreeL Trunk  | parent=RoadSeg8 TreeL | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg8 TreeL Canopy | parent=RoadSeg8 TreeL | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+entity RoadSeg8 TreeR   | parent=RoadSeg8 | pos=13,0,-5
+entity RoadSeg8 TreeR Trunk  | parent=RoadSeg8 TreeR | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg8 TreeR Canopy | parent=RoadSeg8 TreeR | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+
+entity RoadSeg9 | pos=0,0,-140
+entity RoadSeg9 Road    | parent=RoadSeg9 | mesh=Meshes/Cube.obj | pos=0,-0.1,0 | scale=13,0.2,20 | texture=Textures/Asphalt.png
+entity RoadSeg9 Grass   | parent=RoadSeg9 | mesh=Meshes/Cube.obj | pos=0,-0.3,0 | scale=110,0.2,20 | texture=Textures/Grass.png
+entity RoadSeg9 LaneA   | parent=RoadSeg9 | mesh=Meshes/Cube.obj | pos=-2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg9 LaneB   | parent=RoadSeg9 | mesh=Meshes/Cube.obj | pos=2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg9 EdgeL   | parent=RoadSeg9 | mesh=Meshes/Cube.obj | pos=-5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg9 EdgeR   | parent=RoadSeg9 | mesh=Meshes/Cube.obj | pos=5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg9 RailL   | parent=RoadSeg9 | mesh=Meshes/Cube.obj | pos=-6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg9 RailR   | parent=RoadSeg9 | mesh=Meshes/Cube.obj | pos=6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg9 TreeL   | parent=RoadSeg9 | pos=-13,0,-5
+entity RoadSeg9 TreeL Trunk  | parent=RoadSeg9 TreeL | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg9 TreeL Canopy | parent=RoadSeg9 TreeL | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+entity RoadSeg9 TreeR   | parent=RoadSeg9 | pos=13,0,5
+entity RoadSeg9 TreeR Trunk  | parent=RoadSeg9 TreeR | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg9 TreeR Canopy | parent=RoadSeg9 TreeR | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+
+entity RoadSeg10 | pos=0,0,-160
+entity RoadSeg10 Road    | parent=RoadSeg10 | mesh=Meshes/Cube.obj | pos=0,-0.1,0 | scale=13,0.2,20 | texture=Textures/Asphalt.png
+entity RoadSeg10 Grass   | parent=RoadSeg10 | mesh=Meshes/Cube.obj | pos=0,-0.3,0 | scale=110,0.2,20 | texture=Textures/Grass.png
+entity RoadSeg10 LaneA   | parent=RoadSeg10 | mesh=Meshes/Cube.obj | pos=-2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg10 LaneB   | parent=RoadSeg10 | mesh=Meshes/Cube.obj | pos=2,0.01,0 | scale=0.2,0.02,7 | texture=Textures/LaneLine.png
+entity RoadSeg10 EdgeL   | parent=RoadSeg10 | mesh=Meshes/Cube.obj | pos=-5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg10 EdgeR   | parent=RoadSeg10 | mesh=Meshes/Cube.obj | pos=5.9,0.01,0 | scale=0.18,0.02,20 | texture=Textures/LaneLine.png
+entity RoadSeg10 RailL   | parent=RoadSeg10 | mesh=Meshes/Cube.obj | pos=-6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg10 RailR   | parent=RoadSeg10 | mesh=Meshes/Cube.obj | pos=6.8,0.45,0 | scale=0.35,0.9,20 | texture=Textures/Barrier.png
+entity RoadSeg10 TreeL   | parent=RoadSeg10 | pos=-13,0,5
+entity RoadSeg10 TreeL Trunk  | parent=RoadSeg10 TreeL | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg10 TreeL Canopy | parent=RoadSeg10 TreeL | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+entity RoadSeg10 TreeR   | parent=RoadSeg10 | pos=13,0,-5
+entity RoadSeg10 TreeR Trunk  | parent=RoadSeg10 TreeR | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
+entity RoadSeg10 TreeR Canopy | parent=RoadSeg10 TreeR | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+
+# Obstacle pool (parked below the world until HighwayGameScript spawns them). Their scale sets the hit box.
+entity Obstacle1 | mesh=Meshes/Cube.obj | pos=0,0.8,0 | scale=1.6,1.6,1.6 | texture=Textures/Crate.png
+entity Obstacle2 | mesh=Meshes/Cube.obj | pos=0,0.8,0 | scale=1.6,1.6,1.6 | texture=Textures/Crate.png
+entity Obstacle3 | mesh=Meshes/Cube.obj | pos=0,0.8,0 | scale=1.6,1.6,1.6 | texture=Textures/Crate.png
+entity Obstacle4 | mesh=Meshes/Cube.obj | pos=0,0.8,0 | scale=1.6,1.6,1.6 | texture=Textures/Crate.png
+entity Obstacle5 | mesh=Meshes/Cube.obj | pos=0,0.8,0 | scale=1.6,1.6,1.6 | texture=Textures/Crate.png
+entity Obstacle6 | mesh=Meshes/Cube.obj | pos=0,0.8,0 | scale=1.6,1.6,1.6 | texture=Textures/Crate.png
+entity Obstacle7 | mesh=Meshes/Cube.obj | pos=0,0.8,0 | scale=1.6,1.6,1.6 | texture=Textures/Crate.png
+entity Obstacle8 | mesh=Meshes/Cube.obj | pos=0,0.6,0 | scale=3.4,1.2,0.6 | texture=Textures/Hazard.png
+entity Obstacle9 | mesh=Meshes/Cube.obj | pos=0,0.6,0 | scale=3.4,1.2,0.6 | texture=Textures/Hazard.png
+entity Obstacle10 | mesh=Meshes/Cube.obj | pos=0,0.6,0 | scale=3.4,1.2,0.6 | texture=Textures/Hazard.png
+entity Obstacle11 | mesh=Meshes/Cube.obj | pos=0,0.6,0 | scale=3.4,1.2,0.6 | texture=Textures/Hazard.png
+entity Obstacle12 | mesh=Meshes/Cube.obj | pos=0,0.6,0 | scale=3.4,1.2,0.6 | texture=Textures/Hazard.png
+entity Obstacle13 | mesh=Meshes/Sphere.obj | pos=0,0.9,0 | scale=1.9,1.9,1.9 | texture=Textures/Asphalt.png
+entity Obstacle14 | mesh=Meshes/Sphere.obj | pos=0,0.9,0 | scale=1.9,1.9,1.9 | texture=Textures/Asphalt.png
+entity Obstacle15 | mesh=Meshes/Sphere.obj | pos=0,0.9,0 | scale=1.9,1.9,1.9 | texture=Textures/Asphalt.png
+entity Obstacle16 | mesh=Meshes/Sphere.obj | pos=0,0.9,0 | scale=1.9,1.9,1.9 | texture=Textures/Asphalt.png

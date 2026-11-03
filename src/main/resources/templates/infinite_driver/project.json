@@ -1,0 +1,25 @@
+{
+  "id": "infinite_driver",
+  "name": "Infinite Driver",
+  "description": "Endless highway microgame: steer a PSX car smoothly around procedurally spawned obstacles as the speed ramps up.",
+  "startupScene": "Assets/Scenes/Main.rscene",
+  "scene": "main.rscene",
+  "files": [
+    "Meshes/Car3.obj",
+    "Textures/car3_red.png",
+    "Textures/Asphalt.png",
+    "Textures/Grass.png",
+    "Textures/LaneLine.png",
+    "Textures/Barrier.png",
+    "Textures/Crate.png",
+    "Textures/Hazard.png",
+    "Audio/Car2_Engine_Loop.ogg",
+    "Audio/Car2_Engine_Start_Up.ogg",
+    "Audio/Car_Horn.ogg",
+    "Audio/Car_Acceleration.ogg",
+    "Audio/Car_Door_Close.ogg",
+    "Audio/Music_Loop.ogg",
+    "Scripts/CarDriverScript.java",
+    "Scripts/HighwayGameScript.java"
+  ]
+}
