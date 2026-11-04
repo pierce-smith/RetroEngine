@@ -801,6 +801,7 @@ public class EditorWorkspace {
             case ANIMATOR_INSPECTOR -> AnimatorGraphPanel.renderInspector(uiGeometryBuffer, getActiveAnimatorController(), getActiveAnimator(), selectedStateName, selectedTransition, getRecordingAnimator());
             case ASSETS -> AssetBrowserPanel.render(uiContext, assetDirectoryManager.getAssetDirectory(), assetDirectoryManager.getCurrentFolderPath(), assetDirectoryManager.getActiveProjectPath());
             case CONSOLE -> EngineConsolePanel.renderConsole(uiGeometryBuffer);
+            case NAVIGATION -> com.retro.engine.editor.panels.NavMeshBakerPanel.render(uiGeometryBuffer, sceneManager);
         }
     }
 

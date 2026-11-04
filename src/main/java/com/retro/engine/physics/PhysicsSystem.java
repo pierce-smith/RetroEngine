@@ -40,6 +40,8 @@ public class PhysicsSystem {
         public CapsuleCollider capsuleCollider;
         public CharacterControllerComponent characterController;
         public VehicleControllerComponent vehicleController;
+        /** Set when a NavMeshAgent steers this body's Character Controller instead of player input. */
+        public boolean navDriven;
 
         public float px, py, pz;
         public float rx, ry, rz;
@@ -58,6 +60,7 @@ public class PhysicsSystem {
             this.capsuleCollider = entity.getComponent(CapsuleCollider.class);
             this.characterController = entity.getComponent(CharacterControllerComponent.class);
             this.vehicleController = entity.getComponent(VehicleControllerComponent.class);
+            this.navDriven = entity.getComponent(com.retro.engine.ecs.components.NavMeshAgent.class) != null;
             syncFromTransform();
         }
 

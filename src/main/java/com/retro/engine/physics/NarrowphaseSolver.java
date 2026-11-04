@@ -62,8 +62,29 @@ public class NarrowphaseSolver {
             if (Float.isNaN(restitution)) return;
 
             physicsSystem.recordCollision(a, b);
+            if (sepY == 0.0f && (tryStepUp(a, b, halfAy, halfBy) || tryStepUp(b, a, halfBy, halfAy))) return;
             separateBodies(a, b, sepX * penetration, sepY * penetration, sepZ * penetration, restitution);
         }
+    }
+
+    // Float slack so a rise of exactly stepOffset (e.g. 0.3 m steps with a 0.3 m offset) still counts
+    private static final float STEP_TOLERANCE = 0.02f;
+
+    /**
+     * Side contact between a grounded character and a static / kinematic obstacle whose top is no more than the
+     * controller's stepOffset above the character's feet: lift the character onto it instead of pushing it back.
+     * The controller's ground probe then snaps it to the new surface on the next step. Returns true when it stepped.
+     */
+    private static boolean tryStepUp(PhysicsSystem.PhysicsBody character, PhysicsSystem.PhysicsBody obstacle,
+                                     float characterHalfY, float obstacleHalfY) {
+        CharacterControllerComponent cc = character.characterController;
+        if (cc == null || !cc.isGrounded || cc.velocityY > 0.0f) return false;
+        if (obstacle.characterController != null) return false;
+        if (obstacle.rigidBody != null && obstacle.rigidBody.motionType == RigidBodyComponent.MotionType.DYNAMIC) return false;
+        float rise = (obstacle.py + obstacleHalfY) - (character.py - characterHalfY);
+        if (rise <= 0.0f || rise > cc.stepOffset + STEP_TOLERANCE) return false;
+        character.py += rise;
+        return true;
     }
 
     /** Restitution the contact uses unless a mod overrides it: the max of two dynamic bodies, else the dynamic one's. */

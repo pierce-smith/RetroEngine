@@ -36,6 +36,11 @@ public class SceneWorld {
         return simulationEngine.getPhysicsWorld();
     }
 
+    /** NavMesh owner and agent ticker for the active scene. */
+    public com.retro.engine.navigation.NavMeshSystem getNavigation() {
+        return simulationEngine.getNavigation();
+    }
+
 
     public enum PlayState { EDITING, SIMULATING, PAUSED }
 
@@ -309,6 +314,7 @@ public class SceneWorld {
         originSceneEntities = null;
         this.activeScenePath = originScenePath;
         clearRegistryAndRebind(origin, true);
+        getNavigation().loadForScene(resolveScenePath(originScenePath));
         selectEntity(findEntityById(originSelectedId));
         // Re-arms the parked scene's animators in the bind pose; its components were never disposed
         attachAndArmAnimators();
@@ -751,6 +757,7 @@ public class SceneWorld {
         pendingScenePath = null;
         clearRegistryAndRebind(new ArrayList<>());
         this.activeScenePath = "Assets/Scenes/Untitled.rscene";
+        getNavigation().setMesh(null);
     }
 
     public void saveActiveScene(String filePath, List<AssetMeta> assetDirectory) {
@@ -805,6 +812,7 @@ public class SceneWorld {
         // Mods: .rpatch deltas, SceneLoadEvent and EntitySpawnEvent run on the fresh list before it is bound
         ModLoader.onSceneDeserialized(sanitized, loadedEntities);
         clearRegistryAndRebind(loadedEntities);
+        getNavigation().loadForScene(resolveScenePath(sanitized));
         attachAndArmAnimators();
         // A freshly loaded scene starts with nothing selected (rebind may have matched a stale selection by id)
         selectEntity((Entity) null);

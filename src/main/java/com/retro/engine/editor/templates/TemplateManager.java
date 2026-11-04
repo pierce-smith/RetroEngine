@@ -107,10 +107,29 @@ public final class TemplateManager {
             if (!SceneSerializer.saveScene(sceneFile.getAbsolutePath(), new ArrayList<>(world.getSceneEntities()), new ArrayList<>(), assetDb)) {
                 throw new IOException("Failed to write template scene " + sceneFile);
             }
+            bakeNavMeshIfNeeded(world, sceneFile);
         } finally {
             world.newScene();
         }
         assetDb.rescanProjectAssets();
+    }
+
+    /** Scenes with NavMeshAgents get their {@code .navmesh} baked next to the scene file with default settings. */
+    private static void bakeNavMeshIfNeeded(SceneWorld world, File sceneFile) throws IOException {
+        List<Entity> entities = world.getSceneEntities();
+        boolean hasAgent = false;
+        for (Entity e : entities) {
+            if (e.getComponent(com.retro.engine.ecs.components.NavMeshAgent.class) != null) { hasAgent = true; break; }
+        }
+        if (!hasAgent) return;
+        com.retro.engine.navigation.NavMeshBaker.Result result =
+                com.retro.engine.navigation.NavMeshBaker.bake(entities, world, new com.retro.engine.navigation.NavMeshBaker.Settings());
+        if (result.mesh() == null) {
+            System.err.println("[TemplateManager] NavMesh bake produced nothing: " + result.message());
+            return;
+        }
+        result.mesh().save(new File(com.retro.engine.navigation.NavMesh.pathForScene(sceneFile.getAbsolutePath())));
+        System.out.println("[TemplateManager] " + result.message());
     }
 
     // --- Manifest / descriptor parsing ---
@@ -282,6 +301,12 @@ public final class TemplateManager {
                             if (a.length > 4) zone.wetLevel = Float.parseFloat(a[4].trim());
                             if (a.length > 5) zone.priority = Integer.parseInt(a[5].trim());
                             e.addComponent(zone);
+                        }
+                        case "navagent" -> { // speed,stoppingDistance,baseOffset
+                            float[] v = floats(val, 3);
+                            com.retro.engine.ecs.components.NavMeshAgent agent = new com.retro.engine.ecs.components.NavMeshAgent();
+                            agent.speed = v[0]; agent.stoppingDistance = v[1]; agent.baseOffset = v[2];
+                            e.addComponent(agent);
                         }
                         case "light" -> e.addComponent(new Light());
                         case "particles" -> e.addComponent(particlePreset(val));

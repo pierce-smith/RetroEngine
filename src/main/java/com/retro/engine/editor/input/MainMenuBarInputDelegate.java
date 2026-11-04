@@ -147,6 +147,7 @@ public class MainMenuBarInputDelegate {
                 if (itemIndex == 0) { UISoundPlayer.play(UISound.CLICK); manager.resetViewportCamera(); }
                 else if (itemIndex == 1) { UISoundPlayer.play(UISound.TOGGLE); manager.getGizmoStateController().toggle3DGrid(); }
                 else if (itemIndex == 2) { UISoundPlayer.play(UISound.CLICK); manager.getDockSpace().resetLayout(); }
+                else if (itemIndex == 3) { UISoundPlayer.play(UISound.CLICK); manager.getDockSpace().activate(com.retro.engine.editor.panels.DockPanel.NAVIGATION); }
             }
             return true;
         }

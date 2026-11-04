@@ -11,6 +11,7 @@
     "Scripts/PlayerCombatScript.java",
     "Scripts/CollectibleScript.java",
     "Scripts/GameManagerScript.java",
-    "Scripts/TorchFlameScript.java"
+    "Scripts/TorchFlameScript.java",
+    "Scripts/ChaserScript.java"
   ]
 }

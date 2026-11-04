@@ -13,6 +13,7 @@ import com.retro.engine.ecs.components.CapsuleCollider;
 import com.retro.engine.ecs.components.CharacterControllerComponent;
 import com.retro.engine.ecs.components.Light;
 import com.retro.engine.ecs.components.Material;
+import com.retro.engine.ecs.components.NavMeshAgent;
 import com.retro.engine.ecs.components.MeshFilter;
 import com.retro.engine.ecs.components.ParticleSystem;
 import com.retro.engine.ecs.components.RigidBodyComponent;
@@ -91,9 +92,53 @@ public abstract class SimpleEntityScript extends EntityScript {
     public CharacterControllerComponent characterController() { return componentCache.characterController(); }
     public VehicleControllerComponent vehicleController() { return componentCache.vehicleController(); }
     public ParticleSystem particleSystem() { return componentCache.particleSystem(); }
+    public NavMeshAgent navMeshAgent() { return componentCache.navMeshAgent(); }
 
     /** Forces the next accessor calls to look components up again. */
     public void invalidateComponentCache() { componentCache.invalidate(); }
+
+    // =========================================================================
+    // Navigation (this entity's NavMeshAgent; all no-ops / defaults without one, allocation-free)
+    // =========================================================================
+
+    /** Asks the agent to walk to {@code target}; the path is computed on the next navigation tick. */
+    public void setDestination(Vector3 target) {
+        if (target != null) setDestination(target.x, target.y, target.z);
+    }
+
+    public void setDestination(float x, float y, float z) {
+        NavMeshAgent agent = componentCache.navMeshAgent();
+        if (agent != null) agent.setDestination(x, y, z);
+    }
+
+    /**
+     * Cancels the agent's path; it decelerates to a stop. (Named stopNavigation because {@link #stop()} already
+     * stops this entity's particle emission.)
+     */
+    public void stopNavigation() {
+        NavMeshAgent agent = componentCache.navMeshAgent();
+        if (agent != null) agent.stop();
+    }
+
+    /** True between setDestination and the navigation tick that computes the path. */
+    public boolean isPathPending() {
+        NavMeshAgent agent = componentCache.navMeshAgent();
+        return agent != null && agent.pathPending;
+    }
+
+    /** True while the agent is following a path (false once it arrives, stops, or no path was found). */
+    public boolean hasPath() {
+        NavMeshAgent agent = componentCache.navMeshAgent();
+        return agent != null && agent.hasPath;
+    }
+
+    /** Path distance left to the destination; infinity while a path is pending, 0 with no path. */
+    public float remainingDistance() {
+        NavMeshAgent agent = componentCache.navMeshAgent();
+        if (agent == null) return 0.0f;
+        if (agent.pathPending) return Float.POSITIVE_INFINITY;
+        return agent.hasPath ? agent.remainingDistance : 0.0f;
+    }
 
     // =========================================================================
     // Particles (this entity's ParticleSystem; all no-ops without one, allocation-free)

@@ -307,6 +307,10 @@ public class EditorInputRouter {
                 case CONSOLE -> {
                     return true;
                 }
+                case NAVIGATION -> {
+                    if (action == 1 && button == 0) com.retro.engine.editor.panels.NavMeshBakerPanel.handleClick(dx, dy, workspace);
+                    return true;
+                }
                 default -> {
                     return false;
                 }

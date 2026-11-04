@@ -73,7 +73,7 @@ public class MainMenuBar {
             case FILE -> FILE_QUIT + 1;
             case EDIT -> 3;
             case ENTITY -> 4;
-            case VIEW -> 3;
+            case VIEW -> 4;
             default -> 0;
         };
     }
@@ -289,6 +289,7 @@ public class MainMenuBar {
                 renderDropdownItem(buffer, menu, 1, hover, show3DGrid ? "Hide 3D Grid" : "Show 3D Grid", null, true);
                 renderSeparator(buffer, menu, 2);
                 renderDropdownItem(buffer, menu, 2, hover, "Reset Dock Layout", null, true);
+                renderDropdownItem(buffer, menu, 3, hover, "NavMesh Baker", null, true);
             }
             default -> {}
         }

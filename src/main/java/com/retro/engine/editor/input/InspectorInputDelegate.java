@@ -816,6 +816,7 @@ public class InspectorInputDelegate {
             }));
         }
         addComponentItem(items, entities, "+ Character Controller", CharacterControllerComponent.class, CharacterControllerComponent::new);
+        addComponentItem(items, entities, "+ NavMesh Agent", com.retro.engine.ecs.components.NavMeshAgent.class, com.retro.engine.ecs.components.NavMeshAgent::new);
         addComponentItem(items, entities, "+ Vehicle Controller", VehicleControllerComponent.class, VehicleControllerComponent::new);
 
         addComponentItem(items, entities, "+ UI Canvas", UICanvasComponent.class, UICanvasComponent::new);

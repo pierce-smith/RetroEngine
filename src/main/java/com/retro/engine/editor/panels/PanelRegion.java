@@ -18,6 +18,7 @@ public enum PanelRegion {
     VIEWPORT,
     ANIMATOR,
     CONSOLE,
+    NAVIGATION,
     DOCK_CHROME,
     OVERLAY_MODAL;
 

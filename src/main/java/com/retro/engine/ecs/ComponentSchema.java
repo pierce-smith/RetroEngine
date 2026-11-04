@@ -49,7 +49,8 @@ public final class ComponentSchema {
             ScriptComponent.class, RigidBodyComponent.class, BoxCollider.class, SphereCollider.class,
             CapsuleCollider.class, CharacterControllerComponent.class, VehicleControllerComponent.class,
             AnimatorComponent.class, UICanvasComponent.class, UIPanel.class, UIText.class, UIImage.class,
-            UIProgressBar.class, ParticleSystem.class, AudioReverbZone.class
+            UIProgressBar.class, ParticleSystem.class, AudioReverbZone.class,
+            com.retro.engine.ecs.components.NavMeshAgent.class
     );
 
     /** How the inspector presents and edits a property. */

@@ -79,7 +79,7 @@ public final class DockSpace {
         float areaH = AREA_Y1 - AREA_Y0;
         DockNode left = DockNode.leaf(DockPanel.HIERARCHY, DockPanel.ANIMATOR_PARAMETERS);
         DockNode center = DockNode.leaf(DockPanel.SCENE, DockPanel.ANIMATOR);
-        DockNode right = DockNode.leaf(DockPanel.INSPECTOR, DockPanel.ANIMATOR_INSPECTOR);
+        DockNode right = DockNode.leaf(DockPanel.INSPECTOR, DockPanel.ANIMATOR_INSPECTOR, DockPanel.NAVIGATION);
         DockNode bottom = DockNode.leaf(DockPanel.ASSETS, DockPanel.CONSOLE);
 
         DockNode centerRight = DockNode.split(true, 1.10f / 1.55f, center, right);

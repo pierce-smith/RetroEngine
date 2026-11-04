@@ -14,7 +14,8 @@ public enum DockPanel {
     ANIMATOR_PARAMETERS("PARAMETERS", -1.00f, -0.50f, -0.55f, 0.86f, PanelRegion.ANIMATOR),
     ANIMATOR_INSPECTOR("ANIM INSPECTOR", 0.55f, -0.50f, 1.00f, 0.86f, PanelRegion.ANIMATOR),
     ASSETS("PROJECT", -1.00f, -1.00f, 1.00f, -0.42f, PanelRegion.ASSET_DIRECTORY),
-    CONSOLE("CONSOLE", -0.85f, -0.85f, 0.85f, -0.20f, PanelRegion.CONSOLE);
+    CONSOLE("CONSOLE", -0.85f, -0.85f, 0.85f, -0.20f, PanelRegion.CONSOLE),
+    NAVIGATION("NAVIGATION", 0.55f, -0.50f, 1.00f, 0.88f, PanelRegion.NAVIGATION);
 
     public final String title;
     public final float designX0, designY0, designX1, designY1;
