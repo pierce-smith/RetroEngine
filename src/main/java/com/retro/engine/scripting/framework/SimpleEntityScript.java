@@ -18,6 +18,8 @@ import com.retro.engine.ecs.components.MeshFilter;
 import com.retro.engine.ecs.components.ParticleSystem;
 import com.retro.engine.ecs.components.RigidBodyComponent;
 import com.retro.engine.ecs.components.SphereCollider;
+import com.retro.engine.ecs.components.SplineComponent;
+import com.retro.engine.ecs.components.SplineFollower;
 import com.retro.engine.ecs.components.Transform;
 import com.retro.engine.ecs.components.VehicleControllerComponent;
 import com.retro.engine.physics.PhysicsSystem;
@@ -138,6 +140,87 @@ public abstract class SimpleEntityScript extends EntityScript {
         if (agent == null) return 0.0f;
         if (agent.pathPending) return Float.POSITIVE_INFINITY;
         return agent.hasPath ? agent.remainingDistance : 0.0f;
+    }
+
+    // =========================================================================
+    // Player control (cutscenes; allocation-free)
+    // =========================================================================
+
+    /** Enables / suspends movement, look and jump input on every Character Controller in the scene. Reset on Stop. */
+    public void setPlayerInputEnabled(boolean enabled) {
+        if (sceneWorld == null) return;
+        java.util.List<Entity> all = sceneWorld.getSceneEntities();
+        for (int i = 0; i < all.size(); i++) {
+            Entity e = all.get(i);
+            CharacterControllerComponent cc = (e != null) ? e.getComponent(CharacterControllerComponent.class) : null;
+            if (cc != null) cc.inputEnabled = enabled;
+        }
+    }
+
+    /** False while any Character Controller has its input suspended (e.g. an opening cutscene is playing). */
+    public boolean isPlayerInputEnabled() {
+        if (sceneWorld == null) return true;
+        java.util.List<Entity> all = sceneWorld.getSceneEntities();
+        for (int i = 0; i < all.size(); i++) {
+            Entity e = all.get(i);
+            CharacterControllerComponent cc = (e != null) ? e.getComponent(CharacterControllerComponent.class) : null;
+            if (cc != null && !cc.inputEnabled) return false;
+        }
+        return true;
+    }
+
+    // =========================================================================
+    // Splines (this entity's SplineFollower; allocation-free after the first followSpline call)
+    // =========================================================================
+
+    /**
+     * Starts moving this entity along {@code spline} at {@code speed} world units per second from the current
+     * progress. Adds a Spline Follower (wrap mode LOOP) when the entity has none.
+     */
+    public void followSpline(SplineComponent spline, float speed) {
+        if (entity == null) return;
+        SplineFollower f = entity.getComponent(SplineFollower.class);
+        if (f == null) {
+            f = new SplineFollower();
+            f.resetRuntime();
+            entity.addComponent(f);
+            componentCache.invalidate();
+        }
+        if (f.spline != spline) {
+            f.spline = spline;
+            f.distance = 0.0f;
+            f.direction = 1.0f;
+        }
+        f.resolved = true;
+        f.speed = speed;
+        f.playing = spline != null;
+    }
+
+    /** Normalized arc-length progress (0 = start, 1 = end) along the followed spline; 0 without one. */
+    public float getSplineProgress() {
+        SplineFollower f = (entity != null) ? entity.getComponent(SplineFollower.class) : null;
+        if (f == null) return 0.0f;
+        if (f.pendingProgress == f.pendingProgress) return f.pendingProgress;
+        float len = (f.spline != null) ? f.spline.getLength() : 0.0f;
+        return len > 0.0f ? f.distance / len : 0.0f;
+    }
+
+    /** Jumps to normalized progress {@code t} in [0, 1]; applied on the next spline tick. */
+    public void setSplineProgress(float t) {
+        SplineFollower f = (entity != null) ? entity.getComponent(SplineFollower.class) : null;
+        if (f != null) f.pendingProgress = Math.max(0.0f, Math.min(1.0f, t));
+    }
+
+    /** Pauses spline travel (the entity stays at its current progress). */
+    public void pauseSpline() {
+        SplineFollower f = (entity != null) ? entity.getComponent(SplineFollower.class) : null;
+        if (f != null) f.playing = false;
+    }
+
+    /** Resumes spline travel after {@link #pauseSpline()} or a CLAMP end stop. */
+    public void resumeSpline() {
+        SplineFollower f = (entity != null) ? entity.getComponent(SplineFollower.class) : null;
+        if (f != null) f.playing = true;
     }
 
     // =========================================================================

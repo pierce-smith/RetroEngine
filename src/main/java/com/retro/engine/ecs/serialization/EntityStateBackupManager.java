@@ -214,6 +214,7 @@ public class EntityStateBackupManager {
         switch (comp) {
             case Transform t -> t.markDirty();
             case CharacterControllerComponent c -> {
+                c.inputEnabled = true;
                 c.velocityX = 0.0f;
                 c.velocityY = 0.0f;
                 c.velocityZ = 0.0f;

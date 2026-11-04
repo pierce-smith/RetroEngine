@@ -26,6 +26,7 @@ public class SimulationSystem {
     private PlayState playState = PlayState.EDITING;
     private final PhysicsSystem physicsWorld = new PhysicsSystem();
     private final com.retro.engine.navigation.NavMeshSystem navigation = new com.retro.engine.navigation.NavMeshSystem();
+    private final com.retro.engine.spline.SplineSystem splines = new com.retro.engine.spline.SplineSystem();
     private final EntityStateBackupManager backupManager = new EntityStateBackupManager();
     // Sources the pause button paused; resume restarts only these, not ones a script paused itself
     private final List<AudioSource> pausedAudioSources = new ArrayList<>();
@@ -55,6 +56,7 @@ public class SimulationSystem {
             this.playState = PlayState.SIMULATING;
 
             navigation.resetAgents(activeEntities);
+            splines.reset(activeEntities);
 
             // Initialize 3D Physics World
             physicsWorld.initWorld(activeEntities);
@@ -92,6 +94,7 @@ public class SimulationSystem {
             ScriptEngine.destroyScripts(activeEntities);
             physicsWorld.cleanup();
             navigation.resetAgents(activeEntities);
+            splines.reset(activeEntities);
             AudioEngine.stopAllOneShots();
             AudioMixerService.resetRuntime();
             AudioReverbSystem.reset();
@@ -117,6 +120,8 @@ public class SimulationSystem {
         if (playState == PlayState.SIMULATING && activeEntities != null) {
             // 0. Resolve NavMesh path requests and steer agents (sets Character Controller velocities before physics)
             navigation.update(deltaTime, activeEntities);
+            // 0b. Advance Spline Followers along their paths
+            splines.update(deltaTime, activeEntities);
 
             // 1. Step 3D Physics Solver (RigidBodies, Character Controllers, Vehicles, Raycasts)
             physicsWorld.step(deltaTime, activeEntities);

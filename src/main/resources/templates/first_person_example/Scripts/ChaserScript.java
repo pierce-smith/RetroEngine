@@ -48,6 +48,12 @@ public class ChaserScript extends SimpleEntityScript {
         if (player == null) return;
         NavMeshAgent agent = navMeshAgent();
         if (agent == null) return;
+        // Hold still while the player has no control (opening cutscene)
+        if (!isPlayerInputEnabled()) {
+            if (hasPath() || isPathPending()) stopNavigation();
+            hasDest = false;
+            return;
+        }
 
         getWorldPositionOf(player, playerPos);
         float dist = getFlatDistanceTo(player);

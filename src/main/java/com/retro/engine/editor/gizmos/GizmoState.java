@@ -495,6 +495,9 @@ public class GizmoState {
             this.lastOrbitTime = System.currentTimeMillis();
         }
 
+        if (SplineGizmo.isDragging()) {
+            return SplineGizmo.drag(refX, refY, manager.getCameraController());
+        }
         if (marqueeActive) {
             marqueeEndX = refX;
             marqueeEndY = refY;

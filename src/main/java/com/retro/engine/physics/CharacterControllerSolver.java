@@ -163,12 +163,12 @@ public class CharacterControllerSolver {
                 cursorLockRequested = true; // Once per session, so a script that frees the cursor keeps it free
                 Input.setCursorLocked(true);
             }
-            if (hasLookInput && rig.orbit() != null) {
+            if (hasLookInput && cc.inputEnabled && rig.orbit() != null) {
                 applyOrbit(rig.orbit(), body, lookYaw, lookPitch);
             }
 
             // Only override while there is input, so script-set velocities and friction coasting still apply otherwise
-            if (hasMoveInput && !body.navDriven) {
+            if (hasMoveInput && cc.inputEnabled && !body.navDriven) {
                 float yaw = (float) Math.toRadians(worldYaw(rig));
                 float sin = (float) Math.sin(yaw), cos = (float) Math.cos(yaw);
                 // Camera right = (cos, 0, sin), forward = (sin, 0, -cos): yaw 0 looks down -Z
@@ -177,7 +177,7 @@ public class CharacterControllerSolver {
                 cc.velocityZ = (inputRight * sin - inputForward * cos) * speed;
             }
 
-            if (jump && cc.isGrounded && !body.navDriven) {
+            if (jump && cc.inputEnabled && cc.isGrounded && !body.navDriven) {
                 cc.velocityY = cc.jumpForce;
                 cc.isGrounded = false;
                 if (pad != null) pad.setVibration(0.0f, JUMP_RUMBLE_STRENGTH, JUMP_RUMBLE_DURATION);

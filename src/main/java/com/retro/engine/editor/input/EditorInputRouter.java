@@ -193,6 +193,10 @@ public class EditorInputRouter {
             return dispatchToPanel(panel, ndcX, ndcY, button, action);
         } else if (action == 0) { // Release
             if (button == 0) gizmoStateController.onPrimaryRelease(workspace);
+            if (button == 0 && com.retro.engine.editor.gizmos.SplineGizmo.isDragging()) {
+                com.retro.engine.editor.gizmos.SplineGizmo.endDrag(workspace);
+                return true;
+            }
             InspectorInputDelegate.onMouseRelease(workspace);
             AssetBrowserInputDelegate.onMouseRelease(workspace);
             overlayManager.onModalMouseRelease();
@@ -291,6 +295,13 @@ public class EditorInputRouter {
                 }
                 case SCENE -> {
                     if (gizmoStateController.processViewportToolbarClick(dx, dy)) {
+                        return true;
+                    }
+                    // Spline knots / handles of the selected entity take the press before the GPU pick
+                    if (button == 0 && action == 1 && !workspace.isAltHeld()
+                            && workspace.getSceneManager().getPlayState() != com.retro.engine.ecs.SceneWorld.PlayState.SIMULATING
+                            && com.retro.engine.editor.gizmos.SplineGizmo.tryBeginDrag((dx + 1.0) * 640.0, (1.0 - dy) * 360.0,
+                                    workspace.getSelectedEntity(), workspace.getCameraController())) {
                         return true;
                     }
                     gizmoStateController.processViewportGizmoClick((dx + 1.0) * 640.0, (1.0 - dy) * 360.0, workspace);

@@ -12,6 +12,7 @@
     "Scripts/CollectibleScript.java",
     "Scripts/GameManagerScript.java",
     "Scripts/TorchFlameScript.java",
-    "Scripts/ChaserScript.java"
+    "Scripts/ChaserScript.java",
+    "Scripts/OpeningCutsceneScript.java"
   ]
 }

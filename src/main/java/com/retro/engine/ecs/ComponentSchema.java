@@ -50,7 +50,8 @@ public final class ComponentSchema {
             CapsuleCollider.class, CharacterControllerComponent.class, VehicleControllerComponent.class,
             AnimatorComponent.class, UICanvasComponent.class, UIPanel.class, UIText.class, UIImage.class,
             UIProgressBar.class, ParticleSystem.class, AudioReverbZone.class,
-            com.retro.engine.ecs.components.NavMeshAgent.class
+            com.retro.engine.ecs.components.NavMeshAgent.class,
+            com.retro.engine.ecs.components.SplineComponent.class, com.retro.engine.ecs.components.SplineFollower.class
     );
 
     /** How the inspector presents and edits a property. */

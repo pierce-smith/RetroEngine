@@ -308,6 +308,24 @@ public final class TemplateManager {
                             agent.speed = v[0]; agent.stoppingDistance = v[1]; agent.baseOffset = v[2];
                             e.addComponent(agent);
                         }
+                        case "spline" -> { // x,y,z;x,y,z;... knots (Catmull-Rom, open), relative to pos
+                            String[] knots = val.split(";");
+                            float[] xyz = new float[knots.length * 3];
+                            for (int k = 0; k < knots.length; k++) System.arraycopy(floats(knots[k], 3), 0, xyz, k * 3, 3);
+                            com.retro.engine.ecs.components.SplineComponent spline = new com.retro.engine.ecs.components.SplineComponent();
+                            spline.setPoints(xyz, knots.length);
+                            e.addComponent(spline);
+                        }
+                        case "follower" -> { // splineEntity,speed,wrapMode,alignToTangent,autoPlay
+                            String[] a = val.split(",");
+                            com.retro.engine.ecs.components.SplineFollower f = new com.retro.engine.ecs.components.SplineFollower();
+                            f.splineEntity = a[0].trim();
+                            if (a.length > 1) f.speed = Float.parseFloat(a[1].trim());
+                            if (a.length > 2) f.wrapMode = com.retro.engine.ecs.components.SplineFollower.WrapMode.valueOf(a[2].trim().toUpperCase());
+                            if (a.length > 3) f.alignToTangent = Boolean.parseBoolean(a[3].trim());
+                            if (a.length > 4) f.autoPlay = Boolean.parseBoolean(a[4].trim());
+                            e.addComponent(f);
+                        }
                         case "light" -> e.addComponent(new Light());
                         case "particles" -> e.addComponent(particlePreset(val));
                         case "parent" -> parentNames.put(e, val);

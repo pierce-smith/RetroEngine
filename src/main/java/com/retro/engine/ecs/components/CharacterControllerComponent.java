@@ -32,6 +32,8 @@ public class CharacterControllerComponent extends Component {
     public float sprintSpeedMultiplier = 1.75f;
 
     // Runtime state
+    /** False while scripts suspend player control (cutscenes): WASD/stick, look and jump are ignored. Not persisted. */
+    public boolean inputEnabled = true;
     public float velocityX = 0.0f;
     public float velocityY = 0.0f;
     public float velocityZ = 0.0f;
