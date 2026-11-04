@@ -156,6 +156,7 @@ public class SceneRenderPipeline {
         // Project-wide ambient / fog / shadow blob settings ride along with the lights (field copies, no allocation)
         RenderEnvironment environment = snapshot.lights.environment();
         editorManager.getProjectSettings().applyTo(environment);
+        com.retro.engine.audio.AudioMixerService.applySettings(editorManager.getProjectSettings());
         boolean shadowBlobs = environment.shadowBlobsEnabled;
 
         // Selected Camera entity's preview; its frustum also keeps entities only that camera can see in the queue

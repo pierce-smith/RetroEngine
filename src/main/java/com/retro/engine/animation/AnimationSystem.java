@@ -101,6 +101,7 @@ public class AnimationSystem {
         if (animator == null) return;
         animator.isPlaying = false;
         animator.playbackTime = 0.0f;
+        animator.cancelTransition();
         if (animator.controller != null) {
             animator.resetToEntryState();
         }
@@ -236,11 +237,7 @@ public class AnimationSystem {
                     continue;
                 }
 
-                lerpVector3(posScratchA, posScratchB, weight, posBlended);
-                slerpQuat(quatScratchA, quatScratchB, weight, quatBlended);
-                lerpVector3(scaleScratchA, scaleScratchB, weight, scaleBlended);
-
-                composeTRS(posBlended, quatBlended, scaleBlended, localScratch);
+                blendPosesInto(weight, localScratch);
             }
         } else {
             // 2. Direct Clip Playback Fallback
@@ -250,36 +247,65 @@ public class AnimationSystem {
                 return;
             }
 
-            float duration = clip.durationSeconds;
-            animator.playbackTime += deltaTime * animator.playbackSpeed;
-            if (clip.loopMode == AnimationClip.LoopMode.ONCE) {
-                if (animator.playbackTime >= duration) {
+            float speed = animator.playbackSpeed;
+            AnimationClip target = animator.transitioning ? animator.targetClip : null;
+            boolean advanced = target != null;
+            if (target != null) {
+                animator.targetPlaybackTime = advanceClipTime(target, animator.targetPlaybackTime + deltaTime * speed);
+                animator.crossfadeTimer += deltaTime;
+                if (animator.crossfadeTimer >= animator.crossfadeDuration) {
+                    // Crossfade complete: the target becomes the sole clip
+                    animator.currentClip = clip = target;
+                    animator.activeClipName = target.name;
+                    animator.playbackTime = animator.targetPlaybackTime;
+                    animator.cancelTransition();
+                    target = null;
+                } else {
+                    // Source keeps playing under the fade (a single-shot source holds its last frame)
+                    animator.playbackTime = advanceClipTime(clip, animator.playbackTime + deltaTime * speed);
+                }
+            }
+            if (!advanced) {
+                float time = animator.playbackTime + deltaTime * speed;
+                if (clip.loopMode == AnimationClip.LoopMode.ONCE && time >= clip.durationSeconds) {
                     // Single-shot finished: freeze the timeline at its end and drop to the rest pose
                     stop(animator);
-                    animator.playbackTime = duration;
+                    animator.playbackTime = clip.durationSeconds;
                     return;
                 }
-            } else {
-                float period = (clip.loopMode == AnimationClip.LoopMode.PING_PONG) ? duration * 2.0f : duration;
-                animator.playbackTime %= period;
-                if (animator.playbackTime < 0.0f) animator.playbackTime += period;
+                animator.playbackTime = advanceClipTime(clip, time);
             }
-            float sampleTime = clip.normalizeTime(animator.playbackTime);
+            float sampleTimeA = clip.normalizeTime(animator.playbackTime);
+            float sampleTimeB = (target != null) ? target.normalizeTime(animator.targetPlaybackTime) : 0.0f;
+            float weight = animator.getCrossfadeWeight();
 
             for (int i = 0; i < jointCount; i++) {
                 Skeleton.BoneNode bone = skeleton.getBone(i);
                 if (bone == null) continue;
                 float[] localScratch = localBoneTransforms[i];
+                float[] rest = restPose(animator, bone, i);
 
-                KeyframeTrack track = clip.getTrack(bone.name);
-                if (track != null) {
-                    track.samplePosition(sampleTime, posBlended);
-                    track.sampleRotation(sampleTime, quatBlended);
-                    track.sampleScale(sampleTime, scaleBlended);
-                    composeTRS(posBlended, quatBlended, scaleBlended, localScratch);
-                } else {
-                    System.arraycopy(restPose(animator, bone, i), 0, localScratch, 0, 16);
+                if (target == null) {
+                    KeyframeTrack track = clip.getTrack(bone.name);
+                    if (track != null) {
+                        track.samplePosition(sampleTimeA, posBlended);
+                        track.sampleRotation(sampleTimeA, quatBlended);
+                        track.sampleScale(sampleTimeA, scaleBlended);
+                        composeTRS(posBlended, quatBlended, scaleBlended, localScratch);
+                    } else {
+                        System.arraycopy(rest, 0, localScratch, 0, 16);
+                    }
+                    continue;
                 }
+
+                // Dual-pose crossfade blending
+                boolean sampledA = sampleClipPose(clip, sampleTimeA, bone, rest, posScratchA, quatScratchA, scaleScratchA);
+                boolean sampledB = sampleClipPose(target, sampleTimeB, bone, rest, posScratchB, quatScratchB, scaleScratchB);
+                if (!sampledA && !sampledB) {
+                    System.arraycopy(rest, 0, localScratch, 0, 16);
+                    continue;
+                }
+                blendPosesInto(weight, localScratch);
             }
         }
 
@@ -304,14 +330,15 @@ public class AnimationSystem {
         }
 
         // Looping states wrap, single-shot states freeze at their terminal frame
-        animator.currentTime = current.boundStateTime(animator.currentTime + deltaTime * current.speed, parameters);
+        float speed = animator.playbackSpeed;
+        animator.currentTime = current.boundStateTime(animator.currentTime + deltaTime * speed * current.speed, parameters);
 
         if (animator.transitioning) {
             AnimatorState target = animator.getTargetState();
             if (target == null) {
                 animator.cancelTransition(); // target state removed mid-crossfade
             } else {
-                animator.targetTime = target.boundStateTime(animator.targetTime + deltaTime * target.speed, parameters);
+                animator.targetTime = target.boundStateTime(animator.targetTime + deltaTime * speed * target.speed, parameters);
                 animator.crossfadeTimer += deltaTime;
                 if (animator.crossfadeTimer >= animator.crossfadeDuration) {
                     // Complete crossfade transition
@@ -489,6 +516,41 @@ public class AnimationSystem {
             return false;
         }
         return anyTrack;
+    }
+
+    /**
+     * Blends the A pose (posScratchA / quatScratchA / scaleScratchA) toward the B pose by {@code weight}: lerp for
+     * position and scale, slerp for rotation, composed into {@code out}. Uses only the preallocated scratch buffers.
+     */
+    private void blendPosesInto(float weight, float[] out) {
+        lerpVector3(posScratchA, posScratchB, weight, posBlended);
+        slerpQuat(quatScratchA, quatScratchB, weight, quatBlended);
+        lerpVector3(scaleScratchA, scaleScratchB, weight, scaleBlended);
+        composeTRS(posBlended, quatBlended, scaleBlended, out);
+    }
+
+    /** Samples one bone of a clip at {@code sampleTime}; false (outputs hold the decomposed rest pose) without a track. */
+    private static boolean sampleClipPose(AnimationClip clip, float sampleTime, Skeleton.BoneNode bone, float[] rest,
+                                          float[] outPos, float[] outQuat, float[] outScale) {
+        KeyframeTrack track = clip.getTrack(bone.name);
+        if (track == null) {
+            decomposeTRS(rest, outPos, outQuat, outScale);
+            return false;
+        }
+        track.samplePosition(sampleTime, outPos);
+        track.sampleRotation(sampleTime, outQuat);
+        track.sampleScale(sampleTime, outScale);
+        return true;
+    }
+
+    /** Wraps (LOOP / PING_PONG period) or clamps (ONCE) a direct-clip playback time. */
+    private static float advanceClipTime(AnimationClip clip, float time) {
+        float duration = clip.durationSeconds;
+        if (clip.loopMode == AnimationClip.LoopMode.ONCE) return Math.max(0.0f, Math.min(time, duration));
+        float period = (clip.loopMode == AnimationClip.LoopMode.PING_PONG) ? duration * 2.0f : duration;
+        if (period <= 0.0f) return 0.0f;
+        time %= period;
+        return (time < 0.0f) ? time + period : time;
     }
 
     /** Decomposes a column-major TRS matrix into translation, rotation quaternion (x, y, z, w), and axis scale. */

@@ -1,5 +1,7 @@
 package com.retro.engine.scripting.framework;
 
+import com.retro.engine.audio.AudioBus;
+import com.retro.engine.audio.AudioMixerService;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.SceneWorld;
@@ -113,6 +115,32 @@ public abstract class SimpleEntityScript extends EntityScript {
     public void emit(int count) {
         ParticleSystem ps = componentCache.particleSystem();
         if (ps != null) ps.emit(count);
+    }
+
+    // =========================================================================
+    // Animation (this entity's AnimatorComponent; all no-ops without one, allocation-free)
+    // =========================================================================
+
+    /**
+     * Blends into {@code clipName} (a controller state, or the clip a state plays) over {@code duration} seconds.
+     * Safe to call every frame: re-requesting the clip already playing or being faded into does nothing.
+     * Returns false when there is no animator or no such clip.
+     */
+    public boolean crossFadeAnimation(String clipName, float duration) {
+        AnimatorComponent anim = componentCache.animator();
+        return anim != null && anim.crossFade(clipName, duration);
+    }
+
+    /** Switches to {@code clipName} immediately, without blending. */
+    public boolean playAnimation(String clipName) {
+        AnimatorComponent anim = componentCache.animator();
+        return anim != null && anim.playAnimation(clipName);
+    }
+
+    /** Playback speed multiplier for this entity's animations (1 = authored speed, 0 = frozen). */
+    public void setAnimationSpeed(float speed) {
+        AnimatorComponent anim = componentCache.animator();
+        if (anim != null) anim.playbackSpeed = speed;
     }
 
     // =========================================================================
@@ -376,6 +404,58 @@ public abstract class SimpleEntityScript extends EntityScript {
     public boolean playGlobalSound(String clipPath, float volume) {
         return playSound(clipPath, volume, false);
     }
+
+    // --- Mixer bus routing -------------------------------------------------
+    // Bus names for the String overloads: "MASTER", "BGM", "SFX", "VOICE" (case-insensitive; unknown -> SFX)
+
+    /** One-shot 3D clip from this entity's position, routed through {@code bus}. */
+    public boolean playSpatialSound(String clipPath, AudioBus bus) {
+        return playSound(clipPath, 1.0f, true, bus, false);
+    }
+
+    public boolean playSpatialSound(String clipPath, AudioBus bus, float volume) {
+        return playSound(clipPath, volume, true, bus, false);
+    }
+
+    public boolean playSpatialSound(String clipPath, String bus) {
+        return playSound(clipPath, 1.0f, true, AudioBus.fromName(bus, AudioBus.SFX), false);
+    }
+
+    public boolean playSpatialSound(String clipPath, String bus, float volume) {
+        return playSound(clipPath, volume, true, AudioBus.fromName(bus, AudioBus.SFX), false);
+    }
+
+    /** One-shot non-spatial clip routed through {@code bus} (music stingers on BGM, dialogue on VOICE). */
+    public boolean playGlobalSound(String clipPath, AudioBus bus) {
+        return playSound(clipPath, 1.0f, false, bus, false);
+    }
+
+    public boolean playGlobalSound(String clipPath, AudioBus bus, float volume) {
+        return playSound(clipPath, volume, false, bus, false);
+    }
+
+    public boolean playGlobalSound(String clipPath, String bus) {
+        return playSound(clipPath, 1.0f, false, AudioBus.fromName(bus, AudioBus.SFX), false);
+    }
+
+    public boolean playGlobalSound(String clipPath, String bus, float volume) {
+        return playSound(clipPath, volume, false, AudioBus.fromName(bus, AudioBus.SFX), false);
+    }
+
+    /** Critical non-spatial SFX (alarm, boss roar): ducks the BGM bus while it plays. */
+    public boolean playCriticalSound(String clipPath, float volume) {
+        return playSound(clipPath, volume, false, AudioBus.SFX, true);
+    }
+
+    /** Runtime bus volume 0..1, multiplied with the Project Settings mix; reset when Play stops. */
+    public void setBusVolume(AudioBus bus, float volume) { AudioMixerService.setBusVolume(bus, volume); }
+    public void setBusVolume(String bus, float volume) { AudioMixerService.setBusVolume(AudioBus.fromName(bus, null), volume); }
+    public float getBusVolume(AudioBus bus) { return AudioMixerService.getBusVolume(bus); }
+    public float getBusVolume(String bus) { return AudioMixerService.getBusVolume(AudioBus.fromName(bus, null)); }
+    public void setBusMuted(AudioBus bus, boolean muted) { AudioMixerService.setBusMuted(bus, muted); }
+    public void setBusMuted(String bus, boolean muted) { AudioMixerService.setBusMuted(AudioBus.fromName(bus, null), muted); }
+    public boolean isBusMuted(AudioBus bus) { return AudioMixerService.isBusMuted(bus); }
+    public boolean isBusMuted(String bus) { return AudioMixerService.isBusMuted(AudioBus.fromName(bus, null)); }
 
     /** Shakes the Main Camera; intensity ~0..1, fading out over {@code duration} seconds. */
     public void shakeCamera(float intensity, float duration) {

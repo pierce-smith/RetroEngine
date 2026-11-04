@@ -1,5 +1,6 @@
 package com.retro.engine.core;
 
+import com.retro.engine.audio.AudioBus;
 import com.retro.engine.graphics.RenderEnvironment;
 import com.retro.engine.graphics.ShadingModel;
 
@@ -13,8 +14,9 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 
 /**
- * Per-project settings persisted as {@code <Project>/ProjectSettings.bin}: project identity, the startup scene, and
- * the global render environment (shading model, ground shadow blobs, distance fog, ambient light) that
+ * Per-project settings persisted as {@code <Project>/ProjectSettings.bin}: project identity, the startup scene, the
+ * audio mixer (bus volumes / mutes, BGM ducking, reverb zones) read by {@link com.retro.engine.audio.AudioMixerService},
+ * and the global render environment (shading model, ground shadow blobs, distance fog, ambient light) that
  * {@link com.retro.engine.graphics.SceneRenderPipeline} hands to the lit shaders every frame.
  *
  * <p>Binary layout (big-endian, {@link DataOutputStream}):
@@ -33,6 +35,11 @@ import java.nio.file.StandardCopyOption;
  *   float  ambientIntensity
  *   -- version 3 --
  *   UTF    shadingModel ({@link ShadingModel#name()}; unknown names load as the default)
+ *   -- version 4 --
+ *   int    busCount, then per bus (AudioBus ordinal order): float volume, bool muted
+ *   bool   duckingEnabled
+ *   float  duckLevel, duckAttack, duckRelease
+ *   bool   reverbZonesEnabled
  * </pre>
  * Older files load the missing fields with the render defaults, which match the engine's previous look.
  */
@@ -41,11 +48,17 @@ public final class ProjectSettings {
     public static final String FILE_NAME = "ProjectSettings.bin";
 
     static final int MAGIC = 0x5250524A; // 'RPRJ'
-    static final int VERSION = 3;
+    static final int VERSION = 4;
 
     // Editor UI ranges; values read from disk are clamped to these too
     public static final float FOG_DISTANCE_MAX = 2000.0f;
     public static final float AMBIENT_INTENSITY_MAX = 4.0f;
+    public static final float DUCK_ATTACK_MAX = 2.0f;
+    public static final float DUCK_RELEASE_MAX = 5.0f;
+
+    public static final float DEFAULT_DUCK_LEVEL = 0.35f;
+    public static final float DEFAULT_DUCK_ATTACK = 0.15f;
+    public static final float DEFAULT_DUCK_RELEASE = 0.6f;
 
     public String projectName;
     public String engineVersion;
@@ -75,6 +88,21 @@ public final class ProjectSettings {
     /** Linear RGB, 0..1; multiplied by {@link #ambientIntensity}. */
     public final float[] ambientColor = { RenderEnvironment.DEFAULT_AMBIENT_R, RenderEnvironment.DEFAULT_AMBIENT_G, RenderEnvironment.DEFAULT_AMBIENT_B };
     public float ambientIntensity = RenderEnvironment.DEFAULT_AMBIENT_INTENSITY;
+
+    // --- Audio mixer (read every frame by AudioMixerService) ---
+
+    /** Per-bus volume 0..1, indexed by {@link AudioBus#ordinal()}. */
+    public final float[] busVolume = { 1.0f, 1.0f, 1.0f, 1.0f };
+    public final boolean[] busMuted = new boolean[AudioBus.COUNT];
+    /** Lower BGM while VOICE or critical ("ducks BGM") clips play. */
+    public boolean duckingEnabled = true;
+    /** BGM multiplier while ducked (0..1). */
+    public float duckLevel = DEFAULT_DUCK_LEVEL;
+    /** Seconds to ramp BGM down / back up. */
+    public float duckAttack = DEFAULT_DUCK_ATTACK;
+    public float duckRelease = DEFAULT_DUCK_RELEASE;
+    /** Master switch for AudioReverbZone EFX reverb. */
+    public boolean reverbZonesEnabled = true;
 
     public ProjectSettings(String projectName, String startupScene) {
         this.projectName = projectName;
@@ -132,6 +160,21 @@ public final class ProjectSettings {
         copyRenderSettingsFrom(defaults());
     }
 
+    /** Copies only the audio mixer settings from {@code other}. */
+    public void copyAudioSettingsFrom(ProjectSettings other) {
+        System.arraycopy(other.busVolume, 0, busVolume, 0, AudioBus.COUNT);
+        System.arraycopy(other.busMuted, 0, busMuted, 0, AudioBus.COUNT);
+        duckingEnabled = other.duckingEnabled;
+        duckLevel = other.duckLevel;
+        duckAttack = other.duckAttack;
+        duckRelease = other.duckRelease;
+        reverbZonesEnabled = other.reverbZonesEnabled;
+    }
+
+    public void resetAudioSettings() {
+        copyAudioSettingsFrom(defaults());
+    }
+
     /** Clamps every render setting into its valid range (also repairs NaN from a corrupt file). */
     public void sanitize() {
         if (shadingModel == null) shadingModel = RenderEnvironment.DEFAULT_SHADING_MODEL;
@@ -143,6 +186,10 @@ public final class ProjectSettings {
             fogColor[i] = clamp(fogColor[i], 0.0f, 1.0f);
             ambientColor[i] = clamp(ambientColor[i], 0.0f, 1.0f);
         }
+        for (int i = 0; i < AudioBus.COUNT; i++) busVolume[i] = clamp(busVolume[i], 0.0f, 1.0f);
+        duckLevel = clamp(duckLevel, 0.0f, 1.0f);
+        duckAttack = clamp(duckAttack, 0.0f, DUCK_ATTACK_MAX);
+        duckRelease = clamp(duckRelease, 0.0f, DUCK_RELEASE_MAX);
     }
 
     private static float clamp(float v, float min, float max) {
@@ -181,6 +228,17 @@ public final class ProjectSettings {
             dos.writeFloat(ambientIntensity);
 
             dos.writeUTF((shadingModel != null ? shadingModel : RenderEnvironment.DEFAULT_SHADING_MODEL).name());
+
+            dos.writeInt(AudioBus.COUNT);
+            for (int i = 0; i < AudioBus.COUNT; i++) {
+                dos.writeFloat(busVolume[i]);
+                dos.writeBoolean(busMuted[i]);
+            }
+            dos.writeBoolean(duckingEnabled);
+            dos.writeFloat(duckLevel);
+            dos.writeFloat(duckAttack);
+            dos.writeFloat(duckRelease);
+            dos.writeBoolean(reverbZonesEnabled);
         }
         Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }
@@ -209,6 +267,23 @@ public final class ProjectSettings {
             }
             if (version >= 3) {
                 s.shadingModel = ShadingModel.fromName(dis.readUTF(), RenderEnvironment.DEFAULT_SHADING_MODEL);
+            }
+            if (version >= 4) {
+                int buses = dis.readInt();
+                if (buses < 0 || buses > 64) throw new IOException(FILE_NAME + " has an invalid audio bus count: " + buses);
+                for (int i = 0; i < buses; i++) {
+                    float vol = dis.readFloat();
+                    boolean muted = dis.readBoolean();
+                    if (i < AudioBus.COUNT) {
+                        s.busVolume[i] = vol;
+                        s.busMuted[i] = muted;
+                    }
+                }
+                s.duckingEnabled = dis.readBoolean();
+                s.duckLevel = dis.readFloat();
+                s.duckAttack = dis.readFloat();
+                s.duckRelease = dis.readFloat();
+                s.reverbZonesEnabled = dis.readBoolean();
             }
             s.sanitize();
             return s;

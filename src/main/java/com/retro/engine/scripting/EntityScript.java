@@ -1,5 +1,6 @@
 package com.retro.engine.scripting;
 
+import com.retro.engine.audio.AudioBus;
 import com.retro.engine.audio.AudioEngine;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.Entity;
@@ -282,6 +283,14 @@ public abstract class EntityScript {
      * Returns false when the clip could not be loaded or audio is unavailable.
      */
     public boolean playSound(String path, float volume, boolean spatial) {
+        return playSound(path, volume, spatial, AudioBus.SFX, false);
+    }
+
+    /**
+     * Like {@link #playSound(String, float, boolean)} but routed through a mixer bus. {@code ducksBgm} marks a
+     * critical clip that lowers the BGM bus while it plays (VOICE clips always do).
+     */
+    public boolean playSound(String path, float volume, boolean spatial, AudioBus bus, boolean ducksBgm) {
         float x = 0.0f, y = 0.0f, z = 0.0f;
         if (spatial && entity != null) {
             SceneWorld.WorldTransform wt = (sceneWorld != null) ? sceneWorld.getComputedWorldTransform(entity) : null;
@@ -292,19 +301,25 @@ public abstract class EntityScript {
                 x = t.posX; y = t.posY; z = t.posZ;
             }
         }
-        return playSoundAt(path, volume, x, y, z, spatial);
+        return playSoundAt(path, volume, x, y, z, spatial, bus, ducksBgm);
     }
 
     /** Plays a spatial clip once at an arbitrary world position. */
     public boolean playSoundAt(String path, float volume, float x, float y, float z) {
-        return playSoundAt(path, volume, x, y, z, true);
+        return playSoundAt(path, volume, x, y, z, true, AudioBus.SFX, false);
     }
 
-    private boolean playSoundAt(String path, float volume, float x, float y, float z, boolean spatial) {
+    /** Plays a spatial clip once at an arbitrary world position through a mixer bus. */
+    public boolean playSoundAt(String path, float volume, float x, float y, float z, AudioBus bus) {
+        return playSoundAt(path, volume, x, y, z, true, bus, false);
+    }
+
+    private boolean playSoundAt(String path, float volume, float x, float y, float z, boolean spatial,
+                                AudioBus bus, boolean ducksBgm) {
         AudioSource src = (entity != null) ? entity.getComponent(AudioSource.class) : null;
         float min = (src != null) ? src.minDistance : 1.0f;
         float max = (src != null) ? src.maxDistance : 25.0f;
-        return AudioEngine.playOneShot(path, volume, spatial, x, y, z, min, max);
+        return AudioEngine.playOneShot(path, volume, spatial, x, y, z, min, max, bus, ducksBgm);
     }
 
     /** Stops every clip started with playSound / playSoundAt (component AudioSources are unaffected). */

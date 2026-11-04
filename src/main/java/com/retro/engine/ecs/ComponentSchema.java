@@ -2,6 +2,7 @@ package com.retro.engine.ecs;
 
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
 import com.retro.engine.ecs.components.AnimatorComponent;
+import com.retro.engine.ecs.components.AudioReverbZone;
 import com.retro.engine.ecs.components.AudioSource;
 import com.retro.engine.ecs.components.BoxCollider;
 import com.retro.engine.ecs.components.Camera;
@@ -48,7 +49,7 @@ public final class ComponentSchema {
             ScriptComponent.class, RigidBodyComponent.class, BoxCollider.class, SphereCollider.class,
             CapsuleCollider.class, CharacterControllerComponent.class, VehicleControllerComponent.class,
             AnimatorComponent.class, UICanvasComponent.class, UIPanel.class, UIText.class, UIImage.class,
-            UIProgressBar.class, ParticleSystem.class
+            UIProgressBar.class, ParticleSystem.class, AudioReverbZone.class
     );
 
     /** How the inspector presents and edits a property. */

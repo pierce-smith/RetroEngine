@@ -9,6 +9,7 @@ import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.SceneWorld;
 import com.retro.engine.ecs.components.AnimatorComponent;
 import com.retro.engine.ecs.components.Camera;
+import com.retro.engine.ecs.components.CharacterControllerComponent;
 import com.retro.engine.ecs.components.ScriptComponent;
 import com.retro.engine.scripting.Input;
 import com.retro.engine.scripting.framework.ScriptTask;
@@ -24,6 +25,11 @@ import com.retro.engine.scripting.framework.SimpleEntityScript;
  * and the "PunchL", "PunchR" (triggers) and "Guard" (bool) parameters, so nothing extra needs authoring.
  * A punch that lands on a collectible within {@link #punchRange} in front of the camera collects it, with a camera
  * shake and optional spatial hit sound. The impact is scheduled with runAfter() (one reusable ScriptTask).
+ *
+ * <p>Locomotion and weapon blending use crossFadeAnimation(): while the arms are in a locomotion pose they blend
+ * idle / walk / run by ground speed, and playback speed follows velocity via setAnimationSpeed(). The bundled arms
+ * rig has no walk / run clips, so those states fall back to the idle (speed-scaled sway) until a rig that has them is
+ * used. Keys 1 / 2 / 3 swap weapon poses (fists / knife / finger gun) with a crossfade; punches and guard need fists.
  */
 public class PlayerCombatScript extends SimpleEntityScript {
 
@@ -42,7 +48,20 @@ public class PlayerCombatScript extends SimpleEntityScript {
     public String swingSound = "";           // optional, e.g. "Assets/Audio/swing.wav"
     public String hitSound = "";             // optional, e.g. "Assets/Audio/punch_hit.wav"
 
+    // --- Locomotion / weapon blending (state names = clip names in the arms rig; missing ones fall back to idle) ---
+    public String walkClip = "Walk";
+    public String runClip = "Run";
+    public String knifeIdleClip = "knife_idle";
+    public String gunIdleClip = "finger_gun_idle";
+    public float locomotionFade = 0.2f;      // seconds to blend idle <-> walk <-> run
+    public float weaponFade = 0.3f;          // seconds to blend between weapon poses
+    public float walkThreshold = 0.6f;       // m/s of ground speed that counts as walking
+    public float runThreshold = 1.15f;       // fraction of the controller's moveSpeed that counts as running
+    public float minAnimSpeed = 1.0f, maxAnimSpeed = 1.8f; // playback speed at rest .. at a full sprint
+
     private static final int MOUSE_LEFT = 0, MOUSE_RIGHT = 1;
+    private static final int KEY_1 = 49, KEY_2 = 50, KEY_3 = 51;
+    private static final int FISTS = 0, KNIFE = 1, GUN = 2;
 
     private AnimatorComponent animator;
     private Entity cameraEntity;
@@ -51,6 +70,12 @@ public class PlayerCombatScript extends SimpleEntityScript {
     private int pendingHit = ScriptTaskQueue.INVALID_HANDLE;
     private ScriptTask impactTask;
 
+    private boolean ownAnimator;             // animator on this entity -> SimpleEntityScript helpers apply directly
+    private String idleName, walkName, runName, knifeName, gunName; // resolved state names (null = missing)
+    private int weapon = FISTS;
+    private float lastX, lastZ, groundSpeed;
+    private CharacterControllerComponent controllerComp;
+
     @Override
     public void onStart() {
         impactTask = new ScriptTask() {
@@ -58,7 +83,11 @@ public class PlayerCombatScript extends SimpleEntityScript {
         };
         cameraEntity = findChildCamera();
         animator = animator();
+        ownAnimator = animator != null;
         if (animator == null) animator = findDescendantAnimator(); // arms mesh lives under the camera
+        controllerComp = characterController();
+        lastX = getWorldX();
+        lastZ = getWorldZ();
         if (animator == null || animator.controller == null) {
             logWarning("No Animator controller on '" + entity.name + "'; punches will hit but not animate.");
             animator = null;
@@ -70,10 +99,16 @@ public class PlayerCombatScript extends SimpleEntityScript {
     @Override
     public void onUpdate(float dt) {
         cooldown -= dt;
-        boolean guarding = Input.isMouseButtonDown(MOUSE_RIGHT);
+        updateGroundSpeed(dt);
+        if (animator != null && idleName != null) {
+            updateWeaponSwap();
+            updateLocomotion();
+        }
+        boolean fists = weapon == FISTS;
+        boolean guarding = fists && Input.isMouseButtonDown(MOUSE_RIGHT);
         if (animator != null) animator.setBool("Guard", guarding);
 
-        if (!guarding && cooldown <= 0.0f && Input.isMouseButtonPressed(MOUSE_LEFT)) {
+        if (fists && !guarding && cooldown <= 0.0f && Input.isMouseButtonPressed(MOUSE_LEFT)) {
             cooldown = punchCooldown;
             if (pendingHit != ScriptTaskQueue.INVALID_HANDLE) cancelTask(pendingHit);
             pendingHit = runAfter(punchImpactDelay, impactTask);
@@ -82,6 +117,75 @@ public class PlayerCombatScript extends SimpleEntityScript {
             nextIsLeft = !nextIsLeft;
         }
         if (guarding && animator != null) clearPunchTriggers(); // don't fire a buffered punch when guard drops
+    }
+
+    // --- Locomotion / weapon blending (allocation-free: string compares and cached state names only) ---
+
+    private void updateGroundSpeed(float dt) {
+        if (dt <= 0.0f) return;
+        float x = getWorldX(), z = getWorldZ();
+        float dx = x - lastX, dz = z - lastZ;
+        lastX = x;
+        lastZ = z;
+        float instant = (float) Math.sqrt(dx * dx + dz * dz) / dt;
+        groundSpeed += (instant - groundSpeed) * Math.min(1.0f, dt * 10.0f); // smooth out physics-step jitter
+    }
+
+    private void updateWeaponSwap() {
+        int next = weapon;
+        if (Input.isKeyPressed(KEY_1)) next = FISTS;
+        if (Input.isKeyPressed(KEY_2) && knifeName != null) next = KNIFE;
+        if (Input.isKeyPressed(KEY_3) && gunName != null) next = GUN;
+        if (next == weapon) return;
+        weapon = next;
+        clearPunchTriggers();
+        if (pendingHit != ScriptTaskQueue.INVALID_HANDLE) { cancelTask(pendingHit); pendingHit = ScriptTaskQueue.INVALID_HANDLE; }
+        fade(weaponIdle(), weaponFade);
+    }
+
+    /** Idle <-> Walk <-> Run while in a locomotion pose; punches / guard keep control of the arms otherwise. */
+    private void updateLocomotion() {
+        if (!inLocomotionPose()) {
+            speed(1.0f);
+            return;
+        }
+        float moveSpeed = controllerComp != null ? controllerComp.moveSpeed : 5.0f;
+        String target = weaponIdle();
+        if (weapon == FISTS) {
+            if (runName != null && groundSpeed > moveSpeed * runThreshold) target = runName;
+            else if (walkName != null && groundSpeed > walkThreshold) target = walkName;
+        }
+        fade(target, locomotionFade); // no-op when already playing / fading into target
+        float t = moveSpeed > 0.0f ? groundSpeed / moveSpeed : 0.0f;
+        speed(Math.max(minAnimSpeed, Math.min(maxAnimSpeed, minAnimSpeed + (maxAnimSpeed - minAnimSpeed) * t * 0.5f)));
+    }
+
+    private String weaponIdle() {
+        if (weapon == KNIFE) return knifeName;
+        if (weapon == GUN) return gunName;
+        return idleName;
+    }
+
+    private boolean inLocomotionPose() {
+        String s = animator.transitioning && animator.targetStateId != null ? animator.targetStateId : animator.currentStateId;
+        if (s == null) return false;
+        return s.equals(idleName) || s.equals(walkName) || s.equals(runName) || s.equals(knifeName) || s.equals(gunName);
+    }
+
+    private void fade(String state, float duration) {
+        if (ownAnimator) crossFadeAnimation(state, duration);
+        else animator.crossFade(state, duration); // arms on a child entity: same call on its AnimatorComponent
+    }
+
+    private void speed(float s) {
+        if (ownAnimator) setAnimationSpeed(s);
+        else animator.playbackSpeed = s;
+    }
+
+    private static String stateName(AnimatorController c, String name) {
+        if (name == null || name.length() == 0) return null;
+        AnimatorState st = c.getState(name);
+        return st != null ? st.name : null;
     }
 
     // --- Animator wiring (idempotent; the controller is rebuilt from the mesh on every scene load) ---
@@ -102,6 +206,22 @@ public class PlayerCombatScript extends SimpleEntityScript {
         ensureParam(c, "Guard", AnimatorParameter.ParameterType.BOOL);
         jabL.isLooping = false;
         jabR.isLooping = false;
+        idleName = idle.name;
+        walkName = stateName(c, walkClip);
+        runName = stateName(c, runClip);
+        knifeName = stateName(c, knifeIdleClip);
+        gunName = stateName(c, gunIdleClip);
+        // Punches can start from any fists locomotion pose, not just idle
+        AnimatorState walk = walkName != null ? c.getState(walkName) : null;
+        AnimatorState run = runName != null ? c.getState(runName) : null;
+        if (walk != null) {
+            link(walk, jabL.name, 0.06f, false, 0.0f, "PunchL", AnimatorCondition.Comparison.TRUE);
+            link(walk, jabR.name, 0.06f, false, 0.0f, "PunchR", AnimatorCondition.Comparison.TRUE);
+        }
+        if (run != null) {
+            link(run, jabL.name, 0.06f, false, 0.0f, "PunchL", AnimatorCondition.Comparison.TRUE);
+            link(run, jabR.name, 0.06f, false, 0.0f, "PunchR", AnimatorCondition.Comparison.TRUE);
+        }
 
         link(idle, jabL.name, 0.06f, false, 0.0f, "PunchL", AnimatorCondition.Comparison.TRUE);
         link(idle, jabR.name, 0.06f, false, 0.0f, "PunchR", AnimatorCondition.Comparison.TRUE);

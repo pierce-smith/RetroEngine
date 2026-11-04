@@ -807,6 +807,7 @@ public class InspectorInputDelegate {
         addComponentItem(items, entities, "+ Capsule Collider", CapsuleCollider.class, CapsuleCollider::new);
         addComponentItem(items, entities, "+ Light Source", Light.class, Light::new);
         addComponentItem(items, entities, "+ Audio Source", AudioSource.class, AudioSource::new);
+        addComponentItem(items, entities, "+ Audio Reverb Zone", com.retro.engine.ecs.components.AudioReverbZone.class, com.retro.engine.ecs.components.AudioReverbZone::new);
         addComponentItem(items, entities, "+ Particle System", com.retro.engine.ecs.components.ParticleSystem.class, com.retro.engine.ecs.components.ParticleSystem::new);
         if (entities.size() == 1) {
             // Not limited to one per entity: an unbound SCRIPT picker attaches an additional ScriptComponent

@@ -39,6 +39,9 @@ public class CarDriverScript extends SimpleEntityScript {
     // Camera
     public String cameraName = "Main Camera";
     public float crashShake = 0.9f;         // camera shake intensity on impact (0 = off)
+    public String tireScreechSound = "";    // optional, e.g. "Assets/Audio/tire_screech.ogg" (spatial, SFX bus)
+    public float screechSteer = 0.85f;      // |steering| above this at speed triggers a screech
+    public float screechCooldown = 0.6f;
     public float cameraHeight = 3.4f;
     public float cameraDistance = 8.0f;
     public float cameraPitch = 12.0f;
@@ -66,6 +69,7 @@ public class CarDriverScript extends SimpleEntityScript {
     private float spinYaw;
     private float bobTime;
     private float camX;
+    private float screechTimer;
 
     private Entity cameraEntity;
     private AudioSource engine, sfxStartUp, sfxHorn, sfxBoost, sfxCrash;
@@ -129,6 +133,14 @@ public class CarDriverScript extends SimpleEntityScript {
         t.rotZ = lateralVel * rollPerSpeed;
         if (crashed) t.rotY = yaw + spinYaw;
         else yaw = t.rotY;
+
+        // --- Tire screech: one-shot spatial clip on the SFX bus when cornering hard at speed (re-armed by a cooldown) ---
+        screechTimer -= dt;
+        if (!crashed && screechTimer <= 0.0f && Math.abs(steer) > screechSteer && speedT > 0.35f
+                && tireScreechSound != null && tireScreechSound.length() > 0) {
+            playSpatialSound(tireScreechSound, "SFX", 0.5f + 0.5f * speedT);
+            screechTimer = screechCooldown;
+        }
 
         // --- Engine note follows speed, with a little rise while steering hard ---
         if (engine != null) {

@@ -1,6 +1,9 @@
 package com.retro.engine.ecs;
 
 import com.retro.engine.audio.AudioEngine;
+import com.retro.engine.audio.AudioMixerService;
+import com.retro.engine.audio.AudioReverbSystem;
+import com.retro.engine.ecs.components.AudioReverbZone;
 import com.retro.engine.ecs.SceneWorld.PlayState;
 import com.retro.engine.ecs.components.AudioSource;
 import com.retro.engine.ecs.components.ParticleSystem;
@@ -82,6 +85,8 @@ public class SimulationSystem {
             ScriptEngine.destroyScripts(activeEntities);
             physicsWorld.cleanup();
             AudioEngine.stopAllOneShots();
+            AudioMixerService.resetRuntime();
+            AudioReverbSystem.reset();
             pausedAudioSources.clear();
             Input.stopVibration();
             Input.setCursorLocked(false);
@@ -108,8 +113,8 @@ public class SimulationSystem {
             // 2. Execute gameplay script frame ticks
             ScriptEngine.updateScripts(activeEntities, deltaTime, sceneWorld);
 
-            // 3. Sync 3D audio source positions to OpenAL
-            updateSpatialAudio(activeEntities, sceneWorld);
+            // 3. Sync 3D audio source positions, bus mix, ducking and reverb zones to OpenAL
+            updateSpatialAudio(deltaTime, activeEntities, sceneWorld);
 
             // 4. Advance particle systems after scripts, so this frame's play()/stop()/emit() calls take effect now
             updateParticles(deltaTime, activeEntities, sceneWorld);
@@ -164,14 +169,34 @@ public class SimulationSystem {
             AudioSource audioSource = entity.getComponent(AudioSource.class);
             if (audioSource != null && audioSource.playOnStart) audioSource.play();
         }
-        updateSpatialAudio(activeEntities, sceneWorld); // Place sources before the first mixed frame
+        updateSpatialAudio(0.0f, activeEntities, sceneWorld); // Place sources before the first mixed frame
     }
 
     /**
      * Pushes each AudioSource's world position (and live inspector/script edits) to OpenAL. The listener itself is
      * synced to the active viewport camera by SceneRenderPipeline every frame.
+     *
+     * Order: gather AudioReverbZones and resolve the listener's zone, route component sources and pooled one-shots
+     * (bus gain, duck triggers, reverb sends), then advance the BGM duck envelope. Indexed loops, no allocation.
      */
-    private void updateSpatialAudio(List<Entity> activeEntities, SceneWorld sceneWorld) {
+    private void updateSpatialAudio(float deltaTime, List<Entity> activeEntities, SceneWorld sceneWorld) {
+        if (!AudioEngine.isAvailable()) return;
+        AudioReverbSystem.beginFrame();
+        for (int i = 0; i < activeEntities.size(); i++) {
+            Entity entity = activeEntities.get(i);
+            if (entity == null) continue;
+            AudioReverbZone zone = entity.getComponent(AudioReverbZone.class);
+            if (zone == null || !zone.active) continue;
+            SceneWorld.WorldTransform wt = (sceneWorld != null) ? sceneWorld.getComputedWorldTransform(entity) : null;
+            if (wt != null) {
+                AudioReverbSystem.addZone(zone, wt.px(), wt.py(), wt.pz(), wt.sx(), wt.sy(), wt.sz());
+            } else {
+                Transform tc = entity.getTransform();
+                if (tc != null) AudioReverbSystem.addZone(zone, tc.posX, tc.posY, tc.posZ, tc.scaleX, tc.scaleY, tc.scaleZ);
+            }
+        }
+        AudioReverbSystem.resolve(deltaTime);
+
         for (int i = 0; i < activeEntities.size(); i++) {
             Entity entity = activeEntities.get(i);
             if (entity == null) continue;
@@ -185,5 +210,8 @@ public class SimulationSystem {
                 if (tc != null) audioSource.updateSpatial(tc.posX, tc.posY, tc.posZ);
             }
         }
+        AudioEngine.updateOneShots();
+        AudioReverbSystem.endFrame();
+        AudioMixerService.endFrame(deltaTime);
     }
 }

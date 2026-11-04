@@ -1,6 +1,7 @@
 # Infinite Driver scene descriptor (TEXT recipe, baked into Assets/Scenes/Main.rscene by TemplateManager).
 # Format: entity <Name> | key=value | ...   (asset paths relative to Assets/). See TemplateManager.parseScene for keys;
 # extra keys used here: camera=<fov>, audio=<file>[,loop][,manual][,vol:<v>], vehicle, uitext=<ax>,<ay>,<fontSize>,
+#   [,bus:MASTER|BGM|SFX|VOICE][,duck], reverb=<CAVE|ROOM|HALL|OUTDOOR>,<sizeX>,<sizeY>,<sizeZ>[,<wet>[,<priority>]],
 #   uipanel=<ax>,<ay>,<w>,<h>,<r>,<g>,<b>,<alpha>, uibar=<ax>,<ay>,<w>,<h>,<r>,<g>,<b>  (UI anchors: 0,0 bottom-left, 1,1 top-right).
 # The car is moved by the built-in VehicleController (CarDriverScript feeds it speed/steering). HighwayGameScript keeps
 # the car at the origin (floating origin: the world shifts by the car's forward travel each frame), recycles the RoadSeg* roots
@@ -10,11 +11,11 @@ entity GameManager | pos=0,0,0 | script=Scripts/HighwayGameScript.java
 entity Sun         | pos=0,30,0 | rot=55,35,0 | light
 
 # Player car (GGBot PSX Car 03). Model nose points +Z, so it is yawed 180 to face down the road (-Z).
-entity Car         | mesh=Meshes/Car3.obj | pos=0,0,0 | rot=0,180,0 | scale=0.7,0.7,0.7 | texture=Textures/car3_red.png | vehicle=1.35,2.5,0.32 | audio=Audio/Car2_Engine_Loop.ogg,loop,vol:0.6 | script=Scripts/CarDriverScript.java
-entity SFX_StartUp | pos=0,0.5,0 | parent=Car | audio=Audio/Car2_Engine_Start_Up.ogg,manual,vol:0.9
-entity SFX_Horn    | pos=0,0.5,0 | parent=Car | audio=Audio/Car_Horn.ogg,manual
-entity SFX_Boost   | pos=0,0.5,0 | parent=Car | audio=Audio/Car_Acceleration.ogg,manual,vol:0.8
-entity SFX_Crash   | pos=0,0.5,0 | parent=Car | audio=Audio/Car_Door_Close.ogg,manual,vol:1.6
+entity Car         | mesh=Meshes/Car3.obj | pos=0,0,0 | rot=0,180,0 | scale=0.7,0.7,0.7 | texture=Textures/car3_red.png | vehicle=1.35,2.5,0.32 | audio=Audio/Car2_Engine_Loop.ogg,loop,vol:0.6,bus:SFX | script=Scripts/CarDriverScript.java
+entity SFX_StartUp | pos=0,0.5,0 | parent=Car | audio=Audio/Car2_Engine_Start_Up.ogg,manual,vol:0.9,bus:SFX
+entity SFX_Horn    | pos=0,0.5,0 | parent=Car | audio=Audio/Car_Horn.ogg,manual,bus:SFX
+entity SFX_Boost   | pos=0,0.5,0 | parent=Car | audio=Audio/Car_Acceleration.ogg,manual,vol:0.8,bus:SFX
+entity SFX_Crash   | pos=0,0.5,0 | parent=Car | audio=Audio/Car_Door_Close.ogg,manual,vol:1.6,bus:SFX,duck
 
 entity Main Camera | pos=0,3.4,8 | rot=12,0,0 | camera=65
 entity HUD TopBar     | parent=Main Camera | uipanel=0.5,0.92,520,96,0.05,0.05,0.08,0.6
@@ -59,6 +60,12 @@ entity RoadSeg2 TreeL Canopy | parent=RoadSeg2 TreeL | mesh=Meshes/Sphere.obj | 
 entity RoadSeg2 TreeR   | parent=RoadSeg2 | pos=13,0,-5
 entity RoadSeg2 TreeR Trunk  | parent=RoadSeg2 TreeR | mesh=Meshes/Cube.obj | pos=0,1.2,0 | scale=0.6,2.4,0.6 | texture=Textures/Crate.png
 entity RoadSeg2 TreeR Canopy | parent=RoadSeg2 TreeR | mesh=Meshes/Sphere.obj | pos=0,3.6,0 | scale=3.2,3.2,3.2 | texture=Textures/Grass.png
+# Underpass: an overpass deck spanning RoadSeg2 with a CAVE reverb trigger volume beneath it. It recycles with the
+# segment, so the engine / horn echo every time the car (and the camera listener) drives under it.
+entity RoadSeg2 Overpass      | parent=RoadSeg2 | mesh=Meshes/Cube.obj | pos=0,5.6,0 | scale=16,0.8,8 | texture=Textures/Barrier.png
+entity RoadSeg2 OverpassPierL | parent=RoadSeg2 | mesh=Meshes/Cube.obj | pos=-7.6,2.6,0 | scale=0.8,5.2,6 | texture=Textures/Barrier.png
+entity RoadSeg2 OverpassPierR | parent=RoadSeg2 | mesh=Meshes/Cube.obj | pos=7.6,2.6,0 | scale=0.8,5.2,6 | texture=Textures/Barrier.png
+entity RoadSeg2 UnderpassReverb | parent=RoadSeg2 | pos=0,2.6,0 | reverb=CAVE,15,6,14,0.7,1
 
 entity RoadSeg3 | pos=0,0,-20
 entity RoadSeg3 Road    | parent=RoadSeg3 | mesh=Meshes/Cube.obj | pos=0,-0.1,0 | scale=13,0.2,20 | texture=Textures/Asphalt.png

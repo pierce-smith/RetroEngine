@@ -1,5 +1,6 @@
 package com.retro.engine.editor.overlays;
 
+import com.retro.engine.audio.AudioBus;
 import com.retro.engine.core.NativeFileDialog;
 import com.retro.engine.core.ProjectSettings;
 import com.retro.engine.editor.EditorTheme;
@@ -14,8 +15,8 @@ import com.retro.engine.ui.UISoundPlayer.UISound;
 import java.io.File;
 
 /**
- * "File > Project Settings..." modal: global render environment for the active project (shading model, ground shadow
- * blobs, distance fog, ambient light). Edits apply live to the workspace's {@link ProjectSettings}, which
+ * "File > Project Settings..." modal with two tabs: RENDER (shading model, ground shadow blobs, distance fog, ambient
+ * light) and AUDIO (Master / BGM / SFX / Voice bus volumes and mutes, BGM ducking, reverb zones). Edits apply live to the workspace's {@link ProjectSettings}, which
  * {@code SceneRenderPipeline} reads every frame; SAVE writes ProjectSettings.bin and CANCEL restores the values the
  * modal opened with. Rendering and hit-testing share the layout constants below.
  *
@@ -52,6 +53,25 @@ public final class ProjectSettingsOverlay {
     private static final float AMBIENT_COLOR_Y = -0.32f;
     private static final float AMBIENT_INTENSITY_Y = -0.41f;
 
+    // Audio tab rows
+    private static final float SECTION_BUSES_Y = 0.59f;
+    private static final float[] BUS_Y = { 0.52f, 0.44f, 0.36f, 0.28f }; // AudioBus ordinal order
+    private static final float SECTION_DUCK_Y = 0.19f;
+    private static final float DUCK_ENABLED_Y = 0.12f;
+    private static final float DUCK_LEVEL_Y = 0.04f;
+    private static final float DUCK_ATTACK_Y = -0.04f;
+    private static final float DUCK_RELEASE_Y = -0.12f;
+    private static final float SECTION_REVERB_Y = -0.21f;
+    private static final float REVERB_ENABLED_Y = -0.28f;
+    private static final float BUS_TRACK_X1 = 0.20f;
+    private static final float MUTE_X0 = 0.22f, MUTE_X1 = 0.34f;
+    private static final String[] BUS_LABELS = { "MASTER", "BGM (MUSIC)", "SFX", "VOICE" };
+
+    // Header tabs
+    private static final float TAB_Y0 = CARD_Y1 - 0.078f, TAB_Y1 = CARD_Y1 - 0.016f;
+    private static final float TAB_RENDER_X0 = 0.08f, TAB_RENDER_X1 = 0.25f;
+    private static final float TAB_AUDIO_X0 = 0.27f, TAB_AUDIO_X1 = 0.44f;
+
     private static final float ACTION_Y0 = -0.60f, ACTION_Y1 = -0.52f;
     private static final float RESET_X0 = -0.52f, RESET_X1 = -0.24f;
     private static final float CANCEL_X0 = 0.04f, CANCEL_X1 = 0.26f;
@@ -65,6 +85,8 @@ public final class ProjectSettingsOverlay {
     private static final int FOG_R = 3, FOG_G = 4, FOG_B = 5;
     private static final int AMBIENT_R = 6, AMBIENT_G = 7, AMBIENT_B = 8;
     private static final int AMBIENT_INTENSITY = 9;
+    private static final int BUS_FIRST = 10, BUS_LAST = 13; // BUS_FIRST + AudioBus ordinal (MASTER, BGM, SFX, VOICE)
+    private static final int DUCK_LEVEL = 14, DUCK_ATTACK = 15, DUCK_RELEASE = 16;
 
     // UI slider ranges (exact entry through the value prompt is clamped by ProjectSettings.sanitize instead)
     private static final float FOG_DISTANCE_SLIDER_MAX = 500.0f;
@@ -75,6 +97,7 @@ public final class ProjectSettingsOverlay {
     private static boolean statusIsError = false;
 
     private static int draggingSlider = NONE;
+    private static boolean audioTab = false;
 
     private static final ShadingModel[] SHADING_MODELS = ShadingModel.values();
     private static final float DROPDOWN_X0 = CONTROL_X0, DROPDOWN_X1 = TRACK_X1;
@@ -88,6 +111,7 @@ public final class ProjectSettingsOverlay {
     public static void open(EditorWorkspace workspace) {
         if (workspace == null || !workspace.hasActiveProject()) return;
         openedWith.copyRenderSettingsFrom(workspace.getProjectSettings());
+        openedWith.copyAudioSettingsFrom(workspace.getProjectSettings());
         dirty = false;
         draggingSlider = NONE;
         shadingDropdownOpen = false;
@@ -107,12 +131,34 @@ public final class ProjectSettingsOverlay {
         UIGeometryBatch.addRoundedQuad(buffer, CARD_X0 + 0.003f, headerY0, CARD_X1 - 0.003f, CARD_Y1 - 0.003f, 0.014f, EditorTheme.SURFACE_RAISED, 1.0f);
         UIGeometryBatch.addQuad(buffer, CARD_X0 + 0.003f, headerY0, CARD_X1 - 0.003f, CARD_Y1 - 0.02f, EditorTheme.SURFACE_RAISED, 1.0f);
         UIGeometryBatch.addQuad(buffer, CARD_X0, headerY0, CARD_X1, headerY0 + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
-        UIGeometryBatch.addBoundedText(buffer, dirty ? "PROJECT SETTINGS  (UNSAVED)" : "PROJECT SETTINGS", CARD_X0 + 0.03f, CARD_Y1 - 0.035f,
-            CLOSE_X0 - 0.02f, 1.0f, EditorTheme.TEXT, 1.0f);
+        UIGeometryBatch.addBoundedText(buffer, dirty ? "PROJECT SETTINGS *" : "PROJECT SETTINGS", CARD_X0 + 0.03f, CARD_Y1 - 0.035f,
+            TAB_RENDER_X0 - 0.02f, 1.0f, EditorTheme.TEXT, 1.0f);
+        tabButton(buffer, "RENDER", TAB_RENDER_X0, TAB_RENDER_X1, !audioTab, hoverX, hoverY);
+        tabButton(buffer, "AUDIO", TAB_AUDIO_X0, TAB_AUDIO_X1, audioTab, hoverX, hoverY);
 
         UIGeometryBatch.addRoundedQuad(buffer, CLOSE_X0, CLOSE_Y0, CLOSE_X1, CLOSE_Y1, EditorTheme.RADIUS_SMALL, EditorTheme.RED, 0.90f);
         centeredTextIn(buffer, "X", CLOSE_X0, CLOSE_X1, (CLOSE_Y0 + CLOSE_Y1) * 0.5f, 0.9f, EditorTheme.TEXT);
 
+        if (audioTab) renderAudioTab(buffer, s, hoverX, hoverY);
+        else renderRenderTab(buffer, s, hoverX, hoverY);
+
+        if (!status.isEmpty()) {
+            UIGeometryBatch.addTruncatedText(buffer, status, LABEL_X, ACTION_Y1 + 0.05f, VALUE_X1, 0.75f,
+                statusIsError ? EditorTheme.RED : EditorTheme.TEXT_MUTED, 1.0f);
+        }
+
+        UIGeometryBatch.addRoundedCard(buffer, RESET_X0, ACTION_Y0, RESET_X1, ACTION_Y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
+        centeredTextIn(buffer, "RESET DEFAULTS", RESET_X0, RESET_X1, (ACTION_Y0 + ACTION_Y1) * 0.5f, 0.85f, EditorTheme.TEXT);
+        UIGeometryBatch.addRoundedCard(buffer, CANCEL_X0, ACTION_Y0, CANCEL_X1, ACTION_Y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
+        centeredTextIn(buffer, "CANCEL", CANCEL_X0, CANCEL_X1, (ACTION_Y0 + ACTION_Y1) * 0.5f, 0.9f, EditorTheme.TEXT);
+        UIGeometryBatch.addRoundedQuad(buffer, SAVE_X0, ACTION_Y0, SAVE_X1, ACTION_Y1, EditorTheme.RADIUS_SMALL, EditorTheme.ACCENT, 1.0f);
+        centeredTextIn(buffer, "SAVE", SAVE_X0, SAVE_X1, (ACTION_Y0 + ACTION_Y1) * 0.5f, 0.9f, EditorTheme.TEXT);
+
+        // Last, so the open list draws over the rows beneath it
+        if (!audioTab && shadingDropdownOpen) dropdownList(buffer, s.getShadingModel(), hoverX, hoverY);
+    }
+
+    private static void renderRenderTab(UIGeometryBatch.Buffer buffer, ProjectSettings s, float hoverX, float hoverY) {
         sectionHeader(buffer, "SHADING", SECTION_SHADING_Y);
         dropdownField(buffer, "GLOBAL SHADING MODEL", SHADING_MODEL_Y, s.getShadingModel(), hoverX, hoverY);
 
@@ -130,21 +176,52 @@ public final class ProjectSettingsOverlay {
         sectionHeader(buffer, "AMBIENT LIGHT", SECTION_AMBIENT_Y);
         colorRow(buffer, "AMBIENT COLOR", AMBIENT_COLOR_Y, AMBIENT_R, s, s.ambientColor, true);
         sliderRow(buffer, "AMBIENT INTENSITY", AMBIENT_INTENSITY_Y, AMBIENT_INTENSITY, s, 2, true);
+    }
 
-        if (!status.isEmpty()) {
-            UIGeometryBatch.addTruncatedText(buffer, status, LABEL_X, ACTION_Y1 + 0.05f, VALUE_X1, 0.75f,
-                statusIsError ? EditorTheme.RED : EditorTheme.TEXT_MUTED, 1.0f);
+    private static void renderAudioTab(UIGeometryBatch.Buffer buffer, ProjectSettings s, float hoverX, float hoverY) {
+        sectionHeader(buffer, "MIXER BUSES", SECTION_BUSES_Y);
+        boolean masterOn = !s.busMuted[AudioBus.MASTER.ordinal()];
+        for (int b = 0; b < AudioBus.COUNT; b++) {
+            float midY = BUS_Y[b];
+            boolean audible = !s.busMuted[b] && (b == AudioBus.MASTER.ordinal() || masterOn);
+            rowLabel(buffer, BUS_LABELS[b], midY, audible);
+            drawTrack(buffer, CONTROL_X0, BUS_TRACK_X1, midY, s.busVolume[b], audible ? EditorTheme.ACCENT : EditorTheme.GRAPHITE);
+            muteButton(buffer, midY, s.busMuted[b], hoverX, hoverY);
+            valueWell(buffer, midY, BUS_FIRST + b, s, 2, audible);
         }
 
-        UIGeometryBatch.addRoundedCard(buffer, RESET_X0, ACTION_Y0, RESET_X1, ACTION_Y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
-        centeredTextIn(buffer, "RESET DEFAULTS", RESET_X0, RESET_X1, (ACTION_Y0 + ACTION_Y1) * 0.5f, 0.85f, EditorTheme.TEXT);
-        UIGeometryBatch.addRoundedCard(buffer, CANCEL_X0, ACTION_Y0, CANCEL_X1, ACTION_Y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
-        centeredTextIn(buffer, "CANCEL", CANCEL_X0, CANCEL_X1, (ACTION_Y0 + ACTION_Y1) * 0.5f, 0.9f, EditorTheme.TEXT);
-        UIGeometryBatch.addRoundedQuad(buffer, SAVE_X0, ACTION_Y0, SAVE_X1, ACTION_Y1, EditorTheme.RADIUS_SMALL, EditorTheme.ACCENT, 1.0f);
-        centeredTextIn(buffer, "SAVE", SAVE_X0, SAVE_X1, (ACTION_Y0 + ACTION_Y1) * 0.5f, 0.9f, EditorTheme.TEXT);
+        sectionHeader(buffer, "BGM DUCKING  (VOICE / CRITICAL SFX)", SECTION_DUCK_Y);
+        toggleRow(buffer, "DUCKING ENABLED", DUCK_ENABLED_Y, s.duckingEnabled, hoverX, hoverY);
+        boolean duckOn = s.duckingEnabled;
+        sliderRow(buffer, "DUCKED BGM LEVEL", DUCK_LEVEL_Y, DUCK_LEVEL, s, 2, duckOn);
+        sliderRow(buffer, "ATTACK (SEC)", DUCK_ATTACK_Y, DUCK_ATTACK, s, 2, duckOn);
+        sliderRow(buffer, "RELEASE (SEC)", DUCK_RELEASE_Y, DUCK_RELEASE, s, 2, duckOn);
 
-        // Last, so the open list draws over the rows beneath it
-        if (shadingDropdownOpen) dropdownList(buffer, s.getShadingModel(), hoverX, hoverY);
+        sectionHeader(buffer, "SPATIAL REVERB", SECTION_REVERB_Y);
+        toggleRow(buffer, "REVERB ZONES", REVERB_ENABLED_Y, s.reverbZonesEnabled, hoverX, hoverY);
+    }
+
+    private static void tabButton(UIGeometryBatch.Buffer buffer, String label, float x0, float x1, boolean selected, float hoverX, float hoverY) {
+        boolean hot = inRect(hoverX, hoverY, x0, TAB_Y0, x1, TAB_Y1);
+        if (selected) {
+            UIGeometryBatch.addRoundedQuad(buffer, x0, TAB_Y0, x1, TAB_Y1, EditorTheme.RADIUS_SMALL, EditorTheme.ACCENT, 1.0f);
+        } else {
+            UIGeometryBatch.addRoundedCard(buffer, x0, TAB_Y0, x1, TAB_Y1, EditorTheme.RADIUS_SMALL,
+                hot ? EditorTheme.BORDER : EditorTheme.SURFACE, EditorTheme.BORDER_STRONG, 1.0f);
+        }
+        centeredTextIn(buffer, label, x0, x1, (TAB_Y0 + TAB_Y1) * 0.5f, 0.82f, selected ? EditorTheme.TEXT : EditorTheme.TEXT_MUTED);
+    }
+
+    private static void muteButton(UIGeometryBatch.Buffer buffer, float midY, boolean muted, float hoverX, float hoverY) {
+        float y0 = midY - ROW_H * 0.5f, y1 = midY + ROW_H * 0.5f;
+        boolean hot = inRect(hoverX, hoverY, MUTE_X0, y0, MUTE_X1, y1);
+        if (muted) {
+            UIGeometryBatch.addRoundedQuad(buffer, MUTE_X0, y0, MUTE_X1, y1, EditorTheme.RADIUS_SMALL, EditorTheme.RED, hot ? 0.8f : 0.95f);
+        } else {
+            UIGeometryBatch.addRoundedCard(buffer, MUTE_X0, y0, MUTE_X1, y1, EditorTheme.RADIUS_SMALL,
+                hot ? EditorTheme.BORDER : EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
+        }
+        centeredTextIn(buffer, "MUTE", MUTE_X0, MUTE_X1, midY, 0.75f, muted ? EditorTheme.TEXT : EditorTheme.TEXT_MUTED);
     }
 
     private static void dropdownField(UIGeometryBatch.Buffer buffer, String label, float midY, ShadingModel current, float hoverX, float hoverY) {
@@ -219,6 +296,10 @@ public final class ProjectSettingsOverlay {
         rowLabel(buffer, label, midY, enabled);
         drawTrack(buffer, CONTROL_X0, TRACK_X1, midY, normalized(slider, s), enabled ? EditorTheme.ACCENT : EditorTheme.GRAPHITE);
 
+        valueWell(buffer, midY, slider, s, decimals, enabled);
+    }
+
+    private static void valueWell(UIGeometryBatch.Buffer buffer, float midY, int slider, ProjectSettings s, int decimals, boolean enabled) {
         float y0 = midY - ROW_H * 0.5f, y1 = midY + ROW_H * 0.5f;
         UIGeometryBatch.addRoundedQuad(buffer, VALUE_X0, y0, VALUE_X1, y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_SUNKEN, 1.0f);
         valueSb.setLength(0);
@@ -266,8 +347,19 @@ public final class ProjectSettingsOverlay {
         if (workspace == null) return;
         ProjectSettings s = workspace.getProjectSettings();
 
+        if (inRect(ndcX, ndcY, TAB_RENDER_X0, TAB_Y0, TAB_RENDER_X1, TAB_Y1) || inRect(ndcX, ndcY, TAB_AUDIO_X0, TAB_Y0, TAB_AUDIO_X1, TAB_Y1)) {
+            boolean wantAudio = ndcX >= TAB_AUDIO_X0;
+            if (wantAudio != audioTab) {
+                UISoundPlayer.play(UISound.CLICK);
+                audioTab = wantAudio;
+                shadingDropdownOpen = false;
+                draggingSlider = NONE;
+            }
+            return;
+        }
+
         // An open list owns the click: pick an option, or close without acting on whatever lies beneath
-        if (shadingDropdownOpen) {
+        if (!audioTab && shadingDropdownOpen) {
             shadingDropdownOpen = false;
             int option = dropdownOptionAt(ndcX, ndcY);
             if (option != NONE) {
@@ -279,7 +371,7 @@ public final class ProjectSettingsOverlay {
             }
             return;
         }
-        if (inRect(ndcX, ndcY, DROPDOWN_X0, SHADING_MODEL_Y - ROW_H * 0.5f, DROPDOWN_X1, SHADING_MODEL_Y + ROW_H * 0.5f)) {
+        if (!audioTab && inRect(ndcX, ndcY, DROPDOWN_X0, SHADING_MODEL_Y - ROW_H * 0.5f, DROPDOWN_X1, SHADING_MODEL_Y + ROW_H * 0.5f)) {
             UISoundPlayer.play(UISound.CLICK);
             shadingDropdownOpen = true;
             return;
@@ -288,6 +380,7 @@ public final class ProjectSettingsOverlay {
         if (inRect(ndcX, ndcY, CLOSE_X0, CLOSE_Y0, CLOSE_X1, CLOSE_Y1) || inRect(ndcX, ndcY, CANCEL_X0, ACTION_Y0, CANCEL_X1, ACTION_Y1)) {
             UISoundPlayer.play(UISound.CLOSE_MODAL);
             s.copyRenderSettingsFrom(openedWith);
+            s.copyAudioSettingsFrom(openedWith);
             close(workspace);
             return;
         }
@@ -297,17 +390,20 @@ public final class ProjectSettingsOverlay {
         }
         if (inRect(ndcX, ndcY, RESET_X0, ACTION_Y0, RESET_X1, ACTION_Y1)) {
             UISoundPlayer.play(UISound.CLICK);
-            s.resetRenderSettings();
+            if (audioTab) s.resetAudioSettings();
+            else s.resetRenderSettings();
             markDirty();
             return;
         }
-        if (hitsToggle(ndcX, ndcY, BLOBS_Y)) {
+        if (audioTab) {
+            if (handleAudioToggleClick(ndcX, ndcY, s)) return;
+        } else if (hitsToggle(ndcX, ndcY, BLOBS_Y)) {
             UISoundPlayer.play(UISound.TOGGLE);
             s.shadowBlobsEnabled = !s.shadowBlobsEnabled;
             markDirty();
             return;
         }
-        if (hitsToggle(ndcX, ndcY, FOG_ENABLED_Y)) {
+        if (!audioTab && hitsToggle(ndcX, ndcY, FOG_ENABLED_Y)) {
             UISoundPlayer.play(UISound.TOGGLE);
             s.fogEnabled = !s.fogEnabled;
             markDirty();
@@ -325,6 +421,31 @@ public final class ProjectSettingsOverlay {
             draggingSlider = slider;
             dragTo(ndcX, s);
         }
+    }
+
+    /** Mute buttons and ducking / reverb toggles on the AUDIO tab; true when the click was consumed. */
+    private static boolean handleAudioToggleClick(float x, float y, ProjectSettings s) {
+        for (int b = 0; b < AudioBus.COUNT; b++) {
+            if (inRect(x, y, MUTE_X0, BUS_Y[b] - ROW_H * 0.5f, MUTE_X1, BUS_Y[b] + ROW_H * 0.5f)) {
+                UISoundPlayer.play(UISound.TOGGLE);
+                s.busMuted[b] = !s.busMuted[b];
+                markDirty();
+                return true;
+            }
+        }
+        if (hitsToggle(x, y, DUCK_ENABLED_Y)) {
+            UISoundPlayer.play(UISound.TOGGLE);
+            s.duckingEnabled = !s.duckingEnabled;
+            markDirty();
+            return true;
+        }
+        if (hitsToggle(x, y, REVERB_ENABLED_Y)) {
+            UISoundPlayer.play(UISound.TOGGLE);
+            s.reverbZonesEnabled = !s.reverbZonesEnabled;
+            markDirty();
+            return true;
+        }
+        return false;
     }
 
     /** Cursor move in screen space; drives an active slider drag. Returns false when no slider is held. */
@@ -378,6 +499,7 @@ public final class ProjectSettingsOverlay {
 
     private static void close(EditorWorkspace workspace) {
         draggingSlider = NONE;
+        audioTab = false;
         shadingDropdownOpen = false;
         dirty = false;
         workspace.getOverlayManager().setActiveModal(ModalState.NONE);
@@ -405,7 +527,10 @@ public final class ProjectSettingsOverlay {
             case FOG_R, FOG_G, FOG_B -> s.fogColor[slider - FOG_R];
             case AMBIENT_R, AMBIENT_G, AMBIENT_B -> s.ambientColor[slider - AMBIENT_R];
             case AMBIENT_INTENSITY -> s.ambientIntensity;
-            default -> 0.0f;
+            case DUCK_LEVEL -> s.duckLevel;
+            case DUCK_ATTACK -> s.duckAttack;
+            case DUCK_RELEASE -> s.duckRelease;
+            default -> (slider >= BUS_FIRST && slider <= BUS_LAST) ? s.busVolume[slider - BUS_FIRST] : 0.0f;
         };
     }
 
@@ -421,7 +546,12 @@ public final class ProjectSettingsOverlay {
             case FOG_R, FOG_G, FOG_B -> s.fogColor[slider - FOG_R] = value;
             case AMBIENT_R, AMBIENT_G, AMBIENT_B -> s.ambientColor[slider - AMBIENT_R] = value;
             case AMBIENT_INTENSITY -> s.ambientIntensity = value;
-            default -> {}
+            case DUCK_LEVEL -> s.duckLevel = value;
+            case DUCK_ATTACK -> s.duckAttack = value;
+            case DUCK_RELEASE -> s.duckRelease = value;
+            default -> {
+                if (slider >= BUS_FIRST && slider <= BUS_LAST) s.busVolume[slider - BUS_FIRST] = value;
+            }
         }
         s.sanitize();
     }
@@ -430,6 +560,8 @@ public final class ProjectSettingsOverlay {
         return switch (slider) {
             case FOG_START, FOG_END -> FOG_DISTANCE_SLIDER_MAX;
             case AMBIENT_INTENSITY -> ProjectSettings.AMBIENT_INTENSITY_MAX;
+            case DUCK_ATTACK -> ProjectSettings.DUCK_ATTACK_MAX;
+            case DUCK_RELEASE -> ProjectSettings.DUCK_RELEASE_MAX;
             default -> 1.0f;
         };
     }
@@ -444,6 +576,10 @@ public final class ProjectSettingsOverlay {
             case FOG_END -> "Fog end / draw distance";
             case FOG_DENSITY -> "Fog thickness (0-1)";
             case AMBIENT_INTENSITY -> "Ambient intensity (0-" + (int) ProjectSettings.AMBIENT_INTENSITY_MAX + ")";
+            case DUCK_LEVEL -> "Ducked BGM level (0-1)";
+            case DUCK_ATTACK -> "Duck attack seconds (0-" + (int) ProjectSettings.DUCK_ATTACK_MAX + ")";
+            case DUCK_RELEASE -> "Duck release seconds (0-" + (int) ProjectSettings.DUCK_RELEASE_MAX + ")";
+            case BUS_FIRST, BUS_FIRST + 1, BUS_FIRST + 2, BUS_FIRST + 3 -> BUS_LABELS[slider - BUS_FIRST] + " bus volume (0-1)";
             default -> "Value (0-1)";
         };
     }
@@ -456,7 +592,10 @@ public final class ProjectSettingsOverlay {
             case FOG_R, FOG_G, FOG_B -> FOG_COLOR_Y;
             case AMBIENT_R, AMBIENT_G, AMBIENT_B -> AMBIENT_COLOR_Y;
             case AMBIENT_INTENSITY -> AMBIENT_INTENSITY_Y;
-            default -> Float.NaN;
+            case DUCK_LEVEL -> DUCK_LEVEL_Y;
+            case DUCK_ATTACK -> DUCK_ATTACK_Y;
+            case DUCK_RELEASE -> DUCK_RELEASE_Y;
+            default -> (slider >= BUS_FIRST && slider <= BUS_LAST) ? BUS_Y[slider - BUS_FIRST] : Float.NaN;
         };
     }
 
@@ -470,6 +609,7 @@ public final class ProjectSettingsOverlay {
     }
 
     private static float sliderX1(int slider) {
+        if (slider >= BUS_FIRST && slider <= BUS_LAST) return BUS_TRACK_X1;
         if (!isColorChannel(slider)) return TRACK_X1;
         return channelX1((slider - FOG_R) % 3);
     }
@@ -487,7 +627,8 @@ public final class ProjectSettingsOverlay {
     }
 
     private static int sliderAt(float x, float y) {
-        for (int slider = FOG_START; slider <= AMBIENT_INTENSITY; slider++) {
+        int first = audioTab ? BUS_FIRST : FOG_START, last = audioTab ? DUCK_RELEASE : AMBIENT_INTENSITY;
+        for (int slider = first; slider <= last; slider++) {
             float midY = rowY(slider);
             if (inRect(x, y, sliderX0(slider), midY - ROW_H * 0.5f, sliderX1(slider), midY + ROW_H * 0.5f)) return slider;
         }
@@ -495,10 +636,11 @@ public final class ProjectSettingsOverlay {
     }
 
     private static final int[] SCALAR_SLIDERS = { FOG_START, FOG_END, FOG_DENSITY, AMBIENT_INTENSITY };
+    private static final int[] AUDIO_SCALAR_SLIDERS = { BUS_FIRST, BUS_FIRST + 1, BUS_FIRST + 2, BUS_FIRST + 3, DUCK_LEVEL, DUCK_ATTACK, DUCK_RELEASE };
 
     /** Scalar slider whose value well (right of the track) is under the point, or NONE. */
     private static int valueWellAt(float x, float y) {
-        for (int slider : SCALAR_SLIDERS) {
+        for (int slider : audioTab ? AUDIO_SCALAR_SLIDERS : SCALAR_SLIDERS) {
             float midY = rowY(slider);
             if (inRect(x, y, VALUE_X0, midY - ROW_H * 0.5f, VALUE_X1, midY + ROW_H * 0.5f)) return slider;
         }

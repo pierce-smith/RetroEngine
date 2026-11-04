@@ -16,9 +16,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.IntBuffer;
 import java.nio.ShortBuffer;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 import static org.lwjgl.openal.AL10.*;
@@ -29,6 +27,10 @@ import static org.lwjgl.openal.AL10.*;
  *
  * OpenAL only accepts raw PCM: .ogg is decoded with STBVorbis and .wav/.aiff/.au with javax.sound. OpenAL only
  * spatializes mono buffers, so spatial requests are downmixed to mono at load; non-spatial loads keep stereo.
+ *
+ * One-shots are routed through an {@link AudioBus}: {@link #updateOneShots(float)} re-applies each pooled source's
+ * bus gain from {@link AudioMixerService}, reports ducking triggers and attaches reverb sends. The pool is fixed-size
+ * primitive arrays, so the per-frame update allocates nothing.
  */
 public final class AudioEngine {
 
@@ -41,7 +43,20 @@ public final class AudioEngine {
 
     /** Cache key is path + "#mono" or "#native"; values are AL buffer names. */
     private static final Map<String, Integer> bufferCache = new HashMap<>();
-    private static final List<Integer> oneShotSources = new ArrayList<>();
+
+    // One-shot pool (parallel arrays indexed by pool slot)
+    private static final int[] oneShotSources = new int[MAX_ONE_SHOTS];
+    private static final long[] oneShotSequence = new long[MAX_ONE_SHOTS];
+    private static final AudioBus[] oneShotBus = new AudioBus[MAX_ONE_SHOTS];
+    private static final float[] oneShotVolume = new float[MAX_ONE_SHOTS];
+    private static final boolean[] oneShotSpatial = new boolean[MAX_ONE_SHOTS];
+    private static final boolean[] oneShotDucks = new boolean[MAX_ONE_SHOTS];
+    private static final float[] oneShotPos = new float[MAX_ONE_SHOTS * 3];
+    private static int oneShotCount = 0;
+    private static long nextSequence = 1L;
+
+    private static boolean efxPresent = false;
+    private static float listenerX, listenerY, listenerZ;
 
     private AudioEngine() {}
 
@@ -57,6 +72,7 @@ public final class AudioEngine {
             if (context == 0L) throw new IllegalStateException("alcCreateContext returned NULL");
             ALC10.alcMakeContextCurrent(context);
             AL.createCapabilities(alcCaps);
+            efxPresent = alcCaps.ALC_EXT_EFX;
             // Full volume inside REFERENCE_DISTANCE, linear fade to silence at MAX_DISTANCE (rolloff 1)
             alDistanceModel(org.lwjgl.openal.AL11.AL_LINEAR_DISTANCE_CLAMPED);
             initialized = true;
@@ -73,6 +89,15 @@ public final class AudioEngine {
         return initialized;
     }
 
+    /** True when the device exposes ALC_EXT_EFX (auxiliary effect slots, used by reverb zones). */
+    public static boolean isEfxPresent() {
+        return initialized && efxPresent;
+    }
+
+    public static float getListenerX() { return listenerX; }
+    public static float getListenerY() { return listenerY; }
+    public static float getListenerZ() { return listenerZ; }
+
     // -------------------------------------------------------------------------
     // Listener
     // -------------------------------------------------------------------------
@@ -84,6 +109,7 @@ public final class AudioEngine {
         if (!initialized) return;
         if (!Float.isFinite(px + py + pz + fx + fy + fz + ux + uy + uz)) return;
         alListener3f(AL_POSITION, px, py, pz);
+        listenerX = px; listenerY = py; listenerZ = pz;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             alListenerfv(AL_ORIENTATION, stack.floats(fx, fy, fz, ux, uy, uz));
         }
@@ -178,20 +204,44 @@ public final class AudioEngine {
     // -------------------------------------------------------------------------
 
     /**
-     * Plays a clip once on a pooled source. Spatial clips play mono at the world position; non-spatial clips play
-     * listener-relative at the origin (no attenuation or panning). Returns false when the clip could not play.
+     * Plays a clip once on a pooled source through the SFX bus. Spatial clips play mono at the world position;
+     * non-spatial clips play listener-relative at the origin (no attenuation or panning). Returns false when the
+     * clip could not play.
+     */
+    public static boolean playOneShot(String path, float volume, boolean spatial,
+                                      float x, float y, float z,
+                                      float minDistance, float maxDistance) {
+        return playOneShot(path, volume, spatial, x, y, z, minDistance, maxDistance, AudioBus.SFX, false);
+    }
+
+    /**
+     * Plays a clip once routed through {@code bus}. {@code ducksBgm} marks a critical clip that ducks the BGM bus
+     * while it plays (VOICE clips always do).
      */
     public static synchronized boolean playOneShot(String path, float volume, boolean spatial,
                                                    float x, float y, float z,
-                                                   float minDistance, float maxDistance) {
+                                                   float minDistance, float maxDistance,
+                                                   AudioBus bus, boolean ducksBgm) {
         int buffer = getBuffer(path, spatial);
         if (buffer == 0) return false;
-        int source = acquireOneShotSource();
-        if (source == 0) return false;
+        int slotIndex = acquireOneShotSlot();
+        if (slotIndex < 0) return false;
+        int source = oneShotSources[slotIndex];
+        AudioBus routed = (bus != null) ? bus : AudioBus.SFX;
+        float base = Math.max(0.0f, Math.min(2.0f, volume));
+
+        oneShotSequence[slotIndex] = nextSequence++;
+        oneShotBus[slotIndex] = routed;
+        oneShotVolume[slotIndex] = base;
+        oneShotSpatial[slotIndex] = spatial;
+        oneShotDucks[slotIndex] = ducksBgm;
+        oneShotPos[slotIndex * 3] = x;
+        oneShotPos[slotIndex * 3 + 1] = y;
+        oneShotPos[slotIndex * 3 + 2] = z;
 
         alSourcei(source, AL_BUFFER, buffer);
         alSourcef(source, AL_MAX_GAIN, 2.0f); // OpenAL clamps source gain to 1.0 by default
-        alSourcef(source, AL_GAIN, Math.max(0.0f, Math.min(2.0f, volume)));
+        alSourcef(source, AL_GAIN, Math.min(2.0f, base * AudioMixerService.busGain(routed)));
         alSourcef(source, AL_PITCH, 1.0f);
         alSourcei(source, AL_LOOPING, AL_FALSE);
         if (spatial) {
@@ -205,38 +255,58 @@ public final class AudioEngine {
             alSource3f(source, AL_POSITION, 0.0f, 0.0f, 0.0f);
             alSourcef(source, AL_ROLLOFF_FACTOR, 0.0f);
         }
+        AudioReverbSystem.route(source, spatial, x, y, z);
+        if (AudioMixerService.triggersDuck(routed, ducksBgm)) AudioMixerService.reportDuckTrigger();
         alSourcePlay(source);
         return true;
     }
 
-    /** Reuses a finished pooled source, grows the pool up to the cap, or steals the oldest. */
-    private static int acquireOneShotSource() {
-        for (int s : oneShotSources) {
+    /**
+     * Per-frame mix pass over the one-shot pool: re-applies bus gains (live volume / mute / ducking), reports duck
+     * triggers from audible VOICE / critical clips and refreshes reverb routing. Indexed loop, no allocation.
+     */
+    public static synchronized void updateOneShots() {
+        if (!initialized) return;
+        for (int i = 0; i < oneShotCount; i++) {
+            int s = oneShotSources[i];
             int st = alGetSourcei(s, AL_SOURCE_STATE);
-            if (st == AL_STOPPED || st == AL_INITIAL) return s;
+            if (st != AL_PLAYING && st != AL_PAUSED) continue;
+            AudioBus bus = oneShotBus[i];
+            alSourcef(s, AL_GAIN, Math.min(2.0f, oneShotVolume[i] * AudioMixerService.busGain(bus)));
+            if (st == AL_PLAYING && AudioMixerService.triggersDuck(bus, oneShotDucks[i])) AudioMixerService.reportDuckTrigger();
+            AudioReverbSystem.route(s, oneShotSpatial[i], oneShotPos[i * 3], oneShotPos[i * 3 + 1], oneShotPos[i * 3 + 2]);
         }
-        if (oneShotSources.size() < MAX_ONE_SHOTS) {
+    }
+
+    /** Reuses a finished pooled source, grows the pool up to the cap, or steals the oldest. Returns the slot or -1. */
+    private static int acquireOneShotSlot() {
+        for (int i = 0; i < oneShotCount; i++) {
+            int st = alGetSourcei(oneShotSources[i], AL_SOURCE_STATE);
+            if (st == AL_STOPPED || st == AL_INITIAL) return i;
+        }
+        if (oneShotCount < MAX_ONE_SHOTS) {
             int s = alGenSources();
-            if (alGetError() == AL_NO_ERROR) {
-                oneShotSources.add(s);
-                return s;
-            }
-            return 0;
+            if (alGetError() != AL_NO_ERROR) return -1;
+            oneShotSources[oneShotCount] = s;
+            return oneShotCount++;
         }
-        int oldest = oneShotSources.remove(0);
-        alSourceStop(oldest);
-        oneShotSources.add(oldest);
+        int oldest = 0;
+        for (int i = 1; i < oneShotCount; i++) {
+            if (oneShotSequence[i] < oneShotSequence[oldest]) oldest = i;
+        }
+        alSourceStop(oneShotSources[oldest]);
         return oldest;
     }
 
     public static synchronized void stopAllOneShots() {
         if (!initialized) return;
-        for (int s : oneShotSources) alSourceStop(s);
+        for (int i = 0; i < oneShotCount; i++) alSourceStop(oneShotSources[i]);
     }
 
     public static synchronized void setOneShotsPaused(boolean paused) {
         if (!initialized) return;
-        for (int s : oneShotSources) {
+        for (int i = 0; i < oneShotCount; i++) {
+            int s = oneShotSources[i];
             int st = alGetSourcei(s, AL_SOURCE_STATE);
             if (paused && st == AL_PLAYING) alSourcePause(s);
             else if (!paused && st == AL_PAUSED) alSourcePlay(s);
@@ -251,11 +321,16 @@ public final class AudioEngine {
      *  disposed first (OpenAL refuses to delete buffers still attached to a source). */
     public static synchronized void shutdown() {
         if (!initialized) return;
-        for (int s : oneShotSources) {
+        for (int i = 0; i < oneShotCount; i++) {
+            int s = oneShotSources[i];
             alSourceStop(s);
+            AudioReverbSystem.detach(s);
             alDeleteSources(s);
+            oneShotSources[i] = 0;
+            oneShotBus[i] = null;
         }
-        oneShotSources.clear();
+        oneShotCount = 0;
+        AudioReverbSystem.shutdown();
         for (int b : bufferCache.values()) alDeleteBuffers(b);
         bufferCache.clear();
         releaseNative();

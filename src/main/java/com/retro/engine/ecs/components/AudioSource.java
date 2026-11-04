@@ -5,7 +5,10 @@ import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
 
+import com.retro.engine.audio.AudioBus;
 import com.retro.engine.audio.AudioEngine;
+import com.retro.engine.audio.AudioMixerService;
+import com.retro.engine.audio.AudioReverbSystem;
 
 import static org.lwjgl.openal.AL10.*;
 
@@ -14,6 +17,7 @@ import static org.lwjgl.openal.AL10.*;
  * via javax.sound), downmixed to mono so OpenAL can spatialize it, and shared through {@link AudioEngine}'s buffer
  * cache. SimulationSystem pushes the entity's world position each tick; OpenAL applies linear-clamped attenuation
  * between MIN DIST (full volume) and MAX DIST, scaled by ATTENUATION (rolloff), plus panning against the listener.
+ * The final gain is VOLUME times the BUS gain from {@link AudioMixerService} (bus * master, BGM ducking included).
  *
  * Persisted fields are written positionally by ComponentBinaryCodec: append new ones last, gated with since /
  * prefabSince and a format version bump.
@@ -48,6 +52,14 @@ public class AudioSource extends Component {
     // Scenes saved before v6 / prefabs before v5 lack this field and load with the default (true)
     @InspectorProperty(order = 8, label = "PLAY ON START", type = PropertyType.TOGGLE, since = 6, prefabSince = 5)
     public boolean playOnStart = true;
+
+    // Scenes saved before v8 / prefabs before v7 load on the SFX bus without ducking
+    @InspectorProperty(order = 9, label = "BUS", since = 8, prefabSince = 7)
+    public AudioBus bus = AudioBus.SFX;
+
+    /** Critical clip: ducks the BGM bus while it plays (VOICE-bus sources always duck). */
+    @InspectorProperty(order = 10, label = "DUCKS BGM", type = PropertyType.TOGGLE, since = 8, prefabSince = 7)
+    public boolean ducksBgm = false;
 
     /** Matches the inspector's VOLUME slider range. */
     public static final float MAX_VOLUME = 2.0f;
@@ -98,6 +110,7 @@ public class AudioSource extends Component {
     public void dispose() {
         if (sourceHandle != 0 && AudioEngine.isAvailable()) {
             alSourceStop(sourceHandle);
+            AudioReverbSystem.detach(sourceHandle);
             alSourcei(sourceHandle, AL_BUFFER, 0);
             alDeleteSources(sourceHandle);
         }
@@ -138,15 +151,21 @@ public class AudioSource extends Component {
         if (!Float.isFinite(worldX + worldY + worldZ)) return;
         alSource3f(sourceHandle, AL_POSITION, worldX, worldY, worldZ);
         applySourceParams();
-        if (state == PlaybackState.PLAYING && alGetSourcei(sourceHandle, AL_SOURCE_STATE) == AL_STOPPED) {
-            state = PlaybackState.STOPPED;
+        if (state == PlaybackState.PLAYING) {
+            if (alGetSourcei(sourceHandle, AL_SOURCE_STATE) == AL_STOPPED) {
+                state = PlaybackState.STOPPED;
+            } else {
+                if (AudioMixerService.triggersDuck(bus, ducksBgm)) AudioMixerService.reportDuckTrigger();
+                AudioReverbSystem.route(sourceHandle, true, worldX, worldY, worldZ);
+            }
         }
     }
 
     private void applySourceParams() {
         float min = Math.max(0.1f, minDistance);
         alSourcef(sourceHandle, AL_MAX_GAIN, MAX_VOLUME); // OpenAL clamps source gain to 1.0 by default
-        alSourcef(sourceHandle, AL_GAIN, Math.max(0.0f, Math.min(MAX_VOLUME, volume)));
+        float mixed = Math.max(0.0f, Math.min(MAX_VOLUME, volume)) * AudioMixerService.busGain(bus);
+        alSourcef(sourceHandle, AL_GAIN, Math.min(MAX_VOLUME, mixed));
         alSourcef(sourceHandle, AL_PITCH, Math.max(0.1f, pitch));
         alSourcei(sourceHandle, AL_LOOPING, loop ? AL_TRUE : AL_FALSE);
         alSourcef(sourceHandle, AL_REFERENCE_DISTANCE, min);
@@ -180,6 +199,7 @@ public class AudioSource extends Component {
         setVolume(volume);
         setPitch(pitch);
         setDistances(minDistance, maxDistance);
+        if (bus == null) bus = AudioBus.SFX;
     }
 
     @Override

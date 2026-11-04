@@ -63,6 +63,11 @@ public class AnimatorComponent extends Component {
     public float crossfadeDuration = 0.25f;
     public boolean transitioning = false;
 
+    // Direct-clip crossfade (animators without a controller): currentClip fades into targetClip over crossfadeDuration,
+    // sharing crossfadeTimer / transitioning with the state machine path. Runtime only, not serialized.
+    public AnimationClip targetClip = null;
+    public float targetPlaybackTime = 0.0f;
+
     // Live parameter values, seeded from the controller's defaults (getParameters keeps them in sync with its definitions)
     public final Map<String, AnimatorParameter> parameterValues = new LinkedHashMap<>();
 
@@ -143,6 +148,7 @@ public class AnimatorComponent extends Component {
         crossfadeTimer = other.crossfadeTimer;
         crossfadeDuration = other.crossfadeDuration;
         transitioning = other.transitioning;
+        targetPlaybackTime = other.targetPlaybackTime;
         parameterValues.clear();
         for (Map.Entry<String, AnimatorParameter> entry : other.parameterValues.entrySet()) {
             parameterValues.put(entry.getKey(), entry.getValue().copy());
@@ -161,6 +167,7 @@ public class AnimatorComponent extends Component {
                 ? other.controller.copy(clip -> (clip != null && clip == sourceRecorded) ? copiedRecorded : clip)
                 : null;
         currentClip = (other.currentClip != null && other.currentClip == sourceRecorded) ? copiedRecorded : other.currentClip;
+        targetClip = (other.targetClip != null && other.targetClip == sourceRecorded) ? copiedRecorded : other.targetClip;
         dirty = true;
     }
 
@@ -206,8 +213,107 @@ public class AnimatorComponent extends Component {
     public void cancelTransition() {
         targetStateId = null;
         targetTime = 0.0f;
+        targetClip = null;
+        targetPlaybackTime = 0.0f;
         crossfadeTimer = 0.0f;
         transitioning = false;
+    }
+
+    /** True while two poses are being blended (state machine transition or direct-clip crossfade). */
+    public boolean isBlending() {
+        return transitioning;
+    }
+
+    /** Switches to {@code clipName} immediately (no blend). See {@link #crossFade(String, float)}. */
+    public boolean playAnimation(String clipName) {
+        return crossFade(clipName, 0.0f);
+    }
+
+    /**
+     * Blends from the current pose into {@code clipName} over {@code duration} seconds (instant when {@code duration <= 0}).
+     * With a controller, {@code clipName} names a state (or the clip a single-clip state plays) and the fade runs as a
+     * state transition; without one it names {@link #currentClip} or {@link #recordedPose}. Calling it again for the clip
+     * already playing or being faded into is a no-op, so scripts may call it every frame. Returns false if not found.
+     */
+    public boolean crossFade(String clipName, float duration) {
+        if (clipName == null) return false;
+        if (controller != null) {
+            AnimatorState state = findState(clipName);
+            if (state == null) return false;
+            if (transitioning ? state.name.equals(targetStateId) : state.name.equals(currentStateId)) return true;
+            if (duration <= 0.0f) {
+                cancelTransition();
+                currentStateId = state.name;
+                currentTime = 0.0f;
+                return true;
+            }
+            promoteHalfwayTarget();
+            if (state.name.equals(currentStateId)) {
+                cancelTransition(); // fading back into the source: just keep playing it
+                return true;
+            }
+            targetStateId = state.name;
+            targetTime = 0.0f;
+            beginFade(duration);
+            return true;
+        }
+        AnimationClip clip = null;
+        if (currentClip != null && clipName.equals(currentClip.name)) clip = currentClip;
+        else if (targetClip != null && clipName.equals(targetClip.name)) clip = targetClip;
+        else if (recordedPose != null && clipName.equals(recordedPose.name)) clip = recordedPose;
+        return crossFade(clip, duration);
+    }
+
+    /** Direct-clip crossfade into {@code clip} (any loaded clip, e.g. from AnimationSystem.loadClipAsset). */
+    public boolean crossFade(AnimationClip clip, float duration) {
+        if (clip == null) return false;
+        if (transitioning ? clip == targetClip : clip == currentClip) return true;
+        if (duration <= 0.0f || currentClip == null) {
+            cancelTransition();
+            currentClip = clip;
+            activeClipName = clip.name;
+            playbackTime = 0.0f;
+            isPlaying = true;
+            bindPoseApplied = false;
+            return true;
+        }
+        if (transitioning && targetClip != null && getCrossfadeWeight() >= 0.5f) {
+            currentClip = targetClip;
+            activeClipName = targetClip.name;
+            playbackTime = targetPlaybackTime;
+        }
+        if (clip == currentClip) {
+            cancelTransition();
+            return true;
+        }
+        targetClip = clip;
+        targetPlaybackTime = 0.0f;
+        isPlaying = true;
+        beginFade(duration);
+        return true;
+    }
+
+    private void beginFade(float duration) {
+        crossfadeTimer = 0.0f;
+        crossfadeDuration = Math.max(0.01f, duration);
+        transitioning = true;
+    }
+
+    /** Re-targeting mid-fade: a fade already past halfway makes its target the source, so the pose jumps the least. */
+    private void promoteHalfwayTarget() {
+        if (transitioning && targetStateId != null && getCrossfadeWeight() >= 0.5f) {
+            currentStateId = targetStateId;
+            currentTime = targetTime;
+        }
+    }
+
+    private AnimatorState findState(String name) {
+        AnimatorState state = controller.getState(name);
+        if (state != null) return state;
+        for (AnimatorState s : controller.getStates().values()) {
+            if (s.blendTree == null && s.clip != null && name.equals(s.clip.name)) return s;
+        }
+        return null;
     }
 
     /** Seeks the current state's timeline (editor scrubbing), bounded exactly like normal playback. */

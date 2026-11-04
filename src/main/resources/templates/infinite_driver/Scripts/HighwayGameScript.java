@@ -41,7 +41,13 @@ public class HighwayGameScript extends SimpleEntityScript {
     public float nearMissShake = 0.15f;
     public float autoRestartDelay = 0f;     // > 0 reloads the scene this many seconds after a crash
 
-    private static final int KEY_R = 82, KEY_SPACE = 32, KEY_ENTER = 257;
+    // --- Audio mixer (buses: MASTER, BGM, SFX, VOICE; every bus feeds MASTER) ---
+    public String musicTrack = "";          // optional BGM, e.g. "Assets/Audio/drive_theme.ogg" (played on the BGM bus)
+    public String newBestStinger = "";      // optional jingle on a new best run (BGM bus)
+    public float crashSfxBusVolume = 0.6f;  // SFX bus is pulled down while the crash screen is up
+    public float masterStep = 0.1f;         // -/= keys nudge the MASTER bus by this much
+
+    private static final int KEY_R = 82, KEY_SPACE = 32, KEY_ENTER = 257, KEY_M = 77, KEY_MINUS = 45, KEY_EQUAL = 61;
     private static final int READY = 0, DRIVING = 1, CRASHED = 2;
     private static final int MAX = 64;
 
@@ -125,7 +131,12 @@ public class HighwayGameScript extends SimpleEntityScript {
         Entity sb = sceneWorld.findEntityByName("HUD SpeedBar");
         speedBar = sb != null ? (UIProgressBar) sb.getComponent(UIProgressBar.class) : null;
         if (speedBar != null) speedBar.maxValue = maxSpeed;
-        if (hudControls != null) hudControls.text = "A/D OR ARROWS: STEER    H: HORN    R: RESTART";
+        if (hudControls != null) hudControls.text = "A/D OR ARROWS: STEER    H: HORN    R: RESTART    M: MUSIC    -/=: VOLUME";
+
+        // Runtime bus volumes multiply the Project Settings mix and reset when Play stops. Restore SFX after a crash
+        // (scene reloads keep runtime bus state), then start the soundtrack on the BGM bus.
+        setBusVolume("SFX", 1.0f);
+        if (musicTrack != null && musicTrack.length() > 0) playGlobalSound(musicTrack, "BGM", 0.7f);
 
         logInfo("Infinite Driver: " + segCount + " road segments, " + obsCount + " obstacles, " + treeCount + " trees");
 
@@ -140,6 +151,7 @@ public class HighwayGameScript extends SimpleEntityScript {
         if (carScript == null) resolveCarScript();
         dt = Math.min(dt, 0.05f);
         stateTime += dt;
+        updateMixerKeys();
 
         if (Input.isKeyPressed(KEY_R) || (state == CRASHED && stateTime > 0.8f
                 && (Input.isKeyPressed(KEY_SPACE) || Input.isKeyPressed(KEY_ENTER)))) {
@@ -302,7 +314,16 @@ public class HighwayGameScript extends SimpleEntityScript {
             best = score;
             newBest = true;
             System.setProperty("retro.infiniteDriver.best", Integer.toString(best));
+            if (newBestStinger != null && newBestStinger.length() > 0) playGlobalSound(newBestStinger, "BGM");
         }
+        setBusVolume("SFX", crashSfxBusVolume); // muffle engine / screech under the crash screen
+    }
+
+    /** Bus volume controls: M toggles the BGM bus, -/= step the MASTER bus (allocation-free). */
+    private void updateMixerKeys() {
+        if (Input.isKeyPressed(KEY_M)) setBusMuted("BGM", !isBusMuted("BGM"));
+        if (Input.isKeyPressed(KEY_MINUS)) setBusVolume("MASTER", Math.max(0.0f, getBusVolume("MASTER") - masterStep));
+        if (Input.isKeyPressed(KEY_EQUAL)) setBusVolume("MASTER", Math.min(1.0f, getBusVolume("MASTER") + masterStep));
     }
 
     private int score() { return (int) distance + bonus; }

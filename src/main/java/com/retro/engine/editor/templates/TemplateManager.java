@@ -1,5 +1,7 @@
 package com.retro.engine.editor.templates;
 
+import com.retro.engine.audio.AudioBus;
+import com.retro.engine.ecs.components.AudioReverbZone;
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.SceneWorld;
@@ -224,6 +226,11 @@ public final class TemplateManager {
                                 if (opt.equals("loop")) src.loop = true;
                                 else if (opt.equals("manual")) src.playOnStart = false;
                                 else if (opt.startsWith("vol:")) src.volume = Float.parseFloat(opt.substring(4));
+                                else if (opt.startsWith("bus:")) {
+                                    src.bus = AudioBus.fromName(opt.substring(4), null);
+                                    if (src.bus == null) throw new IllegalArgumentException("unknown audio bus '" + opt + "'");
+                                }
+                                else if (opt.equals("duck")) src.ducksBgm = true;
                                 else throw new IllegalArgumentException("unknown audio option '" + opt + "'");
                             }
                             src.minDistance = 8.0f;
@@ -262,6 +269,19 @@ public final class TemplateManager {
                             ui.width = 900.0f; ui.height = v[2] * 1.5f;
                             ui.text = "";
                             e.addComponent(ui);
+                        }
+                        case "reverb" -> { // preset,sizeX,sizeY,sizeZ[,wet[,priority]] (axis-aligned box, scaled by the entity)
+                            String[] a = val.split(",");
+                            if (a.length < 4) throw new IOException("reverb needs preset,sizeX,sizeY,sizeZ");
+                            AudioReverbZone zone = new AudioReverbZone();
+                            zone.reverbPreset = AudioReverbZone.ReverbPreset.valueOf(a[0].trim().toUpperCase(java.util.Locale.ROOT));
+                            zone.shape = AudioReverbZone.Shape.BOX;
+                            zone.sizeX = Float.parseFloat(a[1].trim());
+                            zone.sizeY = Float.parseFloat(a[2].trim());
+                            zone.sizeZ = Float.parseFloat(a[3].trim());
+                            if (a.length > 4) zone.wetLevel = Float.parseFloat(a[4].trim());
+                            if (a.length > 5) zone.priority = Integer.parseInt(a[5].trim());
+                            e.addComponent(zone);
                         }
                         case "light" -> e.addComponent(new Light());
                         case "particles" -> e.addComponent(particlePreset(val));
