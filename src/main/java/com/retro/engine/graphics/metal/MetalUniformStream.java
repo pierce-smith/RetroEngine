@@ -61,7 +61,7 @@ public class MetalUniformStream {
     public static final long OFFSET_VIEW_POS = 320L;
     public static final long OFFSET_PICK_ID = 336L;
     public static final long OFFSET_LOCAL_LIGHTS = 344L;      // gpuAddress of the frame's LocalLights block
-    public static final long OFFSET_FOG_PARAMS = 352L;        // x = fog start, y = fog end, z = ramp exponent (368 bytes total)
+    public static final long OFFSET_FOG_PARAMS = 352L;        // x = fog start, y = fog end, z = ramp exponent, w = shading model (368 bytes total)
 
     // MSL layout guard: float4 / float4x4 members need 16-byte offsets, the LocalLights pointer 8, and both structs
     // must fit their slots. Array sizes must match the ones compiled into blinn_phong.metal.
@@ -212,12 +212,13 @@ public class MetalUniformStream {
     /**
      * Writes the project render environment (premultiplied ambient, fog color / opacity, fog start / end / curve) into
      * the lit uniform slot at baseAddr. Disabled fog is written as opacity 0, which the shader's mix turns into a no-op.
+     * The shading model rides in fogParams.w (0 = Blinn-Phong, 1 = Gouraud).
      */
     public void writeDrawEnvironment(long baseAddr, RenderEnvironment env) {
         float ambient = env.ambientIntensity;
         putFloat4(baseAddr + OFFSET_AMBIENT, env.ambientR * ambient, env.ambientG * ambient, env.ambientB * ambient, 1.0f);
         putFloat4(baseAddr + OFFSET_FOG, env.fogR, env.fogG, env.fogB, env.fogOpacity());
-        putFloat4(baseAddr + OFFSET_FOG_PARAMS, env.safeFogStart(), env.safeFogEnd(), env.fogCurveExponent(), 0.0f);
+        putFloat4(baseAddr + OFFSET_FOG_PARAMS, env.safeFogStart(), env.safeFogEnd(), env.fogCurveExponent(), env.shadingModelShaderValue());
     }
 
     /**

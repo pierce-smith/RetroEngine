@@ -1,6 +1,7 @@
 package com.retro.engine.core;
 
 import com.retro.engine.graphics.RenderEnvironment;
+import com.retro.engine.graphics.ShadingModel;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -13,7 +14,7 @@ import java.nio.file.StandardCopyOption;
 
 /**
  * Per-project settings persisted as {@code <Project>/ProjectSettings.bin}: project identity, the startup scene, and
- * the global render environment (ground shadow blobs, distance fog, ambient light) that
+ * the global render environment (shading model, ground shadow blobs, distance fog, ambient light) that
  * {@link com.retro.engine.graphics.SceneRenderPipeline} hands to the lit shaders every frame.
  *
  * <p>Binary layout (big-endian, {@link DataOutputStream}):
@@ -30,15 +31,17 @@ import java.nio.file.StandardCopyOption;
  *   float  fogColor r, g, b
  *   float  ambientColor r, g, b
  *   float  ambientIntensity
+ *   -- version 3 --
+ *   UTF    shadingModel ({@link ShadingModel#name()}; unknown names load as the default)
  * </pre>
- * Version 1 files load with the render defaults, which match the engine's previous hard-coded look.
+ * Older files load the missing fields with the render defaults, which match the engine's previous look.
  */
 public final class ProjectSettings {
 
     public static final String FILE_NAME = "ProjectSettings.bin";
 
     static final int MAGIC = 0x5250524A; // 'RPRJ'
-    static final int VERSION = 2;
+    static final int VERSION = 3;
 
     // Editor UI ranges; values read from disk are clamped to these too
     public static final float FOG_DISTANCE_MAX = 2000.0f;
@@ -52,6 +55,9 @@ public final class ProjectSettings {
     public String startupScene;
 
     // --- Global render environment ---
+
+    /** Per-vertex (Gouraud) or per-pixel (Blinn-Phong) lighting for every lit entity. Never null after {@link #sanitize()}. */
+    public ShadingModel shadingModel = RenderEnvironment.DEFAULT_SHADING_MODEL;
 
     /** Dynamic downward-raycast ground shadow blobs under every draw. */
     public boolean shadowBlobsEnabled = RenderEnvironment.DEFAULT_SHADOW_BLOBS;
@@ -87,8 +93,18 @@ public final class ProjectSettings {
     // Render environment
     // ------------------------------------------------------------------------------------------
 
+    public ShadingModel getShadingModel() {
+        return shadingModel;
+    }
+
+    /** Takes effect on the next rendered frame; null restores the default. */
+    public void setShadingModel(ShadingModel model) {
+        shadingModel = (model != null) ? model : RenderEnvironment.DEFAULT_SHADING_MODEL;
+    }
+
     /** Copies the render settings into {@code env}. Plain field copies: safe to call every frame. */
     public void applyTo(RenderEnvironment env) {
+        env.shadingModel = (shadingModel != null) ? shadingModel : RenderEnvironment.DEFAULT_SHADING_MODEL;
         env.shadowBlobsEnabled = shadowBlobsEnabled;
         env.fogEnabled = fogEnabled;
         env.fogStart = fogStart;
@@ -101,6 +117,7 @@ public final class ProjectSettings {
 
     /** Copies only the render settings from {@code other}; identity and startup scene are left alone. */
     public void copyRenderSettingsFrom(ProjectSettings other) {
+        shadingModel = other.shadingModel;
         shadowBlobsEnabled = other.shadowBlobsEnabled;
         fogEnabled = other.fogEnabled;
         fogStart = other.fogStart;
@@ -117,6 +134,7 @@ public final class ProjectSettings {
 
     /** Clamps every render setting into its valid range (also repairs NaN from a corrupt file). */
     public void sanitize() {
+        if (shadingModel == null) shadingModel = RenderEnvironment.DEFAULT_SHADING_MODEL;
         fogStart = clamp(fogStart, 0.0f, FOG_DISTANCE_MAX);
         fogEnd = clamp(fogEnd, fogStart + 0.01f, FOG_DISTANCE_MAX + 0.01f);
         fogDensity = clamp(fogDensity, 0.0f, 1.0f);
@@ -161,6 +179,8 @@ public final class ProjectSettings {
             for (int i = 0; i < 3; i++) dos.writeFloat(fogColor[i]);
             for (int i = 0; i < 3; i++) dos.writeFloat(ambientColor[i]);
             dos.writeFloat(ambientIntensity);
+
+            dos.writeUTF((shadingModel != null ? shadingModel : RenderEnvironment.DEFAULT_SHADING_MODEL).name());
         }
         Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }
@@ -186,8 +206,11 @@ public final class ProjectSettings {
                 for (int i = 0; i < 3; i++) s.fogColor[i] = dis.readFloat();
                 for (int i = 0; i < 3; i++) s.ambientColor[i] = dis.readFloat();
                 s.ambientIntensity = dis.readFloat();
-                s.sanitize();
             }
+            if (version >= 3) {
+                s.shadingModel = ShadingModel.fromName(dis.readUTF(), RenderEnvironment.DEFAULT_SHADING_MODEL);
+            }
+            s.sanitize();
             return s;
         }
     }

@@ -17,6 +17,7 @@ layout(location = 5) out vec3 vBitangent;
 layout(location = 6) out float vViewDist;
 layout(location = 7) out vec4 vLightSpacePos;
 layout(location = 8) out vec2 vLightmapUV;
+layout(location = 9) out vec3 v_GouraudLightColor; // Gouraud mode only: per-vertex ambient + diffuse + specular
 
 struct DirectionalLight {
     vec4 direction; // xyz = direction, w = intensity
@@ -50,7 +51,8 @@ layout(std140, set = 0, binding = 0) uniform LightBuffer {
     vec4 previewViewPos;   // byte offset 2368: xyz = that camera's world position
     vec4 ambientColor;     // byte offset 2384: rgb = ProjectSettings ambient color * intensity
     vec4 fogColorDensity;  // byte offset 2400: rgb = fog color, w = opacity at fog end (1 = fog on, 0 = off)
-    vec4 fogParams;        // byte offset 2416: x = fog start, y = fog end, z = ramp exponent (2432 bytes total)
+    vec3 fogParams;        // byte offset 2416: x = fog start, y = fog end, z = ramp exponent
+    float shadingModel;    // byte offset 2428: u_ShadingModel, ProjectSettings.getShadingModel() (0 = Blinn-Phong, 1 = Gouraud; 2432 bytes total)
 } u_Lights;
 
 // 128 bytes: exactly the maxPushConstantsSize every Vulkan implementation guarantees.
@@ -62,6 +64,75 @@ layout(push_constant) uniform MeshPushConstants {
     ivec4 texIndices;  // bindless slots: x = albedo, y = normal, z = specular/roughness, w = lightmap/AO (-1 = channel absent)
     ivec4 texIndices2; // x = emissive slot, y = bone palette slot, z = camera view (0 = editor, 1 = camera preview), w = unused
 } u_PushConstants;
+
+// Adds one light's Lambert diffuse and Blinn-Phong specular, identical to blinn_phong.frag
+void accumulateLight(vec3 N, vec3 V, vec3 L, vec3 radiance, float specularStrength, float shininess,
+                     inout vec3 diffuse, inout vec3 specular) {
+    float diff = max(dot(N, L), 0.0);
+    diffuse += diff * radiance;
+    if (diff > 0.0 && specularStrength > 0.0) {
+        vec3 H = normalize(L + V);
+        specular += pow(max(dot(N, H), 0.0), shininess) * specularStrength * radiance;
+    }
+}
+
+// Gouraud (per-vertex) lighting: ambient + Lambert diffuse + Blinn-Phong specular over the same lights, attenuation
+// and spot cones as blinn_phong.frag, evaluated once per vertex and interpolated across the triangle. A vertex cannot
+// sample textures, so normal, specular/roughness and lightmap maps are skipped (scalar material values only) and the
+// sun is unshadowed: the fixed-function look. Two-sided like the fragment path: there is no face normal per vertex,
+// so a normal pointing away from the camera is turned toward it, which lights single-sided cards from behind.
+// Must stay identical in blinn_phong.vert and blinn_phong_skinned.vert.
+vec3 computeGouraudLight(vec3 worldPos, vec3 worldNormal) {
+    vec3 eyePos = (u_PushConstants.texIndices2.z == 1) ? u_Lights.previewViewPos.xyz : u_Lights.viewPos.xyz;
+    vec3 toEye = eyePos - worldPos;
+    vec3 V = (dot(toEye, toEye) > 1e-12) ? normalize(toEye) : vec3(0.0, 1.0, 0.0);
+    vec3 N = (dot(worldNormal, worldNormal) > 1e-8) ? normalize(worldNormal) : vec3(0.0, 1.0, 0.0);
+    if (dot(N, V) < 0.0) N = -N;
+
+    float specularStrength = u_PushConstants.surface.x;
+    float roughness = clamp(u_PushConstants.surface.y, 0.0, 1.0);
+    float shininess = exp2(10.0 * (1.0 - roughness) + 1.0);
+
+    vec3 diffuse = vec3(0.0);
+    vec3 specular = vec3(0.0);
+
+    if (u_Lights.numLights.x > 0.5) {
+        vec3 L = normalize(-u_Lights.dirLight.direction.xyz);
+        accumulateLight(N, V, L, u_Lights.dirLight.color.rgb * u_Lights.dirLight.color.a, specularStrength, shininess, diffuse, specular);
+    }
+
+    int pointCount = min(int(u_Lights.numLights.y), 32);
+    for (int i = 0; i < pointCount; i++) {
+        PointLight light = u_Lights.pointLights[i];
+        vec3 lightVector = light.position.xyz - worldPos;
+        float dist = length(lightVector);
+        vec3 L = normalize(lightVector);
+        float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
+        accumulateLight(N, V, L, light.color.rgb * light.color.a * attenuation, specularStrength, shininess, diffuse, specular);
+    }
+
+    int spotCount = min(int(u_Lights.numLights.z), 8);
+    for (int i = 0; i < spotCount; i++) {
+        SpotLight light = u_Lights.spotLights[i];
+        vec3 lightVector = light.position.xyz - worldPos;
+        float dist = length(lightVector);
+        vec3 L = normalize(lightVector);
+        float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
+
+        vec3 spotDir = normalize(-light.direction.xyz);
+        float theta = dot(L, spotDir);
+        float innerCutoff = light.position.w > 0.0 ? light.position.w : 0.93;
+        float outerCutoff = light.direction.w > 0.0 ? light.direction.w : 0.82;
+        attenuation *= clamp((theta - outerCutoff) / max(innerCutoff - outerCutoff, 0.0001), 0.0, 1.0);
+
+        accumulateLight(N, V, L, light.color.rgb * light.color.a * attenuation, specularStrength, shininess, diffuse, specular);
+    }
+
+    // Same ambient floor as the fragment path. Specular is folded into the light color, so the fragment stage's
+    // albedo multiply tints highlights (fixed-function GL_MODULATE behaviour)
+    vec3 ambient = max(u_Lights.dirLight.color.rgb * 0.35, u_Lights.ambientColor.rgb);
+    return ambient + diffuse + specular;
+}
 
 void main() {
     vec4 worldPos = u_PushConstants.model * vec4(aPos, 1.0);
@@ -80,6 +151,10 @@ void main() {
     vColor = aColor;
 
     vLightSpacePos = u_Lights.lightSpaceMatrix * worldPos;
+
+    // Lighting is only needed by the lit pass in Gouraud mode; shadow blob and shadow map depth draws skip it
+    v_GouraudLightColor = (u_Lights.shadingModel > 0.5 && u_PushConstants.params.x < 0.5)
+                        ? computeGouraudLight(worldPos.xyz, vNormal) : vec3(0.0);
 
     // Shadow map depth pass renders the same geometry from the directional light
     vec4 cameraClip = (u_PushConstants.texIndices2.z == 1) ? u_Lights.previewViewProj * worldPos

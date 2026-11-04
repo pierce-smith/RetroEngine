@@ -6,6 +6,7 @@ import com.retro.engine.editor.EditorTheme;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.EditorWorkspace.ModalState;
 import com.retro.engine.editor.panels.EngineConsolePanel;
+import com.retro.engine.graphics.ShadingModel;
 import com.retro.engine.ui.UIGeometryBatch;
 import com.retro.engine.ui.UISoundPlayer;
 import com.retro.engine.ui.UISoundPlayer.UISound;
@@ -13,18 +14,20 @@ import com.retro.engine.ui.UISoundPlayer.UISound;
 import java.io.File;
 
 /**
- * "File > Project Settings..." modal: global render environment for the active project (ground shadow blobs,
- * distance fog, ambient light). Edits apply live to the workspace's {@link ProjectSettings}, which
+ * "File > Project Settings..." modal: global render environment for the active project (shading model, ground shadow
+ * blobs, distance fog, ambient light). Edits apply live to the workspace's {@link ProjectSettings}, which
  * {@code SceneRenderPipeline} reads every frame; SAVE writes ProjectSettings.bin and CANCEL restores the values the
  * modal opened with. Rendering and hit-testing share the layout constants below.
  *
- * <p>Sliders drag on press; the value well to the right of a slider opens a prompt for an exact number. Rendering
+ * <p>Sliders drag on press; the value well to the right of a slider opens a prompt for an exact number. The shading
+ * model dropdown opens a list drawn over the rows below it; while it is open, clicks go to the list (a click elsewhere
+ * just closes it). Rendering
  * formats numbers into a reused StringBuilder, so an open modal adds no per-frame allocation.
  */
 public final class ProjectSettingsOverlay {
 
     private static final float CARD_X0 = -0.56f, CARD_X1 = 0.56f;
-    private static final float CARD_Y0 = -0.64f, CARD_Y1 = 0.58f;
+    private static final float CARD_Y0 = -0.64f, CARD_Y1 = 0.74f;
 
     private static final float LABEL_X = -0.52f;
     private static final float CONTROL_X0 = -0.16f;
@@ -35,6 +38,8 @@ public final class ProjectSettingsOverlay {
     private static final float SWATCH_W = 0.07f;
 
     // Row centers, top to bottom
+    private static final float SECTION_SHADING_Y = 0.59f;
+    private static final float SHADING_MODEL_Y = 0.52f;
     private static final float SECTION_SHADOW_Y = 0.43f;
     private static final float BLOBS_Y = 0.36f;
     private static final float SECTION_FOG_Y = 0.27f;
@@ -71,6 +76,10 @@ public final class ProjectSettingsOverlay {
 
     private static int draggingSlider = NONE;
 
+    private static final ShadingModel[] SHADING_MODELS = ShadingModel.values();
+    private static final float DROPDOWN_X0 = CONTROL_X0, DROPDOWN_X1 = TRACK_X1;
+    private static boolean shadingDropdownOpen = false;
+
     private static final StringBuilder valueSb = new StringBuilder(16);
 
     private ProjectSettingsOverlay() {}
@@ -81,6 +90,7 @@ public final class ProjectSettingsOverlay {
         openedWith.copyRenderSettingsFrom(workspace.getProjectSettings());
         dirty = false;
         draggingSlider = NONE;
+        shadingDropdownOpen = false;
         setStatus("", false);
         workspace.getOverlayManager().setActiveModal(ModalState.PROJECT_SETTINGS);
     }
@@ -102,6 +112,9 @@ public final class ProjectSettingsOverlay {
 
         UIGeometryBatch.addRoundedQuad(buffer, CLOSE_X0, CLOSE_Y0, CLOSE_X1, CLOSE_Y1, EditorTheme.RADIUS_SMALL, EditorTheme.RED, 0.90f);
         centeredTextIn(buffer, "X", CLOSE_X0, CLOSE_X1, (CLOSE_Y0 + CLOSE_Y1) * 0.5f, 0.9f, EditorTheme.TEXT);
+
+        sectionHeader(buffer, "SHADING", SECTION_SHADING_Y);
+        dropdownField(buffer, "GLOBAL SHADING MODEL", SHADING_MODEL_Y, s.getShadingModel(), hoverX, hoverY);
 
         sectionHeader(buffer, "SHADOWS", SECTION_SHADOW_Y);
         toggleRow(buffer, "GROUND SHADOW BLOBS", BLOBS_Y, s.shadowBlobsEnabled, hoverX, hoverY);
@@ -129,6 +142,53 @@ public final class ProjectSettingsOverlay {
         centeredTextIn(buffer, "CANCEL", CANCEL_X0, CANCEL_X1, (ACTION_Y0 + ACTION_Y1) * 0.5f, 0.9f, EditorTheme.TEXT);
         UIGeometryBatch.addRoundedQuad(buffer, SAVE_X0, ACTION_Y0, SAVE_X1, ACTION_Y1, EditorTheme.RADIUS_SMALL, EditorTheme.ACCENT, 1.0f);
         centeredTextIn(buffer, "SAVE", SAVE_X0, SAVE_X1, (ACTION_Y0 + ACTION_Y1) * 0.5f, 0.9f, EditorTheme.TEXT);
+
+        // Last, so the open list draws over the rows beneath it
+        if (shadingDropdownOpen) dropdownList(buffer, s.getShadingModel(), hoverX, hoverY);
+    }
+
+    private static void dropdownField(UIGeometryBatch.Buffer buffer, String label, float midY, ShadingModel current, float hoverX, float hoverY) {
+        rowLabel(buffer, label, midY, true);
+        float y0 = midY - ROW_H * 0.5f, y1 = midY + ROW_H * 0.5f;
+        boolean hot = shadingDropdownOpen || inRect(hoverX, hoverY, DROPDOWN_X0, y0, DROPDOWN_X1, y1);
+        UIGeometryBatch.addRoundedCard(buffer, DROPDOWN_X0, y0, DROPDOWN_X1, y1, EditorTheme.RADIUS_SMALL,
+            EditorTheme.SURFACE_SUNKEN, hot ? EditorTheme.ACCENT : EditorTheme.BORDER_STRONG, 1.0f);
+        UIGeometryBatch.addBoundedText(buffer, current.displayName(), DROPDOWN_X0 + 0.016f, midY + 0.82f * 0.009f,
+            DROPDOWN_X1 - 0.05f, 0.82f, EditorTheme.TEXT, 1.0f);
+        centeredTextIn(buffer, shadingDropdownOpen ? "^" : "v", DROPDOWN_X1 - 0.045f, DROPDOWN_X1 - 0.005f, midY, 0.82f, EditorTheme.TEXT_MUTED);
+    }
+
+    private static void dropdownList(UIGeometryBatch.Buffer buffer, ShadingModel current, float hoverX, float hoverY) {
+        float listY1 = dropdownOptionY1(0), listY0 = dropdownOptionY1(SHADING_MODELS.length);
+        UIGeometryBatch.addRoundedCard(buffer, DROPDOWN_X0, listY0, DROPDOWN_X1, listY1, EditorTheme.RADIUS_SMALL,
+            EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
+        for (int i = 0; i < SHADING_MODELS.length; i++) {
+            ShadingModel m = SHADING_MODELS[i];
+            float y1 = dropdownOptionY1(i), y0 = y1 - ROW_H, midY = (y0 + y1) * 0.5f;
+            if (m == current) {
+                UIGeometryBatch.addRoundedQuad(buffer, DROPDOWN_X0 + 0.004f, y0 + 0.004f, DROPDOWN_X1 - 0.004f, y1 - 0.004f,
+                    EditorTheme.RADIUS_SMALL, EditorTheme.ACCENT, 0.85f);
+            } else if (inRect(hoverX, hoverY, DROPDOWN_X0, y0, DROPDOWN_X1, y1)) {
+                UIGeometryBatch.addRoundedQuad(buffer, DROPDOWN_X0 + 0.004f, y0 + 0.004f, DROPDOWN_X1 - 0.004f, y1 - 0.004f,
+                    EditorTheme.RADIUS_SMALL, EditorTheme.BORDER, 1.0f);
+            }
+            UIGeometryBatch.addBoundedText(buffer, m.displayName(), DROPDOWN_X0 + 0.016f, midY + 0.82f * 0.009f,
+                DROPDOWN_X1 - 0.01f, 0.82f, EditorTheme.TEXT, 1.0f);
+        }
+    }
+
+    /** Top edge of dropdown option {@code i}; the list hangs directly below the field. */
+    private static float dropdownOptionY1(int i) {
+        return SHADING_MODEL_Y - ROW_H * 0.5f - 0.006f - i * ROW_H;
+    }
+
+    /** Index of the dropdown option under the point, or NONE. */
+    private static int dropdownOptionAt(float x, float y) {
+        for (int i = 0; i < SHADING_MODELS.length; i++) {
+            float y1 = dropdownOptionY1(i);
+            if (inRect(x, y, DROPDOWN_X0, y1 - ROW_H, DROPDOWN_X1, y1)) return i;
+        }
+        return NONE;
     }
 
     private static void sectionHeader(UIGeometryBatch.Buffer buffer, String title, float midY) {
@@ -205,6 +265,25 @@ public final class ProjectSettingsOverlay {
     public static void handleClick(float ndcX, float ndcY, EditorWorkspace workspace) {
         if (workspace == null) return;
         ProjectSettings s = workspace.getProjectSettings();
+
+        // An open list owns the click: pick an option, or close without acting on whatever lies beneath
+        if (shadingDropdownOpen) {
+            shadingDropdownOpen = false;
+            int option = dropdownOptionAt(ndcX, ndcY);
+            if (option != NONE) {
+                UISoundPlayer.play(UISound.CLICK);
+                if (s.getShadingModel() != SHADING_MODELS[option]) {
+                    s.setShadingModel(SHADING_MODELS[option]);
+                    markDirty();
+                }
+            }
+            return;
+        }
+        if (inRect(ndcX, ndcY, DROPDOWN_X0, SHADING_MODEL_Y - ROW_H * 0.5f, DROPDOWN_X1, SHADING_MODEL_Y + ROW_H * 0.5f)) {
+            UISoundPlayer.play(UISound.CLICK);
+            shadingDropdownOpen = true;
+            return;
+        }
 
         if (inRect(ndcX, ndcY, CLOSE_X0, CLOSE_Y0, CLOSE_X1, CLOSE_Y1) || inRect(ndcX, ndcY, CANCEL_X0, ACTION_Y0, CANCEL_X1, ACTION_Y1)) {
             UISoundPlayer.play(UISound.CLOSE_MODAL);
@@ -299,6 +378,7 @@ public final class ProjectSettingsOverlay {
 
     private static void close(EditorWorkspace workspace) {
         draggingSlider = NONE;
+        shadingDropdownOpen = false;
         dirty = false;
         workspace.getOverlayManager().setActiveModal(ModalState.NONE);
     }

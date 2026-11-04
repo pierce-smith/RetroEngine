@@ -10,6 +10,7 @@ layout(location = 5) in vec3 vBitangent;
 layout(location = 6) in float vViewDist;
 layout(location = 7) in vec4 vLightSpacePos;
 layout(location = 8) in vec2 vLightmapUV;
+layout(location = 9) in vec3 v_GouraudLightColor; // per-vertex lighting, read only in Gouraud mode
 
 layout(location = 0) out vec4 outFragColor;
 
@@ -44,7 +45,8 @@ layout(std140, set = 0, binding = 0) uniform LightBuffer {
     vec4 previewViewPos;   // byte offset 2368: xyz = that camera's world position
     vec4 ambientColor;     // byte offset 2384: rgb = ProjectSettings ambient color * intensity
     vec4 fogColorDensity;  // byte offset 2400: rgb = fog color, w = opacity at fog end (1 = fog on, 0 = off)
-    vec4 fogParams;        // byte offset 2416: x = fog start, y = fog end, z = ramp exponent (2432 bytes total)
+    vec3 fogParams;        // byte offset 2416: x = fog start, y = fog end, z = ramp exponent
+    float shadingModel;    // byte offset 2428: u_ShadingModel, ProjectSettings.getShadingModel() (0 = Blinn-Phong, 1 = Gouraud; 2432 bytes total)
 } u_Lights;
 
 // Shared linear/repeat sampler for every material channel
@@ -181,65 +183,75 @@ void main() {
         if (dot(faceN, V) < 0.0) faceN = -faceN;
         if (dot(geomN, faceN) < 0.0) geomN = -geomN;
     }
-    vec3 N = computeShadingNormal(geomN);
+    // u_ShadingModel (ProjectSettings.getShadingModel()): 0 = per-pixel Blinn-Phong, 1 = per-vertex Gouraud
+    bool gouraud = u_Lights.shadingModel > 0.5;
+    vec3 N = geomN;
+    vec3 finalRGB;
 
-    // Specular/roughness map: R = specular mask, G = roughness multiplier (absent map = scalar material values)
-    vec4 specSample = sampleChannel(u_PushConstants.texIndices.z, vTexCoord, vec4(1.0));
-    float specularStrength = u_PushConstants.surface.x * specSample.r;
-    float roughness = clamp(u_PushConstants.surface.y * specSample.g, 0.0, 1.0);
-    float shininess = exp2(10.0 * (1.0 - roughness) + 1.0); // 2 (rough) .. 2048 (mirror-like)
+    if (gouraud) {
+        // The vertex stage already lit the surface; albedo modulates the interpolated light color
+        finalRGB = baseColor.rgb * v_GouraudLightColor;
+    } else {
+        N = computeShadingNormal(geomN);
 
-    // Lightmap / AO on the second UV set modulates the ambient (indirect) term
-    vec3 lightmap = sampleChannel(u_PushConstants.texIndices.w, vLightmapUV, vec4(1.0)).rgb;
+        // Specular/roughness map: R = specular mask, G = roughness multiplier (absent map = scalar material values)
+        vec4 specSample = sampleChannel(u_PushConstants.texIndices.z, vTexCoord, vec4(1.0));
+        float specularStrength = u_PushConstants.surface.x * specSample.r;
+        float roughness = clamp(u_PushConstants.surface.y * specSample.g, 0.0, 1.0);
+        float shininess = exp2(10.0 * (1.0 - roughness) + 1.0); // 2 (rough) .. 2048 (mirror-like)
 
-    // Every active light accumulates into the same diffuse/specular sums in this single forward pass
-    vec3 diffuse = vec3(0.0);
-    vec3 specular = vec3(0.0);
+        // Lightmap / AO on the second UV set modulates the ambient (indirect) term
+        vec3 lightmap = sampleChannel(u_PushConstants.texIndices.w, vLightmapUV, vec4(1.0)).rgb;
 
-    if (u_Lights.numLights.x > 0.5) {
-        // Directional Light: both biases use the geometric normal so normal-map detail never causes acne
-        vec3 L = normalize(-u_Lights.dirLight.direction.xyz);
-        float shadow = computeDirectionalShadow(vFragPos, geomN, clamp(dot(geomN, L), 0.0, 1.0));
-        vec3 radiance = u_Lights.dirLight.color.rgb * u_Lights.dirLight.color.a * shadow;
-        accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
+        // Every active light accumulates into the same diffuse/specular sums in this single forward pass
+        vec3 diffuse = vec3(0.0);
+        vec3 specular = vec3(0.0);
+
+        if (u_Lights.numLights.x > 0.5) {
+            // Directional Light: both biases use the geometric normal so normal-map detail never causes acne
+            vec3 L = normalize(-u_Lights.dirLight.direction.xyz);
+            float shadow = computeDirectionalShadow(vFragPos, geomN, clamp(dot(geomN, L), 0.0, 1.0));
+            vec3 radiance = u_Lights.dirLight.color.rgb * u_Lights.dirLight.color.a * shadow;
+            accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
+        }
+
+        int pointCount = min(int(u_Lights.numLights.y), 32);
+        for (int i = 0; i < pointCount; i++) {
+            // Point Light
+            PointLight light = u_Lights.pointLights[i];
+            vec3 lightVector = light.position.xyz - vFragPos;
+            float dist = length(lightVector);
+            vec3 L = normalize(lightVector);
+            float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
+            vec3 radiance = light.color.rgb * light.color.a * attenuation;
+            accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
+        }
+
+        int spotCount = min(int(u_Lights.numLights.z), 8);
+        for (int i = 0; i < spotCount; i++) {
+            // Spot Light
+            SpotLight light = u_Lights.spotLights[i];
+            vec3 lightVector = light.position.xyz - vFragPos;
+            float dist = length(lightVector);
+            vec3 L = normalize(lightVector);
+            float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
+
+            vec3 spotDir = normalize(-light.direction.xyz);
+            float theta = dot(L, spotDir);
+            float innerCutoff = light.position.w > 0.0 ? light.position.w : 0.93;
+            float outerCutoff = light.direction.w > 0.0 ? light.direction.w : 0.82;
+            float spotIntensity = clamp((theta - outerCutoff) / max(innerCutoff - outerCutoff, 0.0001), 0.0, 1.0);
+            attenuation *= spotIntensity;
+
+            vec3 radiance = light.color.rgb * light.color.a * attenuation;
+            accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
+        }
+
+        // Project ambient is the floor; a bright sun lifts it (dirLight.color is zero when there is no sun)
+        vec3 ambient = max(u_Lights.dirLight.color.rgb * 0.35, u_Lights.ambientColor.rgb) * lightmap;
+
+        finalRGB = (ambient + diffuse) * baseColor.rgb + specular;
     }
-
-    int pointCount = min(int(u_Lights.numLights.y), 32);
-    for (int i = 0; i < pointCount; i++) {
-        // Point Light
-        PointLight light = u_Lights.pointLights[i];
-        vec3 lightVector = light.position.xyz - vFragPos;
-        float dist = length(lightVector);
-        vec3 L = normalize(lightVector);
-        float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
-        vec3 radiance = light.color.rgb * light.color.a * attenuation;
-        accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
-    }
-
-    int spotCount = min(int(u_Lights.numLights.z), 8);
-    for (int i = 0; i < spotCount; i++) {
-        // Spot Light
-        SpotLight light = u_Lights.spotLights[i];
-        vec3 lightVector = light.position.xyz - vFragPos;
-        float dist = length(lightVector);
-        vec3 L = normalize(lightVector);
-        float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
-
-        vec3 spotDir = normalize(-light.direction.xyz);
-        float theta = dot(L, spotDir);
-        float innerCutoff = light.position.w > 0.0 ? light.position.w : 0.93;
-        float outerCutoff = light.direction.w > 0.0 ? light.direction.w : 0.82;
-        float spotIntensity = clamp((theta - outerCutoff) / max(innerCutoff - outerCutoff, 0.0001), 0.0, 1.0);
-        attenuation *= spotIntensity;
-
-        vec3 radiance = light.color.rgb * light.color.a * attenuation;
-        accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
-    }
-
-    // Project ambient is the floor; a bright sun lifts it (dirLight.color is zero when there is no sun)
-    vec3 ambient = max(u_Lights.dirLight.color.rgb * 0.35, u_Lights.ambientColor.rgb) * lightmap;
-
-    vec3 finalRGB = (ambient + diffuse) * baseColor.rgb + specular;
 
     // Hemisphere Sky/Ground Environment Reflection Pass
     float reflectStrength = u_PushConstants.params.z;

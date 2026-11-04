@@ -1,8 +1,8 @@
 package com.retro.engine.graphics;
 
 /**
- * Per-project global render environment the lit shaders read alongside {@link SceneLights}: ambient light, distance
- * fog (which also sets the draw distance) and the ground shadow blob toggle. Owned by {@link SceneLights#environment()} so it crosses the RHI
+ * Per-project global render environment the lit shaders read alongside {@link SceneLights}: the shading model, ambient
+ * light, distance fog (which also sets the draw distance) and the ground shadow blob toggle. Owned by {@link SceneLights#environment()} so it crosses the RHI
  * boundary with the lights it shades, and filled from {@code ProjectSettings} each frame with plain field copies
  * (no allocation).
  *
@@ -19,6 +19,10 @@ public final class RenderEnvironment {
     public static final float DEFAULT_FOG_R = 0.12f, DEFAULT_FOG_G = 0.13f, DEFAULT_FOG_B = 0.16f;
     public static final float DEFAULT_AMBIENT_R = 0.35f, DEFAULT_AMBIENT_G = 0.35f, DEFAULT_AMBIENT_B = 0.38f;
     public static final float DEFAULT_AMBIENT_INTENSITY = 1.0f;
+    public static final ShadingModel DEFAULT_SHADING_MODEL = ShadingModel.BLINN_PHONG;
+
+    /** Per-vertex (Gouraud) or per-pixel (Blinn-Phong) lighting for every lit draw. Never null. */
+    public ShadingModel shadingModel = DEFAULT_SHADING_MODEL;
 
     /** Downward-raycast ground shadow blobs under every draw (a fallback for scenes without shadow-mapped lighting). */
     public boolean shadowBlobsEnabled = DEFAULT_SHADOW_BLOBS;
@@ -36,6 +40,11 @@ public final class RenderEnvironment {
 
     public float ambientR = DEFAULT_AMBIENT_R, ambientG = DEFAULT_AMBIENT_G, ambientB = DEFAULT_AMBIENT_B;
     public float ambientIntensity = DEFAULT_AMBIENT_INTENSITY;
+
+    /** {@link ShadingModel#shaderValue()} of the current model; a null model falls back to the default. */
+    public float shadingModelShaderValue() {
+        return (shadingModel != null ? shadingModel : DEFAULT_SHADING_MODEL).shaderValue();
+    }
 
     /** Fog opacity at {@link #fogEnd} for the shaders: 1 when fog is on, 0 (fog off) otherwise. */
     public float fogOpacity() {
@@ -68,6 +77,7 @@ public final class RenderEnvironment {
     }
 
     public void setDefaults() {
+        shadingModel = DEFAULT_SHADING_MODEL;
         shadowBlobsEnabled = DEFAULT_SHADOW_BLOBS;
         fogEnabled = DEFAULT_FOG_ENABLED;
         fogStart = DEFAULT_FOG_START;
@@ -79,6 +89,7 @@ public final class RenderEnvironment {
     }
 
     public void copyFrom(RenderEnvironment other) {
+        shadingModel = other.shadingModel;
         shadowBlobsEnabled = other.shadowBlobsEnabled;
         fogEnabled = other.fogEnabled;
         fogStart = other.fogStart;

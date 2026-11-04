@@ -1,7 +1,7 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// Lit 3D scene pass: 22-float static / 30-float skinned vertex strides, multi-light Blinn-Phong shading
+// Lit 3D scene pass: 22-float static / 30-float skinned vertex strides, multi-light Blinn-Phong or Gouraud shading
 // (Directional, Point, Spot), tangent-space normal mapping, specular/roughness, lightmap/AO and emissive
 // channels, 3x3 PCF directional shadows, the procedural infinite grid, and ground shadow blobs.
 //
@@ -45,7 +45,7 @@ struct Uniforms {
     float4 viewPos;           // 320: xyz = camera world position
     uint pickId;              // 336: Color-ID pick value (read only by entity_id.metal)
     constant LocalLights* localLights; // 344: gpuAddress of this frame's LocalLights block
-    float4 fogParams;         // 352: x = fog start, y = fog end, z = ramp exponent (368 bytes total)
+    float4 fogParams;         // 352: x = fog start, y = fog end, z = ramp exponent, w = shading model (0 = Blinn-Phong, 1 = Gouraud; 368 bytes total)
 };
 
 // 64-byte argument buffer entry written by MetalPassEncoder (MetalUniformStream.DRAW_ARGS_*).
@@ -78,6 +78,7 @@ struct VertexOut {
     float3 tangent;
     float3 bitangent;
     float viewDist;
+    float3 gouraudLightColor; // Gouraud mode only: per-vertex ambient + diffuse + specular
     uint drawIndex [[flat]];
 };
 
@@ -141,6 +142,75 @@ static float3x3 normalMatrixOf(float4x4 model) {
     float det = dot(c0, r0);
     if (det == 0.0) return float3x3(c0, c1, c2);
     return float3x3(r0, cross(c2, c0), cross(c0, c1)) * (1.0 / det);
+}
+
+// Adds one light's Lambert diffuse and Blinn-Phong specular. Specular is gated on the lit hemisphere so back faces
+// never pick up highlights.
+static void accumulateLight(float3 N, float3 V, float3 L, float3 radiance, float specularStrength, float shininess,
+                            thread float3& diffuse, thread float3& specular) {
+    float diff = max(dot(N, L), 0.0);
+    diffuse += diff * radiance;
+    if (diff > 0.0 && specularStrength > 0.0) {
+        float3 H = normalize(L + V);
+        specular += pow(max(dot(N, H), 0.0), shininess) * specularStrength * radiance;
+    }
+}
+
+// Gouraud (per-vertex) lighting, matching blinn_phong.vert's computeGouraudLight: ambient + Lambert diffuse +
+// Blinn-Phong specular over the same lights and attenuation as fragmentMain, evaluated once per vertex. A vertex cannot
+// sample textures, so normal, specular/roughness and lightmap maps are skipped (scalar material values only) and the
+// sun is unshadowed. Two-sided: a normal pointing away from the camera is turned toward it.
+static float3 computeGouraudLight(float3 worldPos, float3 worldNormal, constant Uniforms& u) {
+    float3 toEye = u.viewPos.xyz - worldPos;
+    float3 V = (dot(toEye, toEye) > 1e-12) ? normalize(toEye) : float3(0.0, 1.0, 0.0);
+    float3 N = (dot(worldNormal, worldNormal) > 1e-8) ? normalize(worldNormal) : float3(0.0, 1.0, 0.0);
+    if (dot(N, V) < 0.0) N = -N;
+
+    float specularStrength = u.surface.x;
+    float roughness = clamp(u.surface.y, 0.0, 1.0);
+    float shininess = exp2(10.0 * (1.0 - roughness) + 1.0);
+
+    float3 diffuse = float3(0.0);
+    float3 specular = float3(0.0);
+
+    if (u.numLights.x > 0.5) {
+        float3 L = normalize(-u.dirLight.xyz);
+        accumulateLight(N, V, L, u.dirLightColor.rgb * u.dirLight.w, specularStrength, shininess, diffuse, specular);
+    }
+
+    constant LocalLights& localLights = *u.localLights;
+
+    int pointCount = min(int(u.numLights.y), 32);
+    for (int i = 0; i < pointCount; i++) {
+        constant PointLight& light = localLights.pointLights[i];
+        float3 lightVector = light.position.xyz - worldPos;
+        float dist = length(lightVector);
+        float3 L = normalize(lightVector);
+        float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
+        accumulateLight(N, V, L, light.color.rgb * light.color.a * attenuation, specularStrength, shininess, diffuse, specular);
+    }
+
+    int spotCount = min(int(u.numLights.z), 8);
+    for (int i = 0; i < spotCount; i++) {
+        constant SpotLight& light = localLights.spotLights[i];
+        float3 lightVector = light.position.xyz - worldPos;
+        float dist = length(lightVector);
+        float3 L = normalize(lightVector);
+        float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
+
+        float3 spotDir = normalize(-light.direction.xyz);
+        float theta = dot(L, spotDir);
+        float innerCutoff = 0.93;
+        float outerCutoff = 0.82;
+        attenuation *= clamp((theta - outerCutoff) / (innerCutoff - outerCutoff), 0.0, 1.0);
+
+        accumulateLight(N, V, L, light.color.rgb * light.color.a * attenuation, specularStrength, shininess, diffuse, specular);
+    }
+
+    // Same ambient floor as fragmentMain. Specular is folded into the light color, so the fragment stage's albedo
+    // multiply tints highlights (fixed-function GL_MODULATE behaviour)
+    float3 ambient = max(u.dirLightColor.rgb * 0.35, u.ambientColor.rgb);
+    return ambient + diffuse + specular;
 }
 
 vertex VertexOut vertexMain(uint vertexID [[vertex_id]],
@@ -211,19 +281,11 @@ vertex VertexOut vertexMain(uint vertexID [[vertex_id]],
     out.viewDist = out.position.w;
     out.drawIndex = drawIndex;
 
-    return out;
-}
+    // Lighting is only needed by lit meshes in Gouraud mode; shadow blobs and the procedural grid skip it
+    bool gouraudLit = uniforms.fogParams.w > 0.5 && (uniforms.passFlags & 1u) == 0u && uniforms.isUnlit == 0u;
+    out.gouraudLightColor = gouraudLit ? computeGouraudLight(out.worldPos, out.worldNormal, uniforms) : float3(0.0);
 
-// Adds one light's Lambert diffuse and Blinn-Phong specular. Specular is gated on the lit hemisphere so back faces
-// never pick up highlights.
-static void accumulateLight(float3 N, float3 V, float3 L, float3 radiance, float specularStrength, float shininess,
-                            thread float3& diffuse, thread float3& specular) {
-    float diff = max(dot(N, L), 0.0);
-    diffuse += diff * radiance;
-    if (diff > 0.0 && specularStrength > 0.0) {
-        float3 H = normalize(L + V);
-        specular += pow(max(dot(N, H), 0.0), shininess) * specularStrength * radiance;
-    }
+    return out;
 }
 
 // Distance fog from ProjectSettings. Fog end is also the draw distance (entities beyond it are culled and the scene
@@ -325,70 +387,80 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
         if (dot(faceN, V) < 0.0) faceN = -faceN;
         if (dot(geomN, faceN) < 0.0) geomN = -geomN;
     }
-    float3 N = computeShadingNormal(geomN, in, uniforms, args.normalMap, smp);
+    // Shading model (ProjectSettings.getShadingModel()) in fogParams.w: 0 = per-pixel Blinn-Phong, 1 = per-vertex Gouraud
+    bool gouraud = uniforms.fogParams.w > 0.5;
+    float3 N = geomN;
+    float3 finalRGB;
 
-    // Specular/roughness map: R = specular mask, G = roughness multiplier (absent map = scalar material values)
-    float4 specSample = ((mask & MAT_SPECULAR) != 0u) ? args.specularMap.sample(smp, in.uv) : float4(1.0);
-    float specularStrength = uniforms.surface.x * specSample.r;
-    float roughness = clamp(uniforms.surface.y * specSample.g, 0.0, 1.0);
-    float shininess = exp2(10.0 * (1.0 - roughness) + 1.0); // 2 (rough) .. 2048 (mirror-like)
+    if (gouraud) {
+        // The vertex stage already lit the surface; albedo modulates the interpolated light color
+        finalRGB = baseColor.rgb * in.gouraudLightColor;
+    } else {
+        N = computeShadingNormal(geomN, in, uniforms, args.normalMap, smp);
 
-    // Lightmap / AO on the second UV set modulates the ambient (indirect) term
-    float3 lightmap = ((mask & MAT_LIGHTMAP) != 0u) ? args.lightmap.sample(smp, in.uv2).rgb : float3(1.0);
+        // Specular/roughness map: R = specular mask, G = roughness multiplier (absent map = scalar material values)
+        float4 specSample = ((mask & MAT_SPECULAR) != 0u) ? args.specularMap.sample(smp, in.uv) : float4(1.0);
+        float specularStrength = uniforms.surface.x * specSample.r;
+        float roughness = clamp(uniforms.surface.y * specSample.g, 0.0, 1.0);
+        float shininess = exp2(10.0 * (1.0 - roughness) + 1.0); // 2 (rough) .. 2048 (mirror-like)
 
-    // Every active light accumulates into the same diffuse/specular sums in this single forward pass
-    float3 numLights = uniforms.numLights.xyz;
-    float3 diffuse = float3(0.0);
-    float3 specular = float3(0.0);
+        // Lightmap / AO on the second UV set modulates the ambient (indirect) term
+        float3 lightmap = ((mask & MAT_LIGHTMAP) != 0u) ? args.lightmap.sample(smp, in.uv2).rgb : float3(1.0);
 
-    if (numLights.x > 0.5) {
-        // Directional Light: both biases use the geometric normal so normal-map detail never causes acne
-        float3 L = normalize(-uniforms.dirLight.xyz);
-        float shadow = computeDirectionalShadow(in.worldPos, geomN, uniforms.lightSpace, clamp(dot(geomN, L), 0.0, 1.0),
-                                                uniforms.matParams.z, shadowMap, shadowSmp);
-        float3 radiance = uniforms.dirLightColor.rgb * uniforms.dirLight.w * shadow;
-        accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
+        // Every active light accumulates into the same diffuse/specular sums in this single forward pass
+        float3 numLights = uniforms.numLights.xyz;
+        float3 diffuse = float3(0.0);
+        float3 specular = float3(0.0);
+
+        if (numLights.x > 0.5) {
+            // Directional Light: both biases use the geometric normal so normal-map detail never causes acne
+            float3 L = normalize(-uniforms.dirLight.xyz);
+            float shadow = computeDirectionalShadow(in.worldPos, geomN, uniforms.lightSpace, clamp(dot(geomN, L), 0.0, 1.0),
+                                                    uniforms.matParams.z, shadowMap, shadowSmp);
+            float3 radiance = uniforms.dirLightColor.rgb * uniforms.dirLight.w * shadow;
+            accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
+        }
+
+        constant LocalLights& localLights = *uniforms.localLights;
+
+        int pointCount = min(int(numLights.y), 32);
+        for (int i = 0; i < pointCount; i++) {
+            // Point Light
+            constant PointLight& light = localLights.pointLights[i];
+            float3 lightVector = light.position.xyz - in.worldPos;
+            float dist = length(lightVector);
+            float3 L = normalize(lightVector);
+            float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
+            float3 radiance = light.color.rgb * light.color.a * attenuation;
+            accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
+        }
+
+        int spotCount = min(int(numLights.z), 8);
+        for (int i = 0; i < spotCount; i++) {
+            // Spot Light
+            constant SpotLight& light = localLights.spotLights[i];
+            float3 lightVector = light.position.xyz - in.worldPos;
+            float dist = length(lightVector);
+            float3 L = normalize(lightVector);
+            float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
+
+            float3 spotDir = normalize(-light.direction.xyz);
+            float theta = dot(L, spotDir);
+            float innerCutoff = 0.93;
+            float outerCutoff = 0.82;
+            float spotIntensity = clamp((theta - outerCutoff) / (innerCutoff - outerCutoff), 0.0, 1.0);
+            attenuation *= spotIntensity;
+
+            float3 radiance = light.color.rgb * light.color.a * attenuation;
+            accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
+        }
+
+        // Matches blinn_phong.frag: the project ambient is the floor, and a bright sun lifts it (dirLightColor is zero
+        // when there is no sun)
+        float3 ambient = max(uniforms.dirLightColor.rgb * 0.35, uniforms.ambientColor.rgb) * lightmap;
+
+        finalRGB = (ambient + diffuse) * baseColor.rgb + specular;
     }
-
-    constant LocalLights& localLights = *uniforms.localLights;
-
-    int pointCount = min(int(numLights.y), 32);
-    for (int i = 0; i < pointCount; i++) {
-        // Point Light
-        constant PointLight& light = localLights.pointLights[i];
-        float3 lightVector = light.position.xyz - in.worldPos;
-        float dist = length(lightVector);
-        float3 L = normalize(lightVector);
-        float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
-        float3 radiance = light.color.rgb * light.color.a * attenuation;
-        accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
-    }
-
-    int spotCount = min(int(numLights.z), 8);
-    for (int i = 0; i < spotCount; i++) {
-        // Spot Light
-        constant SpotLight& light = localLights.spotLights[i];
-        float3 lightVector = light.position.xyz - in.worldPos;
-        float dist = length(lightVector);
-        float3 L = normalize(lightVector);
-        float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
-
-        float3 spotDir = normalize(-light.direction.xyz);
-        float theta = dot(L, spotDir);
-        float innerCutoff = 0.93;
-        float outerCutoff = 0.82;
-        float spotIntensity = clamp((theta - outerCutoff) / (innerCutoff - outerCutoff), 0.0, 1.0);
-        attenuation *= spotIntensity;
-
-        float3 radiance = light.color.rgb * light.color.a * attenuation;
-        accumulateLight(N, V, L, radiance, specularStrength, shininess, diffuse, specular);
-    }
-
-    // Matches blinn_phong.frag: the project ambient is the floor, and a bright sun lifts it (dirLightColor is zero
-    // when there is no sun)
-    float3 ambient = max(uniforms.dirLightColor.rgb * 0.35, uniforms.ambientColor.rgb) * lightmap;
-
-    float3 finalRGB = (ambient + diffuse) * baseColor.rgb + specular;
 
     // Hemisphere Sky/Ground Environment Reflection Pass
     if ((uniforms.passFlags & 2u) != 0u || uniforms.matParams.x > 0.0) {

@@ -1056,7 +1056,8 @@ public class VulkanGpuCache {
                 int pos = LIGHT_UBO_PREVIEW_VIEW_POS_FLOAT_INDEX;
                 floatBuf.put(pos, previewX); floatBuf.put(pos + 1, previewY); floatBuf.put(pos + 2, previewZ); floatBuf.put(pos + 3, 0.0f);
 
-                // Project render environment: premultiplied ambient, fog color + opacity (0 = off), fog start / end / ramp exponent
+                // Project render environment: premultiplied ambient, fog color + opacity (0 = off), fog start / end / ramp exponent,
+                // and the shading model in the fog params' last float (LightBuffer.shadingModel: 0 = Blinn-Phong, 1 = Gouraud)
                 RenderEnvironment env = lights.environment();
                 int amb = LIGHT_UBO_AMBIENT_FLOAT_INDEX;
                 float ambientScale = env.ambientIntensity;
@@ -1067,7 +1068,7 @@ public class VulkanGpuCache {
                 floatBuf.put(fog + 3, env.fogOpacity());
                 int fogParams = LIGHT_UBO_FOG_PARAMS_FLOAT_INDEX;
                 floatBuf.put(fogParams, env.safeFogStart()); floatBuf.put(fogParams + 1, env.safeFogEnd());
-                floatBuf.put(fogParams + 2, env.fogCurveExponent()); floatBuf.put(fogParams + 3, 0.0f);
+                floatBuf.put(fogParams + 2, env.fogCurveExponent()); floatBuf.put(fogParams + 3, env.shadingModelShaderValue());
 
                 vkUnmapMemory(vkDevice, buf.memoryHandle);
             }
