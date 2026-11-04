@@ -211,9 +211,10 @@ public class HierarchySystem {
         float sy = parentWt.sy() * tc.scaleY;
         float sz = parentWt.sz() * tc.scaleZ;
 
-        float rx = (parentWt.rx() + tc.rotX) % 360.0f;
-        float ry = (parentWt.ry() + tc.rotY) % 360.0f;
-        float rz = (parentWt.rz() + tc.rotZ) % 360.0f;
+        // Compose rotations as matrices (R_world = R_parent * R_local) in the renderer's convention; adding Euler
+        // angles is only correct for pure-yaw parents and makes children of a pitched camera tilt the wrong way.
+        float[] world = composeRotation(parentWt.rx(), parentWt.ry(), parentWt.rz(), tc.rotX, tc.rotY, tc.rotZ);
+        float rx = world[0], ry = world[1], rz = world[2];
 
         float scaledLx = tc.posX * parentWt.sx();
         float scaledLy = tc.posY * parentWt.sy();
@@ -237,31 +238,81 @@ public class HierarchySystem {
         return rotateVector(x, y, z, pitchDeg, yawDeg, rollDeg, rotScratch);
     }
 
+    /** Rotates a local vector by an entity rotation exactly as the renderers' model matrix does. */
     public float[] rotateVector(float x, float y, float z, float pitchDeg, float yawDeg, float rollDeg, float[] out) {
-        float radPitch = (float) Math.toRadians(pitchDeg);
-        float radYaw = (float) Math.toRadians(yawDeg);
-        float radRoll = (float) Math.toRadians(rollDeg);
-
-        float cp = (float) Math.cos(radPitch), sp = (float) Math.sin(radPitch);
-        float cy = (float) Math.cos(radYaw), sy = (float) Math.sin(radYaw);
-        float cr = (float) Math.cos(radRoll), sr = (float) Math.sin(radRoll);
-
-        float x1 = cr * x - sr * y;
-        float y1 = sr * x + cr * y;
-        float z1 = z;
-
-        float x2 = x1;
-        float y2 = cp * y1 - sp * z1;
-        float z2 = sp * y1 + cp * z1;
-
-        float x3 = cy * x2 + sy * z2;
-        float y3 = y2;
-        float z3 = -sy * x2 + cy * z2;
-
-        out[0] = x3;
-        out[1] = y3;
-        out[2] = z3;
+        rotationMatrix(pitchDeg, yawDeg, rollDeg, matScratchA);
+        double[] m = matScratchA;
+        out[0] = (float) (m[0] * x + m[1] * y + m[2] * z);
+        out[1] = (float) (m[3] * x + m[4] * y + m[5] * z);
+        out[2] = (float) (m[6] * x + m[7] * y + m[8] * z);
         return out;
+    }
+
+    private final double[] matScratchA = new double[9], matScratchB = new double[9], matScratchC = new double[9];
+    private final float[] eulerScratch = new float[3];
+
+    /**
+     * Row-major 3x3 of the renderers' model rotation (MetalUniformStream / VulkanPassEncoder): R = Rz(-z) * Ry(-y) * Rx(-x)
+     * with standard right-handed axis matrices. Cameras use the same matrix (SceneRenderPipeline.computeCameraView).
+     */
+    private static void rotationMatrix(float xDeg, float yDeg, float zDeg, double[] m) {
+        double ax = Math.toRadians(xDeg), ay = Math.toRadians(yDeg), az = Math.toRadians(zDeg);
+        double cx = Math.cos(ax), sx = Math.sin(ax), cy = Math.cos(ay), sy = Math.sin(ay), cz = Math.cos(az), sz = Math.sin(az);
+        m[0] = cy * cz;  m[1] = cx * sz + sx * sy * cz;  m[2] = sx * sz - cx * sy * cz;
+        m[3] = -cy * sz; m[4] = cx * cz - sx * sy * sz;  m[5] = sx * cz + cx * sy * sz;
+        m[6] = sy;       m[7] = -sx * cy;                m[8] = cx * cy;
+    }
+
+    /**
+     * World Euler angles of a child: the rotation R_parent * R_local, expressed in the engine's Euler convention. When
+     * plain addition gives the same rotation (pure-yaw parents, the common case) its familiar values are kept; otherwise
+     * the equivalent Euler solution closest to them is returned so angles stay continuous frame to frame.
+     */
+    private float[] composeRotation(float px, float py, float pz, float lx, float ly, float lz) {
+        float ax = (px + lx) % 360.0f, ay = (py + ly) % 360.0f, az = (pz + lz) % 360.0f;
+        rotationMatrix(px, py, pz, matScratchA);
+        rotationMatrix(lx, ly, lz, matScratchB);
+        double[] r = matScratchC;
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+                r[i * 3 + j] = matScratchA[i * 3] * matScratchB[j] + matScratchA[i * 3 + 1] * matScratchB[3 + j] + matScratchA[i * 3 + 2] * matScratchB[6 + j];
+            }
+        }
+        float[] out = eulerScratch;
+        rotationMatrix(ax, ay, az, matScratchA);
+        double diff = 0.0;
+        for (int i = 0; i < 9; i++) diff = Math.max(diff, Math.abs(matScratchA[i] - r[i]));
+        if (diff < 1e-5) { out[0] = ax; out[1] = ay; out[2] = az; return out; }
+
+        double sy = Math.max(-1.0, Math.min(1.0, r[6]));
+        double x1, y1, z1, x2, y2, z2;
+        y1 = Math.toDegrees(Math.asin(sy));
+        if (Math.abs(sy) < 0.99999) {
+            x1 = Math.toDegrees(Math.atan2(-r[7], r[8]));
+            z1 = Math.toDegrees(Math.atan2(-r[3], r[0]));
+            x2 = x1 + 180.0; y2 = 180.0 - y1; z2 = z1 + 180.0;
+        } else { // gimbal lock: fold roll into pitch
+            x1 = Math.toDegrees(Math.atan2(sy * r[1], r[4]));
+            z1 = 0.0;
+            x2 = x1; y2 = y1; z2 = z1;
+        }
+        double d1 = angleDist(x1, ax) + angleDist(y1, ay) + angleDist(z1, az);
+        double d2 = angleDist(x2, ax) + angleDist(y2, ay) + angleDist(z2, az);
+        boolean first = d1 <= d2;
+        out[0] = (float) nearAngle(first ? x1 : x2, ax);
+        out[1] = (float) nearAngle(first ? y1 : y2, ay);
+        out[2] = (float) nearAngle(first ? z1 : z2, az);
+        return out;
+    }
+
+    private static double angleDist(double a, double b) {
+        double d = Math.abs((a - b) % 360.0);
+        return d > 180.0 ? 360.0 - d : d;
+    }
+
+    /** a shifted by whole turns to lie within 180 degrees of the reference. */
+    private static double nearAngle(double a, double ref) {
+        return a + 360.0 * Math.round((ref - a) / 360.0);
     }
 
     public boolean hasHierarchyCycle(Entity startEntity, List<Entity> sceneEntities) {

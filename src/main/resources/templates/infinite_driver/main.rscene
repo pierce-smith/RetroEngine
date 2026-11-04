@@ -10,14 +10,13 @@ entity GameManager | pos=0,0,0 | script=Scripts/HighwayGameScript.java
 entity Sun         | pos=0,30,0 | rot=55,35,0 | light
 
 # Player car (GGBot PSX Car 03). Model nose points +Z, so it is yawed 180 to face down the road (-Z).
-entity Car         | mesh=Meshes/Car3.obj | pos=0,0,0 | rot=0,180,0 | scale=0.7,0.7,0.7 | texture=Textures/car3_red.png | vehicle | audio=Audio/Car2_Engine_Loop.ogg,loop,vol:0.6 | script=Scripts/CarDriverScript.java
+entity Car         | mesh=Meshes/Car3.obj | pos=0,0,0 | rot=0,180,0 | scale=0.7,0.7,0.7 | texture=Textures/car3_red.png | vehicle=1.35,2.5,0.32 | audio=Audio/Car2_Engine_Loop.ogg,loop,vol:0.6 | script=Scripts/CarDriverScript.java
 entity SFX_StartUp | pos=0,0.5,0 | parent=Car | audio=Audio/Car2_Engine_Start_Up.ogg,manual,vol:0.9
 entity SFX_Horn    | pos=0,0.5,0 | parent=Car | audio=Audio/Car_Horn.ogg,manual
 entity SFX_Boost   | pos=0,0.5,0 | parent=Car | audio=Audio/Car_Acceleration.ogg,manual,vol:0.8
 entity SFX_Crash   | pos=0,0.5,0 | parent=Car | audio=Audio/Car_Door_Close.ogg,manual,vol:1.6
 
 entity Main Camera | pos=0,3.4,8 | rot=12,0,0 | camera=65
-entity Music          | parent=Main Camera | audio=Audio/Music_Loop.ogg,loop,manual,vol:0.5
 entity HUD TopBar     | parent=Main Camera | uipanel=0.5,0.92,520,96,0.05,0.05,0.08,0.6
 entity HUD Score      | parent=Main Camera | uitext=0.5,0.94,40
 entity HUD Best       | parent=Main Camera | uitext=0.5,0.895,20

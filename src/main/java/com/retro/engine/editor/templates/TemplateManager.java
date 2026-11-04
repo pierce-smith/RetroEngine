@@ -230,7 +230,14 @@ public final class TemplateManager {
                             src.maxDistance = 60.0f;
                             e.addComponent(src);
                         }
-                        case "vehicle" -> e.addComponent(new VehicleControllerComponent());
+                        case "vehicle" -> { // [track,wheelBase,wheelRadius] in world units, matched to the model's wheels
+                            VehicleControllerComponent vc = new VehicleControllerComponent();
+                            if (!val.isEmpty()) {
+                                float[] v = floats(val, 3);
+                                vc.wheelTrackWidth = v[0]; vc.wheelBase = v[1]; vc.wheelRadius = v[2];
+                            }
+                            e.addComponent(vc);
+                        }
                         case "uipanel" -> { // ax,ay,w,h,r,g,b,alpha (drawn behind text)
                             float[] v = floats(val, 8);
                             UIPanel ui = new UIPanel();

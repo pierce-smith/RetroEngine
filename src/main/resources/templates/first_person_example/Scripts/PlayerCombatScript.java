@@ -48,6 +48,7 @@ public class PlayerCombatScript extends EntityScript {
     public void onStart() {
         cameraEntity = findChildCamera();
         animator = getAnimator();
+        if (animator == null) animator = findDescendantAnimator(); // arms mesh lives under the camera
         if (animator == null || animator.controller == null) {
             logWarning("No Animator controller on '" + entity.name + "'; punches will hit but not animate.");
             animator = null;
@@ -171,6 +172,25 @@ public class PlayerCombatScript extends EntityScript {
         } catch (ReflectiveOperationException ex) {
             logError("Collectible has no collect(Entity): " + ex);
         }
+    }
+
+    /** Animator on any descendant (Player -> Main Camera -> Arms), searched breadth-first by parent links. */
+    private AnimatorComponent findDescendantAnimator() {
+        if (sceneWorld == null) return null;
+        java.util.List all = sceneWorld.getSceneEntities();
+        java.util.ArrayList ids = new java.util.ArrayList();
+        ids.add(entity.id);
+        for (int k = 0; k < ids.size(); k++) {
+            String parent = (String) ids.get(k);
+            for (int i = 0; i < all.size(); i++) {
+                Entity e = (Entity) all.get(i);
+                if (!parent.equals(e.parentId)) continue;
+                AnimatorComponent a = (AnimatorComponent) e.getComponent(AnimatorComponent.class);
+                if (a != null) return a;
+                ids.add(e.id);
+            }
+        }
+        return null;
     }
 
     private Entity findChildCamera() {

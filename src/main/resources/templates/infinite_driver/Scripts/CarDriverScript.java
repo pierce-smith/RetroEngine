@@ -152,15 +152,16 @@ public class CarDriverScript extends EntityScript {
         if (trackX > limit) lat = -(trackX - limit) * 3.0f;
         if (trackX < -limit) lat = (-limit - trackX) * 3.0f;
 
-        // Heading offset that yields the target sideways speed; +X needs rotY below 180 (forward = sin(rotY), cos(rotY))
+        // Heading offset that yields the target sideways speed; the nose points along (-sin rotY, cos rotY), so
+        // +X needs rotY above 180 (positive steering turns right)
         float offset = (float) Math.toDegrees(Math.asin(Math.max(-0.6f, Math.min(0.6f, lat / speed))));
-        float turnRate = (baseYaw - offset - yaw) * yawResponse;
+        float turnRate = (baseYaw + offset - yaw) * yawResponse;
         turnRate = Math.max(-maxTurnRate, Math.min(maxTurnRate, turnRate));
         // Solver: rotY += steering * (speed / maxSpeed) * 30 * dt
         vehicle.currentSteering = turnRate / ((speed / vehicle.maxSpeed) * 30.0f);
 
         yaw += turnRate * fdt;
-        trackX += (float) Math.sin(Math.toRadians(yaw)) * speed * fdt;
+        trackX -= (float) Math.sin(Math.toRadians(yaw)) * speed * fdt;
     }
 
     @Override

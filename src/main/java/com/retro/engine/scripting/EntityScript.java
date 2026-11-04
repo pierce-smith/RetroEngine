@@ -168,11 +168,13 @@ public abstract class EntityScript {
             out[0] = 0.0f; out[1] = 0.0f; out[2] = 1.0f;
             return out;
         }
+        // Matches the renderers' rotation R = Rz(-z) * Ry(-y) * Rx(-x): models face local +Z, cameras look down local -Z
         float radY = (float) Math.toRadians(t.rotY);
         float radX = (float) Math.toRadians(t.rotX);
-        out[0] = (float) (Math.sin(radY) * Math.cos(radX));
-        out[1] = (float) (-Math.sin(radX));
-        out[2] = (float) (Math.cos(radY) * Math.cos(radX));
+        float sign = (entity != null && entity.getComponent(com.retro.engine.ecs.components.Camera.class) != null) ? -1.0f : 1.0f;
+        out[0] = sign * (float) (-Math.sin(radY) * Math.cos(radX));
+        out[1] = sign * (float) Math.sin(radX);
+        out[2] = sign * (float) (Math.cos(radY) * Math.cos(radX));
         return out;
     }
 
@@ -184,10 +186,12 @@ public abstract class EntityScript {
     /** Writes the right vector (forward turned 90 degrees about Y) into {@code out[0..2]} and returns {@code out}. */
     public float[] getRight(float[] out) {
         getForward(out);
-        float fx = out[0];
-        out[0] = out[2];
+        float fx = out[0], fz = out[2];
+        float len = (float) Math.sqrt(fx * fx + fz * fz);
+        if (len < 1e-6f) len = 1.0f;
+        out[0] = -fz / len;   // forward x up, flattened: the viewer's right
         out[1] = 0.0f;
-        out[2] = -fx;
+        out[2] = fx / len;
         return out;
     }
 

@@ -18,7 +18,6 @@
     "Audio/Car_Horn.ogg",
     "Audio/Car_Acceleration.ogg",
     "Audio/Car_Door_Close.ogg",
-    "Audio/Music_Loop.ogg",
     "Scripts/CarDriverScript.java",
     "Scripts/HighwayGameScript.java"
   ]

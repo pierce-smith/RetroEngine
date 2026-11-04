@@ -75,9 +75,6 @@ public class HighwayGameScript extends EntityScript {
 
     private UIText hudScore, hudBest, hudSpeed, hudMsg, hudSub, hudControls;
     private UIPanel msgPanel;
-    private com.retro.engine.ecs.components.AudioSource music;
-    public String musicName = "Music";
-    public float musicVolume = 0.5f;
     private UIProgressBar speedBar;
 
     @Override
@@ -124,9 +121,7 @@ public class HighwayGameScript extends EntityScript {
         if (speedBar != null) speedBar.maxValue = maxSpeed;
         if (hudControls != null) hudControls.text = "A/D OR ARROWS: STEER    H: HORN    R: RESTART";
 
-        setupMusic(car);
-        logInfo("Infinite Driver: " + segCount + " road segments, " + obsCount + " obstacles, " + treeCount + " trees"
-            + (music != null ? ", music ready" : ", no music"));
+        logInfo("Infinite Driver: " + segCount + " road segments, " + obsCount + " obstacles, " + treeCount + " trees");
 
         try { best = Integer.parseInt(System.getProperty("retro.infiniteDriver.best", "0")); } catch (Exception ex) { best = 0; }
         nextRowAt = 40.0f;
@@ -149,12 +144,6 @@ public class HighwayGameScript extends EntityScript {
         if (state == READY && stateTime >= countdown) {
             state = DRIVING;
             stateTime = 0.0f;
-            if (music != null) {
-                music.loop = true;
-                music.setVolume(musicVolume);
-                music.play();
-                if (music.getSourceHandle() == 0 || music.getBufferHandle() == 0) logWarning("Music failed to load: " + music.audioAssetPath);
-            }
         }
         if (state == DRIVING) {
             runTime += dt;
@@ -301,7 +290,6 @@ public class HighwayGameScript extends EntityScript {
         state = CRASHED;
         stateTime = 0.0f;
         callCar(crashM, null);
-        if (music != null) music.setVolume(musicVolume * 0.35f);
         int score = score();
         if (score > best) {
             best = score;
@@ -344,29 +332,6 @@ public class HighwayGameScript extends EntityScript {
     private UIText text(String name) {
         Entity e = sceneWorld.findEntityByName(name);
         return e != null ? (UIText) e.getComponent(UIText.class) : null;
-    }
-
-    /**
-     * Uses the "Music" entity's AudioSource, or (older projects without one) creates one on this entity from
-     * Music_Loop.ogg next to the car's engine clip. Attenuation 0 keeps it at full volume wherever the listener is.
-     */
-    private void setupMusic(Entity car) {
-        Entity me = sceneWorld.findEntityByName(musicName);
-        music = me != null ? (com.retro.engine.ecs.components.AudioSource) me.getComponent(com.retro.engine.ecs.components.AudioSource.class) : null;
-        if (music == null) {
-            com.retro.engine.ecs.components.AudioSource engineSrc = (com.retro.engine.ecs.components.AudioSource) car.getComponent(com.retro.engine.ecs.components.AudioSource.class);
-            if (engineSrc != null && engineSrc.audioAssetPath != null && engineSrc.audioAssetPath.length() > 0) {
-                java.io.File f = new java.io.File(new java.io.File(engineSrc.audioAssetPath).getParentFile(), "Music_Loop.ogg");
-                if (f.isFile()) {
-                    music = new com.retro.engine.ecs.components.AudioSource(f.getAbsolutePath());
-                    entity.addComponent(music);
-                }
-            }
-        }
-        if (music == null) return;
-        music.playOnStart = false;
-        music.loop = true;
-        music.attenuation = 0.0f; // no distance falloff
     }
 
     /** The car's script may start after this one, so its instance is looked up lazily. */

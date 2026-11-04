@@ -159,21 +159,10 @@ public class ColliderDebugRenderer {
 
     private static void renderVehicleController(UIGeometryBatch.Buffer buffer, Transform tc, VehicleControllerComponent vc, boolean isSelected,
                                                 ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
+        float[][] mounts = com.retro.engine.physics.VehicleSuspensionSolver.computeWheelMounts(
+            tc.posX, tc.posY, tc.posZ, tc.rotY, vc, new float[4][3]);
         float radY = (float) Math.toRadians(tc.rotY);
-        float forwardX = (float) Math.sin(radY);
-        float forwardZ = (float) Math.cos(radY);
-        float rightX = (float) Math.cos(radY);
-        float rightZ = (float) -Math.sin(radY);
-
-        float halfTrack = vc.wheelTrackWidth * 0.5f;
-        float halfBase = vc.wheelBase * 0.5f;
-
-        float[][] wheelOffsets = {
-            { rightX * halfTrack + forwardX * halfBase, rightZ * halfTrack + forwardZ * halfBase },
-            { -rightX * halfTrack + forwardX * halfBase, -rightZ * halfTrack + forwardZ * halfBase },
-            { rightX * halfTrack - forwardX * halfBase, rightZ * halfTrack - forwardZ * halfBase },
-            { -rightX * halfTrack - forwardX * halfBase, -rightZ * halfTrack - forwardZ * halfBase }
-        };
+        float fx = (float) -Math.sin(radY), fz = (float) Math.cos(radY); // wheel plane: the car's forward/up plane
 
         for (int i = 0; i < 4; i++) {
             boolean grounded = vc.wheelGrounded != null && i < vc.wheelGrounded.length && vc.wheelGrounded[i];
@@ -182,18 +171,24 @@ public class ColliderDebugRenderer {
             float b = grounded ? 0.3f : 0.25f;
             float a = 0.95f;
 
-            float wx = tc.posX + wheelOffsets[i][0];
-            float wy = tc.posY;
-            float wz = tc.posZ + wheelOffsets[i][1];
+            float wx = mounts[i][0], wy = mounts[i][1], wz = mounts[i][2];
+            float compression = vc.suspensionCompression != null && i < vc.suspensionCompression.length ? vc.suspensionCompression[i] : 0.0f;
+            float centerY = wy - vc.suspensionRestLength + compression;
 
-            float rayLen = vc.suspensionRestLength + vc.wheelRadius;
-            float groundY = wy - rayLen;
+            // Suspension ray (mount to the bottom of its reach)
+            draw3DLine(buffer, wx, wy, wz, wx, wy - vc.suspensionRestLength - vc.wheelRadius, wz, 0.003f, r, g, b, a,
+                cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
 
-            // Draw Suspension Ray
-            draw3DLine(buffer, wx, wy, wz, wx, groundY, wz, 0.003f, r, g, b, a, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
-
-            // Draw Wheel Circle
-            draw3DCircle(buffer, wx, groundY + vc.wheelRadius, wz, vc.wheelRadius, 0, r, g, b, a, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+            // Wheel
+            int segments = 16;
+            float px = 0, py = 0, pz = 0;
+            for (int k = 0; k <= segments; k++) {
+                double ang = k * 2.0 * Math.PI / segments;
+                float c = (float) Math.cos(ang) * vc.wheelRadius, sn = (float) Math.sin(ang) * vc.wheelRadius;
+                float x = wx + fx * c, y = centerY + sn, z = wz + fz * c;
+                if (k > 0) draw3DLine(buffer, px, py, pz, x, y, z, 0.003f, r, g, b, a, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+                px = x; py = y; pz = z;
+            }
         }
     }
 
