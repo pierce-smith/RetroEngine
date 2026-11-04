@@ -7,8 +7,9 @@ import com.retro.engine.ecs.components.Transform;
 import com.retro.engine.ecs.components.UIPanel;
 import com.retro.engine.ecs.components.UIProgressBar;
 import com.retro.engine.ecs.components.UIText;
-import com.retro.engine.scripting.EntityScript;
 import com.retro.engine.scripting.Input;
+import com.retro.engine.scripting.framework.ScriptTask;
+import com.retro.engine.scripting.framework.SimpleEntityScript;
 import com.retro.engine.scripting.SceneManager;
 
 /**
@@ -18,7 +19,7 @@ import com.retro.engine.scripting.SceneManager;
  * rows of obstacles from the Obstacle* pool are generated procedurally, always leaving a drivable gap that narrows
  * as the speed ramps up. Hitting an obstacle ends the run; the HUD shows distance, best, speed and prompts.
  */
-public class HighwayGameScript extends EntityScript {
+public class HighwayGameScript extends SimpleEntityScript {
 
     public String carName = "Car";
     public float startSpeed = 18.0f;        // m/s
@@ -37,6 +38,8 @@ public class HighwayGameScript extends EntityScript {
     public float carHalfLength = 1.7f;
     public float countdown = 2.5f;
     public int nearMissBonus = 25;
+    public float nearMissShake = 0.15f;
+    public float autoRestartDelay = 0f;     // > 0 reloads the scene this many seconds after a crash
 
     private static final int KEY_R = 82, KEY_SPACE = 32, KEY_ENTER = 257;
     private static final int READY = 0, DRIVING = 1, CRASHED = 2;
@@ -76,12 +79,15 @@ public class HighwayGameScript extends EntityScript {
     private UIText hudScore, hudBest, hudSpeed, hudMsg, hudSub, hudControls;
     private UIPanel msgPanel;
     private UIProgressBar speedBar;
+    private final ScriptTask restartTask = new ScriptTask() {
+        public void run() { SceneManager.reloadCurrentScene(); }
+    };
 
     @Override
     public void onStart() {
-        Entity car = sceneWorld.findEntityByName(carName);
+        Entity car = findEntity(carName);
         if (car == null) { logError("HighwayGameScript: no entity named '" + carName + "'"); return; }
-        carT = (Transform) car.getComponent(Transform.class);
+        carT = car.getTransform();
         carEntity = car;
 
         java.util.List entities = sceneWorld.getSceneEntities(); // raw: Janino erases generics
@@ -256,7 +262,7 @@ public class HighwayGameScript extends EntityScript {
             if (dx < hw + carHalfWidth && Math.abs(o.posZ) < hl + carHalfLength) { crash(); return; }
             if (!obsPassed[i] && o.posZ > carHalfLength + hl) {
                 obsPassed[i] = true;
-                if (dx < hw + carHalfWidth + 0.9f) { bonus += nearMissBonus; bonusFlash = 1.0f; }
+                if (dx < hw + carHalfWidth + 0.9f) { bonus += nearMissBonus; bonusFlash = 1.0f; shakeCamera(nearMissShake, 0.15f); }
             }
             if (o.posZ > despawnZ) park(i);
         }
@@ -290,6 +296,7 @@ public class HighwayGameScript extends EntityScript {
         state = CRASHED;
         stateTime = 0.0f;
         callCar(crashM, null);
+        if (autoRestartDelay > 0.0f) runAfter(autoRestartDelay, restartTask);
         int score = score();
         if (score > best) {
             best = score;

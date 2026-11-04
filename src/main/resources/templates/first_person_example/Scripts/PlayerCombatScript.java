@@ -10,8 +10,10 @@ import com.retro.engine.ecs.SceneWorld;
 import com.retro.engine.ecs.components.AnimatorComponent;
 import com.retro.engine.ecs.components.Camera;
 import com.retro.engine.ecs.components.ScriptComponent;
-import com.retro.engine.scripting.EntityScript;
 import com.retro.engine.scripting.Input;
+import com.retro.engine.scripting.framework.ScriptTask;
+import com.retro.engine.scripting.framework.ScriptTaskQueue;
+import com.retro.engine.scripting.framework.SimpleEntityScript;
 
 /**
  * Layers combat on top of the built-in CharacterController (which keeps handling movement, mouse look and jump).
@@ -20,9 +22,10 @@ import com.retro.engine.scripting.Input;
  * <p>Left click: alternating jab.L / jab.R punches (click again mid-swing to chain a combo). Hold right click: guard.
  * Your Animator's idle state stays the entry state; at Play this script adds the punch/guard states' transitions
  * and the "PunchL", "PunchR" (triggers) and "Guard" (bool) parameters, so nothing extra needs authoring.
- * A punch that lands on a collectible within {@link #punchRange} in front of the camera collects it.
+ * A punch that lands on a collectible within {@link #punchRange} in front of the camera collects it, with a camera
+ * shake and optional spatial hit sound. The impact is scheduled with runAfter() (one reusable ScriptTask).
  */
-public class PlayerCombatScript extends EntityScript {
+public class PlayerCombatScript extends SimpleEntityScript {
 
     public String idleState = "";            // empty = the Animator's entry/current state (your idle)
     public String punchLeftClip = "jab.L";
@@ -35,6 +38,9 @@ public class PlayerCombatScript extends EntityScript {
     public float comboWindow = 0.45f;        // normalized swing time after which a queued punch chains
     public float returnToIdle = 0.85f;       // normalized swing time when the arms blend back to idle
     public String collectibleScriptName = "CollectibleScript.java";
+    public float hitShake = 0.25f;           // camera shake intensity on a landed punch (0 = off)
+    public String swingSound = "";           // optional, e.g. "Assets/Audio/swing.wav"
+    public String hitSound = "";             // optional, e.g. "Assets/Audio/punch_hit.wav"
 
     private static final int MOUSE_LEFT = 0, MOUSE_RIGHT = 1;
 
@@ -42,12 +48,16 @@ public class PlayerCombatScript extends EntityScript {
     private Entity cameraEntity;
     private boolean nextIsLeft = true;
     private float cooldown;
-    private float pendingHit = -1.0f;
+    private int pendingHit = ScriptTaskQueue.INVALID_HANDLE;
+    private ScriptTask impactTask;
 
     @Override
     public void onStart() {
+        impactTask = new ScriptTask() {
+            public void run() { pendingHit = ScriptTaskQueue.INVALID_HANDLE; resolvePunchHit(); }
+        };
         cameraEntity = findChildCamera();
-        animator = getAnimator();
+        animator = animator();
         if (animator == null) animator = findDescendantAnimator(); // arms mesh lives under the camera
         if (animator == null || animator.controller == null) {
             logWarning("No Animator controller on '" + entity.name + "'; punches will hit but not animate.");
@@ -65,16 +75,13 @@ public class PlayerCombatScript extends EntityScript {
 
         if (!guarding && cooldown <= 0.0f && Input.isMouseButtonPressed(MOUSE_LEFT)) {
             cooldown = punchCooldown;
-            pendingHit = punchImpactDelay;
+            if (pendingHit != ScriptTaskQueue.INVALID_HANDLE) cancelTask(pendingHit);
+            pendingHit = runAfter(punchImpactDelay, impactTask);
+            if (swingSound != null && swingSound.length() > 0) playSpatialSound(swingSound, 0.8f);
             if (animator != null) animator.setTrigger(nextIsLeft ? "PunchL" : "PunchR");
             nextIsLeft = !nextIsLeft;
         }
         if (guarding && animator != null) clearPunchTriggers(); // don't fire a buffered punch when guard drops
-
-        if (pendingHit >= 0.0f) {
-            pendingHit -= dt;
-            if (pendingHit < 0.0f) resolvePunchHit();
-        }
     }
 
     // --- Animator wiring (idempotent; the controller is rebuilt from the mesh on every scene load) ---
@@ -167,6 +174,8 @@ public class PlayerCombatScript extends EntityScript {
         ScriptComponent sc = (ScriptComponent) best.getComponent(ScriptComponent.class);
         Object inst = sc.activeScriptInstance;
         if (inst == null) return;
+        if (hitShake > 0.0f) shakeCamera(hitShake, 0.2f);
+        if (hitSound != null && hitSound.length() > 0) playSpatialSound(hitSound, 1.0f);
         try {
             inst.getClass().getMethod("collect", new Class[] { Entity.class }).invoke(inst, new Object[] { entity });
         } catch (ReflectiveOperationException ex) {

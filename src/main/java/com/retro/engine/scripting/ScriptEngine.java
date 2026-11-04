@@ -74,6 +74,11 @@ public class ScriptEngine {
     }
 
     /** Binds script source lookup to a project's Assets/ folder (null to unbind) and drops all cached classes. */
+    /** Assets/ folder of the open project (set by the editor or standalone runtime), or null when none is known. */
+    public static String getProjectAssetsRoot() {
+        return projectAssetsRoot;
+    }
+
     public static void setProjectAssetsRoot(String assetsRoot) {
         projectAssetsRoot = (assetsRoot != null && !assetsRoot.trim().isEmpty()) ? assetsRoot.trim() : null;
         clearCache();
@@ -121,6 +126,7 @@ public class ScriptEngine {
                 EntityScript script = sc.activeScriptInstance;
                 if (script == null) continue;
                 try {
+                    script.onFrameworkUpdate(deltaTime);
                     script.onUpdate(deltaTime);
                 } catch (Throwable t) {
                     disableFailedScript(entity, sc, "onUpdate", t);
@@ -204,6 +210,7 @@ public class ScriptEngine {
                     if (t instanceof VirtualMachineError && !(t instanceof StackOverflowError)) throw (VirtualMachineError) t;
                     logScriptError("[ScriptEngine] " + className + ".onDestroy() threw during hot reload on Entity '" + entity.name + "'.", t);
                 }
+                runFrameworkDestroy(previous, entity);
 
                 sc.activeScriptInstance = replacement;
                 try {
@@ -283,20 +290,34 @@ public class ScriptEngine {
     public static void destroyScripts(List<Entity> entities) {
         if (entities == null) return;
         for (int i = 0; i < entities.size(); i++) {
-            Entity entity = entities.get(i);
-            if (entity == null) continue;
-            List<Component> comps = entity.getAllComponents();
-            for (int c = 0; c < comps.size(); c++) {
-                if (!(comps.get(c) instanceof ScriptComponent sc) || sc.activeScriptInstance == null) continue;
-                EntityScript script = sc.activeScriptInstance;
-                sc.activeScriptInstance = null;
-                try {
-                    script.onDestroy();
-                } catch (Throwable t) {
-                    if (t instanceof VirtualMachineError && !(t instanceof StackOverflowError)) throw (VirtualMachineError) t;
-                    logScriptError("[ScriptEngine] " + script.getClass().getSimpleName() + ".onDestroy() threw on Entity '" + entity.name + "'.", t);
-                }
+            destroyEntityScripts(entities.get(i));
+        }
+    }
+
+    /** Runs onDestroy on every live script of one entity (e.g. one destroyed mid-play) and detaches the instances. */
+    public static void destroyEntityScripts(Entity entity) {
+        if (entity == null) return;
+        List<Component> comps = entity.getAllComponents();
+        for (int c = 0; c < comps.size(); c++) {
+            if (!(comps.get(c) instanceof ScriptComponent sc) || sc.activeScriptInstance == null) continue;
+            EntityScript script = sc.activeScriptInstance;
+            sc.activeScriptInstance = null;
+            try {
+                script.onDestroy();
+            } catch (Throwable t) {
+                if (t instanceof VirtualMachineError && !(t instanceof StackOverflowError)) throw (VirtualMachineError) t;
+                logScriptError("[ScriptEngine] " + script.getClass().getSimpleName() + ".onDestroy() threw on Entity '" + entity.name + "'.", t);
             }
+            runFrameworkDestroy(script, entity);
+        }
+    }
+
+    private static void runFrameworkDestroy(EntityScript script, Entity entity) {
+        try {
+            script.onFrameworkDestroy();
+        } catch (Throwable t) {
+            if (t instanceof VirtualMachineError && !(t instanceof StackOverflowError)) throw (VirtualMachineError) t;
+            logScriptError("[ScriptEngine] " + script.getClass().getSimpleName() + " framework cleanup threw on Entity '" + (entity != null ? entity.name : "?") + "'.", t);
         }
     }
 

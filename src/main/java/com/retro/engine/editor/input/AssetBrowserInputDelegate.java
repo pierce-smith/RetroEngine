@@ -489,9 +489,15 @@ public class AssetBrowserInputDelegate {
         return """
                 package com.retro.engine.scripting.user;
 
-                import com.retro.engine.scripting.EntityScript;
+                import com.retro.engine.scripting.framework.ScriptTask;
+                import com.retro.engine.scripting.framework.SimpleEntityScript;
 
-                public class %s extends EntityScript {
+                /**
+                 * SimpleEntityScript gives you cached accessors (transform(), rigidbody(), audio()...), move(), lookAt(),
+                 * runAfter() timers, tweens, playSpatialSound() and shakeCamera(). Janino compiles scripts: no lambdas,
+                 * so create ScriptTask objects once (a field or onStart) and reuse them.
+                 */
+                public class %s extends SimpleEntityScript {
 
                     @Override
                     public void onStart() {

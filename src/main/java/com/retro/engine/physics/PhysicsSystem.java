@@ -106,12 +106,76 @@ public class PhysicsSystem {
     private float accumulator = 0.0f;
     private final RaycastHit sharedRaycastHit = new RaycastHit();
 
+    // Entities spawned mid-play; turned into bodies at the start of the next step so no solver loop sees them mid-iteration
+    private final List<Entity> pendingBodyEntities = new ArrayList<>();
+
     public BroadphaseSolver getBroadphaseSolver() {
         return broadphaseSolver;
     }
 
+    /** Live physics body of {@code entity}, or null when it has none (no collider / rigidbody, or not playing). */
+    public PhysicsBody getBody(Entity entity) {
+        return (entity != null && entity.id != null) ? bodyMap.get(entity.id) : null;
+    }
+
+    /** True when the entity has a component the physics world simulates or collides against. */
+    public static boolean isPhysicsEntity(Entity entity) {
+        return entity != null && (entity.getComponent(RigidBodyComponent.class) != null ||
+                entity.getComponent(BoxCollider.class) != null ||
+                entity.getComponent(SphereCollider.class) != null ||
+                entity.getComponent(CapsuleCollider.class) != null ||
+                entity.getComponent(CharacterControllerComponent.class) != null ||
+                entity.getComponent(VehicleControllerComponent.class) != null);
+    }
+
+    /**
+     * Adds an entity spawned during play (e.g. an instantiated prefab) to the simulation. The body is created at the
+     * start of the next step; entities without physics components are ignored.
+     */
+    public void registerRuntimeEntity(Entity entity) {
+        if (!isPhysicsEntity(entity) || entity.id == null || bodyMap.containsKey(entity.id)) return;
+        if (!pendingBodyEntities.contains(entity)) pendingBodyEntities.add(entity);
+    }
+
+    /** Removes an entity's body (e.g. one destroyed during play) from the bodies list and the broadphase tree. */
+    public void removeRuntimeEntity(Entity entity) {
+        if (entity == null) return;
+        pendingBodyEntities.remove(entity);
+        if (entity.id == null) return;
+        PhysicsBody body = bodyMap.remove(entity.id);
+        if (body == null) return;
+        activeBodies.remove(body);
+        if (body.treeNodeId != -1) {
+            broadphaseSolver.removeLeaf(body.treeNodeId);
+            body.treeNodeId = -1;
+        }
+    }
+
+    private void addBody(Entity entity) {
+        PhysicsBody body = new PhysicsBody(entity);
+        bodyMap.put(entity.id, body);
+        activeBodies.add(body);
+
+        float minX = body.px - getHalfWidthX(body);
+        float maxX = body.px + getHalfWidthX(body);
+        float minY = body.py - getHalfWidthY(body);
+        float maxY = body.py + getHalfWidthY(body);
+        float minZ = body.pz - getHalfWidthZ(body);
+        float maxZ = body.pz + getHalfWidthZ(body);
+        body.treeNodeId = broadphaseSolver.insertLeaf(body, minX, minY, minZ, maxX, maxY, maxZ);
+    }
+
+    private void flushPendingBodies() {
+        for (int i = 0; i < pendingBodyEntities.size(); i++) {
+            Entity e = pendingBodyEntities.get(i);
+            if (e != null && e.id != null && !bodyMap.containsKey(e.id)) addBody(e);
+        }
+        pendingBodyEntities.clear();
+    }
+
     public void initWorld(List<Entity> sceneEntities) {
         bodyMap.clear();
+        pendingBodyEntities.clear();
         activeBodies.clear();
         broadphaseSolver.clear();
         broadphasePairs.clear();
@@ -126,25 +190,7 @@ public class PhysicsSystem {
         if (sceneEntities == null) return;
 
         for (Entity entity : sceneEntities) {
-            if (entity.getComponent(RigidBodyComponent.class) != null ||
-                entity.getComponent(BoxCollider.class) != null ||
-                entity.getComponent(SphereCollider.class) != null ||
-                entity.getComponent(CapsuleCollider.class) != null ||
-                entity.getComponent(CharacterControllerComponent.class) != null ||
-                entity.getComponent(VehicleControllerComponent.class) != null) {
-
-                PhysicsBody body = new PhysicsBody(entity);
-                bodyMap.put(entity.id, body);
-                activeBodies.add(body);
-
-                float minX = body.px - getHalfWidthX(body);
-                float maxX = body.px + getHalfWidthX(body);
-                float minY = body.py - getHalfWidthY(body);
-                float maxY = body.py + getHalfWidthY(body);
-                float minZ = body.pz - getHalfWidthZ(body);
-                float maxZ = body.pz + getHalfWidthZ(body);
-                body.treeNodeId = broadphaseSolver.insertLeaf(body, minX, minY, minZ, maxX, maxY, maxZ);
-            }
+            if (isPhysicsEntity(entity)) addBody(entity);
         }
     }
 
@@ -152,6 +198,7 @@ public class PhysicsSystem {
         if (activeBodies.isEmpty() && sceneEntities != null) {
             initWorld(sceneEntities);
         }
+        if (!pendingBodyEntities.isEmpty()) flushPendingBodies();
 
         for (int i = 0, n = activeBodies.size(); i < n; i++) {
             PhysicsBody body = activeBodies.get(i);
@@ -362,6 +409,7 @@ public class PhysicsSystem {
     }
 
     public void cleanup() {
+        pendingBodyEntities.clear();
         bodyMap.clear();
         activeBodies.clear();
         broadphaseSolver.clear();

@@ -211,7 +211,10 @@ public class BroadphaseSolver {
 
         PhysicsSystem.PhysicsBody body = leaf.body;
         removeLeaf(leafId);
-        insertLeaf(body, minX, minY, minZ, maxX, maxY, maxZ);
+        // The free list is LIFO and removeLeaf frees the old parent last, so the re-inserted leaf usually gets a
+        // different node id: keep the body's handle in sync or later updates / removals hit an internal node
+        int newLeafId = insertLeaf(body, minX, minY, minZ, maxX, maxY, maxZ);
+        if (body != null) body.treeNodeId = newLeafId;
     }
 
     public void removeLeaf(int leafId) {

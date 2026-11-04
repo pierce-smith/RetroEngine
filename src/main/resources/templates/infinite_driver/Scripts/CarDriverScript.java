@@ -6,8 +6,8 @@ import com.retro.engine.ecs.components.AudioSource;
 import com.retro.engine.ecs.components.Camera;
 import com.retro.engine.ecs.components.Transform;
 import com.retro.engine.ecs.components.VehicleControllerComponent;
-import com.retro.engine.scripting.EntityScript;
 import com.retro.engine.scripting.Input;
+import com.retro.engine.scripting.framework.SimpleEntityScript;
 
 /**
  * Input layer for the Infinite Driver car on the built-in VehicleController: the VehicleSuspensionSolver moves the
@@ -19,7 +19,7 @@ import com.retro.engine.scripting.Input;
  *
  * HighwayGameScript drives it through setForwardSpeed / crash / isCrashed (reflection, scripts compile separately).
  */
-public class CarDriverScript extends EntityScript {
+public class CarDriverScript extends SimpleEntityScript {
 
     // Handling
     public float maxLateralSpeed = 10.0f;   // m/s sideways at full lock
@@ -38,6 +38,7 @@ public class CarDriverScript extends EntityScript {
 
     // Camera
     public String cameraName = "Main Camera";
+    public float crashShake = 0.9f;         // camera shake intensity on impact (0 = off)
     public float cameraHeight = 3.4f;
     public float cameraDistance = 8.0f;
     public float cameraPitch = 12.0f;
@@ -71,17 +72,17 @@ public class CarDriverScript extends EntityScript {
 
     @Override
     public void onStart() {
-        vehicle = (VehicleControllerComponent) getComponent(VehicleControllerComponent.class);
+        vehicle = vehicleController(); // SimpleEntityScript cached accessors
         if (vehicle == null) logError("CarDriverScript needs a Vehicle Controller component on " + entity.name);
         else vehicle.maxSpeed = referenceTopSpeed;
         yaw = getRotationY();
         trackX = lastX = getPositionX();
-        engine = (AudioSource) getComponent(AudioSource.class);
+        engine = audio();
         sfxStartUp = childAudio("SFX_StartUp");
         sfxHorn = childAudio("SFX_Horn");
         sfxBoost = childAudio("SFX_Boost");
         sfxCrash = childAudio("SFX_Crash");
-        cameraEntity = sceneWorld != null ? sceneWorld.findEntityByName(cameraName) : null;
+        cameraEntity = findEntity(cameraName);
         camX = getPositionX() * cameraFollow;
         if (sfxStartUp != null) sfxStartUp.play();
         if (engine != null) engine.setPitch(idlePitch);
@@ -202,12 +203,13 @@ public class CarDriverScript extends EntityScript {
         if (sfxHorn != null) sfxHorn.play();
         if (engine != null) engine.setVolume(0.25f);
         vibrate(0.9f, 0.9f, 0.35f);
+        shakeCamera(crashShake, 0.6f);
     }
 
     // --- Helpers ---
 
     private AudioSource childAudio(String name) {
-        Entity e = sceneWorld != null ? sceneWorld.findEntityByName(name) : null;
+        Entity e = findEntity(name);
         return e != null ? (AudioSource) e.getComponent(AudioSource.class) : null;
     }
 

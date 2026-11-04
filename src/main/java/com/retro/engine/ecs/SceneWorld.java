@@ -11,6 +11,8 @@ import com.retro.engine.ecs.serialization.PrefabSerializer;
 import com.retro.engine.ecs.serialization.SceneSerializer;
 import com.retro.engine.modding.ModLoader;
 import com.retro.engine.physics.PhysicsSystem;
+import com.retro.engine.scripting.ScriptEngine;
+import com.retro.engine.scripting.framework.ScriptRuntime;
 import com.retro.engine.ui.UISoundPlayer;
 import com.retro.engine.ui.UISoundPlayer.UISound;
 
@@ -92,6 +94,10 @@ public class SceneWorld {
     private String originSelectedId = null;
 
     // ECS Subsystem Delegates, Contiguous Component Storage, & Animation Engine
+    // Entities scripts asked to destroy this frame; removed after the script tick so no update loop shifts mid-iteration
+    private final List<Entity> pendingDestroys = new ArrayList<>();
+    private final List<Entity> destroyScratch = new ArrayList<>();
+
     private final HierarchySystem graphEvaluator = new HierarchySystem();
     private final SimulationSystem simulationEngine = new SimulationSystem();
     private final EntitySpawner entityFactory = new EntitySpawner();
@@ -282,6 +288,9 @@ public class SceneWorld {
     /** restoreOrigin: if a script transitioned scenes during play, return to the scene Play was pressed in. */
     private void stopSimulation(boolean restoreOrigin) {
         boolean leavingPlayMode = simulationEngine.getPlayState() != PlayState.EDITING;
+        pendingDestroys.clear();
+        // Undo framework frame state (camera shake offsets, debug lines, event listeners) before the snapshot restore
+        if (leavingPlayMode) ScriptRuntime.onPlayStopped(sceneEntities);
         List<Entity> restored = simulationEngine.stop(sceneEntities);
         syncAnimationPlayState();
         if (restored != null) {
@@ -384,8 +393,15 @@ public class SceneWorld {
 
     public void update(float deltaTime) {
         graphEvaluator.invalidateEntityIndex(); // Once per frame: entities may have been added, removed or re-id'd
+        boolean simulating = simulationEngine.getPlayState() == PlayState.SIMULATING;
+        // Scripts and physics see the un-shaken camera pose; this frame's shake is re-applied after they ran
+        if (simulating) ScriptRuntime.beginFrame(deltaTime);
         simulationEngine.update(deltaTime, sceneEntities, this);
         syncAnimationPlayState();
+        if (simulating) {
+            flushPendingDestroys();
+            ScriptRuntime.endFrame(sceneEntities);
+        }
         
         // Per-frame Skeletal Animation Keyframe Sampling & Pose Matrix Palette Evaluation
         if (sceneEntities != null) {
@@ -470,6 +486,90 @@ public class SceneWorld {
         registerEntityHandle(entity);
         graphEvaluator.clearCache();
         return entity;
+    }
+
+    /**
+     * Destroys {@code target} and all of its descendants at the end of the current frame (after physics and every
+     * script ran), so it is safe from any script callback. Their scripts get onDestroy and their physics bodies leave
+     * the simulation. Stop restores them like any other play-mode change. Outside play the entity is deleted at once.
+     */
+    public void requestEntityDestroy(Entity target) {
+        if (target == null) return;
+        if (simulationEngine.getPlayState() == PlayState.EDITING) {
+            deleteEntity(target);
+            return;
+        }
+        if (!pendingDestroys.contains(target)) pendingDestroys.add(target);
+    }
+
+    /** True when {@code target} was queued with {@link #requestEntityDestroy(Entity)} and not yet removed. */
+    public boolean isPendingDestroy(Entity target) {
+        return target != null && pendingDestroys.contains(target);
+    }
+
+    private void flushPendingDestroys() {
+        if (pendingDestroys.isEmpty()) return;
+        destroyScratch.clear();
+        for (int i = 0; i < pendingDestroys.size(); i++) {
+            Entity e = pendingDestroys.get(i);
+            if (e != null && sceneEntities.contains(e) && !destroyScratch.contains(e)) destroyScratch.add(e);
+        }
+        pendingDestroys.clear();
+        // Breadth-first: append every descendant so a destroyed parent does not leave orphaned children behind
+        for (int i = 0; i < destroyScratch.size(); i++) {
+            String parentId = destroyScratch.get(i).id;
+            if (parentId == null) continue;
+            for (int j = 0; j < sceneEntities.size(); j++) {
+                Entity child = sceneEntities.get(j);
+                if (child != null && parentId.equalsIgnoreCase(child.parentId) && !destroyScratch.contains(child)) {
+                    destroyScratch.add(child);
+                }
+            }
+        }
+        PhysicsSystem physics = getPhysicsWorld();
+        for (int i = 0; i < destroyScratch.size(); i++) {
+            Entity e = destroyScratch.get(i);
+            ScriptEngine.destroyEntityScripts(e);
+            if (physics != null) physics.removeRuntimeEntity(e);
+        }
+        for (int i = destroyScratch.size() - 1; i >= 0; i--) {
+            deleteEntity(destroyScratch.get(i));
+        }
+        destroyScratch.clear();
+    }
+
+    /**
+     * Instantiates a prefab during play: resolves the path through the project VFS, adds the entities without changing
+     * the editor selection or playing the editor spawn sound, and registers their physics bodies (simulated from the
+     * next physics step). Scripts on the spawned entities start on the next script tick. Returns the root entity, or
+     * null when the prefab could not be loaded. Reads the prefab from disk, so avoid calling it every frame.
+     */
+    public Entity instantiatePrefabRuntime(String prefabPath) {
+        if (prefabPath == null || prefabPath.isBlank()) return null;
+        String resolved = (lastAssetDatabase != null) ? lastAssetDatabase.resolveAsset(prefabPath) : ModLoader.resolveAssetPath(prefabPath);
+        if (resolved == null || !new File(resolved).exists()) resolved = prefabPath;
+
+        Entity previousPrimary = selectedEntity;
+        List<Entity> previousSelection = new ArrayList<>(selection);
+        List<Entity> spawned = PrefabSerializer.instantiatePrefab(resolved, this, lastAssetDatabase);
+        ModLoader.onPrefabSpawned(resolved, spawned, this::deleteEntity);
+        setSelection(previousSelection, previousPrimary);
+        if (spawned == null || spawned.isEmpty()) {
+            System.err.println("[SceneWorld] Prefab '" + prefabPath + "' could not be instantiated (missing or unreadable).");
+            return null;
+        }
+        if (simulationEngine.getPlayState() != PlayState.EDITING) {
+            PhysicsSystem physics = getPhysicsWorld();
+            for (int i = 0; i < spawned.size(); i++) {
+                Entity e = spawned.get(i);
+                if (e != null && sceneEntities.contains(e)) physics.registerRuntimeEntity(e);
+            }
+        }
+        for (int i = 0; i < spawned.size(); i++) {
+            Entity e = spawned.get(i);
+            if (e != null && sceneEntities.contains(e)) return e;
+        }
+        return null;
     }
 
     /** First entity with exactly this name, or null. */

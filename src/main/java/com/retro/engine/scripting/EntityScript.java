@@ -63,6 +63,20 @@ public abstract class EntityScript {
     public void onDestroy() {}
 
     // =========================================================================
+    // Framework Hooks (engine-internal)
+    // =========================================================================
+
+    /**
+     * Called by the ScriptEngine every frame just before {@link #onUpdate(float)}. Framework base classes (e.g.
+     * {@code SimpleEntityScript}) tick their timers and tweens here so subclasses need not call super.onUpdate.
+     * Gameplay scripts should override onUpdate instead.
+     */
+    public void onFrameworkUpdate(float deltaTime) {}
+
+    /** Called by the ScriptEngine right after {@link #onDestroy()} so framework base classes can release resources. */
+    public void onFrameworkDestroy() {}
+
+    // =========================================================================
     // Transform & Spatial Accessors
     // =========================================================================
 

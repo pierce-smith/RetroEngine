@@ -22,6 +22,7 @@ import com.retro.engine.editor.animator.AnimatorGraphPanel;
 import com.retro.engine.editor.gizmos.ColliderDebugRenderer;
 import com.retro.engine.editor.gizmos.GizmoRenderer;
 import com.retro.engine.editor.gizmos.GizmoState;
+import com.retro.engine.editor.gizmos.ScriptDebugRenderer;
 import com.retro.engine.editor.overlays.ContextMenuOverlay;
 import com.retro.engine.editor.overlays.ModalDialogOverlay;
 import com.retro.engine.editor.overlays.OverlaySystem;
@@ -755,6 +756,11 @@ public class EditorWorkspace {
                     cameraController, gizmoStateController.getCamPanX(), gizmoStateController.getCamPanY(),
                     gizmoStateController.getCamZoom(), gizmoStateController.getCamPitch(), gizmoStateController.getCamYaw()
                 );
+
+                // Lines gameplay scripts drew through ScriptDebug (only exist while playing)
+                if (sceneManager.getPlayState() != PlayState.EDITING) {
+                    ScriptDebugRenderer.render(uiGeometryBuffer, cameraController);
+                }
 
                 Entity selected = sceneManager.getSelectedEntity();
                 // Bones are an authoring aid: hidden while the simulation runs, shown in edit mode and while paused

@@ -77,14 +77,31 @@ public class HierarchySystem {
 
     private void ensureEntityIndex(List<Entity> sceneEntities) {
         if (!indexDirty && indexedList == sceneEntities && indexedSize == sceneEntities.size()) return;
-        entityMapScratch.clear();
-        for (int i = 0; i < sceneEntities.size(); i++) {
-            Entity e = sceneEntities.get(i);
-            if (e != null && e.id != null) entityMapScratch.put(e.id, e);
+        // The per-frame invalidation usually finds the index still correct: verify it in place (lookups only) and
+        // rebuild only on a real change, since clear() + put() allocates a fresh map node per entity every frame
+        if (!indexMatches(sceneEntities)) {
+            entityMapScratch.clear();
+            for (int i = 0; i < sceneEntities.size(); i++) {
+                Entity e = sceneEntities.get(i);
+                if (e != null && e.id != null) entityMapScratch.put(e.id, e);
+            }
         }
         indexedList = sceneEntities;
         indexedSize = sceneEntities.size();
         indexDirty = false;
+    }
+
+    /** True when the id index maps exactly the ids of {@code sceneEntities} to those entities (no stale keys). */
+    private boolean indexMatches(List<Entity> sceneEntities) {
+        int indexed = 0;
+        for (int i = 0; i < sceneEntities.size(); i++) {
+            Entity e = sceneEntities.get(i);
+            if (e == null || e.id == null) continue;
+            if (entityMapScratch.get(e.id) != e) return false;
+            indexed++;
+        }
+        // Every live id resolves to its entity; equal counts also rule out stale keys left by removed / re-id'd entities
+        return indexed == entityMapScratch.size();
     }
 
     /** Stores a result in the per-entity cache, reusing the cached object when there is one. */
