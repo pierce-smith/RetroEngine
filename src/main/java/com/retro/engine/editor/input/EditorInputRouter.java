@@ -301,7 +301,7 @@ public class EditorInputRouter {
                     if (button == 0 && action == 1 && !workspace.isAltHeld()
                             && workspace.getSceneManager().getPlayState() != com.retro.engine.ecs.SceneWorld.PlayState.SIMULATING
                             && com.retro.engine.editor.gizmos.SplineGizmo.tryBeginDrag((dx + 1.0) * 640.0, (1.0 - dy) * 360.0,
-                                    workspace.getSelectedEntity(), workspace.getCameraController())) {
+                                    workspace.getSelectedEntity(), workspace.getSceneEntities(), workspace.getCameraController())) {
                         return true;
                     }
                     gizmoStateController.processViewportGizmoClick((dx + 1.0) * 640.0, (1.0 - dy) * 360.0, workspace);

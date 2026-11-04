@@ -2,6 +2,7 @@ package com.retro.engine.editor.gizmos;
 
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.components.SplineComponent;
+import com.retro.engine.ecs.components.SplineFollower;
 import com.retro.engine.ecs.components.Transform;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ICommand;
@@ -9,9 +10,11 @@ import com.retro.engine.editor.ViewportCamera;
 import com.retro.engine.spline.SplineEvaluator;
 import com.retro.engine.ui.UIGeometryBatch;
 
+import java.util.List;
+
 /**
- * Scene-viewport authoring for {@link SplineComponent}: draws the selected entity's curve, its knots and (for Bezier
- * curves) the tangent handles, and lets the user drag knots / handles in the camera plane. A finished drag commits the
+ * Scene-viewport authoring for {@link SplineComponent}: draws every spline as a debug line and, for the edited spline
+ * (on the selected entity or targeted by its SplineFollower), its knots and Bezier tangent handles, and lets the user drag knots / handles in the camera plane. A finished drag commits the
  * knots and pushes one undoable command. Projection matches {@link ScriptDebugRenderer} (UI design space of the Scene
  * panel; press/drag coordinates are the 1280x720 reference space GizmoState uses). Drawing is allocation-free.
  */
@@ -52,16 +55,45 @@ public final class SplineGizmo {
     // Rendering
     // -----------------------------------------------------------------------------------------------------------------
 
-    public static void render(UIGeometryBatch.Buffer buffer, ViewportCamera camera, Entity selected) {
-        SplineComponent s = (selected != null) ? selected.getComponent(SplineComponent.class) : null;
-        if (buffer == null || camera == null || s == null) return;
-        s.owner = selected;
+    /**
+     * The spline the selection edits: one on the selected entity, else the target of its SplineFollower (the named
+     * spline entity, or the parent's spline when the name is blank). Returns its owner entity, or null.
+     */
+    public static Entity resolveEditedSplineOwner(Entity selected, List<Entity> entities) {
+        if (selected == null) return null;
+        if (selected.getComponent(SplineComponent.class) != null) return selected;
+        SplineFollower f = selected.getComponent(SplineFollower.class);
+        if (f == null || entities == null) return null;
+        String name = f.splineEntity;
+        boolean byName = name != null && !name.isBlank();
+        for (int i = 0; i < entities.size(); i++) {
+            Entity e = entities.get(i);
+            if (e == null || e.getComponent(SplineComponent.class) == null) continue;
+            if (byName ? name.equals(e.name) : (selected.parentId != null && selected.parentId.equals(e.id))) return e;
+        }
+        return null;
+    }
+
+    /** Draws every spline in the scene (debug lines); the edited spline is highlighted with its knots and handles. */
+    public static void render(UIGeometryBatch.Buffer buffer, ViewportCamera camera, List<Entity> entities, Entity selected) {
+        if (buffer == null || camera == null || entities == null) return;
+        setupProjection(camera);
+        Entity edited = resolveEditedSplineOwner(selected, entities);
+        for (int i = 0; i < entities.size(); i++) {
+            Entity e = entities.get(i);
+            if (e != null && e.getComponent(SplineComponent.class) != null) renderSpline(buffer, e, e == edited);
+        }
+    }
+
+    private static void renderSpline(UIGeometryBatch.Buffer buffer, Entity ownerEntity, boolean edited) {
+        SplineComponent s = ownerEntity.getComponent(SplineComponent.class);
+        s.owner = ownerEntity;
         int n = s.getCount();
         if (n < 1) return;
-        setupProjection(camera);
         float ox = 0, oy = 0, oz = 0;
-        Transform tr = selected.getTransform();
+        Transform tr = ownerEntity.getTransform();
         if (tr != null) { ox = tr.posX; oy = tr.posY; oz = tr.posZ; }
+        float curveAlpha = edited ? 1.0f : 0.55f;
 
         // Curve polyline from the baked samples
         int samples = s.lutCount;
@@ -69,9 +101,10 @@ public final class SplineGizmo {
         for (int i = 0; i < samples; i++) {
             SplineEvaluator.evaluate(s, n, s.lutT[i], pt, false);
             float x = pt[0] + ox, y = pt[1] + oy, z = pt[2] + oz;
-            if (i > 0) drawLine(buffer, px, py, pz, x, y, z, CURVE_RGB);
+            if (i > 0) drawLine(buffer, px, py, pz, x, y, z, CURVE_RGB, curveAlpha);
             px = x; py = y; pz = z;
         }
+        if (!edited) return;
 
         boolean bezier = s.curveType == SplineComponent.CurveType.BEZIER;
         for (int i = 0; i < n; i++) {
@@ -81,7 +114,7 @@ public final class SplineGizmo {
                 for (int h = 0; h < 2; h++) {
                     int o = i * 6 + h * 3;
                     float hx = kx + s.handles[o], hy = ky + s.handles[o + 1], hz = kz + s.handles[o + 2];
-                    drawLine(buffer, kx, ky, kz, hx, hy, hz, HANDLE_RGB);
+                    drawLine(buffer, kx, ky, kz, hx, hy, hz, HANDLE_RGB, 1.0f);
                     drawSquare(buffer, hx, hy, hz, 0.7f, HANDLE_RGB);
                 }
             }
@@ -94,7 +127,8 @@ public final class SplineGizmo {
     // -----------------------------------------------------------------------------------------------------------------
 
     /** CPU hit-test of the selected spline's knots / handles; starts a drag and returns true on a hit. */
-    public static boolean tryBeginDrag(double refX, double refY, Entity selected, ViewportCamera camera) {
+    public static boolean tryBeginDrag(double refX, double refY, Entity selected, List<Entity> entities, ViewportCamera camera) {
+        selected = resolveEditedSplineOwner(selected, entities);
         SplineComponent s = (selected != null) ? selected.getComponent(SplineComponent.class) : null;
         if (s == null || camera == null) return false;
         s.owner = selected;
@@ -221,7 +255,7 @@ public final class SplineGizmo {
         UIGeometryBatch.addQuad(buffer, ux - hx, uy - hy, ux + hx, uy + hy, rgb, 1.0f);
     }
 
-    private static void drawLine(UIGeometryBatch.Buffer buffer, float x1, float y1, float z1, float x2, float y2, float z2, int rgb) {
+    private static void drawLine(UIGeometryBatch.Buffer buffer, float x1, float y1, float z1, float x2, float y2, float z2, int rgb, float alpha) {
         float ax = view[0] * x1 + view[4] * y1 + view[8] * z1 + view[12];
         float ay = view[1] * x1 + view[5] * y1 + view[9] * z1 + view[13];
         float da = -(view[2] * x1 + view[6] * y1 + view[10] * z1 + view[14]);
@@ -240,6 +274,6 @@ public final class SplineGizmo {
         float sx2 = (p00 * bx / db) * 0.55f, sy2 = 0.19f + (p11 * by / db) * 0.69f;
         if (sx1 < MIN_X || sx1 > MAX_X || sy1 < MIN_Y || sy1 > MAX_Y) return;
         if (sx2 < MIN_X || sx2 > MAX_X || sy2 < MIN_Y || sy2 > MAX_Y) return;
-        UIGeometryBatch.addLineSegment(buffer, sx1, sy1, sx2, sy2, LINE_THICKNESS, rgb, 1.0f);
+        UIGeometryBatch.addLineSegment(buffer, sx1, sy1, sx2, sy2, LINE_THICKNESS, rgb, alpha);
     }
 }

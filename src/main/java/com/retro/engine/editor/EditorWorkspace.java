@@ -763,9 +763,9 @@ public class EditorWorkspace {
                 }
 
                 Entity selected = sceneManager.getSelectedEntity();
-                // Selected spline: curve, knots and Bezier handles (authoring aid, hidden while simulating)
+                // Splines: every curve as a debug line; the edited one (selected, or a selected follower's target) gets knots/handles
                 if (sceneManager.getPlayState() != PlayState.SIMULATING && overlayManager.getActiveModal() == ModalState.NONE) {
-                    com.retro.engine.editor.gizmos.SplineGizmo.render(uiGeometryBuffer, cameraController, selected);
+                    com.retro.engine.editor.gizmos.SplineGizmo.render(uiGeometryBuffer, cameraController, sceneManager.getSceneEntities(), selected);
                 }
                 // Bones are an authoring aid: hidden while the simulation runs, shown in edit mode and while paused
                 if (sceneManager.getPlayState() != PlayState.SIMULATING && overlayManager.getActiveModal() == ModalState.NONE) {
