@@ -12,6 +12,7 @@ import com.retro.engine.ecs.components.CharacterControllerComponent;
 import com.retro.engine.ecs.components.Light;
 import com.retro.engine.ecs.components.Material;
 import com.retro.engine.ecs.components.MeshFilter;
+import com.retro.engine.ecs.components.ParticleSystem;
 import com.retro.engine.ecs.components.RigidBodyComponent;
 import com.retro.engine.ecs.components.SphereCollider;
 import com.retro.engine.ecs.components.Transform;
@@ -87,9 +88,32 @@ public abstract class SimpleEntityScript extends EntityScript {
     public MeshFilter meshFilter() { return componentCache.meshFilter(); }
     public CharacterControllerComponent characterController() { return componentCache.characterController(); }
     public VehicleControllerComponent vehicleController() { return componentCache.vehicleController(); }
+    public ParticleSystem particleSystem() { return componentCache.particleSystem(); }
 
     /** Forces the next accessor calls to look components up again. */
     public void invalidateComponentCache() { componentCache.invalidate(); }
+
+    // =========================================================================
+    // Particles (this entity's ParticleSystem; all no-ops without one, allocation-free)
+    // =========================================================================
+
+    /** Starts continuous emission on this entity's ParticleSystem. */
+    public void play() {
+        ParticleSystem ps = componentCache.particleSystem();
+        if (ps != null) ps.play();
+    }
+
+    /** Stops continuous emission; live particles fade out over their remaining lifetime. */
+    public void stop() {
+        ParticleSystem ps = componentCache.particleSystem();
+        if (ps != null) ps.stop();
+    }
+
+    /** Spawns a burst of {@code count} particles on the next simulation step (works while stopped). */
+    public void emit(int count) {
+        ParticleSystem ps = componentCache.particleSystem();
+        if (ps != null) ps.emit(count);
+    }
 
     // =========================================================================
     // World-space position

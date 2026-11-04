@@ -227,6 +227,7 @@ public class EntityStateBackupManager {
             case AudioSource a -> {
                 if (a.state != AudioSource.PlaybackState.PLAYING) a.stop();
             }
+            case com.retro.engine.ecs.components.ParticleSystem p -> p.resetRuntime();
             default -> {}
         }
     }

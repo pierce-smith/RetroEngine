@@ -3,6 +3,7 @@ package com.retro.engine.ecs;
 import com.retro.engine.audio.AudioEngine;
 import com.retro.engine.ecs.SceneWorld.PlayState;
 import com.retro.engine.ecs.components.AudioSource;
+import com.retro.engine.ecs.components.ParticleSystem;
 import com.retro.engine.ecs.components.Transform;
 import com.retro.engine.ecs.serialization.EntityStateBackupManager;
 import com.retro.engine.physics.PhysicsSystem;
@@ -109,10 +110,30 @@ public class SimulationSystem {
 
             // 3. Sync 3D audio source positions to OpenAL
             updateSpatialAudio(activeEntities, sceneWorld);
+
+            // 4. Advance particle systems after scripts, so this frame's play()/stop()/emit() calls take effect now
+            updateParticles(deltaTime, activeEntities, sceneWorld);
         }
         // Clear this frame's pressed edges (isKeyPressed / isMouseButtonPressed) after scripts have seen them, and
         // every frame outside Play too, so editor clicks don't arrive as a burst of presses on the first Play frame
         com.retro.engine.scripting.Input.endFrame();
+    }
+
+    /** Simulates every ParticleSystem at its entity's world pose (indexed loop, no allocation). */
+    private void updateParticles(float deltaTime, List<Entity> activeEntities, SceneWorld sceneWorld) {
+        for (int i = 0; i < activeEntities.size(); i++) {
+            Entity entity = activeEntities.get(i);
+            if (entity == null) continue;
+            ParticleSystem ps = entity.getComponent(ParticleSystem.class);
+            if (ps == null) continue;
+            SceneWorld.WorldTransform wt = (sceneWorld != null) ? sceneWorld.getComputedWorldTransform(entity) : null;
+            if (wt != null) {
+                ps.simulate(deltaTime, wt.px(), wt.py(), wt.pz(), wt.rx(), wt.ry(), wt.rz());
+            } else {
+                Transform tc = entity.getTransform();
+                if (tc != null) ps.simulate(deltaTime, tc.posX, tc.posY, tc.posZ, tc.rotX, tc.rotY, tc.rotZ);
+            }
+        }
     }
 
     private void pauseAudioSources(List<Entity> activeEntities) {

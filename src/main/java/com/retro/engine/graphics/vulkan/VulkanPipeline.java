@@ -76,6 +76,7 @@ public class VulkanPipeline {
     private long pipelineLayoutGrid = 0L;
     private long graphicsPipelineGrid = 0L;
     private long graphicsPipelineGridLines = 0L;
+    private long graphicsPipelineParticles = 0L;
 
     private long descriptorSetLayoutUI = 0L;
     private long pipelineLayoutUI = 0L;
@@ -366,7 +367,7 @@ public class VulkanPipeline {
     private long[] pipelineHandles() {
         return new long[] { graphicsPipeline3D, graphicsPipelineShadow, graphicsPipelineSkinned, graphicsPipelineShadowDepth,
                 graphicsPipelineShadowDepthSkinned, graphicsPipelinePick, graphicsPipelinePickSkinned, graphicsPipelinePickOverlay,
-                graphicsPipelineGrid, graphicsPipelineGridLines, graphicsPipelineUI, graphicsPipelinePost };
+                graphicsPipelineGrid, graphicsPipelineGridLines, graphicsPipelineUI, graphicsPipelinePost, graphicsPipelineParticles };
     }
 
     private void setPipelineHandles(long[] h) {
@@ -382,6 +383,7 @@ public class VulkanPipeline {
         graphicsPipelineGridLines = h[9];
         graphicsPipelineUI = h[10];
         graphicsPipelinePost = h[11];
+        graphicsPipelineParticles = h[12];
     }
 
     private static void destroyPipelines(VkDevice vkDevice, long[] handles) {
@@ -451,6 +453,28 @@ public class VulkanPipeline {
 
                 VulkanShaderLoader.destroyShaderModule(vkDevice, vertGridModule);
                 VulkanShaderLoader.destroyShaderModule(vkDevice, fragGridModule);
+
+                // 1C. Billboard Particles: grid vertex layout and push constants, premultiplied blending (ONE / ONE_MINUS_SRC_ALPHA)
+                long vertParticleModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/particle.vert.spv");
+                long fragParticleModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/particle.frag.spv");
+                if (vertParticleModule != 0L && fragParticleModule != 0L) {
+                    VkPipelineShaderStageCreateInfo.Buffer particleStages = VkPipelineShaderStageCreateInfo.calloc(2, stack);
+                    particleStages.get(0).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_VERTEX_BIT).module(vertParticleModule).pName(stack.UTF8("main"));
+                    particleStages.get(1).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_FRAGMENT_BIT).module(fragParticleModule).pName(stack.UTF8("main"));
+                    VkPipelineColorBlendAttachmentState.Buffer particleBlend = VkPipelineColorBlendAttachmentState.calloc(1, stack)
+                            .colorWriteMask(VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT)
+                            .blendEnable(true).srcColorBlendFactor(VK_BLEND_FACTOR_ONE).dstColorBlendFactor(VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA).colorBlendOp(VK_BLEND_OP_ADD)
+                            .srcAlphaBlendFactor(VK_BLEND_FACTOR_ONE).dstAlphaBlendFactor(VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA).alphaBlendOp(VK_BLEND_OP_ADD);
+                    VkPipelineColorBlendStateCreateInfo particleBlending = VkPipelineColorBlendStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO).pAttachments(particleBlend);
+                    VkGraphicsPipelineCreateInfo.Buffer pipelineInfoParticles = VkGraphicsPipelineCreateInfo.calloc(1, stack)
+                            .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO).pNext(renderingCreateInfo.address()).pStages(particleStages).pVertexInputState(vertexInputInfo).pInputAssemblyState(inputAssembly).pViewportState(viewportState).pRasterizationState(rasterizer).pMultisampleState(multisampling).pDepthStencilState(depthStencil).pColorBlendState(particleBlending).pDynamicState(dynamicState).layout(pipelineLayoutGrid).renderPass(VK_NULL_HANDLE).subpass(0);
+                    LongBuffer pPipelineParticles = stack.mallocLong(1);
+                    if (vkCreateGraphicsPipelines(vkDevice, cacheHandle, pipelineInfoParticles, null, pPipelineParticles) == VK_SUCCESS) {
+                        graphicsPipelineParticles = pPipelineParticles.get(0);
+                    }
+                }
+                VulkanShaderLoader.destroyShaderModule(vkDevice, vertParticleModule);
+                VulkanShaderLoader.destroyShaderModule(vkDevice, fragParticleModule);
             }
 
             // 2. Standard 3D Scene Pipeline (88-Byte Stride, 22 Floats per Vertex)
@@ -859,6 +883,7 @@ public class VulkanPipeline {
     public long getPipelineLayoutGrid() { return pipelineLayoutGrid; }
     public long getGraphicsPipelineGrid() { return graphicsPipelineGrid; }
     public long getGraphicsPipelineGridLines() { return graphicsPipelineGridLines; }
+    public long getGraphicsPipelineParticles() { return graphicsPipelineParticles; }
 
     public long getDescriptorSetLayoutUI() { return descriptorSetLayoutUI; }
     public long getPipelineLayoutUI() { return pipelineLayoutUI; }

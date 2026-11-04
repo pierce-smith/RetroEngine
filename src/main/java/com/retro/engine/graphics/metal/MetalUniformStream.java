@@ -31,7 +31,9 @@ public class MetalUniformStream {
     public static final int SLOT_BASE_PREVIEW_SHADOW_BLOBS = 1 + 64 + 2 * MAX_ENTITIES_PER_FRAME;
     public static final int SLOT_BASE_PREVIEW_ENTITIES = SLOT_BASE_PREVIEW_SHADOW_BLOBS + 64;
     public static final int SLOT_BASE_PICK_ENTITIES = SLOT_BASE_PREVIEW_ENTITIES + MAX_ENTITIES_PER_FRAME;
-    public static final int SLOTS_PER_FRAME = SLOT_BASE_PICK_ENTITIES + MAX_ENTITIES_PER_FRAME;
+    // [ParticleDrawList.MAX_BATCHES particle batches] (main scene pass only) close the frame
+    public static final int SLOT_BASE_PARTICLES = SLOT_BASE_PICK_ENTITIES + MAX_ENTITIES_PER_FRAME;
+    public static final int SLOTS_PER_FRAME = SLOT_BASE_PARTICLES + com.retro.engine.graphics.ParticleDrawList.MAX_BATCHES;
     // One LocalLights block (blinn_phong.metal) per frame follows the uniform slots: point and spot light arrays are
     // written once per frame and every lit draw references them through Uniforms.localLights
     public static final long LIGHT_BLOCK_POINT_STRIDE = 32L;  // position, color (a = intensity)

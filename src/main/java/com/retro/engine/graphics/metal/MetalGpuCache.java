@@ -75,6 +75,7 @@ public class MetalGpuCache {
     private final MetalTextureRegistry textureRegistry = new MetalTextureRegistry();
     private final MetalRingBuffer gridRingBuffer = new MetalRingBuffer();
     private final MetalRingBuffer uiRingBuffer = new MetalRingBuffer();
+    private final MetalRingBuffer particleRingBuffer = new MetalRingBuffer();
     private final MetalRingBuffer pickOverlayRingBuffer = new MetalRingBuffer();
 
     private long viewportQuadBuffer = 0L;
@@ -270,6 +271,14 @@ public class MetalGpuCache {
         gridRingBuffer.updateBuffer(metalDevice, vertices, count, 9, this);
     }
 
+    public void updateParticleMesh(MetalDevice metalDevice, float[] vertices, int count) {
+        particleRingBuffer.updateBuffer(metalDevice, vertices, count, com.retro.engine.graphics.ParticleDrawList.FLOATS_PER_VERTEX, this);
+    }
+
+    public long getParticleVertexBuffer() { return particleRingBuffer.getCurrentBufferHandle(); }
+
+    public int getParticleVertexCount() { return particleRingBuffer.getVertexCount(); }
+
     public void updateUiMesh(MetalDevice metalDevice, float[] vertices, int count) {
         uiRingBuffer.updateBuffer(metalDevice, vertices, count, 8, this);
     }
@@ -389,6 +398,7 @@ public class MetalGpuCache {
             if (shadowSamplerState != 0L) { invokePPP(shadowSamplerState, selRelease, send); shadowSamplerState = 0L; }
             gridRingBuffer.cleanup(metalDevice);
             uiRingBuffer.cleanup(metalDevice);
+            particleRingBuffer.cleanup(metalDevice);
             pickOverlayRingBuffer.cleanup(metalDevice);
             if (viewportQuadBuffer != 0L) { invokePPP(viewportQuadBuffer, selRelease, send); viewportQuadBuffer = 0L; }
             if (groundQuadBuffer != 0L) { invokePPP(groundQuadBuffer, selRelease, send); groundQuadBuffer = 0L; groundQuadAddress = 0L; }

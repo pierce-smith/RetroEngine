@@ -2,6 +2,7 @@ package com.retro.engine.physics;
 
 import com.retro.engine.ecs.components.BoxCollider;
 import com.retro.engine.ecs.components.CapsuleCollider;
+import com.retro.engine.ecs.components.CharacterControllerComponent;
 import com.retro.engine.ecs.components.RigidBodyComponent;
 import com.retro.engine.ecs.components.SphereCollider;
 import com.retro.engine.modding.ModLoader;
@@ -95,6 +96,24 @@ public class NarrowphaseSolver {
             if (sepX != 0) b.vx = -b.vx * restitution;
             if (sepY != 0) b.vy = -b.vy * restitution;
             if (sepZ != 0) b.vz = -b.vz * restitution;
+        } else if (a.characterController != null && b.characterController == null) {
+            // Character controllers move by velocity without sweeping, so walls (static / kinematic bodies) must push
+            // them back out here; standing on surfaces is handled by the controller's own ground raycast
+            pushCharacterOut(a, -sepX, -sepY, -sepZ);
+        } else if (b.characterController != null && a.characterController == null) {
+            pushCharacterOut(b, sepX, sepY, sepZ);
+        } else if (a.characterController != null) {
+            pushCharacterOut(a, -sepX * 0.5f, -sepY * 0.5f, -sepZ * 0.5f);
+            pushCharacterOut(b, sepX * 0.5f, sepY * 0.5f, sepZ * 0.5f);
         }
+    }
+
+    /** Moves a character body by (mx, my, mz) and cancels its velocity into the surface it was pushed out of. */
+    private static void pushCharacterOut(PhysicsSystem.PhysicsBody body, float mx, float my, float mz) {
+        CharacterControllerComponent cc = body.characterController;
+        body.px += mx; body.py += my; body.pz += mz;
+        if (mx * cc.velocityX < 0.0f) cc.velocityX = 0.0f;
+        if (my * cc.velocityY < 0.0f) cc.velocityY = 0.0f; // head hit a ceiling
+        if (mz * cc.velocityZ < 0.0f) cc.velocityZ = 0.0f;
     }
 }

@@ -3,7 +3,8 @@
 # project's AssetDatabase exists, so author scenes in the editor and keep this file as the recipe.
 # Format: entity <Name> | key=value | ...   (asset paths are relative to Assets/)
 # Keys: mesh, pos, rot, scale, texture, box=sx,sy,sz[,trigger], sphere=r[,trigger], capsule=r,h,
-#       body=static|kinematic|dynamic, script=<file>, camera, light, parent=<EntityName>, prop.<field>=<value>
+#       body=static|kinematic|dynamic, script=<file>, camera, light, particles=fire|sparks, parent=<EntityName>,
+#       prop.<field>=<value>
 #       prefab=<file>  instantiates a prefab (with its children) as-is; pos/rot/scale/script/prop apply to its root,
 #                      and <Name> renames the root.
 entity Ground       | mesh=Meshes/Plane.obj | pos=0,0,0 | scale=3,1,3 | texture=Textures/Checker.png | box=10,0.2,10 | body=static
@@ -17,3 +18,8 @@ entity Collectible5 | mesh=Meshes/Cube.obj | pos=-8,1,-8   | scale=0.4,0.4,0.4 |
 entity Platform     | mesh=Meshes/Cube.obj | pos=0,0.75,-10 | scale=3,1.5,3 | texture=Textures/Checker.png | box=1,1,1 | body=static
 entity Collectible6 | mesh=Meshes/Cube.obj | pos=0,2.5,-10 | scale=0.4,0.4,0.4 | sphere=1.2,trigger | body=kinematic | script=Scripts/CollectibleScript.java | prop.points=10
 entity Sun          | pos=0,8,0 | rot=50,30,0 | light
+# Torches flanking the platform: ParticleSystem flames animated by TorchFlameScript (press F nearby to snuff / relight)
+entity TorchPostL   | mesh=Meshes/Cube.obj | pos=-2.2,0.6,-7.6 | scale=0.12,1.2,0.12 | texture=Textures/Checker.png | box=1,1,1 | body=static
+entity TorchFlameL  | pos=-2.2,1.25,-7.6 | particles=fire | script=Scripts/TorchFlameScript.java
+entity TorchPostR   | mesh=Meshes/Cube.obj | pos=2.2,0.6,-7.6 | scale=0.12,1.2,0.12 | texture=Textures/Checker.png | box=1,1,1 | body=static
+entity TorchFlameR  | pos=2.2,1.25,-7.6 | particles=fire | script=Scripts/TorchFlameScript.java

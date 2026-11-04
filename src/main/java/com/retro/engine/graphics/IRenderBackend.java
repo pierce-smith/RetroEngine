@@ -56,6 +56,13 @@ public interface IRenderBackend {
      * backend cannot sample it, in which case the editor keeps its bitmap font.
      */
     default boolean setUiFontAtlas(long textureHandle) { return false; }
+    /**
+     * Billboard particle quads for the main scene pass, drawn after opaque geometry with depth testing on and depth
+     * writes off. The vertices are copied (and batch texture handles resolved) during the call, never retained.
+     * A null list or zero batches draws no particles.
+     */
+    default void submitParticles(ParticleDrawList particles) {}
+
     /** Drops the submitted draw list; the next frame renders no scene geometry until another queue is submitted. */
     void clearSceneQueue();
 

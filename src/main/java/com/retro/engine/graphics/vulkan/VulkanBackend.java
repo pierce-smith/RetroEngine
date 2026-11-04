@@ -528,6 +528,23 @@ public class VulkanBackend implements IRenderBackend {
         }
     }
 
+    private final int[] particleFirst = new int[com.retro.engine.graphics.ParticleDrawList.MAX_BATCHES];
+    private final int[] particleCount = new int[com.retro.engine.graphics.ParticleDrawList.MAX_BATCHES];
+
+    @Override
+    public void submitParticles(com.retro.engine.graphics.ParticleDrawList particles) {
+        int batches = (particles == null || particles.vertexCount <= 0) ? 0 : Math.min(particles.batchCount, particleFirst.length);
+        if (batches > 0) {
+            gpuCache.updateParticleMesh(deviceManager, particles.vertices, particles.vertexCount);
+            if (gpuCache.getParticleVertexCount() <= 0) batches = 0;
+        }
+        for (int b = 0; b < batches; b++) {
+            particleFirst[b] = particles.batchFirstVertex[b];
+            particleCount[b] = particles.batchVertexCount[b];
+        }
+        passEncoder.setParticleBatches(batches, particleFirst, particleCount);
+    }
+
     @Override
     public void updateGridMesh(float[] vertices, int count) {
         gpuCache.updateGridMesh(deviceManager, vertices, count);

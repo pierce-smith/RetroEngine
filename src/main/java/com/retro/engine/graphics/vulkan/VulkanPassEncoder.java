@@ -42,6 +42,16 @@ public class VulkanPassEncoder {
     private final float[] identityLightSpace = new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
     private final float[] defaultGridView = new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,-5,1};
 
+    // Particle batches for the editor/game camera pass (arrays owned by VulkanBackend, rewritten only between frames)
+    private int particleBatchCount = 0;
+    private int[] particleFirst, particleCount;
+
+    public void setParticleBatches(int count, int[] first, int[] vertexCounts) {
+        particleBatchCount = count;
+        particleFirst = first;
+        particleCount = vertexCounts;
+    }
+
     // Screen NDC rect of the docked Scene tile the offscreen image is blitted into
     private float sceneMinX = -0.55f, sceneMinY = -0.50f, sceneMaxX = 0.55f, sceneMaxY = 0.88f;
 
@@ -161,6 +171,21 @@ public class VulkanPassEncoder {
 
             recordSceneDraws(cmd, stack, meshPush, bindlessSet, pipelineManager, gpuCache, deviceManager,
                     CAMERA_VIEW_EDITOR);
+
+            // STEP 2: Billboard particles after opaque geometry (depth test, no depth write, premultiplied blend)
+            long particleVbo = gpuCache.getParticleVertexBuffer();
+            if (particleBatchCount > 0 && particleVbo != 0L && pipelineManager.getGraphicsPipelineParticles() != 0L) {
+                FloatBuffer particlePush = stack.mallocFloat(32);
+                particlePush.put(viewMatrix != null && viewMatrix.length == 16 ? viewMatrix : defaultGridView);
+                particlePush.put(projMatrix != null && projMatrix.length == 16 ? projMatrix : identityLightSpace);
+                particlePush.flip();
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getGraphicsPipelineParticles());
+                vkCmdPushConstants(cmd, pipelineManager.getPipelineLayoutGrid(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, particlePush);
+                vkCmdBindVertexBuffers(cmd, 0, stack.longs(particleVbo), stack.longs(0L));
+                for (int b = 0; b < particleBatchCount; b++) {
+                    vkCmdDraw(cmd, particleCount[b], 1, particleFirst[b], 0);
+                }
+            }
 
             vkCmdEndRendering(cmd);
 

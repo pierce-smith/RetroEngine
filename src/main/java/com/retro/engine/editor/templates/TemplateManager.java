@@ -264,6 +264,7 @@ public final class TemplateManager {
                             e.addComponent(ui);
                         }
                         case "light" -> e.addComponent(new Light());
+                        case "particles" -> e.addComponent(particlePreset(val));
                         case "parent" -> parentNames.put(e, val);
                         default -> {
                             if (!key.startsWith("prop.")) throw new IOException("unknown key '" + key + "'");
@@ -284,6 +285,42 @@ public final class TemplateManager {
             link.getKey().parentId = parent.id;
         }
         return entities;
+    }
+
+    /** Built-in ParticleSystem presets for scene descriptors: {@code particles=fire|sparks}. */
+    private static com.retro.engine.ecs.components.ParticleSystem particlePreset(String name) {
+        com.retro.engine.ecs.components.ParticleSystem ps = new com.retro.engine.ecs.components.ParticleSystem();
+        switch (name) {
+            case "fire" -> {
+                ps.maxParticles = 160.0f;
+                ps.emissionRate = 70.0f;
+                ps.lifetime = 0.8f;
+                ps.startSize = 0.32f; ps.endSize = 0.04f;
+                ps.startColorR = 1.0f; ps.startColorG = 0.72f; ps.startColorB = 0.22f; ps.startColorA = 1.0f;
+                ps.endColorR = 0.9f; ps.endColorG = 0.12f; ps.endColorB = 0.02f; ps.endColorA = 0.0f;
+                ps.speed = 1.1f;
+                ps.gravityScale = -0.12f; // hot gas rises
+                ps.emitterShape = com.retro.engine.ecs.components.ParticleSystem.EmitterShape.CONE;
+                ps.shapeAngle = 12.0f;
+                ps.shapeRadius = 0.07f;
+                ps.blendMode = com.retro.engine.ecs.components.ParticleSystem.BlendMode.ADDITIVE;
+            }
+            case "sparks" -> {
+                ps.maxParticles = 64.0f;
+                ps.emissionRate = 0.0f;
+                ps.lifetime = 0.5f;
+                ps.startSize = 0.07f; ps.endSize = 0.02f;
+                ps.startColorR = 1.0f; ps.startColorG = 0.9f; ps.startColorB = 0.55f; ps.startColorA = 1.0f;
+                ps.endColorR = 1.0f; ps.endColorG = 0.35f; ps.endColorB = 0.05f; ps.endColorA = 0.0f;
+                ps.speed = 3.5f;
+                ps.gravityScale = 0.8f;
+                ps.emitterShape = com.retro.engine.ecs.components.ParticleSystem.EmitterShape.SPHERE;
+                ps.shapeRadius = 0.05f;
+                ps.blendMode = com.retro.engine.ecs.components.ParticleSystem.BlendMode.ADDITIVE;
+            }
+            default -> throw new IllegalArgumentException("unknown particle preset '" + name + "' (fire, sparks)");
+        }
+        return ps;
     }
 
     private static String asset(File assetsDir, String rel) {

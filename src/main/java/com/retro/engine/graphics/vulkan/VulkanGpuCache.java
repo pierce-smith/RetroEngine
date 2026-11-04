@@ -189,6 +189,7 @@ public class VulkanGpuCache {
     private final VulkanRingBuffer uiRingBuffer = new VulkanRingBuffer();
     private final VulkanRingBuffer pickOverlayRingBuffer = new VulkanRingBuffer();
     private final VulkanRingBuffer gridRingBuffer = new VulkanRingBuffer();
+    private final VulkanRingBuffer particleRingBuffer = new VulkanRingBuffer();
 
     // Opaque handle tables for registered assets; written from any thread, resolved lock-free during recording
     private final HandleRegistry<VulkanBuffer> meshHandles = new HandleRegistry<>();
@@ -266,6 +267,13 @@ public class VulkanGpuCache {
 
     public void updatePickOverlay(VulkanDevice device, float[] vertices, int count) {
         pickOverlayRingBuffer.updateBuffer(device, vertices, count, IRenderBackend.PICK_OVERLAY_VERTEX_FLOATS, deferredDisposalQueue, totalFrameCount);
+    }
+
+    public long getParticleVertexBuffer() { return particleRingBuffer.getCurrentBufferHandle(); }
+    public int getParticleVertexCount() { return particleRingBuffer.getVertexCount(); }
+
+    public void updateParticleMesh(VulkanDevice device, float[] vertices, int count) {
+        particleRingBuffer.updateBuffer(device, vertices, count, com.retro.engine.graphics.ParticleDrawList.FLOATS_PER_VERTEX, deferredDisposalQueue, totalFrameCount);
     }
 
     public void updateGridMesh(VulkanDevice device, float[] vertices, int count) {
@@ -1129,6 +1137,7 @@ public class VulkanGpuCache {
         uiRingBuffer.cleanup(vkDevice);
         pickOverlayRingBuffer.cleanup(vkDevice);
         gridRingBuffer.cleanup(vkDevice);
+        particleRingBuffer.cleanup(vkDevice);
 
         meshHandles.clear(buf -> {
             if (buf.bufferHandle != 0L) vkDestroyBuffer(vkDevice, buf.bufferHandle, null);

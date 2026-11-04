@@ -12,6 +12,7 @@ import com.retro.engine.ecs.components.Camera;
 import com.retro.engine.ecs.components.Light;
 import com.retro.engine.ecs.components.Material;
 import com.retro.engine.ecs.components.MeshFilter;
+import com.retro.engine.ecs.components.ParticleSystem;
 import com.retro.engine.ecs.components.Transform;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ViewportCamera;
@@ -72,9 +73,12 @@ public class SceneRenderPipeline {
         public final float[] cameraEye = new float[3];
         // Main Camera post-processing for the scene composite (disabled while authoring through the editor camera)
         public final PostProcessSettings postProcess = new PostProcessSettings();
+        // Camera-facing particle quads for the main scene pass (owned, grow-only storage)
+        public final ParticleDrawList particles = new ParticleDrawList();
 
         public void reset() {
             lights.reset();
+            particles.clear();
             renderQueue.clear();
             gridVisible = true;
             gridVertices = null;
@@ -334,6 +338,12 @@ public class SceneRenderPipeline {
             }
         }
 
+        // 3. Billboard particles (after entity residency marks, before the unreferenced-asset sweep)
+        if (entities != null && camera != null) {
+            extractParticles(snapshot.particles, entities, streamingService, handleEpoch);
+            totalActiveVertices += snapshot.particles.vertexCount;
+        }
+
         // Mods: RenderPassEvent may queue extra draws, add lights or tweak this frame's environment before sorting
         activeSnapshot = snapshot;
         ModLoader.onRenderPass(this, streamingService, queue, snapshot.lights, environment, GameView.isFullscreen());
@@ -386,10 +396,153 @@ public class SceneRenderPipeline {
             totalActiveVertices += snapshot.gridVertexCount;
         }
 
-        snapshot.totalDrawCalls = entityDrawCalls * (previewActive ? 2 : 1) + (snapshot.gridVisible ? 1 : 0) + 2;
+        snapshot.totalDrawCalls = entityDrawCalls * (previewActive ? 2 : 1) + (snapshot.gridVisible ? 1 : 0) + 2 + snapshot.particles.batchCount;
         snapshot.totalActiveVertices = totalActiveVertices;
 
         return snapshot;
+    }
+
+    // Particle systems visible this frame and their view depths, sorted back to front (grow-only scratch)
+    private ParticleSystem[] particleSystems = new ParticleSystem[16];
+    private float[] particleSystemDepth = new float[16];
+
+    /**
+     * Builds camera-facing quads for every live ParticleSystem into {@code out}: one batch per system (up to
+     * {@link ParticleDrawList#MAX_BATCHES}), systems ordered back to front, and ALPHA systems' particles sorted back to
+     * front as well (ADDITIVE blending is order-independent). Allocation-free once the scratch arrays have grown.
+     */
+    private void extractParticles(ParticleDrawList out, List<Entity> entities, AssetStreamer streamingService, int handleEpoch) {
+        // Billboard axes: camera right / up are the first two rows of the column-major world-to-view matrix
+        float rX = viewScratch[0], rY = viewScratch[4], rZ = viewScratch[8];
+        float uX = viewScratch[1], uY = viewScratch[5], uZ = viewScratch[9];
+
+        int systems = 0;
+        for (int ei = 0, n = entities.size(); ei < n; ei++) {
+            Entity entity = entities.get(ei);
+            ParticleSystem ps = entity.getComponent(ParticleSystem.class);
+            if (ps == null) continue;
+            String tex = ps.texturePath;
+            if (tex != null && !tex.isEmpty()) {
+                streamingService.markTextureReferenced(tex);
+                if (!streamingService.isTextureLoaded(tex)) streamingService.requestTextureAsync(tex);
+            }
+            int alive = ps.getAliveCount();
+            if (alive == 0 || ps.posX == null) continue;
+
+            // Sort systems by the centroid of their live particles (the emitter may have moved away from them)
+            float cx = 0.0f, cy = 0.0f, cz = 0.0f;
+            for (int i = 0; i < alive; i++) { cx += ps.posX[i]; cy += ps.posY[i]; cz += ps.posZ[i]; }
+            float inv = 1.0f / alive;
+            cx *= inv; cy *= inv; cz *= inv;
+            if (systems == particleSystems.length) growParticleScratch();
+            particleSystems[systems] = ps;
+            particleSystemDepth[systems] = -(depthRowX * cx + depthRowY * cy + depthRowZ * cz + depthRowW);
+            systems++;
+        }
+        if (systems == 0) return;
+
+        // Insertion sort, farthest first (a handful of systems)
+        for (int i = 1; i < systems; i++) {
+            ParticleSystem ps = particleSystems[i];
+            float d = particleSystemDepth[i];
+            int j = i - 1;
+            while (j >= 0 && particleSystemDepth[j] < d) {
+                particleSystems[j + 1] = particleSystems[j];
+                particleSystemDepth[j + 1] = particleSystemDepth[j];
+                j--;
+            }
+            particleSystems[j + 1] = ps;
+            particleSystemDepth[j + 1] = d;
+        }
+
+        // Keep the nearest MAX_BATCHES systems when there are more
+        int first = Math.max(0, systems - ParticleDrawList.MAX_BATCHES);
+        for (int si = first; si < systems; si++) {
+            ParticleSystem ps = particleSystems[si];
+            particleSystems[si] = null; // don't retain components between frames
+            int alive = ps.getAliveCount();
+            out.ensureCapacity(alive);
+
+            boolean additive = ps.blendMode == ParticleSystem.BlendMode.ADDITIVE;
+            int[] order = ps.drawOrder;
+            float[] depth = ps.drawDepth;
+            for (int i = 0; i < alive; i++) {
+                order[i] = i;
+                depth[i] = -(depthRowX * ps.posX[i] + depthRowY * ps.posY[i] + depthRowZ * ps.posZ[i] + depthRowW);
+            }
+            if (!additive) {
+                for (int i = 1; i < alive; i++) {
+                    int idx = order[i];
+                    float d = depth[idx];
+                    int j = i - 1;
+                    while (j >= 0 && depth[order[j]] < d) { order[j + 1] = order[j]; j--; }
+                    order[j + 1] = idx;
+                }
+            }
+
+            int batch = out.batchCount++;
+            out.batchFirstVertex[batch] = out.vertexCount;
+            out.batchTexture[batch] = resolveParticleTexture(ps, streamingService, handleEpoch);
+
+            float[] v = out.vertices;
+            int w = out.vertexCount * ParticleDrawList.FLOATS_PER_VERTEX;
+            int emitted = 0;
+            for (int k = 0; k < alive; k++) {
+                int i = order[k];
+                float t = ps.life[i] > 0.0f ? Math.min(1.0f, ps.age[i] / ps.life[i]) : 1.0f;
+                float h = 0.5f * (ps.startSize + (ps.endSize - ps.startSize) * t);
+                float a = clamp(ps.startColorA + (ps.endColorA - ps.startColorA) * t, 0.0f, 1.0f);
+                if (h <= 0.0f || a <= 0.0f || depth[i] < depthNear * 0.5f) continue; // invisible or behind the camera
+                float r = (ps.startColorR + (ps.endColorR - ps.startColorR) * t) * a;
+                float g = (ps.startColorG + (ps.endColorG - ps.startColorG) * t) * a;
+                float b = (ps.startColorB + (ps.endColorB - ps.startColorB) * t) * a;
+                float outA = additive ? 0.0f : a;
+
+                float px = ps.posX[i], py = ps.posY[i], pz = ps.posZ[i];
+                float ax = (rX + uX) * h, ay = (rY + uY) * h, az = (rZ + uZ) * h; // to top-right
+                float bx = (rX - uX) * h, by = (rY - uY) * h, bz = (rZ - uZ) * h; // to bottom-right
+                // BL, BR, TR, BL, TR, TL
+                w = putParticleVertex(v, w, px - ax, py - ay, pz - az, r, g, b, outA, 0.0f, 1.0f);
+                w = putParticleVertex(v, w, px + bx, py + by, pz + bz, r, g, b, outA, 1.0f, 1.0f);
+                w = putParticleVertex(v, w, px + ax, py + ay, pz + az, r, g, b, outA, 1.0f, 0.0f);
+                w = putParticleVertex(v, w, px - ax, py - ay, pz - az, r, g, b, outA, 0.0f, 1.0f);
+                w = putParticleVertex(v, w, px + ax, py + ay, pz + az, r, g, b, outA, 1.0f, 0.0f);
+                w = putParticleVertex(v, w, px - bx, py - by, pz - bz, r, g, b, outA, 0.0f, 0.0f);
+                emitted++;
+            }
+            int vertexCount = emitted * ParticleDrawList.VERTICES_PER_PARTICLE;
+            if (vertexCount == 0) {
+                out.batchCount--;
+                continue;
+            }
+            out.batchVertexCount[batch] = vertexCount;
+            out.vertexCount += vertexCount;
+        }
+        for (int si = 0; si < first; si++) particleSystems[si] = null;
+    }
+
+    private static int putParticleVertex(float[] v, int w, float x, float y, float z, float r, float g, float b, float a, float u, float t) {
+        v[w] = x; v[w + 1] = y; v[w + 2] = z;
+        v[w + 3] = r; v[w + 4] = g; v[w + 5] = b; v[w + 6] = a;
+        v[w + 7] = u; v[w + 8] = t;
+        return w + ParticleDrawList.FLOATS_PER_VERTEX;
+    }
+
+    private static long resolveParticleTexture(ParticleSystem ps, AssetStreamer streamingService, int handleEpoch) {
+        String tex = ps.texturePath;
+        if (tex == null || tex.isEmpty()) return 0L;
+        long handle = ps.getCachedTextureHandle(tex, handleEpoch);
+        if (handle == 0L) {
+            handle = streamingService.getTextureHandle(tex);
+            if (handle != 0L) ps.cacheTextureHandle(tex, handle, handleEpoch);
+        }
+        return handle;
+    }
+
+    private void growParticleScratch() {
+        int cap = particleSystems.length * 2;
+        particleSystems = Arrays.copyOf(particleSystems, cap);
+        particleSystemDepth = Arrays.copyOf(particleSystemDepth, cap);
     }
 
     private static final long POST_FX_EPOCH = System.nanoTime();
@@ -427,6 +580,7 @@ public class SceneRenderPipeline {
         rhi.setCameraView(snapshot.cameraViewActive ? snapshot.cameraView : null,
                 snapshot.cameraEye[0], snapshot.cameraEye[1], snapshot.cameraEye[2]);
         rhi.submitRenderQueue(snapshot.renderQueue);
+        rhi.submitParticles(snapshot.particles);
 
         rhi.setPickOverlay(snapshot.gizmoPickVertices, snapshot.gizmoPickVertexCount);
         ViewportPanel.updatePicking(rhi);

@@ -37,7 +37,7 @@ struct Uniforms {
     float4 fogColorDensity;   // 192: rgb = fogColor, w = opacity at fog end (1 = fog on, 0 = fog disabled)
     float4 matParams;         // 208: x = reflectStrength, y = shadowOpacity, z = shadowMapBias
     uint materialMask;        // 224: bit 0 albedo, 1 normal, 2 specular, 3 lightmap, 4 emissive
-    uint isUnlit;             // 228: 0 = Lit Model, 1 = Procedural Grid
+    uint isUnlit;             // 228: 0 = Lit Model, 1 = Procedural Grid, 2 = Billboard Particles
     uint stride;              // 232
     uint passFlags;           // 236: bit 0 shadowBlob, bit 1 reflection, bit 4 skinned
     float4x4 lightSpace;      // 240: directional shadow map view-projection
@@ -315,6 +315,24 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
         // Blobs fade out with the fog so they never leave dark patches on it
         float alpha = max(0.0, 1.0 - distSq) * uniforms.matParams.y * (1.0 - fogAmount(uniforms, in.viewDist));
         return float4(0.02, 0.02, 0.05, alpha * 0.75);
+    }
+
+    // Mode 2: Camera-facing billboard particles (ParticleDrawList). Vertex color is premultiplied: (rgb * a, a) for
+    // alpha blending, (rgb * a, 0) for additive; the pipeline blends ONE / ONE_MINUS_SRC_ALPHA.
+    if (uniforms.isUnlit == 2u) {
+        float4 tex;
+        if ((uniforms.materialMask & MAT_ALBEDO) != 0u) {
+            tex = args.albedo.sample(smp, in.uv);
+        } else {
+            float2 c = in.uv * 2.0 - 1.0;
+            float soft = saturate(1.0 - dot(c, c));
+            tex = float4(1.0, 1.0, 1.0, soft * soft);
+        }
+        float coverage = tex.a * (1.0 - fogAmount(uniforms, in.viewDist));
+        if (coverage < 0.002) {
+            discard_fragment();
+        }
+        return float4(in.color.rgb * tex.rgb * coverage, in.color.a * coverage);
     }
 
     // Mode 1: Procedural Ray-Plane Anti-Aliased Infinite Shader Grid

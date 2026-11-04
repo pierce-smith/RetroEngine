@@ -41,9 +41,10 @@ public class MetalPipeline {
     private static final long MTL_COMPARE_LESS_EQUAL = 3L;
     private static final long MTL_COMPARE_ALWAYS = 7L;
 
-    private enum Blend { NONE, ALPHA, UI }
+    private enum Blend { NONE, ALPHA, UI, PREMULTIPLIED }
 
     private long pipelineState3D = 0L;
+    private long pipelineStateParticles = 0L;
     private long pipelineStateComposition = 0L;
     private long pipelineStatePostProcess = 0L;
     private long depthStencilState3D = 0L;
@@ -106,6 +107,9 @@ public class MetalPipeline {
 
         // 1. Offscreen 3D pipeline: alpha-blended BGRA8 color + Depth32Float
         pipelineState3D = createPipeline(device, "offscreen 3D", vertLit, fragLit, Blend.ALPHA, MTL_PIXEL_FORMAT_DEPTH32_FLOAT);
+        // 1b. Billboard particles: same lit library (isUnlit = 2 path), premultiplied blending so one pipeline serves
+        // both alpha (rgb * a, a) and additive (rgb, 0) particles
+        pipelineStateParticles = createPipeline(device, "particles", vertLit, fragLit, Blend.PREMULTIPLIED, MTL_PIXEL_FORMAT_DEPTH32_FLOAT);
         // 2. Viewport composition quad: opaque 1:1 copy of the offscreen color, no depth attachment
         pipelineStateComposition = createPipeline(device, "viewport composition", vertComp, fragComp, Blend.NONE, 0L);
         // 2b. Post-processed viewport composition (same target as 2)
@@ -152,10 +156,11 @@ public class MetalPipeline {
             invokePPPP(color0, sel_registerName("setPixelFormat:"), colorFormat, send);
             if (blend != Blend.NONE) {
                 invokePPPP(color0, sel_registerName("setBlendingEnabled:"), 1L, send);
-                invokePPPP(color0, sel_registerName("setSourceRGBBlendFactor:"), 4L, send);       // SourceAlpha
+                // SourceAlpha, or One for premultiplied particles
+                invokePPPP(color0, sel_registerName("setSourceRGBBlendFactor:"), blend == Blend.PREMULTIPLIED ? 1L : 4L, send);
                 invokePPPP(color0, sel_registerName("setDestinationRGBBlendFactor:"), 5L, send);  // OneMinusSourceAlpha
                 // UI accumulates coverage into the drawable's alpha (transparent glyph padding never punches holes); 3D blends alpha like color
-                invokePPPP(color0, sel_registerName("setSourceAlphaBlendFactor:"), blend == Blend.UI ? 1L : 4L, send);
+                invokePPPP(color0, sel_registerName("setSourceAlphaBlendFactor:"), (blend == Blend.UI || blend == Blend.PREMULTIPLIED) ? 1L : 4L, send);
                 invokePPPP(color0, sel_registerName("setDestinationAlphaBlendFactor:"), 5L, send);
             }
         }
@@ -289,7 +294,7 @@ public class MetalPipeline {
     private long[] ownedStates() {
         return new long[] { pipelineState3D, pipelineStateComposition, depthStencilState3D, depthStencilStateShadow,
                 pipelineStateShadowMap, depthStencilStateShadowMap, pipelineStatePick, pipelineStatePickOverlay,
-                pipelineStateUI, depthStencilStateUI, pipelineStatePostProcess };
+                pipelineStateUI, depthStencilStateUI, pipelineStatePostProcess, pipelineStateParticles };
     }
 
     /** True when this instance built every state {@code previous} had, so swapping it in cannot switch a pass off. */
@@ -306,10 +311,11 @@ public class MetalPipeline {
         for (long state : ownedStates()) device.release(state);
         pipelineState3D = pipelineStateComposition = depthStencilState3D = depthStencilStateShadow = 0L;
         pipelineStateShadowMap = depthStencilStateShadowMap = pipelineStatePick = pipelineStatePickOverlay = 0L;
-        pipelineStateUI = depthStencilStateUI = pipelineStatePostProcess = 0L;
+        pipelineStateUI = depthStencilStateUI = pipelineStatePostProcess = pipelineStateParticles = 0L;
     }
 
     public long getPipelineState3D() { return pipelineState3D; }
+    public long getPipelineStateParticles() { return pipelineStateParticles; }
     public long getPipelineStateComposition() { return pipelineStateComposition; }
     public long getPipelineStatePostProcess() { return pipelineStatePostProcess; }
     public long getDepthStencilState3D() { return depthStencilState3D; }

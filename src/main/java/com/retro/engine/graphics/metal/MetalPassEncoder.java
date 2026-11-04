@@ -98,6 +98,7 @@ public class MetalPassEncoder {
     private long send = 0L;
     private long boundPipeline;
     private long boundDepthStencil;
+    private long particleVertexBuffer;
     private long boundFragmentTexture;
     private long boundFragmentSampler;
     private final long[] boundVertexBuffers = new long[MAX_BUFFER_SLOTS];
@@ -158,6 +159,19 @@ public class MetalPassEncoder {
         this.pickTexelY = texelY;
     }
 
+    // Particle batches for the main scene pass (arrays owned by MetalBackend, rewritten only between frames)
+    private int particleBatchCount = 0;
+    private int[] particleFirst, particleCount;
+    private long[] particleTextures, particleResourceIds;
+
+    public void setParticleBatches(int count, int[] first, int[] vertexCounts, long[] textures, long[] resourceIds) {
+        particleBatchCount = count;
+        particleFirst = first;
+        particleCount = vertexCounts;
+        particleTextures = textures;
+        particleResourceIds = resourceIds;
+    }
+
     public void setSceneAspect(float aspect) {
         this.sceneAspect = aspect;
     }
@@ -202,6 +216,7 @@ public class MetalPassEncoder {
         boolean drawGrid = gridBuffer != 0L && resourceCache.getGridVertexCount() > 0;
         long groundQuadBuf = resourceCache.getGroundQuadBuffer();
 
+        particleVertexBuffer = particleBatchCount > 0 ? resourceCache.getParticleVertexBuffer() : 0L;
         collectResidency(entityCount, streamingUniformBuffer, bonePaletteBuffer, defaultTexture,
                 drawGrid ? gridBuffer : 0L, groundQuadBuf);
 
@@ -228,7 +243,7 @@ public class MetalPassEncoder {
         encodeScenePass(commandBuffer, framebuffer.getOffscreenColorTexture(), framebuffer.getOffscreenDepthTexture(),
                 pipeline, texture, resourceCache, streamer, entityCount, pBufferContents, currentSlotOffset,
                 defaultResourceId, editorViewProj, editorCamPos, drawGrid ? gridBuffer : 0L, groundQuadBuf,
-                MetalUniformStream.SLOT_BASE_ENTITIES, MetalUniformStream.SLOT_BASE_SHADOW_BLOBS);
+                MetalUniformStream.SLOT_BASE_ENTITIES, MetalUniformStream.SLOT_BASE_SHADOW_BLOBS, true);
 
         // PASS 1B: Color-ID picking from the editor camera, with the probed texel blitted back for the host
         if (pickTarget != null && pickTarget.getOffscreenColorTexture() != 0L && pickReadbackBuffer != 0L && pipeline.getPipelineStatePick() != 0L) {
@@ -240,7 +255,7 @@ public class MetalPassEncoder {
             encodeScenePass(commandBuffer, previewTarget.getOffscreenColorTexture(), previewTarget.getOffscreenDepthTexture(),
                     pipeline, texture, resourceCache, streamer, entityCount, pBufferContents, currentSlotOffset,
                     defaultResourceId, previewViewProj, previewCamPos, 0L, groundQuadBuf,
-                    MetalUniformStream.SLOT_BASE_PREVIEW_ENTITIES, MetalUniformStream.SLOT_BASE_PREVIEW_SHADOW_BLOBS);
+                    MetalUniformStream.SLOT_BASE_PREVIEW_ENTITIES, MetalUniformStream.SLOT_BASE_PREVIEW_SHADOW_BLOBS, false);
         }
     }
 
@@ -252,7 +267,7 @@ public class MetalPassEncoder {
                                  MetalPipeline pipeline, MetalTexture texture, MetalGpuCache resourceCache, MetalUniformStream streamer,
                                  int entityCount, long pBufferContents, long currentSlotOffset,
                                  long defaultResourceId, float[] viewProj, float[] camPos, long gridBuffer, long groundQuadBuf,
-                                 int entitySlotBase, int blobSlotBase) {
+                                 int entitySlotBase, int blobSlotBase, boolean drawParticles) {
         long offscreenPassDesc = invokePPP(renderPassDescClass(), SEL_RENDER_PASS_DESCRIPTOR, send);
 
         long colorAttachOff = invokePPP(offscreenPassDesc, SEL_COLOR_ATTACHMENTS, send);
@@ -411,6 +426,33 @@ public class MetalPassEncoder {
                 drawInstanced(MTL_PRIMITIVE_TRIANGLE, 0L, 6L, slot);
 
                 shadowIndex++;
+            }
+        }
+
+        // 1D. Billboard particles: after all opaque and blob draws, depth-tested without depth writes
+        if (drawParticles && particleBatchCount > 0 && particleVertexBuffer != 0L && pipeline.getPipelineStateParticles() != 0L) {
+            bindPipeline(pipeline.getPipelineStateParticles());
+            long noWriteState = pipeline.getDepthStencilStateShadow() != 0L ? pipeline.getDepthStencilStateShadow() : pipeline.getDepthStencilState3D();
+            bindDepthStencil(noWriteState);
+            long vertexAddress = MetalBuffer.gpuAddress(particleVertexBuffer, send);
+            float[] identityModel = streamer.createModelMatrix(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f);
+            for (int b = 0; b < particleBatchCount; b++) {
+                int slot = MetalUniformStream.SLOT_BASE_PARTICLES + b;
+                long baseAddr = pBufferContents + currentSlotOffset + MetalUniformStream.UNIFORM_STRIDE * slot;
+                MemoryUtil.memFloatBuffer(baseAddr + MetalUniformStream.OFFSET_MVP, 16).put(viewProj);
+                MemoryUtil.memFloatBuffer(baseAddr + MetalUniformStream.OFFSET_MODEL, 16).put(identityModel);
+                streamer.writeDrawEnvironment(baseAddr, lights.environment());
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_MATERIAL_MASK,
+                        particleResourceIds[b] != 0L ? MetalUniformStream.MATERIAL_ALBEDO : 0);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_IS_UNLIT, 2);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_STRIDE, com.retro.engine.graphics.ParticleDrawList.FLOATS_PER_VERTEX);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PASS_FLAGS, 0);
+
+                writeDrawArgs(slot, vertexAddress, streamer.getUniformSlotAddress(slot), streamer.getBonePaletteAddress(0), -1, defaultResourceId);
+                if (particleResourceIds[b] != 0L) {
+                    MemoryUtil.memPutLong(pDrawArgs + MetalUniformStream.DRAW_ARGS_STRIDE * slot + MetalUniformStream.DRAW_ARGS_TEXTURES, particleResourceIds[b]);
+                }
+                drawInstanced(MTL_PRIMITIVE_TRIANGLE, particleFirst[b], particleCount[b], slot);
             }
         }
 
@@ -730,7 +772,7 @@ public class MetalPassEncoder {
     private void collectResidency(int entityCount, long uniformBuffer, long boneBuffer,
                                   long defaultTexture, long gridBuffer, long groundQuadBuffer) {
         int n = 0;
-        int capacity = 5 + entityCount * (1 + MetalUniformStream.MATERIAL_CHANNELS);
+        int capacity = 6 + particleBatchCount + entityCount * (1 + MetalUniformStream.MATERIAL_CHANNELS);
         if (residencyScratch.length < capacity) {
             residencyScratch = new long[Math.max(capacity, residencyScratch.length * 2)];
         }
@@ -740,6 +782,10 @@ public class MetalPassEncoder {
         scratch[n++] = defaultTexture;
         scratch[n++] = gridBuffer;
         scratch[n++] = groundQuadBuffer;
+        if (particleBatchCount > 0) {
+            scratch[n++] = particleVertexBuffer;
+            for (int b = 0; b < particleBatchCount; b++) scratch[n++] = particleTextures[b];
+        }
         for (int i = 0; i < entityCount; i++) {
             scratch[n++] = draws.vertexBuffer[i];
             int base = i * MetalDrawBuffers.CHANNELS;

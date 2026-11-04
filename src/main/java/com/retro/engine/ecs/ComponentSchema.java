@@ -10,6 +10,7 @@ import com.retro.engine.ecs.components.CharacterControllerComponent;
 import com.retro.engine.ecs.components.Light;
 import com.retro.engine.ecs.components.Material;
 import com.retro.engine.ecs.components.MeshFilter;
+import com.retro.engine.ecs.components.ParticleSystem;
 import com.retro.engine.ecs.components.RigidBodyComponent;
 import com.retro.engine.ecs.components.ScriptComponent;
 import com.retro.engine.ecs.components.SphereCollider;
@@ -47,7 +48,7 @@ public final class ComponentSchema {
             ScriptComponent.class, RigidBodyComponent.class, BoxCollider.class, SphereCollider.class,
             CapsuleCollider.class, CharacterControllerComponent.class, VehicleControllerComponent.class,
             AnimatorComponent.class, UICanvasComponent.class, UIPanel.class, UIText.class, UIImage.class,
-            UIProgressBar.class
+            UIProgressBar.class, ParticleSystem.class
     );
 
     /** How the inspector presents and edits a property. */

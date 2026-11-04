@@ -42,6 +42,7 @@ public final class ComponentCache {
     private MeshFilter meshFilter;
     private CharacterControllerComponent characterController;
     private VehicleControllerComponent vehicleController;
+    private com.retro.engine.ecs.components.ParticleSystem particleSystem;
 
     public void bind(Entity target) {
         this.entity = target;
@@ -67,6 +68,7 @@ public final class ComponentCache {
         meshFilter = null;
         characterController = null;
         vehicleController = null;
+        particleSystem = null;
     }
 
     /** False when unbound; otherwise drops stale references if the entity's components changed. */
@@ -161,6 +163,12 @@ public final class ComponentCache {
         if (!validate()) return null;
         if (characterController == null) characterController = entity.getComponent(CharacterControllerComponent.class);
         return characterController;
+    }
+
+    public com.retro.engine.ecs.components.ParticleSystem particleSystem() {
+        if (!validate()) return null;
+        if (particleSystem == null) particleSystem = entity.getComponent(com.retro.engine.ecs.components.ParticleSystem.class);
+        return particleSystem;
     }
 
     public VehicleControllerComponent vehicleController() {

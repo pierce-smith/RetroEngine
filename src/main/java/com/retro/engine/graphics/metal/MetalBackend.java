@@ -264,6 +264,31 @@ public class MetalBackend implements IRenderBackend {
 
     @Override public void clearSceneQueue() { drawBuffers.count = 0; }
 
+    // Particle batches resolved at submission (id<MTLTexture> for residency, gpuResourceID for DrawArgs; 0L = soft particle)
+    private final int[] particleFirst = new int[com.retro.engine.graphics.ParticleDrawList.MAX_BATCHES];
+    private final int[] particleCount = new int[com.retro.engine.graphics.ParticleDrawList.MAX_BATCHES];
+    private final long[] particleTextures = new long[com.retro.engine.graphics.ParticleDrawList.MAX_BATCHES];
+    private final long[] particleResourceIds = new long[com.retro.engine.graphics.ParticleDrawList.MAX_BATCHES];
+
+    @Override
+    public void submitParticles(com.retro.engine.graphics.ParticleDrawList particles) {
+        int batches = (particles == null || particles.vertexCount <= 0) ? 0 : Math.min(particles.batchCount, particleFirst.length);
+        if (batches > 0) {
+            resourceCache.updateParticleMesh(metalDevice, particles.vertices, particles.vertexCount);
+            if (resourceCache.getParticleVertexCount() <= 0) batches = 0;
+        }
+        for (int b = 0; b < batches; b++) {
+            particleFirst[b] = particles.batchFirstVertex[b];
+            particleCount[b] = particles.batchVertexCount[b];
+            long handle = particles.batchTexture[b];
+            MetalTexture tex = handle != 0L ? resourceCache.getTexture(handle) : null;
+            boolean live = tex != null && tex.getBindableResourceId() != 0L;
+            particleTextures[b] = live ? tex.getBindableTexture() : 0L;
+            particleResourceIds[b] = live ? tex.getBindableResourceId() : 0L;
+        }
+        passEncoder.setParticleBatches(batches, particleFirst, particleCount, particleTextures, particleResourceIds);
+    }
+
     /**
      * Resolves every command's mesh and material handles to raw id<MTLBuffer> / id<MTLTexture> objects, gpuAddresses
      * and gpuResourceIDs in key order, so MetalPassEncoder writes argument buffers without lookups. Commands whose mesh
