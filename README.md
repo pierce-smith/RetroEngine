@@ -64,5 +64,5 @@ Starting out as a 1-month proof-of-concept, RetroEngine now implements a fully f
 ## License & Credits
 
 - **License**: Distributed under the **Apache License 2.0**. See LICENSE.txt for details.
-- **Sample Assets**: Big thanks to Kenney for the UI audio sounds, and Drillimpact for the rigged arms.
+- **Sample Assets**: Big thanks to Kenney for the UI audio sounds, Drillimpact for the rigged arms, and GGBotNet for the car assets.
 - **Acknowledgments**: *Special thanks to all team members, friends, and early testers who provided feedback and support during this 1-month sprint.*
