@@ -45,6 +45,7 @@ public class MetalPipeline {
 
     private long pipelineState3D = 0L;
     private long pipelineStateComposition = 0L;
+    private long pipelineStatePostProcess = 0L;
     private long depthStencilState3D = 0L;
     private long depthStencilStateShadow = 0L;
     private long pipelineStateShadowMap = 0L;
@@ -70,11 +71,13 @@ public class MetalPipeline {
         long libShadow = loadLibrary(device, "shadow_depth");
         long libUI = loadLibrary(device, "ui");
         long libPick = loadLibrary(device, "entity_id");
+        long libPost = loadLibrary(device, "postprocess");
         if (libLit == 0L || libShadow == 0L || libUI == 0L) {
             device.release(libLit);
             device.release(libShadow);
             device.release(libUI);
             device.release(libPick);
+            device.release(libPost);
             return false;
         }
 
@@ -86,6 +89,9 @@ public class MetalPipeline {
         long fragUI = newFunction(device, libUI, "uiFragmentMain");
         long vertComp = newFunction(device, libUI, "compositeVertexMain");
         long fragComp = newFunction(device, libUI, "compositeFragmentMain");
+        // Post-processing is optional: a missing library falls back to the plain composite
+        long vertPost = libPost != 0L ? newFunction(device, libPost, "postVertexMain") : 0L;
+        long fragPost = libPost != 0L ? newFunction(device, libPost, "postFragmentMain") : 0L;
         // Picking is optional: a missing entity_id library only disables GPU picks
         long vertPick = libPick != 0L ? newFunction(device, libPick, "pickVertexMain") : 0L;
         long fragPick = libPick != 0L ? newFunction(device, libPick, "pickFragmentMain") : 0L;
@@ -96,11 +102,14 @@ public class MetalPipeline {
         device.release(libShadow);
         device.release(libUI);
         device.release(libPick);
+        device.release(libPost);
 
         // 1. Offscreen 3D pipeline: alpha-blended BGRA8 color + Depth32Float
         pipelineState3D = createPipeline(device, "offscreen 3D", vertLit, fragLit, Blend.ALPHA, MTL_PIXEL_FORMAT_DEPTH32_FLOAT);
         // 2. Viewport composition quad: opaque 1:1 copy of the offscreen color, no depth attachment
         pipelineStateComposition = createPipeline(device, "viewport composition", vertComp, fragComp, Blend.NONE, 0L);
+        // 2b. Post-processed viewport composition (same target as 2)
+        pipelineStatePostProcess = createPipeline(device, "viewport post-process", vertPost, fragPost, Blend.NONE, 0L);
         // 3. Directional shadow map depth pipeline: no color attachments, Depth32Float
         pipelineStateShadowMap = createPipeline(device, "directional shadow map", vertShadow, fragShadow, null, MTL_PIXEL_FORMAT_DEPTH32_FLOAT);
         // 4. 2D UI overlay: alpha-blended color, no depth attachment
@@ -110,7 +119,7 @@ public class MetalPipeline {
         // 6. Color-ID pick overlay (gizmo handles): same targets, drawn with the always-pass UI depth state
         pipelineStatePickOverlay = createPipeline(device, "color-ID pick overlay", vertPickOverlay, fragPickOverlay, Blend.NONE, MTL_PIXEL_FORMAT_RGBA8_UINT, MTL_PIXEL_FORMAT_DEPTH32_FLOAT);
 
-        for (long fn : new long[] { vertLit, fragLit, vertShadow, fragShadow, vertUI, fragUI, vertComp, fragComp, vertPick, fragPick, vertPickOverlay, fragPickOverlay }) {
+        for (long fn : new long[] { vertLit, fragLit, vertShadow, fragShadow, vertUI, fragUI, vertComp, fragComp, vertPick, fragPick, vertPickOverlay, fragPickOverlay, vertPost, fragPost }) {
             device.release(fn);
         }
 
@@ -280,7 +289,7 @@ public class MetalPipeline {
     private long[] ownedStates() {
         return new long[] { pipelineState3D, pipelineStateComposition, depthStencilState3D, depthStencilStateShadow,
                 pipelineStateShadowMap, depthStencilStateShadowMap, pipelineStatePick, pipelineStatePickOverlay,
-                pipelineStateUI, depthStencilStateUI };
+                pipelineStateUI, depthStencilStateUI, pipelineStatePostProcess };
     }
 
     /** True when this instance built every state {@code previous} had, so swapping it in cannot switch a pass off. */
@@ -297,11 +306,12 @@ public class MetalPipeline {
         for (long state : ownedStates()) device.release(state);
         pipelineState3D = pipelineStateComposition = depthStencilState3D = depthStencilStateShadow = 0L;
         pipelineStateShadowMap = depthStencilStateShadowMap = pipelineStatePick = pipelineStatePickOverlay = 0L;
-        pipelineStateUI = depthStencilStateUI = 0L;
+        pipelineStateUI = depthStencilStateUI = pipelineStatePostProcess = 0L;
     }
 
     public long getPipelineState3D() { return pipelineState3D; }
     public long getPipelineStateComposition() { return pipelineStateComposition; }
+    public long getPipelineStatePostProcess() { return pipelineStatePostProcess; }
     public long getDepthStencilState3D() { return depthStencilState3D; }
     public long getDepthStencilStateShadow() { return depthStencilStateShadow; }
     public long getPipelineStateShadowMap() { return pipelineStateShadowMap; }

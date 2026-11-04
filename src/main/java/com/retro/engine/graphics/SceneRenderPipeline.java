@@ -70,6 +70,8 @@ public class SceneRenderPipeline {
         public boolean cameraViewActive = false;
         public final float[] cameraView = new float[16];
         public final float[] cameraEye = new float[3];
+        // Main Camera post-processing for the scene composite (disabled while authoring through the editor camera)
+        public final PostProcessSettings postProcess = new PostProcessSettings();
 
         public void reset() {
             lights.reset();
@@ -83,6 +85,7 @@ public class SceneRenderPipeline {
             totalActiveVertices = 0;
             cameraPreviewActive = false;
             cameraViewActive = false;
+            postProcess.disable();
         }
     }
 
@@ -142,6 +145,7 @@ public class SceneRenderPipeline {
         } else {
             depthRowX = depthRowY = depthRowZ = depthRowW = 0.0f;
         }
+        extractPostProcess(snapshot, editorManager, camera);
         RenderQueue queue = snapshot.renderQueue;
         shadowFrustum.reset();
 
@@ -388,6 +392,29 @@ public class SceneRenderPipeline {
         return snapshot;
     }
 
+    private static final long POST_FX_EPOCH = System.nanoTime();
+
+    /** Main Camera post-processing applies whenever the scene is viewed through a game camera (Play or entity view). */
+    private static void extractPostProcess(RenderSceneSnapshot snapshot, EditorWorkspace editorManager, ViewportCamera camera) {
+        PostProcessSettings fx = snapshot.postProcess;
+        fx.disable();
+        boolean gameView = editorManager.getPlayState() != SceneWorld.PlayState.EDITING || (camera != null && camera.hasEntityView());
+        if (!gameView) return;
+        Entity main = SceneWorld.findMainCamera(editorManager.getSceneEntities());
+        Camera cam = main != null ? main.getComponent(Camera.class) : null;
+        if (cam == null || !cam.postProcessEnabled) return;
+        fx.enabled = true;
+        fx.vignette = clamp(cam.vignetteIntensity, 0.0f, 1.0f);
+        fx.scanlines = clamp(cam.scanlineIntensity, 0.0f, 1.0f);
+        fx.scanlineSpeed = cam.scanlineSpeed;
+        fx.chromatic = clamp(cam.chromaticOffset, 0.0f, 64.0f);
+        fx.saturation = clamp(cam.saturation, 0.0f, 4.0f);
+        fx.contrast = clamp(cam.contrast, 0.0f, 4.0f);
+        fx.time = (float) ((System.nanoTime() - POST_FX_EPOCH) * 1e-9 % 3600.0);
+    }
+
+    private static float clamp(float v, float lo, float hi) { return Float.isNaN(v) ? lo : Math.max(lo, Math.min(hi, v)); }
+
     /**
      * Submits a decoupled RenderSceneSnapshot directly to RHI without touching EditorWorkspace.
      */
@@ -403,6 +430,7 @@ public class SceneRenderPipeline {
 
         rhi.setPickOverlay(snapshot.gizmoPickVertices, snapshot.gizmoPickVertexCount);
         ViewportPanel.updatePicking(rhi);
+        rhi.setPostProcess(snapshot.postProcess);
         rhi.setSceneViewport(snapshot.sceneMinX, snapshot.sceneMinY, snapshot.sceneMaxX, snapshot.sceneMaxY, snapshot.sceneAspect);
         rhi.setCameraPreview(snapshot.cameraPreviewActive, snapshot.cameraPreviewViewProj,
                 snapshot.cameraPreviewPosX, snapshot.cameraPreviewPosY, snapshot.cameraPreviewPosZ);

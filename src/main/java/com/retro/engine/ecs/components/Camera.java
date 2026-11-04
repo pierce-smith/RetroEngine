@@ -25,6 +25,32 @@ public class Camera extends Component {
     @InspectorProperty(order = 4, label = "UI CANVAS", type = PropertyType.TEXT, since = 3, prefabSince = 3)
     public String uiCanvas = "";
 
+    // --- Post-processing (single fullscreen pass over the scene image while this is the Main Camera) ---
+    @InspectorProperty(order = 5, label = "POST FX", type = PropertyType.TOGGLE, since = 7, prefabSince = 6)
+    public boolean postProcessEnabled = false;
+
+    /** Edge darkening strength, 0 = off. */
+    @InspectorProperty(order = 6, label = "VIGNETTE", min = 0.0f, max = 1.0f, step = 0.05f, since = 7, prefabSince = 6)
+    public float vignetteIntensity = 0.35f;
+
+    /** CRT scanline darkening strength, 0 = off. */
+    @InspectorProperty(order = 7, label = "SCANLINES", min = 0.0f, max = 1.0f, step = 0.05f, since = 7, prefabSince = 6)
+    public float scanlineIntensity = 0.25f;
+
+    /** Scanline scroll speed in lines per second (0 = static). */
+    @InspectorProperty(order = 8, label = "SCANLINE SPEED", min = 0.0f, max = 60.0f, step = 1.0f, since = 7, prefabSince = 6)
+    public float scanlineSpeed = 4.0f;
+
+    /** Red/blue channel split at the screen edges, in pixels. */
+    @InspectorProperty(order = 9, label = "CHROMATIC", min = 0.0f, max = 10.0f, step = 0.25f, since = 7, prefabSince = 6)
+    public float chromaticOffset = 1.0f;
+
+    @InspectorProperty(order = 10, label = "SATURATION", min = 0.0f, max = 2.0f, step = 0.05f, since = 7, prefabSince = 6)
+    public float saturation = 1.0f;
+
+    @InspectorProperty(order = 11, label = "CONTRAST", min = 0.0f, max = 2.0f, step = 0.05f, since = 7, prefabSince = 6)
+    public float contrast = 1.0f;
+
     /** Runtime canvas set by scripts; takes precedence over {@link #uiCanvas} and is never persisted. */
     public transient UICanvasComponent activeCanvas;
 

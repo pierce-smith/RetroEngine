@@ -103,6 +103,7 @@ public class MetalBackend implements IRenderBackend {
     { sceneLights.setDefaultSun(); }
 
     private boolean cameraPreviewActive = false;
+    private final com.retro.engine.graphics.PostProcessSettings postProcess = new com.retro.engine.graphics.PostProcessSettings();
     private final float[] cameraPreviewViewProj = new float[16];
     private final float[] cameraPreviewPos = new float[3];
 
@@ -199,6 +200,11 @@ public class MetalBackend implements IRenderBackend {
     }
 
     @Override public long getOffscreenViewportTexture() { return framebuffer.getOffscreenColorTexture(); }
+    @Override
+    public void setPostProcess(com.retro.engine.graphics.PostProcessSettings settings) {
+        if (settings == null) postProcess.disable(); else postProcess.copyFrom(settings);
+    }
+
     @Override public long getCameraPreviewTexture() { return cameraPreviewTarget.getOffscreenColorTexture(); }
 
     @Override
@@ -437,7 +443,8 @@ public class MetalBackend implements IRenderBackend {
         passEncoder.encodeWindowCompositionPass(
             currentCommandBuffer, drawableTexture, metalDevice, metalPipeline, metalTexture,
             framebuffer, resourceCache, uniformStreamer,
-            cameraPreviewActive ? cameraPreviewTarget.getOffscreenColorTexture() : 0L
+            cameraPreviewActive ? cameraPreviewTarget.getOffscreenColorTexture() : 0L,
+            postProcess
         );
     }
 

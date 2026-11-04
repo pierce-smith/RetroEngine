@@ -520,6 +520,12 @@ public class VulkanGpuCache {
         return slot;
     }
 
+    /** Re-points a {@link #registerRenderTargetView} slot at a new image view (e.g. after a target resize). */
+    public void rebindRenderTargetView(int slot, long imageView) {
+        if (slot == NO_TEXTURE || imageView == 0L || bindlessSet == 0L) return;
+        queueTableWrite(new PendingTableWrite(slot, imageView, null, false));
+    }
+
     /** The persistent bindless set 0 shared by every 3D pipeline; 0L if initialization failed. */
     public long getBindlessDescriptorSet() { return bindlessSet; }
 

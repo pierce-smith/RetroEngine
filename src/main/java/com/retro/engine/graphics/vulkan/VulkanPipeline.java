@@ -40,6 +40,8 @@ public class VulkanPipeline {
     public static final int MESH_PUSH_CONSTANT_SIZE = 128;
     /** UI fragment push constants: int font atlas bindless slot, padded to 16 bytes. */
     public static final int UI_PUSH_CONSTANT_SIZE = 16;
+    /** Post-process fragment push constants: int scene slot (padded to 16 bytes) + PostProcessSettings.pack() floats. */
+    public static final int POST_PUSH_CONSTANT_SIZE = 16 + com.retro.engine.graphics.PostProcessSettings.PACKED_FLOATS * 4;
     /** Color-ID picking target format: entity_id.frag writes the 32-bit pick ID little-endian across RGBA. */
     public static final int PICK_ID_FORMAT = VK_FORMAT_R8G8B8A8_UINT;
 
@@ -78,6 +80,9 @@ public class VulkanPipeline {
     private long descriptorSetLayoutUI = 0L;
     private long pipelineLayoutUI = 0L;
     private long graphicsPipelineUI = 0L;
+
+    private long pipelineLayoutPost = 0L;
+    private long graphicsPipelinePost = 0L;
 
     public static long calcAlignedOffset(long size, long alignment) {
         if (alignment <= 0) return size;
@@ -181,6 +186,18 @@ public class VulkanPipeline {
             LongBuffer pPipelineLayoutUI = stack.mallocLong(1);
             if (vkCreatePipelineLayout(vkDevice, layoutCreateInfoUI, null, pPipelineLayoutUI) != VK_SUCCESS) return false;
             pipelineLayoutUI = pPipelineLayoutUI.get(0);
+
+            // 4. Camera post-process composite: bindless set 0 + fragment push constants
+            VkPushConstantRange.Buffer pushConstantsPost = VkPushConstantRange.calloc(1, stack);
+            pushConstantsPost.get(0).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT).offset(0).size(POST_PUSH_CONSTANT_SIZE);
+            VkPipelineLayoutCreateInfo layoutCreateInfoPost = VkPipelineLayoutCreateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO)
+                    .pSetLayouts(stack.longs(descriptorSetLayout3D))
+                    .pPushConstantRanges(pushConstantsPost);
+            LongBuffer pPipelineLayoutPost = stack.mallocLong(1);
+            if (vkCreatePipelineLayout(vkDevice, layoutCreateInfoPost, null, pPipelineLayoutPost) == VK_SUCCESS) {
+                pipelineLayoutPost = pPipelineLayoutPost.get(0);
+            }
 
             System.out.println("[VulkanPipeline] Layouts and Descriptor Sets configured (bindless table: " + bindlessTextureCapacity + " textures).");
             createGraphicsPipelines(device);
@@ -349,7 +366,7 @@ public class VulkanPipeline {
     private long[] pipelineHandles() {
         return new long[] { graphicsPipeline3D, graphicsPipelineShadow, graphicsPipelineSkinned, graphicsPipelineShadowDepth,
                 graphicsPipelineShadowDepthSkinned, graphicsPipelinePick, graphicsPipelinePickSkinned, graphicsPipelinePickOverlay,
-                graphicsPipelineGrid, graphicsPipelineGridLines, graphicsPipelineUI };
+                graphicsPipelineGrid, graphicsPipelineGridLines, graphicsPipelineUI, graphicsPipelinePost };
     }
 
     private void setPipelineHandles(long[] h) {
@@ -364,6 +381,7 @@ public class VulkanPipeline {
         graphicsPipelineGrid = h[8];
         graphicsPipelineGridLines = h[9];
         graphicsPipelineUI = h[10];
+        graphicsPipelinePost = h[11];
     }
 
     private static void destroyPipelines(VkDevice vkDevice, long[] handles) {
@@ -615,11 +633,59 @@ public class VulkanPipeline {
                 VulkanShaderLoader.destroyShaderModule(vkDevice, fragUIModule);
             }
 
+            // 3b. Camera post-process composite (fullscreen triangle into the swapchain Scene rect)
+            graphicsPipelinePost = createPostProcessPipeline(vkDevice, cacheHandle);
+            if (graphicsPipelinePost != 0L) {
+                System.out.println("[VulkanPipeline] Created Post-Process VkPipeline [0x" + Long.toHexString(graphicsPipelinePost) + "].");
+            }
+
             // 4. Color-ID Pick Overlay Pipeline (12-Byte Stride, R8G8B8A8_UINT + D32)
             graphicsPipelinePickOverlay = createPickOverlayPipeline(vkDevice, cacheHandle);
             if (graphicsPipelinePickOverlay != 0L) {
                 System.out.println("[VulkanPipeline] Created Color-ID Pick Overlay VkPipeline [0x" + Long.toHexString(graphicsPipelinePickOverlay) + "].");
             }
+        }
+    }
+
+    /** Opaque post-process pipeline: no vertex input, no depth, B8G8R8A8 swapchain color; 0L when unavailable. */
+    private long createPostProcessPipeline(VkDevice vkDevice, long cacheHandle) {
+        if (pipelineLayoutPost == 0L) return 0L;
+        long vertModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/postprocess.vert.spv");
+        long fragModule = VulkanShaderLoader.createShaderModule(vkDevice, "/shaders/vulkan/postprocess.frag.spv");
+        if (vertModule == 0L || fragModule == 0L) {
+            VulkanShaderLoader.destroyShaderModule(vkDevice, vertModule);
+            VulkanShaderLoader.destroyShaderModule(vkDevice, fragModule);
+            return 0L;
+        }
+        try (MemoryStack stack = stackPush()) {
+            VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(2, stack);
+            stages.get(0).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_VERTEX_BIT).module(vertModule).pName(stack.UTF8("main"));
+            stages.get(1).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO).stage(VK_SHADER_STAGE_FRAGMENT_BIT).module(fragModule).pName(stack.UTF8("main"));
+
+            VkPipelineVertexInputStateCreateInfo vertexInput = VkPipelineVertexInputStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
+            VkPipelineInputAssemblyStateCreateInfo inputAssembly = VkPipelineInputAssemblyStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO).topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+            VkPipelineViewportStateCreateInfo viewportState = VkPipelineViewportStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO).viewportCount(1).scissorCount(1);
+            VkPipelineRasterizationStateCreateInfo rasterizer = VkPipelineRasterizationStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO).polygonMode(VK_POLYGON_MODE_FILL).lineWidth(1.0f).cullMode(VK_CULL_MODE_NONE).frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);
+            VkPipelineMultisampleStateCreateInfo multisampling = VkPipelineMultisampleStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO).rasterizationSamples(VK_SAMPLE_COUNT_1_BIT);
+            VkPipelineDepthStencilStateCreateInfo depthStencil = VkPipelineDepthStencilStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO).depthTestEnable(false).depthWriteEnable(false).depthCompareOp(VK_COMPARE_OP_ALWAYS);
+            VkPipelineColorBlendAttachmentState.Buffer blendAttachment = VkPipelineColorBlendAttachmentState.calloc(1, stack)
+                    .colorWriteMask(VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT)
+                    .blendEnable(false);
+            VkPipelineColorBlendStateCreateInfo colorBlending = VkPipelineColorBlendStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO).pAttachments(blendAttachment);
+            VkPipelineDynamicStateCreateInfo dynamicState = VkPipelineDynamicStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO).pDynamicStates(stack.ints(VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR));
+            VkPipelineRenderingCreateInfo renderingInfo = VkPipelineRenderingCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO).pColorAttachmentFormats(stack.ints(VK_FORMAT_B8G8R8A8_UNORM));
+
+            VkGraphicsPipelineCreateInfo.Buffer pipelineInfo = VkGraphicsPipelineCreateInfo.calloc(1, stack)
+                    .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO).pNext(renderingInfo.address()).pStages(stages)
+                    .pVertexInputState(vertexInput).pInputAssemblyState(inputAssembly).pViewportState(viewportState)
+                    .pRasterizationState(rasterizer).pMultisampleState(multisampling).pDepthStencilState(depthStencil)
+                    .pColorBlendState(colorBlending).pDynamicState(dynamicState).layout(pipelineLayoutPost).renderPass(VK_NULL_HANDLE).subpass(0);
+
+            LongBuffer pPipeline = stack.mallocLong(1);
+            long pipeline = vkCreateGraphicsPipelines(vkDevice, cacheHandle, pipelineInfo, null, pPipeline) == VK_SUCCESS ? pPipeline.get(0) : 0L;
+            VulkanShaderLoader.destroyShaderModule(vkDevice, vertModule);
+            VulkanShaderLoader.destroyShaderModule(vkDevice, fragModule);
+            return pipeline;
         }
     }
 
@@ -797,6 +863,8 @@ public class VulkanPipeline {
     public long getDescriptorSetLayoutUI() { return descriptorSetLayoutUI; }
     public long getPipelineLayoutUI() { return pipelineLayoutUI; }
     public long getGraphicsPipelineUI() { return graphicsPipelineUI; }
+    public long getPipelineLayoutPost() { return pipelineLayoutPost; }
+    public long getGraphicsPipelinePost() { return graphicsPipelinePost; }
 
     public void cleanup(VulkanDevice device) {
         if (device == null || device.getLogicalDevice() == null) return;
@@ -827,5 +895,8 @@ public class VulkanPipeline {
         if (graphicsPipelineUI != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineUI, null); graphicsPipelineUI = 0L; }
         if (pipelineLayoutUI != 0L) { vkDestroyPipelineLayout(vkDevice, pipelineLayoutUI, null); pipelineLayoutUI = 0L; }
         if (descriptorSetLayoutUI != 0L) { vkDestroyDescriptorSetLayout(vkDevice, descriptorSetLayoutUI, null); descriptorSetLayoutUI = 0L; }
+
+        if (graphicsPipelinePost != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelinePost, null); graphicsPipelinePost = 0L; }
+        if (pipelineLayoutPost != 0L) { vkDestroyPipelineLayout(vkDevice, pipelineLayoutPost, null); pipelineLayoutPost = 0L; }
     }
 }

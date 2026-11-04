@@ -58,6 +58,9 @@ public class MetalPassEncoder {
     private static final long SEL_SET_FRAGMENT_BUFFER = sel_registerName("setFragmentBuffer:offset:atIndex:");
     private static final long SEL_SET_FRAGMENT_BUFFER_OFFSET = sel_registerName("setFragmentBufferOffset:atIndex:");
     private static final long SEL_SET_FRAGMENT_TEXTURE = sel_registerName("setFragmentTexture:atIndex:");
+    private static final long SEL_SET_FRAGMENT_BYTES = sel_registerName("setFragmentBytes:length:atIndex:");
+    // PostFX uniform block, copied by setFragmentBytes at encode time so one native buffer serves every frame
+    private java.nio.ByteBuffer postFxBytes = MemoryUtil.memAlloc(com.retro.engine.graphics.PostProcessSettings.PACKED_FLOATS * Float.BYTES);
     private static final long SEL_SET_FRAGMENT_SAMPLER_STATE = sel_registerName("setFragmentSamplerState:atIndex:");
     private static final long SEL_DRAW_PRIMITIVES = sel_registerName("drawPrimitives:vertexStart:vertexCount:");
     private static final long SEL_DRAW_PRIMITIVES_INSTANCED = sel_registerName("drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:");
@@ -526,7 +529,8 @@ public class MetalPassEncoder {
 
     public void encodeWindowCompositionPass(
             long commandBuffer, long drawableTexture, MetalDevice device, MetalPipeline pipeline, MetalTexture texture,
-            MetalTargetPass framebuffer, MetalGpuCache resourceCache, MetalUniformStream streamer, long cameraPreviewTexture) {
+            MetalTargetPass framebuffer, MetalGpuCache resourceCache, MetalUniformStream streamer, long cameraPreviewTexture,
+            com.retro.engine.graphics.PostProcessSettings postFx) {
 
         send = device.getObjcMsgSend();
         long windowPassDesc = invokePPP(renderPassDescClass(), SEL_RENDER_PASS_DESCRIPTOR, send);
@@ -545,14 +549,20 @@ public class MetalPassEncoder {
         if (encoderWin == 0L) return;
         beginEncoder(encoderWin);
 
-        // 1. Viewport Quad Pass-Through Composition
-        long pipelineComp = pipeline.getPipelineStateComposition();
+        // 1. Viewport Quad Composition: plain 1:1 copy, or the single-pass post-process shader for the Main Camera
+        boolean postActive = postFxBytes != null && postFx != null && postFx.enabled && pipeline.getPipelineStatePostProcess() != 0L;
+        long pipelineComp = postActive ? pipeline.getPipelineStatePostProcess() : pipeline.getPipelineStateComposition();
         if (resourceCache.isViewportQuadVisible() && resourceCache.getViewportQuadBuffer() != 0L && framebuffer.getOffscreenColorTexture() != 0L && pipelineComp != 0L) {
             bindPipeline(pipelineComp);
 
             bindFragmentTexture(framebuffer.getOffscreenColorTexture());
             if (texture.getSamplerStateHandle() != 0L) {
                 bindFragmentSampler(texture.getSamplerStateHandle());
+            }
+
+            if (postActive) {
+                postFx.pack(postFxBytes, 0);
+                invokePPPPPP(encoderWin, SEL_SET_FRAGMENT_BYTES, MemoryUtil.memAddress(postFxBytes), (long) postFxBytes.capacity(), 0L, send);
             }
 
             bindVertexBuffer(resourceCache.getViewportQuadBuffer(), 0L, 0);
@@ -583,6 +593,7 @@ public class MetalPassEncoder {
 
     /** Frees the native residency list; call once the GPU no longer executes frames encoded by this object. */
     public void dispose() {
+        if (postFxBytes != null) { MemoryUtil.memFree(postFxBytes); postFxBytes = null; }
         if (residencyList != null) {
             MemoryUtil.memFree(residencyList);
             residencyList = null;

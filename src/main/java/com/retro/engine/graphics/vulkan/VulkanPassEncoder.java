@@ -95,7 +95,9 @@ public class VulkanPassEncoder {
                                      VulkanDrawBuffers draws,
                                      VulkanTargetPass previewTarget,
                                      boolean previewActive,
-                                     int previewSlot) {
+                                     int previewSlot,
+                                     com.retro.engine.graphics.PostProcessSettings postFx,
+                                     int sceneSlot) {
         this.commands = commands;
         this.draws = draws;
         try (MemoryStack stack = stackPush()) {
@@ -110,7 +112,7 @@ public class VulkanPassEncoder {
             // source / depth) are discarded; the source scopes only order this frame's writes after last frame's use.
             imageBarrier(cmd, stack, targetPass.getOffscreenImage(), VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_NONE,
+                    VK_PIPELINE_STAGE_2_BLIT_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_NONE,
                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
             imageBarrier(cmd, stack, targetPass.getDepthImage(), VK_IMAGE_ASPECT_DEPTH_BIT,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
@@ -179,14 +181,25 @@ public class VulkanPassEncoder {
             long currentSwapchainImageView = swapchainManager.getImageView(imageIndex);
             long currentSwapchainImage = swapchainManager.getSwapchainImage(imageIndex);
 
-            // 1. Offscreen color goes straight to the blit source; the swapchain image is discarded into TRANSFER_DST.
+            // Post-process: the offscreen color is sampled by a fullscreen draw instead of blitted
+            boolean postActive = postFx != null && postFx.enabled && sceneSlot != VulkanGpuCache.NO_TEXTURE
+                    && bindlessSet != 0L && pipelineManager.getGraphicsPipelinePost() != 0L;
+
+            // 1. Offscreen color goes straight to the blit source (or shader read for post-process); the swapchain image is discarded into TRANSFER_DST.
             // The swapchain transition's source stage matches the acquire semaphore's wait stage in VulkanBackend.endFrame,
             // which chains the layout change after presentation has released the image.
             VkImageMemoryBarrier2.Buffer compositionBarriers = VkImageMemoryBarrier2.calloc(2, stack);
-            fillImageBarrier(compositionBarriers.get(0), targetPass.getOffscreenImage(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+            if (postActive) {
+                fillImageBarrier(compositionBarriers.get(0), targetPass.getOffscreenImage(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            } else {
+                fillImageBarrier(compositionBarriers.get(0), targetPass.getOffscreenImage(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+            }
             fillImageBarrier(compositionBarriers.get(1), currentSwapchainImage, VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_NONE,
@@ -228,7 +241,7 @@ public class VulkanPassEncoder {
             blitRegion.get(0).dstOffsets(0).set(dstX0, dstY0, 0);
             blitRegion.get(0).dstOffsets(1).set(dstX1, dstY1, 1);
 
-            if (sceneVisible) {
+            if (sceneVisible && !postActive) {
                 vkCmdBlitImage(cmd, targetPass.getOffscreenImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, currentSwapchainImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, blitRegion, VK_FILTER_LINEAR);
             }
 
@@ -237,6 +250,17 @@ public class VulkanPassEncoder {
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                     VK_PIPELINE_STAGE_2_CLEAR_BIT | VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+
+            // 2b. Post-processed scene: fullscreen triangle over the Scene rect, sampling the offscreen color
+            if (postActive && sceneVisible) {
+                recordPostProcessPass(cmd, stack, swapchainManager, currentSwapchainImageView, pipelineManager, bindlessSet,
+                        postFx, sceneSlot, dstX0, dstY0, dstX1 - dstX0, dstY1 - dstY0);
+                // The UI pass blends over these writes in a separate rendering scope: order write-after-write
+                imageBarrier(cmd, stack, currentSwapchainImage, VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+            }
 
             // 3. Render 2D UI Overlay quads directly over Swapchain Framebuffer
             long uiVbo = gpuCache.getUiVertexBuffer();
@@ -470,6 +494,45 @@ public class VulkanPassEncoder {
                 .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                 .buffer(pickReadbackBuffer).offset(0L).size(VK_WHOLE_SIZE);
         vkCmdPipelineBarrier2(cmd, VkDependencyInfo.calloc(stack).sType$Default().pBufferMemoryBarriers(hostBarrier));
+    }
+
+    /** Draws the post-process composite into the swapchain rect (x, y, w, h) in pixels, top-left origin. */
+    private static void recordPostProcessPass(VkCommandBuffer cmd, MemoryStack stack, VulkanSwapchain swapchainManager, long swapchainView,
+                                              VulkanPipeline pipelineManager, long bindlessSet,
+                                              com.retro.engine.graphics.PostProcessSettings postFx, int sceneSlot,
+                                              int x, int y, int w, int h) {
+        VkRenderingAttachmentInfo.Buffer color = VkRenderingAttachmentInfo.calloc(1, stack);
+        color.get(0)
+                .sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO)
+                .imageView(swapchainView)
+                .imageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                .loadOp(VK_ATTACHMENT_LOAD_OP_LOAD)
+                .storeOp(VK_ATTACHMENT_STORE_OP_STORE);
+        VkRenderingInfo renderingInfo = VkRenderingInfo.calloc(stack)
+                .sType(VK_STRUCTURE_TYPE_RENDERING_INFO)
+                .layerCount(1)
+                .pColorAttachments(color);
+        renderingInfo.renderArea().extent().set(swapchainManager.getWidth(), swapchainManager.getHeight());
+        vkCmdBeginRendering(cmd, renderingInfo);
+
+        // Positive height: NDC y = -1 is the rect's top edge, matching the offscreen image's row 0
+        VkViewport.Buffer viewport = VkViewport.calloc(1, stack);
+        viewport.get(0).x(x).y(y).width(w).height(h).minDepth(0.0f).maxDepth(1.0f);
+        VkRect2D.Buffer scissor = VkRect2D.calloc(1, stack);
+        scissor.get(0).offset().set(x, y);
+        scissor.get(0).extent().set(w, h);
+        vkCmdSetViewport(cmd, 0, viewport);
+        vkCmdSetScissor(cmd, 0, scissor);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getGraphicsPipelinePost());
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineManager.getPipelineLayoutPost(), 0, stack.longs(bindlessSet), null);
+        ByteBuffer push = stack.calloc(VulkanPipeline.POST_PUSH_CONSTANT_SIZE);
+        push.putInt(0, sceneSlot);
+        postFx.pack(push, 16);
+        vkCmdPushConstants(cmd, pipelineManager.getPipelineLayoutPost(), VK_SHADER_STAGE_FRAGMENT_BIT, 0, push);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+
+        vkCmdEndRendering(cmd);
     }
 
     private void beginOffscreenRendering(VkCommandBuffer cmd, MemoryStack stack, VulkanTargetPass target) {

@@ -43,6 +43,9 @@ public class VulkanBackend implements IRenderBackend {
     private static final int CAMERA_PREVIEW_WIDTH = 640;
     private static final int CAMERA_PREVIEW_HEIGHT = 360;
     private int cameraPreviewSlot = VulkanGpuCache.NO_TEXTURE;
+    // Bindless slot of the offscreen scene color, sampled by the post-process composite
+    private int sceneColorSlot = VulkanGpuCache.NO_TEXTURE;
+    private final com.retro.engine.graphics.PostProcessSettings postProcess = new com.retro.engine.graphics.PostProcessSettings();
     private boolean cameraPreviewActive = false;
     private final float[] cameraPreviewViewProj = new float[16];
     private float cameraPreviewX, cameraPreviewY, cameraPreviewZ;
@@ -124,6 +127,7 @@ public class VulkanBackend implements IRenderBackend {
 
         cameraPreviewTarget.initFramebuffer(deviceManager, CAMERA_PREVIEW_WIDTH, CAMERA_PREVIEW_HEIGHT);
         cameraPreviewSlot = gpuCache.registerRenderTargetView(cameraPreviewTarget.getOffscreenImageView());
+        sceneColorSlot = gpuCache.registerRenderTargetView(targetPass.getOffscreenImageView());
         initPickReadback();
 
         System.out.println("[VulkanBackend] Vulkan 1.3 Multi-Pass Architecture Active on Apple Silicon / MoltenVK.");
@@ -248,7 +252,9 @@ public class VulkanBackend implements IRenderBackend {
                     drawBuffers,
                     cameraPreviewTarget,
                     cameraPreviewActive && cameraPreviewSlot != VulkanGpuCache.NO_TEXTURE,
-                    cameraPreviewSlot
+                    cameraPreviewSlot,
+                    postProcess,
+                    sceneColorSlot
             );
 
             vkEndCommandBuffer(cmd);
@@ -484,7 +490,18 @@ public class VulkanBackend implements IRenderBackend {
         System.arraycopy(viewProj, 0, cameraPreviewViewProj, 0, 16);
         cameraPreviewX = camX; cameraPreviewY = camY; cameraPreviewZ = camZ;
     }
-    @Override public void resizeViewport(int width, int height) { targetPass.resizeViewport(deviceManager, width, height); }
+    @Override
+    public void resizeViewport(int width, int height) {
+        long previousView = targetPass.getOffscreenImageView();
+        targetPass.resizeViewport(deviceManager, width, height);
+        long view = targetPass.getOffscreenImageView();
+        if (view != previousView) gpuCache.rebindRenderTargetView(sceneColorSlot, view);
+    }
+
+    @Override
+    public void setPostProcess(com.retro.engine.graphics.PostProcessSettings settings) {
+        if (settings == null) postProcess.disable(); else postProcess.copyFrom(settings);
+    }
 
     @Override public void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw) {
         this.camPanX = panX; this.camPanY = panY; this.camZoom = zoom; this.camPitch = pitch; this.camYaw = yaw;

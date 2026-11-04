@@ -16,7 +16,7 @@ import java.util.List;
 public class SceneSerializer {
 
     public static final int BINARY_MAGIC = 0x52455452; // 'RETR' in ASCII
-    public static final int BINARY_VERSION = 6;         // Version 6 (AudioSource play on start)
+    public static final int BINARY_VERSION = 7;         // Version 7 (Camera post-processing)
 
     public record SceneLoadData(List<Entity> entities, List<AssetMeta> assetDirectory) {}
 

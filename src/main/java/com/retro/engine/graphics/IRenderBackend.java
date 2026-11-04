@@ -33,6 +33,12 @@ public interface IRenderBackend {
     default void setSceneViewport(float minX, float minY, float maxX, float maxY, float aspect) {}
 
     /**
+     * Post-processing for the scene composite: while {@code settings.enabled}, the offscreen scene image is drawn into
+     * the Scene tile (or full window) through the postprocess shader instead of a plain copy. Copied, never retained.
+     */
+    default void setPostProcess(PostProcessSettings settings) {}
+
+    /**
      * Picture-in-picture camera preview: while active, the queued scene is rendered a second time from {@code viewProj}
      * (column-major, same clip conventions as the editor camera, camera world position for lighting) into the target
      * returned by {@link #getCameraPreviewTexture}, before the UI samples it. viewProj is copied, never retained.
