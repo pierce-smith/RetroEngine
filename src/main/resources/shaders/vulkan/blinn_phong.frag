@@ -43,8 +43,8 @@ layout(std140, set = 0, binding = 0) uniform LightBuffer {
     mat4 previewViewProj;  // byte offset 2304: selected Camera entity's view-projection (picture-in-picture pass)
     vec4 previewViewPos;   // byte offset 2368: xyz = that camera's world position
     vec4 ambientColor;     // byte offset 2384: rgb = ProjectSettings ambient color * intensity
-    vec4 fogColorDensity;  // byte offset 2400: rgb = fog color, w = fog density (max opacity at fog end; 0 = off)
-    vec4 fogParams;        // byte offset 2416: x = fog start, y = fog end (2432 bytes total)
+    vec4 fogColorDensity;  // byte offset 2400: rgb = fog color, w = opacity at fog end (1 = fog on, 0 = off)
+    vec4 fogParams;        // byte offset 2416: x = fog start, y = fog end, z = ramp exponent (2432 bytes total)
 } u_Lights;
 
 // Shared linear/repeat sampler for every material channel
@@ -134,6 +134,15 @@ void accumulateLight(vec3 N, vec3 V, vec3 L, vec3 radiance, float specularStreng
     }
 }
 
+// Distance fog from ProjectSettings. Fog end is also the draw distance (entities beyond it are culled and the scene
+// clears to the fog color), so the ramp is fully opaque there; the exponent (1 = linear .. 5 = thick, from fog
+// density) eases it out so thick fog closes in well before the end.
+float fogAmount(float viewDist) {
+    float t = clamp((viewDist - u_Lights.fogParams.x) / (u_Lights.fogParams.y - u_Lights.fogParams.x), 0.0, 1.0);
+    float k = max(u_Lights.fogParams.z, 1.0);
+    return (1.0 - pow(max(1.0 - t, 1e-6), k)) * u_Lights.fogColorDensity.w;
+}
+
 void main() {
     // Dynamic Ground Shadow Blob Pass (PassFlags == 1.0)
     if (u_PushConstants.params.x > 0.5) {
@@ -143,7 +152,8 @@ void main() {
             discard;
         }
         float heightFade = u_PushConstants.params.y;
-        float alpha = max(0.0, 1.0 - distSq) * heightFade * 0.75;
+        // Blobs fade out with the fog so they never leave dark patches on it
+        float alpha = max(0.0, 1.0 - distSq) * heightFade * 0.75 * (1.0 - fogAmount(vViewDist));
         outFragColor = vec4(0.02, 0.02, 0.05, alpha);
         return;
     }
@@ -244,11 +254,7 @@ void main() {
     // Emissive is unlit and unshadowed, but still fogs with distance like everything else
     finalRGB += sampleChannel(u_PushConstants.texIndices2.x, vTexCoord, vec4(0.0)).rgb * u_PushConstants.params.w;
 
-    // Linear distance fog from ProjectSettings: ramps from fogStart to fogEnd, reaching fogDensity opacity
-    float fogStart = u_Lights.fogParams.x;
-    float fogEnd = u_Lights.fogParams.y;
-    float fogFactor = clamp((vViewDist - fogStart) / (fogEnd - fogStart), 0.0, 1.0) * u_Lights.fogColorDensity.w;
-    finalRGB = mix(finalRGB, u_Lights.fogColorDensity.rgb, fogFactor);
+    finalRGB = mix(finalRGB, u_Lights.fogColorDensity.rgb, fogAmount(vViewDist));
 
     outFragColor = vec4(finalRGB, baseColor.a);
 }

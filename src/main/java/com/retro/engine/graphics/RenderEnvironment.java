@@ -1,8 +1,8 @@
 package com.retro.engine.graphics;
 
 /**
- * Per-project global render environment the lit shaders read alongside {@link SceneLights}: ambient light, linear
- * distance fog and the ground shadow blob toggle. Owned by {@link SceneLights#environment()} so it crosses the RHI
+ * Per-project global render environment the lit shaders read alongside {@link SceneLights}: ambient light, distance
+ * fog (which also sets the draw distance) and the ground shadow blob toggle. Owned by {@link SceneLights#environment()} so it crosses the RHI
  * boundary with the lights it shades, and filled from {@code ProjectSettings} each frame with plain field copies
  * (no allocation).
  *
@@ -23,20 +23,37 @@ public final class RenderEnvironment {
     /** Downward-raycast ground shadow blobs under every draw (a fallback for scenes without shadow-mapped lighting). */
     public boolean shadowBlobsEnabled = DEFAULT_SHADOW_BLOBS;
 
+    /**
+     * Fog doubles as the draw distance (RenderWare style): it is fully opaque at {@link #fogEnd}, the scene clears to
+     * the fog color, and entities entirely beyond fogEnd are culled, so nothing visibly pops in or out.
+     */
     public boolean fogEnabled = DEFAULT_FOG_ENABLED;
-    /** View distance (world units) where fog begins and where it reaches {@link #fogDensity}. */
+    /** View depth (world units) where fog begins, and where it becomes fully opaque and entities are culled. */
     public float fogStart = DEFAULT_FOG_START, fogEnd = DEFAULT_FOG_END;
-    /** Maximum fog opacity (0..1) reached at {@link #fogEnd}. */
+    /** Thickness (0..1): 0 ramps linearly from start to end, 1 is a near-solid wall well before the end. */
     public float fogDensity = DEFAULT_FOG_DENSITY;
     public float fogR = DEFAULT_FOG_R, fogG = DEFAULT_FOG_G, fogB = DEFAULT_FOG_B;
 
     public float ambientR = DEFAULT_AMBIENT_R, ambientG = DEFAULT_AMBIENT_G, ambientB = DEFAULT_AMBIENT_B;
     public float ambientIntensity = DEFAULT_AMBIENT_INTENSITY;
 
-    /** Fog opacity the shaders should apply at {@link #fogEnd}, clamped to 0..1: 0 when fog is disabled or the value is NaN. */
-    public float effectiveFogDensity() {
-        if (!fogEnabled || !(fogDensity > 0.0f)) return 0.0f;
-        return Math.min(fogDensity, 1.0f);
+    /** Fog opacity at {@link #fogEnd} for the shaders: 1 when fog is on, 0 (fog off) otherwise. */
+    public float fogOpacity() {
+        return fogEnabled ? 1.0f : 0.0f;
+    }
+
+    /**
+     * Exponent of the shaders' ease-out ramp {@code 1 - (1 - t)^k} between fog start and end: 1 (linear) at density 0
+     * up to 5 at density 1, where fog is ~97% opaque halfway to the end. NaN density falls back to linear.
+     */
+    public float fogCurveExponent() {
+        float d = (fogDensity >= 0.0f) ? Math.min(fogDensity, 1.0f) : 0.0f;
+        return 1.0f + 4.0f * d;
+    }
+
+    /** True when an object whose nearest point is {@code viewDepth} units ahead of the camera is hidden by fog. */
+    public boolean isFogCulled(float viewDepth) {
+        return fogEnabled && viewDepth > safeFogEnd();
     }
 
     /** {@link #fogStart}, with a non-finite value (a corrupt settings file) treated as 0. */

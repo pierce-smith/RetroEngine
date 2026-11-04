@@ -59,9 +59,9 @@ public final class ProjectSettings {
     public boolean fogEnabled = RenderEnvironment.DEFAULT_FOG_ENABLED;
     /** View distance (world units) where fog begins. */
     public float fogStart = RenderEnvironment.DEFAULT_FOG_START;
-    /** View distance (world units) where fog reaches {@link #fogDensity}. */
+    /** View distance (world units) where fog turns fully opaque; it is also the draw distance (entities past it are culled). */
     public float fogEnd = RenderEnvironment.DEFAULT_FOG_END;
-    /** Maximum fog opacity (0..1), reached at {@link #fogEnd}. */
+    /** Fog thickness (0..1): 0 ramps linearly from start to end, 1 closes in to a near-solid wall well before the end. */
     public float fogDensity = RenderEnvironment.DEFAULT_FOG_DENSITY;
     /** Linear RGB, 0..1. */
     public final float[] fogColor = { RenderEnvironment.DEFAULT_FOG_R, RenderEnvironment.DEFAULT_FOG_G, RenderEnvironment.DEFAULT_FOG_B };

@@ -2,6 +2,7 @@ package com.retro.engine.graphics.metal;
 
 import com.retro.engine.graphics.DirectionalShadowFrustum;
 import com.retro.engine.graphics.RenderCommand;
+import com.retro.engine.graphics.RenderEnvironment;
 import com.retro.engine.graphics.SceneLights;
 
 import org.lwjgl.PointerBuffer;
@@ -9,6 +10,7 @@ import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.libffi.FFICIF;
 import org.lwjgl.system.libffi.FFIType;
 
+import java.nio.DoubleBuffer;
 import java.nio.FloatBuffer;
 import java.nio.LongBuffer;
 import java.util.Arrays;
@@ -16,6 +18,8 @@ import java.util.Arrays;
 import static org.lwjgl.system.APIUtil.apiCreateCIF;
 import static org.lwjgl.system.JNI.*;
 import static org.lwjgl.system.libffi.LibFFI.FFI_DEFAULT_ABI;
+import static org.lwjgl.system.libffi.LibFFI.FFI_TYPE_STRUCT;
+import static org.lwjgl.system.libffi.LibFFI.ffi_type_double;
 import static org.lwjgl.system.libffi.LibFFI.ffi_type_pointer;
 import static org.lwjgl.system.libffi.LibFFI.ffi_type_void;
 import static org.lwjgl.system.libffi.LibFFI.nffi_call;
@@ -121,6 +125,26 @@ public class MetalPassEncoder {
     private FFICIF pickCopyCif = null;
     private LongBuffer pickCopyArgs = null;
     private PointerBuffer pickCopyArgPointers = null;
+
+    // setClearColor: through libffi. The CIF and its MTLClearColor struct type live for the process (like
+    // APIUtil.apiCreateCIF's own CIFs, which are never freed); the per-encoder argument buffers are freed in dispose.
+    private static final long SEL_SET_CLEAR_COLOR = sel_registerName("setClearColor:");
+    private static FFICIF clearColorCif = null;
+    private LongBuffer clearColorArgs = null;
+    private DoubleBuffer clearColorValue = null;
+    private PointerBuffer clearColorArgPointers = null;
+
+    private static synchronized FFICIF clearColorCif() {
+        if (clearColorCif == null) {
+            PointerBuffer elements = PointerBuffer.create(MemoryUtil.getAllocator().malloc(5L * 8L), 5);
+            for (int i = 0; i < 4; i++) elements.put(i, ffi_type_double.address());
+            elements.put(4, 0L);
+            FFIType mtlClearColor = FFIType.create(MemoryUtil.getAllocator().calloc(1L, FFIType.SIZEOF))
+                    .type((short) FFI_TYPE_STRUCT).elements(elements);
+            clearColorCif = apiCreateCIF(FFI_DEFAULT_ABI, ffi_type_void, ffi_type_pointer, ffi_type_pointer, mtlClearColor);
+        }
+        return clearColorCif;
+    }
 
     /** Arms the pick pass for the next encoded frame; a null target or 0L buffer disarms it. */
     public void setPickPass(MetalTargetPass target, long readbackBuffer, long readbackOffset, int texelX, int texelY) {
@@ -234,6 +258,11 @@ public class MetalPassEncoder {
         invokePPPP(colorAttachOff0, SEL_SET_TEXTURE, colorTarget, send);
         invokePPPP(colorAttachOff0, SEL_SET_LOAD_ACTION, 2L, send);
         invokePPPP(colorAttachOff0, SEL_SET_STORE_ACTION, 1L, send);
+        // Fog doubles as the draw distance: the background is the fog color, so culled space reads as fog
+        RenderEnvironment env = lights.environment();
+        if (env.fogEnabled) {
+            setClearColor(colorAttachOff0, env.fogR, env.fogG, env.fogB);
+        }
 
         if (depthTarget != 0L) {
             long depthAttachOff = invokePPP(offscreenPassDesc, SEL_DEPTH_ATTACHMENT, send);
@@ -366,6 +395,8 @@ public class MetalPassEncoder {
                 fbModel.clear(); fbModel.put(modelMat);
 
                 MemoryUtil.memPutFloat(baseAddr + 212L, heightFade);
+                // Blobs fade with distance fog, so their slots need the fog parameters too
+                streamer.writeDrawEnvironment(baseAddr, lights.environment());
 
                 MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_MATERIAL_MASK, 0);
                 MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_IS_UNLIT, 0);
@@ -458,6 +489,26 @@ public class MetalPassEncoder {
         invokePPP(blit, SEL_END_ENCODING, send);
     }
 
+    /**
+     * {@code [attachment setClearColor:MTLClearColorMake(r, g, b, 1)]}. MTLClearColor is a by-value struct of four
+     * doubles (an HFA in d0-d3 on arm64, passed in memory on x86_64), so the call goes through libffi with a real
+     * struct type rather than the integer-only JNI msgSend helpers.
+     */
+    private void setClearColor(long attachment, float r, float g, float b) {
+        FFICIF cif = clearColorCif();
+        if (clearColorArgs == null) {
+            clearColorArgs = MemoryUtil.memAllocLong(2);
+            clearColorValue = MemoryUtil.memAllocDouble(4);
+            clearColorArgPointers = MemoryUtil.memAllocPointer(3);
+            clearColorArgPointers.put(0, MemoryUtil.memAddress(clearColorArgs));
+            clearColorArgPointers.put(1, MemoryUtil.memAddress(clearColorArgs) + 8L);
+            clearColorArgPointers.put(2, MemoryUtil.memAddress(clearColorValue));
+        }
+        clearColorArgs.put(0, attachment).put(1, SEL_SET_CLEAR_COLOR);
+        clearColorValue.put(0, r).put(1, g).put(2, b).put(3, 1.0);
+        nffi_call(cif.address(), send, 0L, MemoryUtil.memAddress(clearColorArgPointers));
+    }
+
     /** objc_msgSend with 11 pointer-sized arguments (void return) through libffi. */
     private void msgSendPickCopy(long... args) {
         if (pickCopyCif == null) {
@@ -545,6 +596,14 @@ public class MetalPassEncoder {
             MemoryUtil.memFree(pickCopyArgPointers);
             pickCopyArgs = null;
             pickCopyArgPointers = null;
+        }
+        if (clearColorArgs != null) {
+            MemoryUtil.memFree(clearColorArgs);
+            MemoryUtil.memFree(clearColorValue);
+            MemoryUtil.memFree(clearColorArgPointers);
+            clearColorArgs = null;
+            clearColorValue = null;
+            clearColorArgPointers = null;
         }
     }
 

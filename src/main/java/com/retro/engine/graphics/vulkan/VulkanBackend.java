@@ -1,5 +1,6 @@
 package com.retro.engine.graphics.vulkan;
 
+import com.retro.engine.graphics.RenderEnvironment;
 import com.retro.engine.graphics.BufferDesc;
 import com.retro.engine.graphics.GraphicsAPI;
 import com.retro.engine.graphics.IRenderBackend;
@@ -229,7 +230,10 @@ public class VulkanBackend implements IRenderBackend {
 
             vkBeginCommandBuffer(cmd, beginInfo);
 
-            passEncoder.setShadowBlobsEnabled(sceneLights.environment().shadowBlobsEnabled);
+            RenderEnvironment env = sceneLights.environment();
+            passEncoder.setShadowBlobsEnabled(env.shadowBlobsEnabled);
+            if (env.fogEnabled) passEncoder.setSceneClearColor(env.fogR, env.fogG, env.fogB);
+            else passEncoder.setSceneClearColor(0.0f, 0.0f, 0.0f);
             passEncoder.record4PhasePipeline(
                     cmd,
                     targetPass,

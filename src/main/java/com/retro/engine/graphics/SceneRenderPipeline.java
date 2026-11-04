@@ -233,8 +233,18 @@ public class SceneRenderPipeline {
                     // whenever the player looks up. Animation can at most swing limbs across the rig, so double it.
                     sphereRadius *= 2.0f;
                 }
-                if (!frustumCuller.isSphereVisible(wt.px(), wt.py(), wt.pz(), sphereRadius)
-                        && !(previewActive && previewCuller.isSphereVisible(wt.px(), wt.py(), wt.pz(), sphereRadius))) {
+                // Fog doubles as the draw distance: a sphere whose nearest view depth is past fog end would be fully
+                // fogged, so it is culled with no visible pop. Same planar view depth the shaders fog with.
+                float mainNearDepth = -(depthRowX * wt.px() + depthRowY * wt.py() + depthRowZ * wt.pz() + depthRowW) - sphereRadius;
+                boolean mainVisible = frustumCuller.isSphereVisible(wt.px(), wt.py(), wt.pz(), sphereRadius)
+                        && !environment.isFogCulled(mainNearDepth);
+                boolean previewVisible = false;
+                if (!mainVisible && previewActive) {
+                    float previewNearDepth = -(previewView[2] * wt.px() + previewView[6] * wt.py() + previewView[10] * wt.pz() + previewView[14]) - sphereRadius;
+                    previewVisible = previewCuller.isSphereVisible(wt.px(), wt.py(), wt.pz(), sphereRadius)
+                            && !environment.isFogCulled(previewNearDepth);
+                }
+                if (!mainVisible && !previewVisible) {
                     continue;
                 }
 

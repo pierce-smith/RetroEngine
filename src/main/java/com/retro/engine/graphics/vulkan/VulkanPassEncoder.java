@@ -65,6 +65,16 @@ public class VulkanPassEncoder {
         this.shadowBlobsEnabled = enabled;
     }
 
+    // Scene color target clear (opaque black, or the fog color while fog is on: fog doubles as the draw distance, so
+    // culled space reads as fog); set by VulkanBackend before recording
+    private float sceneClearR, sceneClearG, sceneClearB;
+
+    public void setSceneClearColor(float r, float g, float b) {
+        this.sceneClearR = r;
+        this.sceneClearG = g;
+        this.sceneClearB = b;
+    }
+
     public void setSceneRect(float minX, float minY, float maxX, float maxY) {
         this.sceneMinX = minX;
         this.sceneMinY = minY;
@@ -394,7 +404,7 @@ public class VulkanPassEncoder {
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 
-        beginOffscreenRendering(cmd, stack, target, true);
+        beginOffscreenRendering(cmd, stack, target, true, 0.0f, 0.0f, 0.0f);
 
         long staticPipeline = pipelineManager.getGraphicsPipelinePick();
         long skinnedPipeline = pipelineManager.getGraphicsPipelinePickSkinned();
@@ -462,15 +472,16 @@ public class VulkanPassEncoder {
         vkCmdPipelineBarrier2(cmd, VkDependencyInfo.calloc(stack).sType$Default().pBufferMemoryBarriers(hostBarrier));
     }
 
-    private static void beginOffscreenRendering(VkCommandBuffer cmd, MemoryStack stack, VulkanTargetPass target) {
-        beginOffscreenRendering(cmd, stack, target, false);
+    private void beginOffscreenRendering(VkCommandBuffer cmd, MemoryStack stack, VulkanTargetPass target) {
+        beginOffscreenRendering(cmd, stack, target, false, sceneClearR, sceneClearG, sceneClearB);
     }
 
     /**
      * Begins dynamic rendering into {@code target}'s color + depth (both cleared) with its viewport and scissor bound.
-     * Integer targets clear to all-zero (PICK_ID_NONE) instead of opaque black.
+     * Float targets clear to opaque (clearR, clearG, clearB); integer targets clear to all-zero (PICK_ID_NONE).
      */
-    private static void beginOffscreenRendering(VkCommandBuffer cmd, MemoryStack stack, VulkanTargetPass target, boolean integerColor) {
+    private static void beginOffscreenRendering(VkCommandBuffer cmd, MemoryStack stack, VulkanTargetPass target, boolean integerColor,
+                                                float clearR, float clearG, float clearB) {
         // Dynamic Viewport & Scissor Setup for Offscreen Viewport (Negative height for Vulkan Y-Inversion)
         VkViewport.Buffer offscreenViewport = VkViewport.calloc(1, stack);
         offscreenViewport.get(0)
@@ -493,7 +504,7 @@ public class VulkanPassEncoder {
         if (integerColor) {
             offscreenColorAttachment.get(0).clearValue().color().uint32(0, 0).uint32(1, 0).uint32(2, 0).uint32(3, 0);
         } else {
-            offscreenColorAttachment.get(0).clearValue().color().float32(0, 0.0f).float32(1, 0.0f).float32(2, 0.0f).float32(3, 1.0f);
+            offscreenColorAttachment.get(0).clearValue().color().float32(0, clearR).float32(1, clearG).float32(2, clearB).float32(3, 1.0f);
         }
 
         VkRenderingAttachmentInfo offscreenDepthAttachment = VkRenderingAttachmentInfo.calloc(stack)

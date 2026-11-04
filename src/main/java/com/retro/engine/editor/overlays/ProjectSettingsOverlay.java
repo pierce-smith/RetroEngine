@@ -361,8 +361,8 @@ public final class ProjectSettingsOverlay {
     private static String sliderName(int slider) {
         return switch (slider) {
             case FOG_START -> "Fog start distance";
-            case FOG_END -> "Fog end distance";
-            case FOG_DENSITY -> "Fog density (0-1)";
+            case FOG_END -> "Fog end / draw distance";
+            case FOG_DENSITY -> "Fog thickness (0-1)";
             case AMBIENT_INTENSITY -> "Ambient intensity (0-" + (int) ProjectSettings.AMBIENT_INTENSITY_MAX + ")";
             default -> "Value (0-1)";
         };
