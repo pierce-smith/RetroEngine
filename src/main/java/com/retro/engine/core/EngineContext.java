@@ -148,9 +148,15 @@ public class EngineContext {
                 boolean inViewport = selectionController.isCursorInViewport(mouseX, mouseY);
                 // Clicking the game view during Play re-locks a mouse-look cursor that Escape freed; the click is consumed
                 if (action == GLFW.GLFW_PRESS && inViewport && relockCursorForPlay()) return;
-                // Scripts see presses aimed at the game (viewport, or anywhere while the cursor is captured);
-                // releases always go through so a button can't stick down
-                if (action == GLFW.GLFW_RELEASE || inViewport || window.isCursorCaptured()) {
+                // While captured, GLFW reports a virtual, unbounded cursor position that drifts with mouse-look;
+                // clicks belong to the game only, never to whatever editor chrome (e.g. Stop) that position lands on
+                if (window.isCursorCaptured()) {
+                    com.retro.engine.scripting.Input.setMouseButtonState(button, action != GLFW.GLFW_RELEASE);
+                    if (action == GLFW.GLFW_RELEASE) cameraController.onMouseButton(button, action, mouseX, mouseY);
+                    return;
+                }
+                // Scripts see presses aimed at the game viewport; releases always go through so a button can't stick down
+                if (action == GLFW.GLFW_RELEASE || inViewport) {
                     com.retro.engine.scripting.Input.setMouseButtonState(button, action != GLFW.GLFW_RELEASE);
                 }
                 boolean handled = selectionController.handleMouseClick(mouseX, mouseY, button, action);
@@ -165,6 +171,12 @@ public class EngineContext {
 
             window.setOnCursorPosListener((x, y) -> {
                 if (selectionController == null || cameraController == null || window == null) return;
+                // The captured cursor's virtual position is mouse-look motion, not a pointer: park the editor's
+                // hover off-window so docked panels/toolbar don't light up as it drifts across them
+                if (window.isCursorCaptured()) {
+                    parkEditorPointer();
+                    return;
+                }
                 boolean handledByGizmo = selectionController.onCursorPos(x, y);
                 if (!handledByGizmo && selectionController.isCursorInViewport(x, y)) {
                     boolean isShiftDown = window.isKeyDown(GLFW.GLFW_KEY_LEFT_SHIFT) || window.isKeyDown(GLFW.GLFW_KEY_RIGHT_SHIFT);
@@ -282,6 +294,15 @@ public class EngineContext {
             if (args[i] != null && args[i].toLowerCase().startsWith(flag + "=")) return args[i].substring(flag.length() + 1);
         }
         return null;
+    }
+
+    /** Moves the editor's hover point off-window (no panel, tab, splitter or menu row reads as hovered). */
+    private void parkEditorPointer() {
+        if (editorManager == null) return;
+        final float off = -10.0f; // NDC far outside [-1, 1]
+        editorManager.setLastNdcPos(off, off);
+        com.retro.engine.editor.panels.DockSpace dock = editorManager.getDockSpace();
+        if (dock != null && !dock.isDragging()) dock.onCursor(off, off);
     }
 
     /** Re-captures the cursor when gameplay wants mouse-look but Escape freed it; true if it did. */
