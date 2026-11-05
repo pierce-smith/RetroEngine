@@ -50,6 +50,10 @@ Starting out as a 1-month proof-of-concept, RetroEngine now implements a fully f
 - Download your platform's version from the Releases section if on Windows or Apple Silicon. If on Linux or an Intel Mac, you will need to compile from source.
 - To get the most updated version, compiling from source is always recommended. Versions in the Releases section will be updated after a certain amount of commits to the source code.
 
+### Running the Tests
+
+`./gradlew test` runs the automated suite. It needs no GPU or window. See Volume 5 §3.0 for how it works.
+
 ---
 
 ## Contributing & Pull Requests

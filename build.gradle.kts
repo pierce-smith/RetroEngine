@@ -40,6 +40,10 @@ dependencies {
     // In-Memory Janino Scripting Compiler
     implementation("org.codehaus.janino:janino:3.1.12")
 
+    testImplementation(platform("org.junit:junit-bom:6.1.3"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
     for (platformNative in lwjglNatives) {
         runtimeOnly("org.lwjgl:lwjgl::$platformNative")
         runtimeOnly("org.lwjgl:lwjgl-glfw::$platformNative")
@@ -81,6 +85,32 @@ application {
 
 tasks.withType<JavaCompile> {
     options.encoding = "UTF-8"
+}
+
+// Tests run on the shipped heap size, with no window or GPU, and with a throwaway home folder so nothing touches the
+// developer's real ~/.retroengine. Timing-sensitive tests are tagged "perf": shared CI machines are too noisy for them.
+tasks.withType<Test>().configureEach {
+    maxHeapSize = "512m"
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    systemProperty("java.awt.headless", "true")
+    systemProperty("user.home", layout.buildDirectory.dir("test-home").get().asFile.absolutePath)
+    testLogging {
+        events("failed", "skipped")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.SHORT
+    }
+}
+
+tasks.named<Test>("test") {
+    useJUnitPlatform { excludeTags("perf") }
+}
+
+tasks.register<Test>("perfTest") {
+    group = "verification"
+    description = "Runs the timing-sensitive scaling tests. Use a quiet machine; not part of CI."
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform { includeTags("perf") }
+    outputs.upToDateWhen { false }
 }
 
 fun findGlslcExecutable(): String? {

@@ -152,10 +152,25 @@ When a player reports a crash, ask for `<name>.log.1`.
 
 ## 3. QA Verification Checklist & Benchmark Protocols
 
-> **Candid note:** RetroEngine has **no automated test suite** yet (`src/test/` doesn't exist). Everything below is
-> manual, and it's the gate for merging into `main`. Adding JUnit coverage for `ComponentSchema`,
-> `SceneDeltaPatcher`, `ModVirtualFileSystem` and `BroadphaseSolver` is the most useful contribution you could make
-> right now.
+### 3.0 Automated Tests
+
+`./gradlew test` runs the JUnit suite in `src/test/` with no window or GPU, and CI runs it on macOS, Windows and Linux
+(`.github/workflows/ci.yml`). It covers physics, the simulation's allocation budget, `ComponentSchema`, scene
+saving and loading, `.rpatch`, the mod VFS, `.rmod` packages, and compiling every shipped script with Janino. It
+can't see anything that needs a GPU, a window or a person, so the manual checklist below is still the gate for merging
+into `main`.
+
+Three parts of the suite work differently from a normal test:
+
+- **`@KnownIssue`.** The test describes correct behavior the engine doesn't have yet. It reports as skipped with the
+  reason. Once it passes, **the build fails** until you remove the annotation, so every fix leaves a regression test
+  behind. Only assertion failures count as expected. Any other exception is a real failure.
+- **Binary layout.** `ComponentSchemaTest` compares every persisted field with
+  `src/test/resources/component-binary-layout.txt`, which enforces the rule in Volume 1 §2.3. If you added a field on
+  purpose, gate it with `since` / `prefabSince`, then copy `build/component-binary-layout.actual.txt` over that file.
+  Otherwise, undo the change.
+- **`perf` tag.** Timing tests are too noisy for shared CI machines. Run them with `./gradlew perfTest` on a quiet
+  machine.
 
 ### 3.1 Pre-Merge Checklist
 
