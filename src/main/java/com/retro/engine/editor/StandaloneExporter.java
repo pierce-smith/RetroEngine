@@ -47,9 +47,10 @@ import javax.imageio.ImageIO;
  * </pre>
  *
  * When the target OS matches the host, {@code jpackage} produces the real native launcher (.exe / .app / ELF) and
- * embeds a jlinked runtime; on Linux an AppImage is also produced when {@code appimagetool} is on PATH. Cross-OS
- * exports jlink a runtime from the target platform's JDK jmods and use script launchers (a .app bundle on macOS),
- * since native launchers can only be built on their own OS.
+ * embeds a jlinked runtime; on Linux an AppImage is also produced when {@code appimagetool} is on PATH. Without
+ * jpackage (cross-OS exports, or a packaged editor on a machine with no JDK) the runtime comes from the target
+ * platform's jmods or the editor's bundled JRE. macOS and Linux then get script launchers (a .app bundle on macOS);
+ * Windows always gets a real .exe, assembled from jpackage's prebuilt launcher (see {@link #windowsLauncher()}).
  */
 public final class StandaloneExporter {
 
@@ -123,10 +124,14 @@ public final class StandaloneExporter {
     public static final String GAME_DATA_PROPERTY = "retro.gameData";
     /** Set by the packaged editor's launcher: a jlinked JRE (with bin/java) that exported games can embed. */
     public static final String GAME_RUNTIME_PROPERTY = "retro.gameRuntime";
+    /** Set by the packaged Windows editor's launcher: the jpackage launcher .exe that exported games are built from. */
+    public static final String GAME_LAUNCHER_PROPERTY = "retro.gameLauncher";
     /** Optional override pointing at a full JDK whose jpackage/jlink the exporter should use. */
     public static final String JDK_PROPERTY = "retro.jdk";
     private static final String ENGINE_JAR = "retro-engine.jar";
     private static final String SDL_JAR_PREFIX = "lwjgl-sdl";
+    /** GUI-subsystem launcher in jdk.jpackage: no console window, reads app/<name>.cfg, starts runtime/bin/jli.dll. */
+    private static final String WINDOWS_LAUNCHER_ENTRY = "classes/jdk/jpackage/internal/resources/jpackageapplauncherw.exe";
     private static final java.util.regex.Pattern HAPTICS_CALL = java.util.regex.Pattern.compile("\\b(vibrate|setVibration)\\s*\\(");
 
     private final Request req;
@@ -277,11 +282,12 @@ public final class StandaloneExporter {
     /** Runs the full pipeline; returns the path of the produced build. */
     public File export() throws IOException, InterruptedException {
         validate();
-        if (!nativeHost && (req.targetJdk == null || !new File(req.targetJdk, "jmods").isDirectory())) {
-            throw new IOException("Cross-platform export needs a " + req.platform.label + " JDK containing jmods/");
+        if (!nativeHost && jmodsDir(req.targetJdk) == null) {
+            throw new IOException("Cross-platform export needs a " + req.platform.label + " JDK containing jmods/, or its jmods "
+                + "package (JDK 24+ builds such as Temurin ship jmods as a separate download)");
         }
         // The packaged editor's own runtime has no jpackage (a jlinked image cannot contain jdk.jpackage), so host
-        // exports fall back to the JRE bundled with the editor plus script launchers when no full JDK is installed
+        // exports fall back to the JRE bundled with the editor when no full JDK is installed
         boolean useJpackage = nativeHost && findJdkTool("jpackage") != null;
         File bundledRuntime = nativeHost && !useJpackage ? bundledGameRuntime() : null;
         if (nativeHost && !useJpackage && bundledRuntime == null) {
@@ -289,6 +295,7 @@ public final class StandaloneExporter {
                 + JDK_PROPERTY + "=<jdk>)");
         }
         if (!nativeHost) jdkTool("jlink");
+        byte[] windowsLauncher = !useJpackage && req.platform == Platform.WINDOWS ? windowsLauncher() : null;
         if (!hasTargetNatives()) {
             throw new IOException("This editor build has no " + req.platform.label + " native libraries (packaged editors ship "
                 + "their own OS's natives only). Export from the editor running on " + req.platform.label + " instead.");
@@ -311,7 +318,7 @@ public final class StandaloneExporter {
             // 4. Native packaging
             progress.report(0.55f, useJpackage ? "PACKAGING NATIVE LAUNCHER (JPACKAGE)"
                 : bundledRuntime != null ? "EMBEDDING BUNDLED RUNTIME" : "LINKING EMBEDDED RUNTIME (JLINK)");
-            File result = useJpackage ? packageWithJpackage(app) : packageWithScriptLauncher(work, app, bundledRuntime);
+            File result = useJpackage ? packageWithJpackage(app) : packageWithoutJpackage(work, app, bundledRuntime, windowsLauncher);
             progress.report(1.0f, "EXPORT COMPLETE");
             return result;
         } finally {
@@ -507,7 +514,6 @@ public final class StandaloneExporter {
             cmd.add("--icon");
             cmd.add(req.iconFile.getAbsolutePath());
         }
-        if (req.platform == Platform.WINDOWS) cmd.add("--win-console");
         if (req.platform == Platform.MACOS) {
             cmd.add("--mac-package-identifier");
             cmd.add(bundleId(req.executableName));
@@ -556,19 +562,19 @@ public final class StandaloneExporter {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Cross-OS packaging (jlink against target jmods + script launchers)
+    // Packaging without jpackage (jlink against target jmods or the bundled JRE; assembled launchers)
     // ------------------------------------------------------------------------------------------
 
     /**
-     * Script-launcher build. {@code prebuiltRuntime} (the editor's bundled host JRE) is embedded as-is; when null a
-     * runtime is jlinked from the target platform's jmods.
+     * Builds without jpackage. {@code prebuiltRuntime} (the editor's bundled host JRE) is embedded as-is; when null a
+     * runtime is jlinked from the target platform's jmods. {@code windowsLauncher} is required for Windows targets.
      */
-    private File packageWithScriptLauncher(File work, File app, File prebuiltRuntime) throws IOException, InterruptedException {
+    private File packageWithoutJpackage(File work, File app, File prebuiltRuntime, byte[] windowsLauncher) throws IOException, InterruptedException {
         File runtime = prebuiltRuntime;
         if (runtime == null) {
             runtime = new File(work, "runtime");
             run(List.of(jdkTool("jlink").getAbsolutePath(),
-                "--module-path", new File(req.targetJdk, "jmods").getAbsolutePath(),
+                "--module-path", jmodsDir(req.targetJdk).getAbsolutePath(),
                 "--add-modules", RUNTIME_MODULES,
                 "--strip-debug", "--no-header-files", "--no-man-pages",
                 "--output", runtime.getAbsolutePath()), null);
@@ -606,15 +612,64 @@ public final class StandaloneExporter {
                 deleteRecursively(target.toPath());
                 copyTree(runtime.toPath(), new File(target, "runtime").toPath());
                 copyTree(app.toPath(), new File(target, "app").toPath());
-                copyIcon(new File(target, exe + ".ico")); // A .bat cannot embed an icon; shipped for shortcuts
-                StringBuilder opts = new StringBuilder();
-                for (String o : jvmOptions("%APPDIR%")) opts.append('"').append(o).append("\" ");
-                Files.writeString(new File(target, exe + ".bat").toPath(),
-                    "@echo off\r\nset \"APPDIR=%~dp0app\"\r\n\"%~dp0runtime\\bin\\javaw.exe\" " + opts
-                        + "-cp \"%APPDIR%\\*\" " + Main.class.getName() + " --runtime %*\r\n");
+                File appDir = new File(target, "app");
+                Files.writeString(new File(appDir, exe + ".cfg").toPath(), windowsLauncherConfig(appDir));
+                Files.write(new File(target, exe + ".exe").toPath(), withIcon(windowsLauncher));
             }
         }
         return target;
+    }
+
+    /**
+     * The launcher for an .exe built without jpackage. jpackage's own output is just this prebuilt file renamed, next
+     * to app/&lt;name&gt;.cfg and runtime/, so the same layout runs identically on any host that assembles it. It comes
+     * from the target JDK's jmods, or for host exports from the copy staged in the packaged editor.
+     */
+    private byte[] windowsLauncher() throws IOException {
+        File jmods = jmodsDir(req.targetJdk);
+        if (jmods != null) {
+            File jmod = new File(jmods, "jdk.jpackage.jmod");
+            if (!jmod.isFile()) throw new IOException("No jdk.jpackage.jmod in " + jmods + ": it provides the Windows .exe launcher");
+            try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(jmod)) { // A jmod is a zip after a 4-byte magic
+                java.util.zip.ZipEntry entry = zip.getEntry(WINDOWS_LAUNCHER_ENTRY);
+                if (entry == null) throw new IOException(jmod + " has no Windows launcher: pick a Windows JDK");
+                try (var in = zip.getInputStream(entry)) {
+                    return in.readAllBytes();
+                }
+            }
+        }
+        String staged = System.getProperty(GAME_LAUNCHER_PROPERTY);
+        if (staged != null && new File(staged.trim()).isFile()) return Files.readAllBytes(new File(staged.trim()).toPath());
+        throw new IOException("No Windows launcher in this editor build: repackage it with ./gradlew packageEditor, or install "
+            + "JDK 25 and set JAVA_HOME (or -D" + JDK_PROPERTY + "=<jdk>)");
+    }
+
+    /** The launcher's config, as jpackage writes it. --runtime is only the default, and is dropped if args are passed. */
+    private String windowsLauncherConfig(File appDir) throws IOException {
+        File[] jars = appDir.listFiles((d, n) -> n.endsWith(".jar") && !n.equals(ENGINE_JAR));
+        if (jars == null) throw new IOException("Cannot list " + appDir);
+        java.util.Arrays.sort(jars);
+        List<String> lines = new ArrayList<>(List.of("[Application]", "app.classpath=$APPDIR\\" + ENGINE_JAR));
+        for (File jar : jars) lines.add("app.classpath=$APPDIR\\" + jar.getName());
+        lines.add("app.mainclass=" + Main.class.getName());
+        lines.add("");
+        lines.add("[JavaOptions]");
+        for (String opt : jvmOptions("$APPDIR")) lines.add("java-options=" + opt);
+        lines.add("");
+        lines.add("[ArgOptions]");
+        lines.add("arguments=--runtime");
+        return String.join("\r\n", lines) + "\r\n";
+    }
+
+    /** {@code launcher} with the configured icon embedded. A launcher that can't take the icon still runs, so ship it as is. */
+    private byte[] withIcon(byte[] launcher) throws IOException {
+        if (req.iconFile == null) return launcher;
+        try {
+            return WindowsExeIcon.embed(launcher, Files.readAllBytes(req.iconFile.toPath()));
+        } catch (IOException e) {
+            System.err.println("[Exporter] Could not embed " + req.iconFile.getName() + ", keeping the default icon: " + e.getMessage());
+            return launcher;
+        }
     }
 
     private String shellOptions(String appDirVar) {
@@ -690,6 +745,17 @@ public final class StandaloneExporter {
         File tool = findJdkTool(name);
         if (tool == null) throw new IOException(name + " not found: install JDK 25 and set JAVA_HOME (or -D" + JDK_PROPERTY + "=<jdk>)");
         return tool;
+    }
+
+    /**
+     * Folder holding {@code jdk}'s .jmod files: its jmods/ subfolder, or {@code jdk} itself for a standalone jmods
+     * package. Null when it has neither.
+     */
+    public static File jmodsDir(File jdk) {
+        if (jdk == null) return null;
+        File nested = new File(jdk, "jmods");
+        if (nested.isDirectory()) return nested;
+        return new File(jdk, "java.base.jmod").isFile() ? jdk : null;
     }
 
     /** The host JRE shipped inside the packaged editor (must contain bin/java), or null when running from source. */
