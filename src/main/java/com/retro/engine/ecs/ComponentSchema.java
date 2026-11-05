@@ -257,7 +257,7 @@ public final class ComponentSchema {
         if (meta.type() == PropertyType.ASSET_PICKER) return Control.ASSET;
         if (meta.type() == PropertyType.TOGGLE || t == boolean.class) return Control.TOGGLE;
         if (meta.type() == PropertyType.BUTTON_GROUP || t.isEnum()) return Control.CHOICE;
-        if (meta.type() == PropertyType.COLOR || t == float.class || t == Float.class) return Control.NUMBER;
+        if (meta.type() == PropertyType.COLOR || t == float.class || t == Float.class || t == int.class || t == Integer.class) return Control.NUMBER;
         if (t == String.class) return Control.STRING;
         return Control.READ_ONLY;
     }

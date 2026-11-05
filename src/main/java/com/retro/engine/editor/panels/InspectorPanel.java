@@ -349,7 +349,8 @@ public class InspectorPanel {
                         }
                     } else if (p.control == Control.NUMBER) {
                         if (isVisible) {
-                            float floatVal = (val != null) ? (Float) val : 0.0f;
+                            float floatVal = (val instanceof Number n) ? n.floatValue() : 0.0f;
+                            boolean isIntField = val instanceof Integer;
                             boolean isColor = p.isColor();
                             int axis = isColor ? -1 : CACHED_AXES.computeIfAbsent(field, f -> axisOf(label));
                             String display = CACHED_DISPLAY_LABELS.computeIfAbsent(field, f -> {
@@ -381,7 +382,8 @@ public class InspectorPanel {
                                 renderInputText(buffer, textX, FIELD_X1 - 0.006f, midY);
                             } else {
                                 strBuilder.setLength(0);
-                                appendFloat(strBuilder, floatVal, isColor ? 2 : 1);
+                                if (isIntField) strBuilder.append((int) floatVal);
+                                else appendFloat(strBuilder, floatVal, isColor ? 2 : 1);
                                 UIGeometryBatch.addTruncatedText(buffer, strBuilder, textX, textTop(midY, VALUE_TEXT), FIELD_X1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
                             }
 

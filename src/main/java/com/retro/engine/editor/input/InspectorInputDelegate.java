@@ -368,19 +368,28 @@ public class InspectorInputDelegate {
                 }
             }
             case NUMBER -> {
-                float currentVal = (val != null) ? (Float) val : 0.0f;
+                boolean isInt = field.getType() == int.class || field.getType() == Integer.class;
+                float currentVal = (val instanceof Number n) ? n.floatValue() : 0.0f;
                 float step = prop.step() > 0.0f ? prop.step() : 0.1f;
+                if (isInt) step = Math.max(1.0f, Math.round(step));
                 float delta = 0.0f;
                 if (ndcX >= InspectorPanel.DEC_X0 && ndcX < InspectorPanel.DEC_X1) delta = -step;
                 else if (ndcX >= InspectorPanel.INC_X0 && ndcX <= InspectorPanel.INC_X1) delta = step;
                 if (delta != 0.0f) {
                     UISoundPlayer.play(UISound.CLICK);
                     float newVal = Math.max(prop.min(), Math.min(prop.max(), currentVal + delta));
-                    execute(manager, comp, field, currentVal, newVal, label);
+                    if (isInt) {
+                        int oldInt = (val instanceof Number n) ? n.intValue() : 0;
+                        int newInt = Math.round(newVal);
+                        if (newInt != oldInt) execute(manager, comp, field, oldInt, newInt, label);
+                    } else {
+                        execute(manager, comp, field, currentVal, newVal, label);
+                    }
                     return true;
                 }
                 if (ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.FIELD_X1) {
-                    beginInlineEdit(comp, field.getName(), field, field.getType(), prop, label, val, Float.toString(currentVal));
+                    String initial = isInt ? Integer.toString((int) currentVal) : Float.toString(currentVal);
+                    beginInlineEdit(comp, field.getName(), field, field.getType(), prop, label, val, initial);
                     return true;
                 }
             }
