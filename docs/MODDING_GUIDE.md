@@ -171,7 +171,11 @@ public void onInitialize(ModContext context) {
   `hidden = true`; in a `.rpatch` it's a Base64 string). `int` fields are editable in the Inspector and drag in whole
   steps.
 - Fields are serialized in `order` sequence. Once a mod has shipped, only **append** fields with a new `order`.
-  Reordering or removing them breaks scenes and prefabs saved with the old layout.
+  Appended fields keep their defaults in older scenes. Reordering or removing fields breaks scenes and prefabs saved
+  with the old layout.
+- If a player removes your mod, scenes and prefabs still load. Your components show as `Missing: <type>`, and their
+  saved data is kept, so it comes back when the mod is reinstalled. This covers files saved with this engine version
+  or later, because older files can't skip a component they don't recognize.
 - Registering a name that is already taken is rejected, so pick names that won't collide.
 - Components only hold data. Per-frame logic goes in an `EntityScript` attached through a `ScriptComponent`.
   EntityScripts compile against the mod class-loader chain, so they can reference your component classes directly

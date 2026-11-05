@@ -166,6 +166,17 @@ public class ComponentSchemaTest {
         assertTrue(p.isPersistedIn(true, 7));
     }
 
+    @Test
+    void newPrefabsFollowPrefabSinceAloneButOldOnesAreReadAsWritten() {
+        class Newer extends Component {
+            @InspectorProperty(order = 0, since = 12, prefabSince = 7) public float value;
+            @Override public String getComponentName() { return "Newer"; }
+        }
+        Property p = ComponentSchema.of(Newer.class).serializedProperties().get(0);
+        assertFalse(p.isPersistedIn(true, 7), "version 7 prefabs left these fields out");
+        assertTrue(p.isPersistedIn(true, 8));
+    }
+
     public static class DuplicateOrder extends Component {
         @InspectorProperty(order = 0) public float a;
         @InspectorProperty(order = 0) public float b;

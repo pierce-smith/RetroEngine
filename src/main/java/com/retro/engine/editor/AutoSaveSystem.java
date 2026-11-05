@@ -1,6 +1,7 @@
 package com.retro.engine.editor;
 
 import com.retro.engine.ecs.SceneWorld.PlayState;
+import com.retro.engine.ecs.serialization.SceneBackups;
 import com.retro.engine.ecs.serialization.SceneSerializer;
 
 import java.io.File;
@@ -11,9 +12,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Crash-safety net: every 5 minutes a daemon timer flags an autosave, and the next editor tick writes the dirty scene
- * to {@code [SceneName].rscene.bak} beside the scene file. The timer only sets a flag; serialization itself runs on the
- * main thread in {@link #tick} so it never races the ECS while entities are being mutated. Edit state is "dirty" once a
- * command executes / undoes / redoes after the last backup.
+ * to {@code [SceneName].rscene.bak} beside the scene file, keeping older copies (see {@link SceneBackups}). The timer
+ * only sets a flag; serialization itself runs on the main thread in {@link #tick} so it never races the ECS while
+ * entities are being mutated. Edit state is "dirty" once a command executes / undoes / redoes after the last backup.
  */
 public final class AutoSaveSystem implements CommandStack.CommandListener {
 
@@ -56,7 +57,13 @@ public final class AutoSaveSystem implements CommandStack.CommandListener {
         if (!workspace.hasActiveProject() || com.retro.engine.modding.ModLoader.isActive()) return;
         if (!dirty.getAndSet(false)) return;
 
-        String target = backupPathFor(workspace.getActiveScenePath());
+        File scene = sceneFileFor(workspace.getActiveScenePath());
+        String target = SceneBackups.newestFor(scene).getPath();
+        try {
+            SceneBackups.rotate(scene);
+        } catch (java.io.IOException e) {
+            System.err.println("[AutoSave] Could not rotate backups for " + scene + ": " + e.getMessage());
+        }
         boolean ok = SceneSerializer.saveBinaryScene(target, workspace.getSceneManager().getSceneEntities(),
                 workspace.getAssetDirectory(), workspace.getAssetDatabase());
         if (ok) {
@@ -67,14 +74,14 @@ public final class AutoSaveSystem implements CommandStack.CommandListener {
         }
     }
 
-    /** {@code Foo.rscene} -> {@code Foo.rscene.bak}; relative (untitled) scenes go to the project's Scenes folder. */
-    private String backupPathFor(String scenePath) {
+    /** The scene file backups are named after; relative (untitled) scenes go to the project's Scenes folder. */
+    private File sceneFileFor(String scenePath) {
         String path = (scenePath == null || scenePath.isBlank()) ? "Untitled.rscene" : scenePath;
         File file = new File(path);
         String name = file.getName();
         if (!name.toLowerCase().endsWith(".rscene")) name += ".rscene";
         File dir = file.isAbsolute() ? file.getParentFile() : new File(workspace.getProjectScenesDir());
-        return new File(dir, name + ".bak").getAbsolutePath();
+        return new File(dir, name).getAbsoluteFile();
     }
 
     // --- CommandStack.CommandListener ---

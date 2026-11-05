@@ -155,7 +155,9 @@ public final class ModWorkspace {
         File patchFile = editorPatchFile(mod, relScene);
 
         SceneSerializer.SceneLoadData data = SceneSerializer.loadSceneData(sceneFile.getAbsolutePath(), assetDb);
-        List<Entity> baseline = (data != null && data.entities() != null) ? data.entities() : new ArrayList<>();
+        // A delta against an unreadable baseline would record the whole scene as mod content
+        if (data.failed()) throw new IOException("the vanilla scene could not be read: " + data.error());
+        List<Entity> baseline = data.entities();
         loader.applyPatches(sceneFile.getAbsolutePath(), baseline, patchFile);
 
         Map<String, Object> doc = new SceneDeltaWriter(mod, loader.vfs()).diff(relScene, baseline, current);

@@ -94,6 +94,10 @@ public class EntitySpawner {
                 copy.addComponent(new AnimatorComponent(origAnim));
                 continue;
             }
+            if (orig instanceof com.retro.engine.ecs.components.UnknownComponent unknown) {
+                copy.addComponent(new com.retro.engine.ecs.components.UnknownComponent(unknown.typeName(), unknown.payload()));
+                continue;
+            }
             ComponentSchema schema = ComponentSchema.of(orig.getClass());
             Component target = findUnpopulated(copy, orig.getClass(), populated);
             boolean created = target == null;

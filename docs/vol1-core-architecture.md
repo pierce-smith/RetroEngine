@@ -31,7 +31,7 @@ pre-sized arrays, reuse scratch objects, and keep `new` out of anything that run
 |-------------------------|-----------------------|---------------|--------------|
 | *(none)*                | Editor                | `EngineLoop`  | Yes          |
 | `--runtime` / `--game`  | Standalone game       | `RuntimeLoop` | Yes          |
-| `--headless`            | Dedicated server      | `RuntimeLoop` | No           |
+| `--headless`            | Headless host         | `RuntimeLoop` | No           |
 | `--vulkan`              | Force Vulkan backend  | *(modifier)*  | MoltenVK on macOS |
 
 `EngineContext` reads a few more flags after the mode is picked:
@@ -41,6 +41,7 @@ pre-sized arrays, reuse scratch objects, and keep `new` out of anything that run
 | `--project <dir>` / `--project=<dir>` | Editor: open that project instead of showing the project launcher. Runtime: use it as the game-data folder |
 | `--mods`                | Editor only: load `<Project>/Mods/` (scene saving is then disabled, see Volume 4) |
 | `--no-mods`             | Runtime only: skip `Game_Data/Mods/` |
+| `--frames <n>` / `--frames=<n>` | Headless only: run `n` frames, stop the scene and exit (see §1.4) |
 
 `BackendLoader` also accepts `-vulkan` or a bare `vulkan` argument, the `-Dretro.rhi=vulkan` / `-Dretro.vulkan=true`
 system properties, and the `RETRO_RHI=vulkan` / `RETRO_VULKAN=1` environment variables as equivalents of `--vulkan`.
@@ -112,8 +113,30 @@ Exported games run the same scene simulation without editor overlays. The scene 
 viewport is set fullscreen through `GameView.setFullscreen`, the grid mesh is cleared, and only the game HUD reaches
 the UI stream. Delta is clamped on both ends: `[0.0001s, 0.1s]`.
 
-In `--headless` mode the loop never touches a window or GPU. It runs a fixed-rate simulation tick and sleeps off
-the rest, which is the starting point for a dedicated server.
+In `--headless` mode the loop never touches a window or GPU. The project loads the same way it does in an exported
+game, and scripts, physics, navigation and animation all run. Nothing is drawn, so this can't catch rendering bugs.
+
+This mode is the foundation for **networked games**: a process that runs the game with no player at the machine. The
+networking layer itself doesn't exist yet, so for now a headless process can't talk to anything. It's also how a game
+gets run automatically:
+
+```bash
+./gradlew installDist
+build/install/retro-engine/bin/retro-engine --headless --project <dir> --frames 600
+```
+
+With `--frames`, every frame uses the fixed 1/60 s tick with no sleeping, so runs are repeatable and fast. The scene
+is stopped at the end, so `onDestroy` runs too. Without it, the loop ticks at 60 Hz until the process is killed.
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | Every frame ran, with no script errors |
+| `1` | The engine crashed with an uncaught exception |
+| `2` | Bad arguments, the project couldn't be opened, or the startup scene is empty or failed to load |
+| `3` | `--frames` only: a script failed to compile or threw |
+
+An empty scene counts as a failure because a run that tested nothing mustn't report success. The automated suite uses
+this to run each template in a fresh JVM (Volume 5 §3.0).
 
 ### 1.4.1 Inside a Simulation Tick
 
@@ -258,6 +281,20 @@ actually changes.
 
 > **Binary layout rule:** fields are serialized **in `order` sequence**. Never reorder, insert or remove annotated
 > fields. Append new ones with the next `order`, and gate them with `since` / `prefabSince` and a format version bump.
+
+**File format.** Scenes (format 9) and prefabs (format 8) share these guarantees, and older files keep loading:
+
+- **Saves are all-or-nothing.** The file is built in memory, then swapped in atomically by `AtomicFile`. Anything that
+  goes wrong along the way leaves the old file untouched.
+- **Damage is detected.** A CRC-32 in the header covers the rest of the file. A bad checksum, a truncated file, or a
+  file from a newer engine is reported as a load failure. It's never treated as an empty scene.
+- **Components are self-contained.** Each one is stored as its type name, its byte length, then a payload that refers
+  to nothing else in the file. An unknown type, usually from a missing mod, loads as an `UnknownComponent`. It shows
+  in the Inspector as `Missing: <type>` and writes its bytes back unchanged on save, so the data returns with the mod.
+- **Short payloads are allowed.** Fields missing from the end of a payload keep their defaults.
+
+When you bump a format version, add a real file from the old version to `src/test/resources/formats/` **before**
+changing the writer. Once the writer moves on, you can't make one any more.
 
 ### 2.4 The 24 Built-In Component Types
 

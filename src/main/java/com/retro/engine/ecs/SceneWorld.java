@@ -8,6 +8,7 @@ import com.retro.engine.ecs.components.AnimatorComponent;
 import com.retro.engine.ecs.components.AudioSource;
 import com.retro.engine.ecs.components.Camera;
 import com.retro.engine.ecs.serialization.PrefabSerializer;
+import com.retro.engine.ecs.serialization.SceneBackups;
 import com.retro.engine.ecs.serialization.SceneSerializer;
 import com.retro.engine.modding.ModLoader;
 import com.retro.engine.physics.PhysicsSystem;
@@ -97,6 +98,9 @@ public class SceneWorld {
     private List<Entity> originSceneEntities = null;
     private String originScenePath = null;
     private String originSelectedId = null;
+    // Scene file that failed to load. Saving over it is refused, because the file may be recoverable and the world isn't it
+    private File unreadableSceneFile = null;
+    private java.util.function.Consumer<String> dataErrorListener = null;
 
     // ECS Subsystem Delegates, Contiguous Component Storage, & Animation Engine
     // Entities scripts asked to destroy this frame; removed after the script tick so no update loop shifts mid-iteration
@@ -109,6 +113,16 @@ public class SceneWorld {
     private final AnimationSystem animationEngine = new AnimationSystem();
 
     public SceneWorld() {}
+
+    /** Receives a readable message when a scene or prefab can't be loaded or saved. Errors are always logged as well. */
+    public void setDataErrorListener(java.util.function.Consumer<String> listener) {
+        this.dataErrorListener = listener;
+    }
+
+    private void reportDataError(String message) {
+        System.err.println("[SceneWorld] " + message);
+        if (dataErrorListener != null) dataErrorListener.accept(message);
+    }
 
     public List<Entity> getSceneEntities() { return sceneEntitiesView; }
 
@@ -452,11 +466,13 @@ public class SceneWorld {
         String path = pendingScenePath;
         if (path == null) return;
         pendingScenePath = null;
-        // Abort before tearing anything down: a bad path must not swap the running scene for an empty one
+        // Abort before tearing anything down: a bad path or file must not swap the running scene for an empty one
         if (resolveScenePath(path) == null) {
             System.err.println("[SceneWorld] Scene transition aborted: '" + path + "' could not be resolved through the project VFS.");
             return;
         }
+        SceneSerializer.SceneLoadData data = readScene(path, lastAssetDatabase);
+        if (data.failed()) return;
 
         boolean wasRunning = simulationEngine.getPlayState() != PlayState.EDITING;
         // Tear down the running scene without jumping back to the origin; this restores it to its pre-play state
@@ -469,7 +485,8 @@ public class SceneWorld {
             originSelectedId = selected != null ? selected.id : null;
             clearRegistryAndRebind(new ArrayList<>(), false);
         }
-        loadSceneFromFile(path, lastAssetDatabase);
+        stop();
+        bindLoadedScene(path, data);
         if (wasRunning) play();
     }
 
@@ -729,7 +746,9 @@ public class SceneWorld {
     /** Writes {@code entity} (and its children) as a prefab blueprint and registers it in the asset browser. */
     public void saveEntityAsPrefab(Entity entity, String targetPath, AssetDatabase assetDb) {
         if (entity == null || targetPath == null || targetPath.isBlank()) return;
-        PrefabSerializer.savePrefab(targetPath, entity, sceneEntities, assetDb);
+        if (!PrefabSerializer.savePrefab(targetPath, entity, sceneEntities, assetDb)) {
+            reportDataError("Could not save the prefab " + new File(targetPath).getName() + ". The file on disk has not changed. See the log for details.");
+        }
         if (assetDb != null) {
             assetDb.addAssetDirectoryIfNotExists(targetPath, AssetType.PREFAB);
         }
@@ -776,7 +795,21 @@ public class SceneWorld {
             return;
         }
         String sanitized = SceneSerializer.sanitizeScenePath(filePath);
-        SceneSerializer.saveScene(sanitized, sceneEntities, assetDirectory, assetDb);
+        File target = new File(sanitized).getAbsoluteFile();
+        if (target.equals(unreadableSceneFile)) {
+            reportDataError("Not saved: " + target.getName() + " could not be loaded earlier, and saving now would replace it. "
+                    + "Save under a new name, or restore the file from its .bak backups.");
+            return;
+        }
+        try {
+            SceneBackups.backUpBeforeSave(target);
+        } catch (java.io.IOException e) {
+            System.err.println("[SceneWorld] Could not back up " + target + " before saving: " + e.getMessage());
+        }
+        if (!SceneSerializer.saveScene(sanitized, sceneEntities, assetDirectory, assetDb)) {
+            reportDataError("Could not save " + target.getName() + ". The file on disk has not changed. See the log for details.");
+            return;
+        }
         this.activeScenePath = sanitized;
     }
 
@@ -796,11 +829,22 @@ public class SceneWorld {
         return loadSceneFromFile(filePath, null);
     }
 
+    /**
+     * Loads a scene over the current one. If the file can't be read, the current scene stays open and untouched, the
+     * returned data reports the failure, and that file is protected from being saved over.
+     */
     public SceneSerializer.SceneLoadData loadSceneFromFile(String filePath, AssetDatabase assetDb) {
-        stop();
         if (assetDb != null) this.lastAssetDatabase = assetDb;
+        SceneSerializer.SceneLoadData data = readScene(filePath, assetDb);
+        if (data.failed()) return data;
+        stop();
+        bindLoadedScene(filePath, data);
+        return data;
+    }
+
+    /** Reads a scene file without touching the world, reporting any failure. */
+    private SceneSerializer.SceneLoadData readScene(String filePath, AssetDatabase assetDb) {
         String sanitized = SceneSerializer.sanitizeScenePath(filePath);
-        this.activeScenePath = sanitized;
         // Read from the VFS-resolved file, never relative to user.dir (the packaged editor's install folder)
         String diskPath = resolveScenePath(sanitized);
         if (diskPath == null) {
@@ -808,7 +852,21 @@ public class SceneWorld {
             diskPath = sanitized;
         }
         SceneSerializer.SceneLoadData data = SceneSerializer.loadSceneData(diskPath, assetDb);
-        List<Entity> loadedEntities = (data != null && data.entities() != null) ? data.entities() : new ArrayList<>();
+        File file = new File(diskPath).getAbsoluteFile();
+        if (data.failed()) {
+            unreadableSceneFile = file;
+            reportDataError("Could not load " + file.getName() + ". " + data.error() + " The current scene was left open, and "
+                    + "the file is protected from being saved over. Autosave backups (.bak) are next to it.");
+        } else if (file.equals(unreadableSceneFile)) {
+            unreadableSceneFile = null;
+        }
+        return data;
+    }
+
+    private void bindLoadedScene(String filePath, SceneSerializer.SceneLoadData data) {
+        String sanitized = SceneSerializer.sanitizeScenePath(filePath);
+        this.activeScenePath = sanitized;
+        List<Entity> loadedEntities = data.entities();
         // Mods: .rpatch deltas, SceneLoadEvent and EntitySpawnEvent run on the fresh list before it is bound
         ModLoader.onSceneDeserialized(sanitized, loadedEntities);
         clearRegistryAndRebind(loadedEntities);
@@ -816,7 +874,6 @@ public class SceneWorld {
         attachAndArmAnimators();
         // A freshly loaded scene starts with nothing selected (rebind may have matched a stale selection by id)
         selectEntity((Entity) null);
-        return data;
     }
 
     /** First entity with a primary Camera, falling back to the first entity with any Camera (null if none). */

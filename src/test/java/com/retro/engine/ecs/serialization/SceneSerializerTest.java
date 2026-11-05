@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.retro.engine.ecs.Component;
@@ -13,11 +12,11 @@ import com.retro.engine.ecs.ComponentSchema.Property;
 import com.retro.engine.ecs.ComponentSchemaTest;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.InspectorProperty;
+import com.retro.engine.ecs.SceneWorld;
 import com.retro.engine.ecs.components.AudioReverbZone;
 import com.retro.engine.ecs.components.Light;
 import com.retro.engine.ecs.components.SplineComponent;
 import com.retro.engine.ecs.components.Transform;
-import com.retro.engine.testing.KnownIssue;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -99,6 +98,27 @@ class SceneSerializerTest {
         }
     }
 
+    @ParameterizedTest
+    @MethodSource("persistentComponents")
+    void everyPersistedFieldSurvivesAPrefabRoundTrip(Class<? extends Component> type) throws Exception {
+        Component original = ComponentSchema.of(type).newInstance();
+        fillWithSentinels(original);
+        Entity entity = new Entity("e1", "Sample", null);
+        if (type == Transform.class) entity.removeComponent(Transform.class);
+        entity.addComponent(original);
+        Path prefab = dir.resolve("sample.prefab.bin");
+        assertTrue(PrefabSerializer.savePrefab(prefab.toString(), entity, List.of(entity), null));
+
+        Entity loaded = PrefabSerializer.instantiatePrefab(prefab.toString(), new SceneWorld(), null).get(0);
+
+        Component copy = loaded.getComponent(type);
+        assertNotNull(copy);
+        for (Property p : ComponentSchema.of(type).serializedProperties()) {
+            if (p.kind == ComponentSchema.ValueKind.BYTES) continue;
+            assertEquals(p.get(original), p.get(copy), type.getSimpleName() + "." + p.name());
+        }
+    }
+
     @Test
     void outOfRangeValuesAreClampedOnLoad() {
         AudioReverbZone zone = new AudioReverbZone();
@@ -168,7 +188,6 @@ class SceneSerializerTest {
     }
 
     @Test
-    @KnownIssue("Components have no length prefix, so an unknown type desyncs the file and the scene loads empty (diagnostic 5.8)")
     void removingAModKeepsTheSceneAndItsModData() {
         List<Entity> entities = new ArrayList<>();
         Entity first = new Entity("first", "First", null);
@@ -205,14 +224,13 @@ class SceneSerializerTest {
     }
 
     @Test
-    @KnownIssue("Saves write straight over the real file (diagnostic 5.8)")
     void interruptedSaveLeavesTheOriginalFileIntact() throws Exception {
         assertTrue(SceneSerializer.saveScene(scenePath().toString(), List.of(new Entity("keep", "Keep", null))));
         byte[] original = Files.readAllBytes(scenePath());
 
         Entity bad = new Entity("bad", "Bad", null);
         bad.addComponent(new ExplodingComponent());
-        assertThrows(IllegalStateException.class, () -> SceneSerializer.saveScene(scenePath().toString(), List.of(bad)));
+        assertFalse(SceneSerializer.saveScene(scenePath().toString(), List.of(bad)));
 
         assertArrayEquals(original, Files.readAllBytes(scenePath()));
     }

@@ -1,12 +1,14 @@
 package com.retro.engine.ecs.serialization;
 
 import com.retro.engine.assets.AssetDatabase;
+import com.retro.engine.core.AtomicFile;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.EntitySpawner;
 import com.retro.engine.ecs.SceneWorld;
 import com.retro.engine.ecs.components.AnimatorComponent;
 
 import java.io.*;
+import java.nio.file.Files;
 import java.util.*;
 
 /**
@@ -17,7 +19,7 @@ public class PrefabSerializer {
 
     public static final int PREFAB_MAGIC = 0x50524546; // 'PREF' in ASCII
     // Version 2 layout: no asset UUIDs, reduced Material record (fields gated with prefabSince = 3 are omitted)
-    public static final int PREFAB_VERSION = 7; // Version 7 (AudioSource bus / ducking)
+    public static final int PREFAB_VERSION = 8; // Version 8 (self-contained components, checksum)
 
     public record PrefabTemplate(List<Entity> entities, String rootEntityId) {}
 
@@ -38,7 +40,6 @@ public class PrefabSerializer {
     public static boolean savePrefab(String filePath, Entity rootEntity, List<Entity> sceneEntities, AssetDatabase assetDb) {
         if (filePath == null || rootEntity == null) return false;
         File file = new File(sanitizePrefabPath(filePath));
-        if (file.getParentFile() != null) file.getParentFile().mkdirs();
 
         List<Entity> prefabEntities = new ArrayList<>();
         prefabEntities.add(rootEntity);
@@ -51,13 +52,14 @@ public class PrefabSerializer {
             }
         }
 
-        try (FileOutputStream fos = new FileOutputStream(file);
-             DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(fos))) {
+        try {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            DataOutputStream dos = new DataOutputStream(bytes);
 
             dos.writeInt(PREFAB_MAGIC);
             dos.writeInt(PREFAB_VERSION);
             dos.writeInt(prefabEntities.size());
-            dos.writeInt(0);
+            dos.writeInt(0); // Checksum, filled in below
 
             ComponentBinaryCodec codec = ComponentBinaryCodec.prefab(PREFAB_VERSION);
             ComponentBinaryCodec.StringTable stringTable = new ComponentBinaryCodec.StringTable();
@@ -72,9 +74,13 @@ public class PrefabSerializer {
                 codec.writeEntity(dos, entity, stringTable, assetDb);
             }
 
+            byte[] finished = bytes.toByteArray();
+            ComponentBinaryCodec.sealChecksum(finished);
+            AtomicFile.write(file, finished);
             System.out.println("[PrefabSerializer] Saved binary prefab blueprint (.prefab.bin): " + file.getAbsolutePath());
             return true;
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
+            System.err.println("[PrefabSerializer] Could not save " + file.getAbsolutePath() + ": " + e);
             e.printStackTrace();
             return false;
         }
@@ -87,13 +93,23 @@ public class PrefabSerializer {
         if (!file.exists()) file = new File("Assets/Prefabs/" + filePath);
         if (!file.exists()) return new ArrayList<>();
 
-        try (DataInputStream dis = new DataInputStream(new BufferedInputStream(new FileInputStream(file)))) {
+        try {
+            byte[] bytes = Files.readAllBytes(file.toPath());
+            DataInputStream dis = new DataInputStream(new ByteArrayInputStream(bytes));
             int magic = dis.readInt();
-            if (magic != PREFAB_MAGIC) return new ArrayList<>();
+            if (magic != PREFAB_MAGIC) {
+                System.err.println("[PrefabSerializer] Not a prefab file: " + file.getAbsolutePath());
+                return new ArrayList<>();
+            }
 
             int version = dis.readInt();
+            if (version > PREFAB_VERSION) {
+                System.err.println("[PrefabSerializer] " + file.getName() + " was saved by a newer version of the engine (format " + version + ").");
+                return new ArrayList<>();
+            }
             int entityCount = dis.readInt();
-            dis.readInt();
+            dis.readInt(); // Checksum, or padding in older files
+            if (version >= ComponentBinaryCodec.PREFAB_SELF_CONTAINED_VERSION) ComponentBinaryCodec.verifyChecksum(bytes);
 
             String[] stringTable = ComponentBinaryCodec.StringTable.read(dis);
 

@@ -146,7 +146,10 @@ When a player reports a crash, ask for `<name>.log.1`.
 | No audio device / no `ALC_EXT_EFX`       | Audio calls become no-ops. Reverb zones switch off (Volume 1 §4) |
 | `loadScene` with a bad path              | Transition aborted before the running scene is torn down (Volume 1 §1.4.1) |
 | Script leaves a bus muted / input suspended | Stop resets the runtime mixer layer and `CharacterController.inputEnabled` |
-| Editor crashes between saves             | `AutoSaveSystem` writes `[Scene].rscene.bak` every 5 minutes when there are changes (Volume 2 §1.6) |
+| Editor crashes between saves             | `AutoSaveSystem` writes `[Scene].rscene.bak` every 5 minutes when there are changes, keeping the last 5 (Volume 2 §1.6) |
+| Crash, full disk or bad component during a save | Saves are atomic, so the existing file is untouched, and a dialog reports the failure (Volume 1 §2.3) |
+| Scene file damaged or from a newer engine | Detected by checksum and version. The open scene stays, and the file can't be saved over (Volume 2 §1.6) |
+| Mod removed from a project                | Its components load as `Missing: <type>` and keep their data through saves |
 
 ---
 
@@ -156,8 +159,9 @@ When a player reports a crash, ask for `<name>.log.1`.
 
 `./gradlew test` runs the JUnit suite in `src/test/` with no window or GPU, and CI runs it on macOS, Windows and Linux
 (`.github/workflows/ci.yml`). It covers physics, the simulation's allocation budget, `ComponentSchema`, scene
-saving and loading, `.rpatch`, the mod VFS, `.rmod` packages, and compiling every shipped script with Janino. It
-can't see anything that needs a GPU, a window or a person, so the manual checklist below is still the gate for merging
+saving and loading, `.rpatch`, the mod VFS, `.rmod` packages, and compiling every shipped script with Janino. It also
+creates each project template and plays it for 300 frames in a separate process with `--headless --frames`
+(Volume 1 §1.4). It can't see anything that needs a GPU, a window or a person, so the manual checklist below is still the gate for merging
 into `main`.
 
 Three parts of the suite work differently from a normal test:
@@ -190,6 +194,7 @@ Run on **at least one Metal host and one Vulkan host** (Windows/Linux, or macOS 
 - [ ] Collider wireframes show the expected colors (solid / selected / trigger, grounded / airborne).
 - [ ] Edit an `int` field (e.g. a spline's RESOLUTION) by dragging and by typing. Undo restores it.
 - [ ] Drag spline knots and Bezier handles. One undo reverts the whole drag. Alt+LMB still orbits over a knot.
+- [ ] Open a deliberately damaged `.rscene`: the dialog appears, the open scene stays, and saving over that file is refused.
 - [ ] *Project Settings*: switch Blinn-Phong ↔ Gouraud, change a bus volume, CANCEL restores, SAVE persists.
 
 **Simulation & Scripting**

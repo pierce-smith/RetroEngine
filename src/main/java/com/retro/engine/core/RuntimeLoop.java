@@ -11,7 +11,7 @@ import com.retro.engine.graphics.SceneRenderPipeline;
 
 /**
  * Decoupled Standalone Game Runtime Execution Loop.
- * Enables standalone game builds and headless dedicated servers (--headless) to execute
+ * Enables standalone game builds and headless runs (--headless) to execute
  * pure 3D scene simulation without allocating or rendering EditorWorkspace UI overlays,
  * transform gizmos, or editor hotkeys.
  */
@@ -21,6 +21,7 @@ public class RuntimeLoop {
 
     private boolean running = false;
     private boolean headless = false;
+    private long maxFrames = 0L;
 
     public RuntimeLoop() {}
 
@@ -34,6 +35,14 @@ public class RuntimeLoop {
 
     public void setHeadless(boolean headless) {
         this.headless = headless;
+    }
+
+    /**
+     * Headless only: run exactly this many frames, then stop the scene so onDestroy runs too. Frames use the fixed tick
+     * and don't sleep, so a run is repeatable and finishes as fast as the machine allows. 0 runs until stopped.
+     */
+    public void setMaxFrames(long maxFrames) {
+        this.maxFrames = maxFrames;
     }
 
     public boolean isRunning() {
@@ -70,7 +79,11 @@ public class RuntimeLoop {
 
         System.out.println("[RuntimeLoop] Executing Standalone Game Loop (Headless Mode: " + headless + ")");
 
-        while (running && (headless || (window != null && !window.shouldClose()))) {
+        long frame = 0L;
+        boolean limited = headless && maxFrames > 0L;
+
+        while (running && (headless || (window != null && !window.shouldClose())) && !(limited && frame >= maxFrames)) {
+            frame++;
             long currentTime = System.nanoTime();
             float rawDeltaTime = (currentTime - lastTime) / 1_000_000_000.0f;
             lastTime = currentTime;
@@ -109,10 +122,11 @@ public class RuntimeLoop {
                     rhi.present();
                 }
             } else {
-                // Headless Dedicated Server Mode: Pure 60 Hz Simulation Tick without GPU Context
-                sceneWorld.update(deltaTime);
+                // Headless: pure simulation tick with no GPU context
+                sceneWorld.update(limited ? TARGET_HEADLESS_TICK_TIME : deltaTime);
+                if (limited) continue;
 
-                // Frame-pacing sleep for headless server thread
+                // Frame-pacing sleep for the headless thread
                 long elapsedNanos = System.nanoTime() - currentTime;
                 long targetNanos = (long) (TARGET_HEADLESS_TICK_TIME * 1_000_000_000.0f);
                 if (elapsedNanos < targetNanos) {
@@ -126,7 +140,8 @@ public class RuntimeLoop {
             }
         }
 
+        if (limited) sceneWorld.stop();
         this.running = false;
-        System.out.println("[RuntimeLoop] Standalone Game Loop Terminated.");
+        System.out.println("[RuntimeLoop] Standalone Game Loop Terminated after " + frame + " frames.");
     }
 }

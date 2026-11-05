@@ -601,6 +601,11 @@ public class EditorWorkspace {
     private final java.util.concurrent.ConcurrentLinkedQueue<Runnable> dialogResults = new java.util.concurrent.ConcurrentLinkedQueue<>();
     private final java.util.concurrent.atomic.AtomicBoolean dialogOpen = new java.util.concurrent.atomic.AtomicBoolean();
 
+    /** Shows a scene or prefab problem to the user. Off the main thread for the same reason as the pickers above. */
+    public void showDataError(String message) {
+        DIALOG_EXECUTOR.execute(() -> com.retro.engine.core.NativeFileDialog.showError("Scene Error", message));
+    }
+
     /** True while an off-thread native dialog is showing; UI should ignore clicks that would open another. */
     public boolean isNativeDialogOpen() { return dialogOpen.get(); }
 

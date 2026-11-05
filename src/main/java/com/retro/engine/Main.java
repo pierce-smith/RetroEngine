@@ -12,7 +12,8 @@ import org.lwjgl.system.Configuration;
  * <ul>
  *   <li>none: the editor (EngineLoop)</li>
  *   <li>{@code --runtime} / {@code --game}: a standalone game (RuntimeLoop), as launched by exported builds</li>
- *   <li>{@code --headless}: a dedicated server, simulation only, no window or GPU</li>
+ *   <li>{@code --headless}: simulation only, no window or GPU. Loads {@code --project <dir>} like an exported game.
+ *       With {@code --frames N} it runs N frames, stops the scene and exits with one of the EXIT_ codes below</li>
  *   <li>{@code --vulkan}: force the Vulkan backend (MoltenVK on macOS)</li>
  * </ul>
  * Packaged editors and exported games ({@code -Dretro.packaged=true}) have no visible console, so stdout, stderr and
@@ -24,6 +25,13 @@ public class Main {
 
     /** Log file base name; exported games pass their executable name so several games do not share one log. */
     public static final String LOG_NAME_PROPERTY = "retro.logName";
+
+    /** The run finished and nothing failed. An uncaught exception exits with 1, like any Java program. */
+    public static final int EXIT_OK = 0;
+    /** Headless: bad arguments, or the project or its startup scene could not be loaded. */
+    public static final int EXIT_STARTUP_FAILED = 2;
+    /** Headless --frames: at least one script failed to compile or threw. */
+    public static final int EXIT_SCRIPT_FAILED = 3;
 
     public static void main(String[] args) {
         // LWJGL's default 64 KB thread stack overflows inside new VkInstance(...) on Windows NVIDIA drivers: it enumerates
@@ -56,13 +64,13 @@ public class Main {
         System.out.println("[Main] RetroEngine on Java " + Runtime.version() + " (" + System.getProperty("os.name") + " "
                 + System.getProperty("os.arch") + ")");
 
+        int exitCode = EXIT_OK;
         EngineContext context = new EngineContext();
         try {
             if (isHeadless) {
-                System.out.println("[Main] Mode: dedicated headless server (--headless)");
-                if (context.initializeHeadless(args)) {
-                    new RuntimeLoop(true).run(context, context.getEditorManager().getSceneManager());
-                }
+                System.out.println("[Main] Mode: headless (--headless)");
+                System.setProperty("java.awt.headless", "true");
+                exitCode = runHeadless(context, args);
             } else if (isRuntime) {
                 System.out.println("[Main] Mode: standalone game (--runtime)");
                 if (context.initialize(1280, 720, "RetroEngine Standalone Runtime", true, args)) {
@@ -82,6 +90,31 @@ public class Main {
         } finally {
             context.shutdown();
         }
+        if (exitCode != EXIT_OK) System.exit(exitCode);
+    }
+
+    private static int runHeadless(EngineContext context, String[] args) {
+        if (!context.initializeHeadless(args)) return EXIT_STARTUP_FAILED;
+        com.retro.engine.ecs.SceneWorld world = context.getEditorManager().getSceneManager();
+        long frames = context.getHeadlessFrames();
+        // A failed scene load looks like an empty scene, and running nothing would report success
+        if (frames > 0L && world.getSceneEntities().isEmpty()) {
+            System.err.println("[Main] The startup scene is empty or failed to load, so there is nothing to run.");
+            return EXIT_STARTUP_FAILED;
+        }
+
+        RuntimeLoop loop = new RuntimeLoop(true);
+        loop.setMaxFrames(frames);
+        loop.run(context, world);
+        if (frames == 0L) return EXIT_OK;
+
+        int failures = com.retro.engine.scripting.ScriptEngine.getFailureCount();
+        if (failures > 0) {
+            System.err.println("[Main] Headless run failed: " + failures + " script error(s).");
+            return EXIT_SCRIPT_FAILED;
+        }
+        System.out.println("[Main] Headless run passed: " + frames + " frames, no script errors.");
+        return EXIT_OK;
     }
 
     private static void redirectOutputToLogFile(String logName) {

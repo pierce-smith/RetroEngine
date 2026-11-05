@@ -355,9 +355,10 @@ public class AssetDatabase {
 
     private static boolean isIgnoredRelativePath(String relPath) {
         String lowerRel = relPath.toLowerCase();
-        // Hidden files/dirs (.DS_Store, .git), legacy sidecars, and in-flight temp files
+        // Hidden files/dirs (.DS_Store, .git), legacy sidecars, in-flight temp files, and scene backups
         return lowerRel.startsWith(".") || lowerRel.contains("/.") ||
-               lowerRel.endsWith(".rmeta") || lowerRel.endsWith(".meta") || lowerRel.endsWith(".tmp");
+               lowerRel.endsWith(".rmeta") || lowerRel.endsWith(".meta") || lowerRel.endsWith(".tmp") ||
+               lowerRel.endsWith(".bak");
     }
 
     // --- LIVE ASSETS/ FOLDER WATCHER ---

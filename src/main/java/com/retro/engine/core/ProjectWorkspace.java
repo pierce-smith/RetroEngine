@@ -172,16 +172,17 @@ public final class ProjectWorkspace {
         com.retro.engine.assets.AssetStreamer.setCookedMirror(new File(dir, AssetDatabase.ASSETS_DIR), new File(dir, AssetDatabase.COOKED_DIR));
         workspace.setProjectSettings(settings);
         if (ModLoader.isRuntimeModsEnabled()) ModLoader.loadForProject(dir);
-        loadStartupScene(workspace, dir, settings);
+        String sceneError = loadStartupScene(workspace, dir, settings);
+        if (sceneError != null) throw new IOException("Startup scene " + settings.startupScene + ": " + sceneError);
         System.out.println("[Runtime] Loaded game '" + settings.projectName + "' (startup scene: " + settings.startupScene + ")");
     }
 
-    private static void loadStartupScene(EditorWorkspace workspace, File projectDir, ProjectSettings settings) {
-        if (settings.startupScene == null || settings.startupScene.isEmpty()) return;
+    /** Returns the load error, or null. SceneWorld has already reported it, so the editor can carry on. */
+    private static String loadStartupScene(EditorWorkspace workspace, File projectDir, ProjectSettings settings) {
+        if (settings.startupScene == null || settings.startupScene.isEmpty()) return null;
         File scene = new File(projectDir, settings.startupScene);
-        if (scene.isFile()) {
-            workspace.getSceneManager().loadSceneFromFile(scene.getAbsolutePath(), workspace.getAssetDatabase());
-        }
+        if (!scene.isFile()) return null;
+        return workspace.getSceneManager().loadSceneFromFile(scene.getAbsolutePath(), workspace.getAssetDatabase()).error();
     }
 
     // --- Starter Content ---

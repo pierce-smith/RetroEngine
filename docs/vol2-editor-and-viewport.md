@@ -138,6 +138,16 @@ redone since the last backup, the scene is written to `[SceneName].rscene.bak` n
 only sets the flag. Serialization runs on the main thread in `tick()`, so it never races ECS mutation (Volume 1
 §1.5).
 
+The last **5** backups are kept beside the scene: `[SceneName].rscene.bak` is the newest, then `.1.bak` through
+`.4.bak`. **Save Scene** adds the previous version of the file to the same rotation, unless it matches the newest
+backup, so saving repeatedly without changes doesn't use up history. To restore one, copy it and rename it to
+`.rscene`. Backups are hidden from the Asset Browser, and exports and mod packages skip them.
+
+**When a scene can't be read.** If a scene is damaged, was made by a newer engine, or isn't a scene at all, a dialog
+says so and the scene you had open stays open. That file is then protected: saving over it is refused until it loads
+successfully, so a blank scene can never replace something recoverable. Save under a new name instead. A failed save
+also shows a dialog and leaves the existing file as it was.
+
 ### 1.7 Project Settings (*File → Project Settings…*)
 
 A modal with two tabs. Edits apply live to the workspace's `ProjectSettings`, which the renderer and the audio

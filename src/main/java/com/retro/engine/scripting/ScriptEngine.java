@@ -35,6 +35,14 @@ public class ScriptEngine {
     // Negative failure cache preventing hot-loop re-compilation/re-resolution on every frame tick
     private static final Set<String> failedScriptCache = ConcurrentHashMap.newKeySet();
 
+    // Every script error since the process started, so headless test runs can fail on them
+    private static final java.util.concurrent.atomic.AtomicInteger failureCount = new java.util.concurrent.atomic.AtomicInteger();
+
+    /** Scripts that failed to compile or load, and script callbacks that threw, since the process started. */
+    public static int getFailureCount() {
+        return failureCount.get();
+    }
+
     // Reusable URLClassLoader to prevent Metaspace and classloader leaks across re-compilations
     private static URLClassLoader scriptClassLoader;
 
@@ -154,6 +162,7 @@ public class ScriptEngine {
 
     /** Header, the exception, and its first frames (the console shows few rows, so full traces would bury the cause). */
     static void logScriptError(String header, Throwable t) {
+        failureCount.incrementAndGet();
         StringBuilder sb = new StringBuilder(512).append(header);
         for (Throwable cause = t; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
             sb.append(cause == t ? "\n  " : "\n  Caused by: ").append(cause);
@@ -469,11 +478,13 @@ public class ScriptEngine {
         // per-frame tick does not retry them and print the same error every frame
         if (clazz == null) {
             sc.enabled = false;
+            failureCount.incrementAndGet();
             System.err.println("[ScriptEngine] Could not resolve or compile script class for '" + rawName + "'; disabled until Play is stopped.");
             return;
         }
         if (!EntityScript.class.isAssignableFrom(clazz)) {
             sc.enabled = false;
+            failureCount.incrementAndGet();
             System.err.println("[ScriptEngine] Class '" + clazz.getName() + "' does not extend EntityScript; disabled until Play is stopped.");
             return;
         }

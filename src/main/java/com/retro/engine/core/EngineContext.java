@@ -32,6 +32,7 @@ public class EngineContext {
     private IRenderBackend rhi;
     private boolean headlessMode = false;
     private boolean runtimeOnlyMode = false;
+    private long headlessFrames = 0L;
     // Process-wide: set once a standalone runtime boots, so static asset resolvers can skip editor-only fallbacks
     private static volatile boolean runtimeProcess = false;
 
@@ -49,17 +50,60 @@ public class EngineContext {
         return initializeHeadless(null);
     }
 
+    /**
+     * Boots without a window or GPU and loads the project the same way an exported game does. Returns false when the
+     * run can't mean anything: a bad --frames value, a --project that isn't a project, or game data that won't load.
+     */
     public boolean initializeHeadless(String[] args) {
         this.headlessMode = true;
         this.runtimeOnlyMode = true;
         runtimeProcess = true;
         this.editorManager = new EditorWorkspace();
         this.cameraController = new ViewportCamera();
+        editorManager.setCameraController(cameraController);
         this.hotkeyHandler = new HotkeyRouter();
         this.streamingService = new AssetStreamer();
         this.renderSubmitter = new SceneRenderPipeline();
 
-        System.out.println("[EngineContext] Headless Dedicated Server Context Bootstrapped (No GLFW/GPU).");
+        String frames = findCliValue(args, "--frames");
+        if (frames != null || hasCliFlag(args, "--frames")) {
+            try {
+                headlessFrames = Long.parseLong(String.valueOf(frames).trim());
+            } catch (NumberFormatException e) {
+                headlessFrames = 0L;
+            }
+            if (headlessFrames <= 0L) {
+                System.err.println("[EngineContext] --frames needs a positive number of frames, got: " + frames);
+                return false;
+            }
+        }
+
+        com.retro.engine.modding.ModLoader.setRuntimeModsEnabled(!hasCliFlag(args, "--no-mods"));
+
+        // An explicit --project must not fall through to another folder, or a typo would test the wrong game
+        String cliProject = findCliValue(args, "--project");
+        if (cliProject != null && !ProjectWorkspace.isProjectDirectory(new java.io.File(cliProject.trim()).getAbsoluteFile())) {
+            System.err.println("[EngineContext] Not a RetroEngine project (missing " + ProjectWorkspace.SETTINGS_FILE + "): " + cliProject);
+            return false;
+        }
+
+        java.io.File gameData = resolveRuntimeGameData(args);
+        if (gameData == null) {
+            if (headlessFrames > 0L) {
+                System.err.println("[EngineContext] --frames needs a project to run; pass --project <dir>.");
+                return false;
+            }
+            System.err.println("[EngineContext] No Game_Data/ or --project folder found; starting with an empty scene.");
+        } else {
+            try {
+                ProjectWorkspace.openRuntimeProject(editorManager, gameData);
+            } catch (java.io.IOException e) {
+                System.err.println("[EngineContext] Failed to load game data: " + e.getMessage());
+                return false;
+            }
+        }
+
+        System.out.println("[EngineContext] Headless context ready (no window or GPU).");
         return true;
     }
 
@@ -112,7 +156,10 @@ public class EngineContext {
 
         rhi = loader.getBackend();
 
-        if (!isRuntimeOnly) enableShaderHotReload();
+        if (!isRuntimeOnly) {
+            enableShaderHotReload();
+            editorManager.getSceneManager().setDataErrorListener(editorManager::showDataError);
+        }
 
         // Listen for window resizes and update editorManager dimensions
         display.setOnWindowSizeListener((w, h) -> {
@@ -314,6 +361,8 @@ public class EngineContext {
     }
 
     public boolean isHeadlessMode() { return headlessMode; }
+    /** Frames requested with --frames, or 0 to run until the process is stopped. */
+    public long getHeadlessFrames() { return headlessFrames; }
     public boolean isRuntimeOnlyMode() { return runtimeOnlyMode; }
 
     /** Null in headless mode (no GLFW). */

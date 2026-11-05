@@ -60,6 +60,8 @@ public final class ComponentSchema {
     /** Binary encoding of a persisted property. */
     public enum ValueKind { FLOAT, INT, BOOLEAN, ENUM, ASSET_PATH, STRING, STRING_MAP, BYTES, UNSUPPORTED }
 
+    private static final int LAST_PREFAB_VERSION_GATED_BY_SCENE_VERSION = 7;
+
     public static final class Property {
         public final Field field;
         public final InspectorProperty meta;
@@ -81,7 +83,12 @@ public final class ComponentSchema {
 
         /** True when this property is part of the binary layout for the given format profile and version. */
         public boolean isPersistedIn(boolean prefab, int version) {
-            return meta.serialized() && version >= meta.since() && (!prefab || version >= meta.prefabSince());
+            if (!meta.serialized()) return false;
+            if (!prefab) return version >= meta.since();
+            // Prefabs up to version 7 were also held to the scene version, which silently left out any field whose
+            // scene version was newer (AudioSource.bus and ducksBgm). Those files have to be read the way they were written.
+            if (version <= LAST_PREFAB_VERSION_GATED_BY_SCENE_VERSION) return version >= meta.since() && version >= meta.prefabSince();
+            return version >= meta.prefabSince();
         }
 
         public Object get(Component c) throws IllegalAccessException { return field.get(c); }

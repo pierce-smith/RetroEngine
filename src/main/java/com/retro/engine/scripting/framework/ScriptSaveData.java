@@ -4,10 +4,8 @@ import com.retro.engine.scripting.ScriptEngine;
 
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.util.Properties;
 
 /**
@@ -121,31 +119,16 @@ public final class ScriptSaveData {
             System.err.println("[ScriptSaveData] Could not create save folder " + dir.getAbsolutePath());
             return false;
         }
-        File tmp = new File(file.getAbsolutePath() + ".tmp");
-        OutputStream out = null;
         try {
-            out = new FileOutputStream(tmp);
-            values.store(out, "RetroEngine script save data");
-            out.close();
-            out = null;
-            // Write-then-rename so a crash mid-write never leaves a truncated save behind
-            if (file.exists() && !file.delete()) {
-                System.err.println("[ScriptSaveData] Could not replace " + file.getAbsolutePath());
-                return false;
-            }
-            if (!tmp.renameTo(file)) {
-                System.err.println("[ScriptSaveData] Could not move save data into " + file.getAbsolutePath());
-                return false;
-            }
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            values.store(bytes, "RetroEngine script save data");
+            // A crash mid-write must never lose the player's previous save
+            com.retro.engine.core.AtomicFile.write(file, bytes.toByteArray());
             dirty = false;
             return true;
         } catch (IOException e) {
             System.err.println("[ScriptSaveData] Saving " + file.getAbsolutePath() + " failed: " + e.getMessage());
             return false;
-        } finally {
-            if (out != null) {
-                try { out.close(); } catch (IOException ignored) {}
-            }
         }
     }
 
