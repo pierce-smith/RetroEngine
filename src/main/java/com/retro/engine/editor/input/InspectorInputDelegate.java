@@ -55,24 +55,25 @@ public class InspectorInputDelegate {
         // Clicking inside the focused field keeps typing; anywhere else is focus loss, which commits
         if (InspectorPanel.isOverActiveField(ndcX, ndcY)) return;
         commitInlineEdit(manager);
+        InspectorPanel.layout();
 
         if (manager.getSelectionCount() > 1) {
-            if (ndcX >= 0.55f) processMultiSelectionClick(ndcX, ndcY, manager);
+            processMultiSelectionClick(ndcX, ndcY, manager);
             return;
         }
 
         Entity selected = manager.getSelectedEntity();
-        if (selected == null || ndcX < 0.55f) return;
+        if (selected == null) return;
 
         // Top Header: "+ PREFAB" Button
-        if (ndcX >= InspectorPanel.PREFAB_X0 && ndcX <= InspectorPanel.PREFAB_X1 && ndcY >= InspectorPanel.PREFAB_Y0 && ndcY <= InspectorPanel.PREFAB_Y1) {
+        if (ndcX >= InspectorPanel.prefabX0 && ndcX <= InspectorPanel.prefabX1 && ndcY >= InspectorPanel.prefabY0 && ndcY <= InspectorPanel.prefabY1) {
             UISoundPlayer.play(UISound.OPEN_MODAL);
             manager.promptSaveSelectedAsPrefab();
             return;
         }
 
         float scrollOffset = InspectorPanel.getScrollOffset();
-        float curY = InspectorPanel.CONTENT_TOP;
+        float curY = InspectorPanel.contentTop;
 
         // BONE TRANSFORM section (drawn above the components while a Viewport bone is selected)
         AnimatorComponent boneAnimator = boneSectionAnimator(manager, selected);
@@ -153,7 +154,7 @@ public class InspectorInputDelegate {
                         Class<?> fieldType = f.getType();
 
                         if (fieldType == boolean.class || fieldType == Boolean.class) {
-                            if (inRow && ndcX >= InspectorPanel.LABEL_X && ndcX <= InspectorPanel.VALUE_X1) {
+                            if (inRow && ndcX >= InspectorPanel.labelX && ndcX <= InspectorPanel.valueX1) {
                                 UISoundPlayer.play(UISound.CLICK);
                                 boolean currentBool = Boolean.parseBoolean(valStr);
                                 boolean newBool = !currentBool;
@@ -168,7 +169,7 @@ public class InspectorInputDelegate {
                                 try { currentVal = Float.parseFloat(valStr); } catch (Exception ignored) {}
                                 float step = (prop != null && prop.step() > 0.0f) ? prop.step() : 0.1f;
 
-                                if (ndcX >= InspectorPanel.DEC_X0 && ndcX < InspectorPanel.DEC_X1) {
+                                if (ndcX >= InspectorPanel.decX0 && ndcX < InspectorPanel.decX1) {
                                     UISoundPlayer.play(UISound.CLICK);
                                     float newVal = currentVal - step;
                                     String newStr = (fieldType == int.class || fieldType == Integer.class) ? String.valueOf((int) newVal) : String.valueOf(newVal);
@@ -176,7 +177,7 @@ public class InspectorInputDelegate {
                                     manager.getCommandHistory().executeCommand(cmd);
                                     return;
                                 }
-                                if (ndcX >= InspectorPanel.INC_X0 && ndcX <= InspectorPanel.INC_X1) {
+                                if (ndcX >= InspectorPanel.incX0 && ndcX <= InspectorPanel.incX1) {
                                     UISoundPlayer.play(UISound.CLICK);
                                     float newVal = currentVal + step;
                                     String newStr = (fieldType == int.class || fieldType == Integer.class) ? String.valueOf((int) newVal) : String.valueOf(newVal);
@@ -184,14 +185,14 @@ public class InspectorInputDelegate {
                                     manager.getCommandHistory().executeCommand(cmd);
                                     return;
                                 }
-                                if (ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.FIELD_X1) {
+                                if (ndcX >= InspectorPanel.valueX0 && ndcX <= InspectorPanel.fieldX1) {
                                     beginInlineEdit(sc, fName, null, fieldType, prop, label, valStr, valStr);
                                     return;
                                 }
                             }
                             curY -= InspectorPanel.ROW_ADVANCE;
                         } else if (fieldType.isEnum()) {
-                            if (inRow && ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.VALUE_X1) {
+                            if (inRow && ndcX >= InspectorPanel.valueX0 && ndcX <= InspectorPanel.valueX1) {
                                 UISoundPlayer.play(UISound.CLICK);
                                 Object[] enumConstants = fieldType.getEnumConstants();
                                 if (enumConstants != null && enumConstants.length > 0) {
@@ -210,7 +211,7 @@ public class InspectorInputDelegate {
                             }
                             curY -= InspectorPanel.ROW_ADVANCE;
                         } else if (fieldType == String.class) {
-                            if (inRow && ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.VALUE_X1) {
+                            if (inRow && ndcX >= InspectorPanel.valueX0 && ndcX <= InspectorPanel.valueX1) {
                                 beginInlineEdit(sc, fName, null, fieldType, prop, label, valStr, valStr);
                                 return;
                             }
@@ -227,8 +228,8 @@ public class InspectorInputDelegate {
 
         // "+ ADD COMPONENT" Button
         float drawAddBtnY = curY + scrollOffset;
-        if (drawAddBtnY + InspectorPanel.ADD_ABOVE <= InspectorPanel.VIEW_TOP && drawAddBtnY - InspectorPanel.ADD_BELOW >= InspectorPanel.VIEW_BOTTOM) {
-            if (ndcX >= InspectorPanel.ADD_X0 && ndcX <= InspectorPanel.ADD_X1
+        if (drawAddBtnY + InspectorPanel.ADD_ABOVE <= InspectorPanel.viewTop && drawAddBtnY - InspectorPanel.ADD_BELOW >= InspectorPanel.viewBottom) {
+            if (ndcX >= InspectorPanel.addX0 && ndcX <= InspectorPanel.addX1
                     && ndcY >= drawAddBtnY - InspectorPanel.ADD_BELOW && ndcY <= drawAddBtnY + InspectorPanel.ADD_ABOVE) {
                 UISoundPlayer.play(UISound.OPEN_MODAL);
                 promptAddComponentMenu(manager, selected, ndcX, ndcY);
@@ -243,7 +244,7 @@ public class InspectorInputDelegate {
         List<Entity> selection = List.copyOf(manager.getSelectedEntities());
         Entity primary = manager.getSelectedEntity();
         float scrollOffset = InspectorPanel.getScrollOffset();
-        float curY = InspectorPanel.CONTENT_TOP - InspectorPanel.TEXT_ROW_ADVANCE - InspectorPanel.HEADER_ADVANCE;
+        float curY = InspectorPanel.contentTop - InspectorPanel.TEXT_ROW_ADVANCE - InspectorPanel.HEADER_ADVANCE;
 
         for (ComponentSchema.Property p : InspectorPanel.batchTransformProperties()) {
             float drawY = curY + scrollOffset;
@@ -252,15 +253,15 @@ public class InspectorInputDelegate {
             InspectorProperty prop = p.meta;
             float step = prop.step() > 0.0f ? prop.step() : 0.1f;
             float delta = 0.0f;
-            if (ndcX >= InspectorPanel.DEC_X0 && ndcX < InspectorPanel.DEC_X1) delta = -step;
-            else if (ndcX >= InspectorPanel.INC_X0 && ndcX <= InspectorPanel.INC_X1) delta = step;
+            if (ndcX >= InspectorPanel.decX0 && ndcX < InspectorPanel.decX1) delta = -step;
+            else if (ndcX >= InspectorPanel.incX0 && ndcX <= InspectorPanel.incX1) delta = step;
             if (delta != 0.0f) {
                 UISoundPlayer.play(UISound.CLICK);
                 applyBatchTransform(manager, selection, p, delta, true);
                 return;
             }
             Transform anchor = (primary != null) ? primary.getTransform() : null;
-            if (anchor != null && ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.FIELD_X1) {
+            if (anchor != null && ndcX >= InspectorPanel.valueX0 && ndcX <= InspectorPanel.fieldX1) {
                 float shared = InspectorPanel.sharedTransformValue(selection, p.field);
                 beginInlineEdit(anchor, InspectorPanel.MULTI_KEY_PREFIX + p.field.getName(), p.field, float.class, prop, p.label,
                         null, Float.isNaN(shared) ? "" : Float.toString(shared));
@@ -275,7 +276,7 @@ public class InspectorInputDelegate {
             float drawY = curY + scrollOffset;
             curY -= InspectorPanel.ROW_ADVANCE;
             if (!InspectorPanel.isRowVisible(drawY) || ndcY < drawY - InspectorPanel.CTRL_BELOW || ndcY > drawY + InspectorPanel.CTRL_ABOVE) continue;
-            if (ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.VALUE_X1 && InspectorPanel.isRemovable(primary.getComponent(type))) {
+            if (ndcX >= InspectorPanel.valueX0 && ndcX <= InspectorPanel.valueX1 && InspectorPanel.isRemovable(primary.getComponent(type))) {
                 List<ICommand> removals = new ArrayList<>();
                 for (Entity e : selection) {
                     Component c = e.getComponent(type);
@@ -290,8 +291,8 @@ public class InspectorInputDelegate {
         curY -= InspectorPanel.COMPONENT_GAP;
 
         float drawAddBtnY = curY + scrollOffset;
-        if (drawAddBtnY + InspectorPanel.ADD_ABOVE <= InspectorPanel.VIEW_TOP && drawAddBtnY - InspectorPanel.ADD_BELOW >= InspectorPanel.VIEW_BOTTOM
-                && ndcX >= InspectorPanel.ADD_X0 && ndcX <= InspectorPanel.ADD_X1
+        if (drawAddBtnY + InspectorPanel.ADD_ABOVE <= InspectorPanel.viewTop && drawAddBtnY - InspectorPanel.ADD_BELOW >= InspectorPanel.viewBottom
+                && ndcX >= InspectorPanel.addX0 && ndcX <= InspectorPanel.addX1
                 && ndcY >= drawAddBtnY - InspectorPanel.ADD_BELOW && ndcY <= drawAddBtnY + InspectorPanel.ADD_ABOVE) {
             UISoundPlayer.play(UISound.OPEN_MODAL);
             promptAddComponentMenu(manager, selection, ndcX, ndcY);
@@ -328,7 +329,7 @@ public class InspectorInputDelegate {
 
         switch (p.control) {
             case ASSET -> {
-                if (ndcX >= InspectorPanel.PICK_X0 && ndcX <= InspectorPanel.PICK_X1) {
+                if (ndcX >= InspectorPanel.pickX0 && ndcX <= InspectorPanel.pickX1) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     AssetType assetType = parseAssetType(prop.assetType());
                     // Script and Audio Source cards bind the picker to their own instance, so the pick lands in that component
@@ -336,7 +337,7 @@ public class InspectorInputDelegate {
                             (comp instanceof ScriptComponent || comp instanceof AudioSource) ? comp : null);
                     return true;
                 }
-                if (ndcX >= InspectorPanel.IMPORT_X0 && ndcX <= InspectorPanel.IMPORT_X1) {
+                if (ndcX >= InspectorPanel.importX0 && ndcX <= InspectorPanel.importX1) {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     if (comp instanceof Material && "TEXTURE".equalsIgnoreCase(prop.assetType())) {
                         promptImportTexture(manager, field.getName());
@@ -351,7 +352,7 @@ public class InspectorInputDelegate {
                 }
             }
             case TOGGLE -> {
-                if (ndcX >= InspectorPanel.LABEL_X && ndcX <= InspectorPanel.VALUE_X1) {
+                if (ndcX >= InspectorPanel.labelX && ndcX <= InspectorPanel.valueX1) {
                     UISoundPlayer.play(UISound.CLICK);
                     boolean currentBool = (val != null) && (Boolean) val;
                     execute(manager, comp, field, currentBool, !currentBool, label);
@@ -360,7 +361,7 @@ public class InspectorInputDelegate {
             }
             case CHOICE -> {
                 Object[] enumConstants = field.getType().getEnumConstants();
-                if (ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.VALUE_X1 && enumConstants != null && enumConstants.length > 0) {
+                if (ndcX >= InspectorPanel.valueX0 && ndcX <= InspectorPanel.valueX1 && enumConstants != null && enumConstants.length > 0) {
                     UISoundPlayer.play(UISound.CLICK);
                     int currentIdx = Math.max(0, Arrays.asList(enumConstants).indexOf(val));
                     execute(manager, comp, field, val, enumConstants[(currentIdx + 1) % enumConstants.length], label);
@@ -373,8 +374,8 @@ public class InspectorInputDelegate {
                 float step = prop.step() > 0.0f ? prop.step() : 0.1f;
                 if (isInt) step = Math.max(1.0f, Math.round(step));
                 float delta = 0.0f;
-                if (ndcX >= InspectorPanel.DEC_X0 && ndcX < InspectorPanel.DEC_X1) delta = -step;
-                else if (ndcX >= InspectorPanel.INC_X0 && ndcX <= InspectorPanel.INC_X1) delta = step;
+                if (ndcX >= InspectorPanel.decX0 && ndcX < InspectorPanel.decX1) delta = -step;
+                else if (ndcX >= InspectorPanel.incX0 && ndcX <= InspectorPanel.incX1) delta = step;
                 if (delta != 0.0f) {
                     UISoundPlayer.play(UISound.CLICK);
                     float newVal = Math.max(prop.min(), Math.min(prop.max(), currentVal + delta));
@@ -387,14 +388,14 @@ public class InspectorInputDelegate {
                     }
                     return true;
                 }
-                if (ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.FIELD_X1) {
+                if (ndcX >= InspectorPanel.valueX0 && ndcX <= InspectorPanel.fieldX1) {
                     String initial = isInt ? Integer.toString((int) currentVal) : Float.toString(currentVal);
                     beginInlineEdit(comp, field.getName(), field, field.getType(), prop, label, val, initial);
                     return true;
                 }
             }
             case STRING -> {
-                if (ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.VALUE_X1) {
+                if (ndcX >= InspectorPanel.valueX0 && ndcX <= InspectorPanel.valueX1) {
                     beginInlineEdit(comp, field.getName(), field, String.class, prop, label, val, (val != null) ? (String) val : "");
                     return true;
                 }
@@ -437,20 +438,20 @@ public class InspectorInputDelegate {
             float step = InspectorPanel.boneRowStep(row);
 
             float delta = 0.0f;
-            if (ndcX >= InspectorPanel.DEC_X0 && ndcX < InspectorPanel.DEC_X1) delta = -step;
-            else if (ndcX >= InspectorPanel.INC_X0 && ndcX <= InspectorPanel.INC_X1) delta = step;
+            if (ndcX >= InspectorPanel.decX0 && ndcX < InspectorPanel.decX1) delta = -step;
+            else if (ndcX >= InspectorPanel.incX0 && ndcX <= InspectorPanel.incX1) delta = step;
             if (delta != 0.0f) {
                 UISoundPlayer.play(UISound.CLICK);
                 commitBoneValue(manager, selected, animator, boneIndex, row, trs[row] + delta);
                 return true;
             }
-            if (ndcX >= InspectorPanel.VALUE_X0 && ndcX <= InspectorPanel.FIELD_X1) {
+            if (ndcX >= InspectorPanel.valueX0 && ndcX <= InspectorPanel.fieldX1) {
                 beginInlineEdit(animator, InspectorPanel.boneRowKey(row), null, float.class, null, null, null, Float.toString(trs[row]));
                 editBoneRow = row;
                 editBoneIndex = boneIndex;
                 return true;
             }
-            if (ndcX >= InspectorPanel.LABEL_X && ndcX < InspectorPanel.VALUE_X0) {
+            if (ndcX >= InspectorPanel.labelX && ndcX < InspectorPanel.valueX0) {
                 float[] local = animator.getLocalPose(boneIndex);
                 boneDragAnimator = animator;
                 boneDragEntity = selected;

@@ -28,14 +28,13 @@ import java.util.Map;
 
 /**
  * InspectorPanel handles dynamic component rendering using @InspectorProperty reflection
- * and Pillar 3 User Script Property Overrides reflection.
+ * and Pillar 3 User Script Property Overrides reflection. Lays itself out against its docked tile (see {@link #layout()}):
+ * the label column takes a clamped share of the width, controls shrink in narrow tiles, content is capped in wide ones,
+ * and the scrolling view spans whatever height the tile has.
  */
 public class InspectorPanel {
 
-    // --- Shared layout (design-space NDC) ---
-    public static final float VIEW_TOP = 0.77f, VIEW_BOTTOM = -0.48f;
-    public static final float CONTENT_TOP = 0.74f;
-
+    // --- Vertical rhythm (row advances and control bands are size-independent) ---
     public static final float HEADER_ADVANCE = 0.046f;
     public static final float ROW_ADVANCE = 0.040f;
     public static final float ASSET_ROW_ADVANCE = 0.044f;
@@ -45,27 +44,70 @@ public class InspectorPanel {
 
     /** Control band of a row spans [drawY - CTRL_BELOW, drawY + CTRL_ABOVE]. */
     public static final float CTRL_ABOVE = 0.004f, CTRL_BELOW = 0.030f;
+    public static final float ADD_ABOVE = 0.01f, ADD_BELOW = 0.04f;
+    public static final float REMOVE_INSET = 0.004f;
+
+    // --- Responsive layout. Recomputed from the docked tile (DockPanel.INSPECTOR.rect) by layout(), which render and
+    // InspectorInputDelegate both call first, so every edge below is shared by drawing and hit-testing.
+    private static final float EDGE_PAD = 0.025f;
+    /** Content never grows wider than this, so wide tiles keep label and value close instead of stretching rows. */
+    private static final float MAX_CONTENT_W = 0.9f;
+    /** Label column share of the content width, clamped to a readable range. */
+    private static final float LABEL_SHARE = 0.40f, LABEL_MIN_W = 0.09f, LABEL_MAX_W = 0.28f;
+    /** Value column width the fixed-size buttons were designed for; narrower columns shrink them proportionally. */
+    private static final float NOMINAL_VALUE_W = 0.24f;
+    private static final float STEP_W = 0.055f, PICK_W = 0.057f, IMPORT_W = 0.065f, BUTTON_GAP = 0.005f;
+    private static final float PREFAB_W = 0.16f, REMOVE_W = 0.084f;
 
     // Two-column grid: label column | value column
-    public static final float LABEL_X = 0.575f;
-    public static final float VALUE_X0 = 0.735f, VALUE_X1 = 0.975f;
-
+    public static float labelX, valueX0, valueX1;
     // Float rows: value well + segmented [-|+] stepper
-    public static final float FIELD_X1 = 0.858f;
-    public static final float DEC_X0 = 0.865f, DEC_X1 = 0.92f;
-    public static final float INC_X0 = 0.92f, INC_X1 = 0.975f;
-
+    public static float fieldX1, decX0, decX1, incX0, incX1;
     // Asset rows: value well + PICK + IMPORT
-    public static final float ASSET_FIELD_X1 = 0.843f;
-    public static final float PICK_X0 = 0.848f, PICK_X1 = 0.905f;
-    public static final float IMPORT_X0 = 0.91f, IMPORT_X1 = 0.975f;
+    public static float assetFieldX1, pickX0, pickX1, importX0, importX1;
+    // Header "+ PREFAB" button, footer "+ ADD COMPONENT" button, section header "REMOVE" button
+    public static float prefabX0, prefabX1, prefabY0, prefabY1;
+    public static float addX0, addX1, removeX0, removeX1;
+    // Scrolling view band and where the first row starts
+    public static float viewTop, viewBottom, contentTop;
+    private static float headerBarX0, headerTextY, headerRuleY, scrollbarX0, scrollbarX1;
 
-    // Header "+ PREFAB" button and footer "+ ADD COMPONENT" button
-    public static final float PREFAB_X0 = 0.82f, PREFAB_X1 = 0.98f, PREFAB_Y0 = 0.800f, PREFAB_Y1 = 0.845f;
-    public static final float ADD_X0 = 0.58f, ADD_X1 = 0.975f, ADD_ABOVE = 0.01f, ADD_BELOW = 0.04f;
+    static { layout(); }
 
-    // Section header "REMOVE" button (every component except Transform)
-    public static final float REMOVE_X0 = 0.885f, REMOVE_X1 = 0.969f, REMOVE_INSET = 0.004f;
+    /** Lays the panel out against its current tile. Cheap and allocation-free; safe to call any number of times. */
+    public static void layout() {
+        PanelRect r = DockPanel.INSPECTOR.rect;
+        labelX = r.x0 + EDGE_PAD;
+        float right = Math.max(labelX + 0.05f, Math.min(r.x1 - EDGE_PAD, labelX + MAX_CONTENT_W));
+        float contentW = right - labelX;
+        float labelW = Math.max(LABEL_MIN_W, Math.min(LABEL_MAX_W, contentW * LABEL_SHARE));
+        valueX0 = labelX + Math.min(labelW, contentW * 0.5f);
+        valueX1 = right;
+
+        float k = Math.min(1.0f, (valueX1 - valueX0) / NOMINAL_VALUE_W);
+        incX1 = right; incX0 = incX1 - STEP_W * k;
+        decX1 = incX0; decX0 = decX1 - STEP_W * k;
+        fieldX1 = decX0 - 0.007f * k;
+
+        importX1 = right; importX0 = importX1 - IMPORT_W * k;
+        pickX1 = importX0 - BUTTON_GAP * k; pickX0 = pickX1 - PICK_W * k;
+        assetFieldX1 = pickX0 - BUTTON_GAP * k;
+
+        prefabX1 = right + 0.005f;
+        prefabX0 = prefabX1 - Math.min(PREFAB_W, contentW * 0.4f);
+        prefabY0 = r.y1 - 0.080f; prefabY1 = r.y1 - 0.035f;
+        addX0 = labelX + 0.005f; addX1 = right;
+        removeX1 = right - 0.006f; removeX0 = removeX1 - REMOVE_W * Math.max(0.6f, k);
+
+        headerBarX0 = labelX - 0.01f;
+        headerTextY = r.y1 - 0.047f;
+        headerRuleY = r.y1 - 0.095f;
+        viewTop = r.y1 - 0.11f;
+        contentTop = r.y1 - 0.14f;
+        viewBottom = r.y0 + 0.02f;
+        // Scrollbar rides just right of the (possibly capped) content, not at a far-away tile edge
+        scrollbarX1 = Math.min(r.x1 - 0.007f, right + 0.018f); scrollbarX0 = scrollbarX1 - 0.009f;
+    }
 
     private static final float LABEL_TEXT = 0.82f;
     private static final float VALUE_TEXT = 0.85f;
@@ -145,7 +187,7 @@ public class InspectorPanel {
     }
 
     public static boolean isRowVisible(float drawY) {
-        return drawY + CTRL_ABOVE <= VIEW_TOP && drawY - CTRL_BELOW >= VIEW_BOTTOM;
+        return drawY + CTRL_ABOVE <= viewTop && drawY - CTRL_BELOW >= viewBottom;
     }
 
     public static int axisOf(String label) {
@@ -271,13 +313,16 @@ public class InspectorPanel {
     public static void render(UIContext ui, Entity selectedEntity, Skeleton.BoneNode selectedBone, int selectedBoneIndex,
                               List<AssetMeta> assetDirectory) {
         UIGeometryBatch.Buffer buffer = ui.geometry();
-        UIGeometryBatch.addQuad(buffer, 0.55f, -0.5f, 1.0f, 1.0f, EditorTheme.SURFACE, 1.0f);
+        layout();
+        PanelRect r = DockPanel.INSPECTOR.rect;
+        UIGeometryBatch.addQuad(buffer, r.x0, r.y0, r.x1, r.y1, EditorTheme.SURFACE, 1.0f);
         activeWellVisible = false;
 
         if (selectedEntity == null) {
             resetScroll();
-            centeredText(buffer, "NO SELECTION", 0.24f, 1.15f, EditorTheme.TEXT_MUTED);
-            centeredText(buffer, "SELECT AN ENTITY IN THE HIERARCHY", 0.17f, 0.8f, EditorTheme.TEXT_DISABLED);
+            float y = r.y1 - Math.min(0.64f, r.height() * 0.4f);
+            centeredText(buffer, "NO SELECTION", y, 1.15f, EditorTheme.TEXT_MUTED);
+            centeredText(buffer, "SELECT AN ENTITY IN THE HIERARCHY", y - 0.07f, 0.8f, EditorTheme.TEXT_DISABLED);
             return;
         }
 
@@ -285,13 +330,13 @@ public class InspectorPanel {
         headerSb.setLength(0);
         headerSb.append(selectedEntity.name);
         if (selectedBone != null) headerSb.append(" / BONE ").append(selectedBone.id).append(": ").append(selectedBone.name);
-        UIGeometryBatch.addTruncatedText(buffer, headerSb, LABEL_X, 0.833f, PREFAB_X0 - 0.012f, 1.1f,
+        UIGeometryBatch.addTruncatedText(buffer, headerSb, labelX, headerTextY, prefabX0 - 0.012f, 1.1f,
                 selectedBone != null ? EditorTheme.ACCENT : EditorTheme.TEXT, 1.0f);
-        UIGeometryBatch.addRoundedCard(buffer, PREFAB_X0, PREFAB_Y0, PREFAB_X1, PREFAB_Y1, EditorTheme.RADIUS, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
-        centeredTextIn(buffer, "+ PREFAB", PREFAB_X0, PREFAB_X1, (PREFAB_Y0 + PREFAB_Y1) * 0.5f, 0.8f, EditorTheme.TEXT);
-        UIGeometryBatch.addQuad(buffer, LABEL_X, 0.785f, VALUE_X1, 0.785f + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
+        UIGeometryBatch.addRoundedCard(buffer, prefabX0, prefabY0, prefabX1, prefabY1, EditorTheme.RADIUS, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
+        centeredTextIn(buffer, "+ PREFAB", prefabX0, prefabX1, (prefabY0 + prefabY1) * 0.5f, 0.8f, EditorTheme.TEXT);
+        UIGeometryBatch.addQuad(buffer, labelX, headerRuleY, valueX1, headerRuleY + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
 
-        float curY = CONTENT_TOP;
+        float curY = contentTop;
 
         AnimatorComponent boneAnimator = (selectedBone != null) ? selectedEntity.getComponent(AnimatorComponent.class) : null;
         if (boneAnimator != null && readBoneTrs(boneAnimator, selectedBoneIndex, boneTrsScratch)) {
@@ -329,11 +374,11 @@ public class InspectorPanel {
                             String pathStr = (val != null) ? val.toString() : "";
                             boolean empty = pathStr.isEmpty();
                             rowLabel(buffer, label, midY);
-                            well(buffer, VALUE_X0, ASSET_FIELD_X1, drawY);
-                            UIGeometryBatch.addTruncatedText(buffer, empty ? "NONE" : extractFileName(pathStr), VALUE_X0 + 0.008f,
-                                    textTop(midY, VALUE_TEXT), ASSET_FIELD_X1 - 0.006f, VALUE_TEXT, empty ? EditorTheme.TEXT_MUTED : EditorTheme.TEXT, 1.0f);
-                            button(buffer, "PICK", PICK_X0, PICK_X1, drawY, EditorTheme.SURFACE_RAISED);
-                            button(buffer, "IMPORT", IMPORT_X0, IMPORT_X1, drawY, EditorTheme.ACCENT);
+                            well(buffer, valueX0, assetFieldX1, drawY);
+                            UIGeometryBatch.addTruncatedText(buffer, empty ? "NONE" : extractFileName(pathStr), valueX0 + 0.008f,
+                                    textTop(midY, VALUE_TEXT), assetFieldX1 - 0.006f, VALUE_TEXT, empty ? EditorTheme.TEXT_MUTED : EditorTheme.TEXT, 1.0f);
+                            button(buffer, "PICK", pickX0, pickX1, drawY, EditorTheme.SURFACE_RAISED);
+                            button(buffer, "IMPORT", importX0, importX1, drawY, EditorTheme.ACCENT);
                         }
                     } else if (p.control == Control.TOGGLE) {
                         if (isVisible) {
@@ -361,30 +406,30 @@ public class InspectorPanel {
 
                             boolean editing = isActiveField(comp, field.getName());
                             rowLabel(buffer, display, midY);
-                            if (editing) activeWell(buffer, VALUE_X0, FIELD_X1, drawY);
-                            else well(buffer, VALUE_X0, FIELD_X1, drawY);
+                            if (editing) activeWell(buffer, valueX0, fieldX1, drawY);
+                            else well(buffer, valueX0, fieldX1, drawY);
 
-                            float textX = VALUE_X0 + 0.008f;
+                            float textX = valueX0 + 0.008f;
                             if (isColor && !editing) {
                                 float range = prop.max() - prop.min();
                                 float t = range > 0.0f ? Math.max(0.0f, Math.min(1.0f, (floatVal - prop.min()) / range)) : 0.0f;
                                 float inset = 0.004f;
-                                float fillX1 = VALUE_X0 + inset + (FIELD_X1 - VALUE_X0 - inset * 2.0f) * t;
-                                if (fillX1 > VALUE_X0 + inset) {
-                                    UIGeometryBatch.addRoundedQuad(buffer, VALUE_X0 + inset, drawY - CTRL_BELOW + inset, fillX1, drawY + CTRL_ABOVE - inset,
+                                float fillX1 = valueX0 + inset + (fieldX1 - valueX0 - inset * 2.0f) * t;
+                                if (fillX1 > valueX0 + inset) {
+                                    UIGeometryBatch.addRoundedQuad(buffer, valueX0 + inset, drawY - CTRL_BELOW + inset, fillX1, drawY + CTRL_ABOVE - inset,
                                             EditorTheme.RADIUS_SMALL, channelColor(label), 0.45f);
                                 }
                             } else if (axis >= 0) {
-                                textX = axisBadge(buffer, axis, VALUE_X0 + 0.005f, drawY) + 0.008f;
+                                textX = axisBadge(buffer, axis, valueX0 + 0.005f, drawY) + 0.008f;
                             }
 
                             if (editing) {
-                                renderInputText(buffer, textX, FIELD_X1 - 0.006f, midY);
+                                renderInputText(buffer, textX, fieldX1 - 0.006f, midY);
                             } else {
                                 strBuilder.setLength(0);
                                 if (isIntField) strBuilder.append((int) floatVal);
                                 else appendFloat(strBuilder, floatVal, isColor ? 2 : 1);
-                                UIGeometryBatch.addTruncatedText(buffer, strBuilder, textX, textTop(midY, VALUE_TEXT), FIELD_X1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+                                UIGeometryBatch.addTruncatedText(buffer, strBuilder, textX, textTop(midY, VALUE_TEXT), fieldX1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
                             }
 
                             renderStepper(buffer, drawY, midY);
@@ -393,21 +438,21 @@ public class InspectorPanel {
                         if (isVisible) {
                             rowLabel(buffer, label, midY);
                             if (isActiveField(comp, field.getName())) {
-                                activeWell(buffer, VALUE_X0, VALUE_X1, drawY);
-                                renderInputText(buffer, VALUE_X0 + 0.008f, VALUE_X1 - 0.006f, midY);
+                                activeWell(buffer, valueX0, valueX1, drawY);
+                                renderInputText(buffer, valueX0 + 0.008f, valueX1 - 0.006f, midY);
                             } else {
                                 String strVal = (val != null) ? (String) val : "";
-                                well(buffer, VALUE_X0, VALUE_X1, drawY);
-                                UIGeometryBatch.addTruncatedText(buffer, strVal, VALUE_X0 + 0.008f, textTop(midY, VALUE_TEXT),
-                                        VALUE_X1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+                                well(buffer, valueX0, valueX1, drawY);
+                                UIGeometryBatch.addTruncatedText(buffer, strVal, valueX0 + 0.008f, textTop(midY, VALUE_TEXT),
+                                        valueX1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
                             }
                         }
                     } else {
                         if (isVisible) {
                             String textVal = (val != null) ? val.toString() : "";
                             rowLabel(buffer, label, midY);
-                            UIGeometryBatch.addTruncatedText(buffer, textVal.isEmpty() ? "-" : textVal, VALUE_X0 + 0.008f, textTop(midY, VALUE_TEXT),
-                                    VALUE_X1, VALUE_TEXT, EditorTheme.TEXT_MUTED, 1.0f);
+                            UIGeometryBatch.addTruncatedText(buffer, textVal.isEmpty() ? "-" : textVal, valueX0 + 0.008f, textTop(midY, VALUE_TEXT),
+                                    valueX1, VALUE_TEXT, EditorTheme.TEXT_MUTED, 1.0f);
                         }
                     }
                 } catch (Exception e) {
@@ -463,15 +508,15 @@ public class InspectorPanel {
                             if (isVisible) {
                                 rowLabel(buffer, label, midY);
                                 if (isActiveField(sc, fName)) {
-                                    activeWell(buffer, VALUE_X0, FIELD_X1, drawY);
-                                    renderInputText(buffer, VALUE_X0 + 0.008f, FIELD_X1 - 0.006f, midY);
+                                    activeWell(buffer, valueX0, fieldX1, drawY);
+                                    renderInputText(buffer, valueX0 + 0.008f, fieldX1 - 0.006f, midY);
                                 } else {
                                     float floatVal = 0.0f;
                                     try { floatVal = Float.parseFloat(valStr); } catch (Exception ignored) {}
-                                    well(buffer, VALUE_X0, FIELD_X1, drawY);
+                                    well(buffer, valueX0, fieldX1, drawY);
                                     strBuilder.setLength(0);
                                     appendFloat(strBuilder, floatVal, 1);
-                                    UIGeometryBatch.addTruncatedText(buffer, strBuilder, VALUE_X0 + 0.008f, textTop(midY, VALUE_TEXT), FIELD_X1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+                                    UIGeometryBatch.addTruncatedText(buffer, strBuilder, valueX0 + 0.008f, textTop(midY, VALUE_TEXT), fieldX1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
                                 }
                                 renderStepper(buffer, drawY, midY);
                             }
@@ -486,20 +531,20 @@ public class InspectorPanel {
                             if (isVisible) {
                                 rowLabel(buffer, label, midY);
                                 if (isActiveField(sc, fName)) {
-                                    activeWell(buffer, VALUE_X0, VALUE_X1, drawY);
-                                    renderInputText(buffer, VALUE_X0 + 0.008f, VALUE_X1 - 0.006f, midY);
+                                    activeWell(buffer, valueX0, valueX1, drawY);
+                                    renderInputText(buffer, valueX0 + 0.008f, valueX1 - 0.006f, midY);
                                 } else {
-                                    well(buffer, VALUE_X0, VALUE_X1, drawY);
-                                    UIGeometryBatch.addTruncatedText(buffer, valStr, VALUE_X0 + 0.008f, textTop(midY, VALUE_TEXT),
-                                            VALUE_X1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+                                    well(buffer, valueX0, valueX1, drawY);
+                                    UIGeometryBatch.addTruncatedText(buffer, valStr, valueX0 + 0.008f, textTop(midY, VALUE_TEXT),
+                                            valueX1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
                                 }
                             }
                             curY -= ROW_ADVANCE;
                         } else {
                             if (isVisible) {
                                 rowLabel(buffer, label, midY);
-                                UIGeometryBatch.addTruncatedText(buffer, valStr.isEmpty() ? "-" : valStr, VALUE_X0 + 0.008f, textTop(midY, VALUE_TEXT),
-                                        VALUE_X1, VALUE_TEXT, EditorTheme.TEXT_MUTED, 1.0f);
+                                UIGeometryBatch.addTruncatedText(buffer, valStr.isEmpty() ? "-" : valStr, valueX0 + 0.008f, textTop(midY, VALUE_TEXT),
+                                        valueX1, VALUE_TEXT, EditorTheme.TEXT_MUTED, 1.0f);
                             }
                             curY -= TEXT_ROW_ADVANCE;
                         }
@@ -512,10 +557,10 @@ public class InspectorPanel {
 
         // Button: + ADD COMPONENT
         float drawAddBtnY = curY + scrollOffset;
-        if (drawAddBtnY + ADD_ABOVE <= VIEW_TOP && drawAddBtnY - ADD_BELOW >= VIEW_BOTTOM) {
+        if (drawAddBtnY + ADD_ABOVE <= viewTop && drawAddBtnY - ADD_BELOW >= viewBottom) {
             float y0 = drawAddBtnY - ADD_BELOW, y1 = drawAddBtnY + ADD_ABOVE;
-            UIGeometryBatch.addRoundedQuad(buffer, ADD_X0, y0, ADD_X1, y1, EditorTheme.RADIUS, EditorTheme.ACCENT, 1.0f);
-            centeredTextIn(buffer, "+ ADD COMPONENT", ADD_X0, ADD_X1, (y0 + y1) * 0.5f, 0.95f, EditorTheme.TEXT);
+            UIGeometryBatch.addRoundedQuad(buffer, addX0, y0, addX1, y1, EditorTheme.RADIUS, EditorTheme.ACCENT, 1.0f);
+            centeredTextIn(buffer, "+ ADD COMPONENT", addX0, addX1, (y0 + y1) * 0.5f, 0.95f, EditorTheme.TEXT);
         }
         curY -= ADD_BUTTON_ADVANCE;
         finishScroll(buffer, curY);
@@ -523,16 +568,16 @@ public class InspectorPanel {
 
     /** Clamps the scroll offset to the content height ending at {@code curY} and draws the scrollbar thumb. */
     private static void finishScroll(UIGeometryBatch.Buffer buffer, float curY) {
-        float viewH = (VIEW_TOP - VIEW_BOTTOM) - 0.03f;
-        float totalContentHeight = CONTENT_TOP - curY;
+        float viewH = (viewTop - viewBottom) - 0.03f;
+        float totalContentHeight = contentTop - curY;
         maxScroll = Math.max(0.0f, totalContentHeight - viewH);
         scrollOffset = Math.max(0.0f, Math.min(maxScroll, scrollOffset));
 
         if (maxScroll > 0.001f) {
-            float trackH = VIEW_TOP - VIEW_BOTTOM;
+            float trackH = viewTop - viewBottom;
             float thumbHeight = Math.max(0.12f, (viewH / totalContentHeight) * trackH);
-            float thumbTopY = VIEW_TOP - (scrollOffset / maxScroll) * (trackH - thumbHeight);
-            UIGeometryBatch.addPill(buffer, 0.984f, thumbTopY - thumbHeight, 0.993f, thumbTopY, EditorTheme.GRAPHITE, 0.85f);
+            float thumbTopY = viewTop - (scrollOffset / maxScroll) * (trackH - thumbHeight);
+            UIGeometryBatch.addPill(buffer, scrollbarX0, thumbTopY - thumbHeight, scrollbarX1, thumbTopY, EditorTheme.GRAPHITE, 0.85f);
         }
     }
 
@@ -592,15 +637,17 @@ public class InspectorPanel {
      */
     public static void renderMultiSelection(UIContext ui, List<Entity> selection, Entity primary) {
         UIGeometryBatch.Buffer buffer = ui.geometry();
-        UIGeometryBatch.addQuad(buffer, 0.55f, -0.5f, 1.0f, 1.0f, EditorTheme.SURFACE, 1.0f);
+        layout();
+        PanelRect r = DockPanel.INSPECTOR.rect;
+        UIGeometryBatch.addQuad(buffer, r.x0, r.y0, r.x1, r.y1, EditorTheme.SURFACE, 1.0f);
         activeWellVisible = false;
 
         headerSb.setLength(0);
         headerSb.append(selection.size()).append(" ENTITIES SELECTED");
-        UIGeometryBatch.addTruncatedText(buffer, headerSb, LABEL_X, 0.833f, VALUE_X1, 1.1f, EditorTheme.ACCENT, 1.0f);
-        UIGeometryBatch.addQuad(buffer, LABEL_X, 0.785f, VALUE_X1, 0.785f + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
+        UIGeometryBatch.addTruncatedText(buffer, headerSb, labelX, headerTextY, valueX1, 1.1f, EditorTheme.ACCENT, 1.0f);
+        UIGeometryBatch.addQuad(buffer, labelX, headerRuleY, valueX1, headerRuleY + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
 
-        float curY = CONTENT_TOP;
+        float curY = contentTop;
 
         // Names of the selected entities (primary first)
         float drawY = curY + scrollOffset;
@@ -613,7 +660,7 @@ public class InspectorPanel {
                 strBuilder.append(e.name);
                 if (strBuilder.length() > 120) break;
             }
-            UIGeometryBatch.addTruncatedText(buffer, strBuilder, LABEL_X, textTop(drawY - 0.012f, 0.75f), VALUE_X1, 0.75f, EditorTheme.TEXT_MUTED, 1.0f);
+            UIGeometryBatch.addTruncatedText(buffer, strBuilder, labelX, textTop(drawY - 0.012f, 0.75f), valueX1, 0.75f, EditorTheme.TEXT_MUTED, 1.0f);
         }
         curY -= TEXT_ROW_ADVANCE;
 
@@ -636,17 +683,17 @@ public class InspectorPanel {
             });
             boolean editing = anchor != null && isActiveField(anchor, MULTI_KEY_PREFIX + field.getName());
             rowLabel(buffer, display, midY);
-            if (editing) activeWell(buffer, VALUE_X0, FIELD_X1, drawY);
-            else well(buffer, VALUE_X0, FIELD_X1, drawY);
-            float textX = (axis >= 0) ? axisBadge(buffer, axis, VALUE_X0 + 0.005f, drawY) + 0.008f : VALUE_X0 + 0.008f;
+            if (editing) activeWell(buffer, valueX0, fieldX1, drawY);
+            else well(buffer, valueX0, fieldX1, drawY);
+            float textX = (axis >= 0) ? axisBadge(buffer, axis, valueX0 + 0.005f, drawY) + 0.008f : valueX0 + 0.008f;
             if (editing) {
-                renderInputText(buffer, textX, FIELD_X1 - 0.006f, midY);
+                renderInputText(buffer, textX, fieldX1 - 0.006f, midY);
             } else {
                 float shared = sharedTransformValue(selection, field);
                 strBuilder.setLength(0);
                 if (Float.isNaN(shared)) strBuilder.append("MIXED");
                 else appendFloat(strBuilder, shared, 1);
-                UIGeometryBatch.addTruncatedText(buffer, strBuilder, textX, textTop(midY, VALUE_TEXT), FIELD_X1 - 0.006f, VALUE_TEXT,
+                UIGeometryBatch.addTruncatedText(buffer, strBuilder, textX, textTop(midY, VALUE_TEXT), fieldX1 - 0.006f, VALUE_TEXT,
                         Float.isNaN(shared) ? EditorTheme.TEXT_MUTED : EditorTheme.TEXT, 1.0f);
             }
             renderStepper(buffer, drawY, midY);
@@ -661,8 +708,8 @@ public class InspectorPanel {
         if (shared.isEmpty()) {
             drawY = curY + scrollOffset;
             if (isRowVisible(drawY)) {
-                UIGeometryBatch.addTruncatedText(buffer, "NO COMPONENTS SHARED BY ALL SELECTED", LABEL_X, textTop(drawY - 0.012f, 0.75f),
-                        VALUE_X1, 0.75f, EditorTheme.TEXT_DISABLED, 1.0f);
+                UIGeometryBatch.addTruncatedText(buffer, "NO COMPONENTS SHARED BY ALL SELECTED", labelX, textTop(drawY - 0.012f, 0.75f),
+                        valueX1, 0.75f, EditorTheme.TEXT_DISABLED, 1.0f);
             }
             curY -= TEXT_ROW_ADVANCE;
         }
@@ -673,15 +720,15 @@ public class InspectorPanel {
             float midY = drawY - (CTRL_BELOW - CTRL_ABOVE) * 0.5f;
             Component sample = primary.getComponent(type);
             rowLabel(buffer, sample.getComponentName(), midY);
-            if (isRemovable(sample)) button(buffer, "REMOVE ALL", VALUE_X0, VALUE_X1, drawY, EditorTheme.SURFACE_RAISED);
+            if (isRemovable(sample)) button(buffer, "REMOVE ALL", valueX0, valueX1, drawY, EditorTheme.SURFACE_RAISED);
         }
         curY -= COMPONENT_GAP;
 
         float drawAddBtnY = curY + scrollOffset;
-        if (drawAddBtnY + ADD_ABOVE <= VIEW_TOP && drawAddBtnY - ADD_BELOW >= VIEW_BOTTOM) {
+        if (drawAddBtnY + ADD_ABOVE <= viewTop && drawAddBtnY - ADD_BELOW >= viewBottom) {
             float y0 = drawAddBtnY - ADD_BELOW, y1 = drawAddBtnY + ADD_ABOVE;
-            UIGeometryBatch.addRoundedQuad(buffer, ADD_X0, y0, ADD_X1, y1, EditorTheme.RADIUS, EditorTheme.ACCENT, 1.0f);
-            centeredTextIn(buffer, "+ ADD COMPONENT TO ALL", ADD_X0, ADD_X1, (y0 + y1) * 0.5f, 0.95f, EditorTheme.TEXT);
+            UIGeometryBatch.addRoundedQuad(buffer, addX0, y0, addX1, y1, EditorTheme.RADIUS, EditorTheme.ACCENT, 1.0f);
+            centeredTextIn(buffer, "+ ADD COMPONENT TO ALL", addX0, addX1, (y0 + y1) * 0.5f, 0.95f, EditorTheme.TEXT);
         }
         curY -= ADD_BUTTON_ADVANCE;
         finishScroll(buffer, curY);
@@ -702,15 +749,15 @@ public class InspectorPanel {
             if (axis == 0) rowLabel(buffer, row == 0 ? "POSITION" : (row == 3 ? "ROTATION" : "SCALE"), midY);
 
             boolean editing = isActiveField(animator, BONE_ROW_KEYS[row]);
-            if (editing) activeWell(buffer, VALUE_X0, FIELD_X1, drawY);
-            else well(buffer, VALUE_X0, FIELD_X1, drawY);
-            float textX = axisBadge(buffer, axis, VALUE_X0 + 0.005f, drawY) + 0.008f;
+            if (editing) activeWell(buffer, valueX0, fieldX1, drawY);
+            else well(buffer, valueX0, fieldX1, drawY);
+            float textX = axisBadge(buffer, axis, valueX0 + 0.005f, drawY) + 0.008f;
             if (editing) {
-                renderInputText(buffer, textX, FIELD_X1 - 0.006f, midY);
+                renderInputText(buffer, textX, fieldX1 - 0.006f, midY);
             } else {
                 strBuilder.setLength(0);
                 appendFloat(strBuilder, boneTrsScratch[row], row < 3 || row >= 6 ? 2 : 1);
-                UIGeometryBatch.addTruncatedText(buffer, strBuilder, textX, textTop(midY, VALUE_TEXT), FIELD_X1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+                UIGeometryBatch.addTruncatedText(buffer, strBuilder, textX, textTop(midY, VALUE_TEXT), fieldX1 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
             }
             renderStepper(buffer, drawY, midY);
         }
@@ -732,7 +779,7 @@ public class InspectorPanel {
 
     private static void rowLabel(UIGeometryBatch.Buffer buffer, String label, float midY) {
         if (label == null || label.isEmpty()) return;
-        UIGeometryBatch.addTruncatedText(buffer, label, LABEL_X, textTop(midY, LABEL_TEXT), VALUE_X0 - 0.01f, LABEL_TEXT, EditorTheme.TEXT_MUTED, 1.0f);
+        UIGeometryBatch.addTruncatedText(buffer, label, labelX, textTop(midY, LABEL_TEXT), valueX0 - 0.01f, LABEL_TEXT, EditorTheme.TEXT_MUTED, 1.0f);
     }
 
     public static boolean isRemovable(Component comp) {
@@ -741,22 +788,22 @@ public class InspectorPanel {
 
     /** True when (ndcX, ndcY) lies on the bar of a section header drawn at drawY (REMOVE button included). */
     public static boolean isOverSectionHeader(float ndcX, float ndcY, float drawY) {
-        return ndcX >= 0.565f && ndcX <= VALUE_X1 && ndcY >= drawY - CTRL_BELOW && ndcY <= drawY + CTRL_ABOVE + 0.002f;
+        return ndcX >= headerBarX0 && ndcX <= valueX1 && ndcY >= drawY - CTRL_BELOW && ndcY <= drawY + CTRL_ABOVE + 0.002f;
     }
 
     /** True when (ndcX, ndcY) lies on the REMOVE button of a section header drawn at drawY. */
     public static boolean isOverRemoveButton(float ndcX, float ndcY, float drawY) {
-        return ndcX >= REMOVE_X0 && ndcX <= REMOVE_X1
+        return ndcX >= removeX0 && ndcX <= removeX1
                 && ndcY >= drawY - CTRL_BELOW + REMOVE_INSET && ndcY <= drawY + CTRL_ABOVE + 0.002f - REMOVE_INSET;
     }
 
     private static void renderSectionHeader(UIGeometryBatch.Buffer buffer, String name, float drawY, boolean removable, boolean collapsed) {
         float y0 = drawY - CTRL_BELOW, y1 = drawY + CTRL_ABOVE + 0.002f;
-        UIGeometryBatch.addRoundedQuad(buffer, 0.565f, y0, VALUE_X1, y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, 1.0f);
+        UIGeometryBatch.addRoundedQuad(buffer, headerBarX0, y0, valueX1, y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, 1.0f);
 
         float mid = (y0 + y1) * 0.5f;
         float tw = UIGeometryBatch.squareWidth(buffer, 0.012f);
-        float tx = LABEL_X;
+        float tx = labelX;
         // Disclosure arrow: pointing down (expanded) or right (collapsed)
         if (collapsed) {
             UIGeometryBatch.addTriangle(buffer, tx + tw * 0.15f, mid + 0.0065f, tx + tw * 0.15f, mid - 0.0065f, tx + tw * 0.95f, mid, EditorTheme.TEXT_MUTED, 1.0f);
@@ -766,12 +813,12 @@ public class InspectorPanel {
 
         strBuilder.setLength(0);
         strBuilder.append(name);
-        float textX1 = removable ? REMOVE_X0 - 0.008f : VALUE_X1 - 0.008f;
+        float textX1 = removable ? removeX0 - 0.008f : valueX1 - 0.008f;
         UIGeometryBatch.addTruncatedText(buffer, strBuilder, tx + tw + 0.012f, textTop(mid, 0.9f), textX1, 0.9f, EditorTheme.TEXT, 1.0f);
 
         if (removable) {
-            UIGeometryBatch.addRoundedQuad(buffer, REMOVE_X0, y0 + REMOVE_INSET, REMOVE_X1, y1 - REMOVE_INSET, EditorTheme.RADIUS_SMALL, EditorTheme.RED, 1.0f);
-            centeredTextIn(buffer, "REMOVE", REMOVE_X0, REMOVE_X1, mid, 0.68f, EditorTheme.TEXT);
+            UIGeometryBatch.addRoundedQuad(buffer, removeX0, y0 + REMOVE_INSET, removeX1, y1 - REMOVE_INSET, EditorTheme.RADIUS_SMALL, EditorTheme.RED, 1.0f);
+            centeredTextIn(buffer, "REMOVE", removeX0, removeX1, mid, 0.68f, EditorTheme.TEXT);
         }
     }
 
@@ -830,35 +877,35 @@ public class InspectorPanel {
 
     private static void renderStepper(UIGeometryBatch.Buffer buffer, float drawY, float midY) {
         float y0 = drawY - CTRL_BELOW, y1 = drawY + CTRL_ABOVE;
-        UIGeometryBatch.addRoundedCard(buffer, DEC_X0, y0, INC_X1, y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
-        UIGeometryBatch.addQuad(buffer, INC_X0 - 0.001f, y0 + 0.006f, INC_X0 + 0.001f, y1 - 0.006f, EditorTheme.BORDER_STRONG, 1.0f);
-        centeredTextIn(buffer, "-", DEC_X0, DEC_X1, midY, 0.9f, EditorTheme.TEXT);
-        centeredTextIn(buffer, "+", INC_X0, INC_X1, midY, 0.9f, EditorTheme.TEXT);
+        UIGeometryBatch.addRoundedCard(buffer, decX0, y0, incX1, y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
+        UIGeometryBatch.addQuad(buffer, incX0 - 0.001f, y0 + 0.006f, incX0 + 0.001f, y1 - 0.006f, EditorTheme.BORDER_STRONG, 1.0f);
+        centeredTextIn(buffer, "-", decX0, decX1, midY, 0.9f, EditorTheme.TEXT);
+        centeredTextIn(buffer, "+", incX0, incX1, midY, 0.9f, EditorTheme.TEXT);
     }
 
     private static void renderSwitch(UIGeometryBatch.Buffer buffer, boolean on, float midY) {
         float h = 0.024f;
         float knobW = UIGeometryBatch.squareWidth(buffer, h - 0.006f);
         float trackW = Math.max(UIGeometryBatch.squareWidth(buffer, h) * 1.8f, knobW * 2.0f + 0.004f);
-        float x0 = VALUE_X0, x1 = VALUE_X0 + trackW;
+        float x0 = valueX0, x1 = valueX0 + trackW;
         UIGeometryBatch.addPill(buffer, x0, midY - h * 0.5f, x1, midY + h * 0.5f, on ? EditorTheme.ACCENT : EditorTheme.GRAPHITE, 1.0f);
         float pad = (trackW - knobW * 2.0f) * 0.25f + UIGeometryBatch.squareWidth(buffer, 0.003f);
         float kx0 = on ? x1 - pad - knobW : x0 + pad;
         UIGeometryBatch.addPill(buffer, kx0, midY - h * 0.5f + 0.003f, kx0 + knobW, midY + h * 0.5f - 0.003f, EditorTheme.TEXT, 1.0f);
-        UIGeometryBatch.addBoundedText(buffer, on ? "ON" : "OFF", x1 + 0.01f, textTop(midY, 0.75f), VALUE_X1, 0.75f, EditorTheme.TEXT_MUTED, 1.0f);
+        UIGeometryBatch.addBoundedText(buffer, on ? "ON" : "OFF", x1 + 0.01f, textTop(midY, 0.75f), valueX1, 0.75f, EditorTheme.TEXT_MUTED, 1.0f);
     }
 
     private static void renderPopupButton(UIGeometryBatch.Buffer buffer, String value, float drawY, float midY) {
         float y0 = drawY - CTRL_BELOW, y1 = drawY + CTRL_ABOVE;
-        UIGeometryBatch.addRoundedCard(buffer, VALUE_X0, y0, VALUE_X1, y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
+        UIGeometryBatch.addRoundedCard(buffer, valueX0, y0, valueX1, y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
 
         float cw = UIGeometryBatch.squareWidth(buffer, 0.010f);
-        float cx1 = VALUE_X1 - 0.008f, cx0 = cx1 - cw;
+        float cx1 = valueX1 - 0.008f, cx0 = cx1 - cw;
         float cxm = (cx0 + cx1) * 0.5f;
         UIGeometryBatch.addTriangle(buffer, cx0, midY + 0.002f, cx1, midY + 0.002f, cxm, midY + 0.009f, EditorTheme.TEXT_MUTED, 1.0f);
         UIGeometryBatch.addTriangle(buffer, cx0, midY - 0.002f, cxm, midY - 0.009f, cx1, midY - 0.002f, EditorTheme.TEXT_MUTED, 1.0f);
 
-        UIGeometryBatch.addTruncatedText(buffer, value, VALUE_X0 + 0.008f, textTop(midY, VALUE_TEXT), cx0 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
+        UIGeometryBatch.addTruncatedText(buffer, value, valueX0 + 0.008f, textTop(midY, VALUE_TEXT), cx0 - 0.006f, VALUE_TEXT, EditorTheme.TEXT, 1.0f);
     }
 
     private static int channelColor(String label) {
@@ -878,7 +925,8 @@ public class InspectorPanel {
     }
 
     private static void centeredText(UIGeometryBatch.Buffer buffer, String text, float midY, float size, int rgb) {
-        centeredTextIn(buffer, text, 0.56f, 0.99f, midY, size, rgb);
+        PanelRect r = DockPanel.INSPECTOR.rect;
+        centeredTextIn(buffer, text, r.x0 + 0.01f, r.x1 - 0.01f, midY, size, rgb);
     }
 
     private static String extractFileName(String path) {

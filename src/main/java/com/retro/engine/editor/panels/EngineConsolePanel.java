@@ -72,7 +72,7 @@ public class EngineConsolePanel {
     private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm:ss");
 
     // Render-thread copy of the newest rows, refreshed under the log lock (loggers run on virtual threads too)
-    private static final int MAX_VISIBLE_LINES = 8;
+    private static final int MAX_VISIBLE_LINES = 64;
     private static final LogEntry[] visibleScratch = new LogEntry[MAX_VISIBLE_LINES];
 
     public static synchronized void log(LogLevel level, String message) {
@@ -94,45 +94,57 @@ public class EngineConsolePanel {
         return out;
     }
 
-    /** Copies up to {@code out.length} newest entries into {@code out}, oldest first; returns how many. No allocation. */
-    private static synchronized int copyNewestEntries(LogEntry[] out) {
-        int count = Math.min(out.length, logCount);
+    /** Copies up to {@code max} newest entries into {@code out}, oldest first; returns how many. No allocation. */
+    private static synchronized int copyNewestEntries(LogEntry[] out, int max) {
+        int count = Math.min(Math.min(out.length, max), logCount);
         int first = logStart + logCount - count;
         for (int i = 0; i < count; i++) out[i] = logRing[(first + i) % MAX_LOG_ENTRIES];
         return count;
     }
 
+    // Console layout (screen NDC, relative to the docked tile)
+    private static final float HEADER_H = 0.05f;
+    private static final float ROW_H = 0.055f;
+    private static final float PAD = 0.02f;
+    private static final float PILL_W = 0.075f;
+    /** Below this tile width the timestamp column is dropped so messages keep the room. */
+    private static final float TIMESTAMP_MIN_WIDTH = 0.7f;
+
     public static void renderConsole(UIGeometryBatch.Buffer buffer) {
         if (!consoleVisible) return;
 
-        // Console bounds (design space; the dock maps this onto the Console tile)
-        float minX = -0.85f, maxX = 0.85f;
-        float minY = -0.85f, maxY = -0.20f;
-        float headerH = 0.05f;
+        PanelRect r = DockPanel.CONSOLE.rect;
+        float minX = r.x0, maxX = r.x1, minY = r.y0, maxY = r.y1;
 
         UIGeometryBatch.addQuad(buffer, minX, minY, maxX, maxY, EditorTheme.SURFACE, 1.0f);
 
-        // Header strip: title left, toggle shortcut right
-        UIGeometryBatch.addQuad(buffer, minX, maxY - headerH, maxX, maxY, EditorTheme.BACKGROUND, 1.0f);
-        UIGeometryBatch.addQuad(buffer, minX, maxY - headerH, maxX, maxY - headerH + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
-        float headerMid = maxY - headerH * 0.5f;
-        UIGeometryBatch.addBoundedText(buffer, "ENGINE CONSOLE", minX + 0.02f, headerMid + 0.009f, maxX - 0.3f, 1.0f, EditorTheme.TEXT, 1.0f);
-        UIGeometryBatch.addRightAlignedText(buffer, CONSOLE_HINT, maxX - 0.02f, headerMid + 0.0081f, 0.9f, EditorTheme.TEXT_MUTED, 1.0f);
+        // Header strip: title left, toggle shortcut right (the hint yields to the title in narrow tiles)
+        UIGeometryBatch.addQuad(buffer, minX, maxY - HEADER_H, maxX, maxY, EditorTheme.BACKGROUND, 1.0f);
+        UIGeometryBatch.addQuad(buffer, minX, maxY - HEADER_H, maxX, maxY - HEADER_H + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
+        float headerMid = maxY - HEADER_H * 0.5f;
+        float hintW = UIGeometryBatch.textWidth(buffer, CONSOLE_HINT, 0.9f);
+        float titleW = UIGeometryBatch.textWidth(buffer, "ENGINE CONSOLE", 1.0f);
+        boolean showHint = minX + PAD + titleW + 0.04f + hintW <= maxX - PAD;
+        UIGeometryBatch.addTruncatedText(buffer, "ENGINE CONSOLE", minX + PAD, headerMid + 0.009f,
+                showHint ? maxX - PAD - hintW - 0.04f : maxX - PAD, 1.0f, EditorTheme.TEXT, 1.0f);
+        if (showHint) {
+            UIGeometryBatch.addRightAlignedText(buffer, CONSOLE_HINT, maxX - PAD, headerMid + 0.0081f, 0.9f, EditorTheme.TEXT_MUTED, 1.0f);
+        }
 
-        // Log rows from the ring buffer (newest at the bottom)
-        float rowH = 0.07f;
+        // Log rows: as many of the newest entries as the tile fits, newest at the bottom
+        float rowTop = maxY - HEADER_H - 0.006f;
+        int fit = (int) Math.floor((rowTop - (minY + 0.005f)) / ROW_H);
+        if (fit <= 0) return;
         LogEntry[] entries = visibleScratch;
-        int count = copyNewestEntries(entries);
-        int startIndex = 0;
+        int count = copyNewestEntries(entries, Math.min(fit, MAX_VISIBLE_LINES));
+        boolean showTimestamp = (maxX - minX) >= TIMESTAMP_MIN_WIDTH;
 
-        float rowTop = maxY - headerH - 0.006f;
         for (int i = 0; i < count; i++) {
-            float rowBottom = rowTop - rowH;
-            if (rowBottom < minY + 0.005f) break;
+            float rowBottom = rowTop - ROW_H;
             LogEntry entry = entries[i];
             float mid = (rowTop + rowBottom) * 0.5f;
 
-            if (((i - startIndex) & 1) == 1) {
+            if ((i & 1) == 1) {
                 UIGeometryBatch.addQuad(buffer, minX + 0.004f, rowBottom, maxX - 0.004f, rowTop, EditorTheme.SURFACE_RAISED, 0.45f);
             }
 
@@ -146,17 +158,19 @@ public class EngineConsolePanel {
             }
 
             // Level pill
-            float pillX0 = minX + 0.02f, pillX1 = pillX0 + 0.075f;
+            float pillX0 = minX + PAD, pillX1 = pillX0 + PILL_W;
             UIGeometryBatch.addPill(buffer, pillX0, mid - 0.016f, pillX1, mid + 0.016f, levelColor, 1.0f);
             float tagW = UIGeometryBatch.textWidth(buffer, levelTag, 0.75f);
             UIGeometryBatch.addBoundedText(buffer, levelTag, (pillX0 + pillX1 - tagW) * 0.5f, mid + 0.75f * 0.009f, pillX1, 0.75f,
                     entry.level() == LogLevel.INFO ? EditorTheme.TEXT : EditorTheme.BACKGROUND, 1.0f);
 
-            // Timestamp (muted) + message
-            float tsX = pillX1 + 0.018f;
-            UIGeometryBatch.addBoundedText(buffer, entry.timestamp(), tsX, mid + 0.95f * 0.009f, maxX - 0.02f, 0.95f, EditorTheme.TEXT_MUTED, 1.0f);
-            float msgX = tsX + UIGeometryBatch.textWidth(buffer, 8, 0.95f) + 0.02f;
-            UIGeometryBatch.addTruncatedText(buffer, entry.message(), msgX, mid + 0.95f * 0.009f, maxX - 0.02f, 0.95f, textColor, 1.0f);
+            // Timestamp (muted, wide tiles only) + message
+            float msgX = pillX1 + 0.018f;
+            if (showTimestamp) {
+                UIGeometryBatch.addBoundedText(buffer, entry.timestamp(), msgX, mid + 0.95f * 0.009f, maxX - PAD, 0.95f, EditorTheme.TEXT_MUTED, 1.0f);
+                msgX += UIGeometryBatch.textWidth(buffer, 8, 0.95f) + 0.02f;
+            }
+            UIGeometryBatch.addTruncatedText(buffer, entry.message(), msgX, mid + 0.95f * 0.009f, maxX - PAD, 0.95f, textColor, 1.0f);
 
             rowTop = rowBottom;
         }

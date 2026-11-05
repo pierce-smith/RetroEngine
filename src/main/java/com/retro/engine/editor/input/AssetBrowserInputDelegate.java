@@ -94,7 +94,7 @@ public class AssetBrowserInputDelegate {
             hierarchyPressEntity = clickedEntity;
             hierarchyPressY = ndcY;
             hierarchyDragY = ndcY;
-        } else if (ndcY <= HierarchyPanel.VIEW_TOP && ndcY >= HierarchyPanel.VIEW_BOTTOM) {
+        } else if (ndcY <= HierarchyPanel.viewTop() && ndcY >= HierarchyPanel.viewBottom()) {
             manager.selectEntity(null);
         }
     }
@@ -209,14 +209,14 @@ public class AssetBrowserInputDelegate {
 
         // 1. Header Buttons
         // [+ NEW FOLDER] Button
-        if (ndcX >= AssetBrowserPanel.NEW_FOLDER_X0 && ndcX <= AssetBrowserPanel.NEW_FOLDER_X1 && ndcY >= AssetBrowserPanel.HEADER_Y0 && ndcY <= AssetBrowserPanel.HEADER_Y1) {
+        if (AssetBrowserPanel.inNewFolderButton(ndcX, ndcY)) {
             UISoundPlayer.play(UISound.CLICK);
             manager.getAssetDatabase().createNewFolder();
             return;
         }
 
         // [+ IMPORT ASSET] Button
-        if (ndcX >= AssetBrowserPanel.IMPORT_X0 && ndcX <= AssetBrowserPanel.IMPORT_X1 && ndcY >= AssetBrowserPanel.HEADER_Y0 && ndcY <= AssetBrowserPanel.HEADER_Y1) {
+        if (AssetBrowserPanel.inImportButton(ndcX, ndcY)) {
             UISoundPlayer.play(UISound.OPEN_MODAL);
             InspectorInputDelegate.promptImportAssetForDirectory(manager);
             return;

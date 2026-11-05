@@ -11,6 +11,8 @@ import com.retro.engine.core.NativeFileDialog;
 import com.retro.engine.ecs.components.AnimatorComponent;
 import com.retro.engine.editor.EditorTheme;
 import com.retro.engine.editor.EditorWorkspace;
+import com.retro.engine.editor.panels.DockPanel;
+import com.retro.engine.editor.panels.PanelRect;
 import com.retro.engine.ui.UIGeometryBatch;
 import com.retro.engine.ui.UISoundPlayer;
 import com.retro.engine.ui.UISoundPlayer.UISound;
@@ -33,25 +35,58 @@ import java.util.Map;
  */
 public class AnimatorInspectorDelegate {
 
-    // --- Layout (design-space NDC of DockPanel.ANIMATOR_INSPECTOR); hit-tests share these values ---
-    private static final float PANEL_X0 = 0.55f, PANEL_Y0 = -0.50f, PANEL_X1 = 1.00f, PANEL_Y1 = 0.86f;
-    private static final float HEADER_Y0 = 0.81f;
-    private static final float CX0 = 0.565f, CX1 = 0.985f;
+    // --- Responsive layout against DockPanel.ANIMATOR_INSPECTOR.rect (screen NDC). layout() recomputes every edge;
+    // render and each input entry point call it first, so drawing and hit-testing share the same values.
+    // Tall tiles stack the state details above the dope sheet; wide, shallow tiles (e.g. a bottom strip) put them
+    // side by side so the timeline keeps the full height.
     private static final float PROP_ROW_H = 0.045f;
-
-    private static final float DOPE_TOP = 0.215f;
-    private static final float DOPE_HEADER_Y0 = 0.175f;
-    private static final float RULER_Y0 = 0.125f, RULER_Y1 = 0.165f;
-    private static final float TRACK_TOP = RULER_Y0, TRACK_BOTTOM = -0.49f;
     private static final float TRACK_ROW_H = 0.038f;
-    private static final float LABEL_X1 = 0.705f;
-    private static final float TL_X0 = 0.718f, TL_X1 = 0.972f;
     private static final float DIAMOND_H = 0.010f;
+    private static final float SIDE_BY_SIDE_MIN_W = 0.9f, SIDE_BY_SIDE_MAX_H = 0.95f;
 
+    private static float panelX0, panelY0, panelX1, panelY1, headerY0, titleMidY;
+    // State details column
+    private static float detX0, detX1, detBottom;
+    // Dope sheet column
+    private static float cx0, cx1, dopeTop, dopeHeaderY0, rulerY0, rulerY1, trackTop, trackBottom;
+    private static float labelX1, tlX0, tlX1;
     // Dope sheet header buttons (shown while recording), in place of the "DOPE SHEET" title
-    private static final float HEADER_BTN_Y0 = DOPE_HEADER_Y0 + 0.006f, HEADER_BTN_Y1 = DOPE_TOP - 0.006f;
-    private static final float NEW_CLIP_X0 = CX0 + 0.006f, NEW_CLIP_X1 = CX0 + 0.106f;
-    private static final float RENAME_X0 = NEW_CLIP_X1 + 0.006f, RENAME_X1 = NEW_CLIP_X1 + 0.081f;
+    private static float headerBtnY0, headerBtnY1, newClipX0, newClipX1, renameX0, renameX1;
+
+    private static void layout() {
+        PanelRect r = DockPanel.ANIMATOR_INSPECTOR.rect;
+        panelX0 = r.x0; panelY0 = r.y0; panelX1 = r.x1; panelY1 = r.y1;
+        headerY0 = r.y1 - 0.05f;
+        titleMidY = r.y1 - 0.025f;
+        trackBottom = r.y0 + 0.01f;
+
+        float innerX0 = r.x0 + 0.015f, innerX1 = r.x1 - 0.015f;
+        if (r.width() >= SIDE_BY_SIDE_MIN_W && r.height() < SIDE_BY_SIDE_MAX_H) {
+            detX0 = innerX0;
+            detX1 = detX0 + Math.min(0.42f, r.width() * 0.38f);
+            detBottom = trackBottom;
+            cx0 = detX1 + 0.025f; cx1 = innerX1;
+            dopeTop = headerY0 - 0.01f;
+        } else {
+            detX0 = cx0 = innerX0;
+            detX1 = cx1 = innerX1;
+            dopeTop = headerY0 - Math.max(0.22f, Math.min(0.6f, r.height() * 0.44f));
+            detBottom = dopeTop + 0.005f;
+        }
+
+        dopeHeaderY0 = dopeTop - 0.04f;
+        rulerY1 = dopeTop - 0.05f;
+        rulerY0 = dopeTop - 0.09f;
+        trackTop = rulerY0;
+
+        labelX1 = cx0 + Math.max(0.09f, Math.min(0.22f, (cx1 - cx0) * 0.33f));
+        tlX0 = labelX1 + 0.013f;
+        tlX1 = Math.max(tlX0 + 0.02f, cx1 - 0.013f);
+
+        headerBtnY0 = dopeHeaderY0 + 0.006f; headerBtnY1 = dopeTop - 0.006f;
+        newClipX0 = cx0 + 0.006f; newClipX1 = cx0 + 0.106f;
+        renameX0 = newClipX1 + 0.006f; renameX1 = newClipX1 + 0.081f;
+    }
 
     // Record timeline: at least this long, and this far past the last key
     private static final float RECORD_MIN_LENGTH = 2.0f, RECORD_TAIL = 1.0f;
@@ -137,28 +172,33 @@ public class AnimatorInspectorDelegate {
     }
 
     private static float timeToX(float t, float duration) {
-        return TL_X0 + (t / duration) * (TL_X1 - TL_X0);
+        return tlX0 + (t / duration) * (tlX1 - tlX0);
     }
 
     // --- Rendering ---
 
     public static void renderInspectorSidebar(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorComponent animator, String selectedStateName,
                                               AnimatorTransition transition, AnimatorComponent recorder) {
-        UIGeometryBatch.addQuad(buffer, PANEL_X0, PANEL_Y0, PANEL_X1, PANEL_Y1, EditorTheme.SURFACE, 1.0f);
+        layout();
+        UIGeometryBatch.addQuad(buffer, panelX0, panelY0, panelX1, panelY1, EditorTheme.SURFACE, 1.0f);
 
         AnimatorState state = resolveInspectedState(controller, animator, selectedStateName);
         if (state == null) {
-            centeredTextIn(buffer, "NOTHING TO INSPECT", PANEL_X0, PANEL_X1, 0.30f, 1.0f, EditorTheme.TEXT_MUTED);
-            centeredTextIn(buffer, "SELECT A STATE NODE IN THE GRAPH", PANEL_X0, PANEL_X1, 0.24f, 0.72f, EditorTheme.TEXT_DISABLED);
+            float y = headerY0 - Math.min(0.51f, (headerY0 - panelY0) * 0.35f);
+            centeredTextIn(buffer, "NOTHING TO INSPECT", panelX0, panelX1, y, 1.0f, EditorTheme.TEXT_MUTED);
+            centeredTextIn(buffer, "SELECT A STATE NODE IN THE GRAPH", panelX0, panelX1, y - 0.06f, 0.72f, EditorTheme.TEXT_DISABLED);
         } else {
+            // Details never spill into the dope sheet when the tile is short
+            buffer.pushClipY(detBottom, headerY0);
             renderStateDetails(buffer, controller, animator, state);
+            buffer.popClipY();
             renderDopeSheet(buffer, controller, animator, state, recorder);
         }
 
         // Header
-        UIGeometryBatch.addQuad(buffer, PANEL_X0, HEADER_Y0, PANEL_X1, PANEL_Y1, EditorTheme.SURFACE, 1.0f);
-        UIGeometryBatch.addQuad(buffer, PANEL_X0, HEADER_Y0, PANEL_X1, HEADER_Y0 + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
-        UIGeometryBatch.addBoundedText(buffer, "INSPECTOR", CX0, textTop(0.835f, 0.85f), CX1, 0.85f, EditorTheme.TEXT, 1.0f);
+        UIGeometryBatch.addQuad(buffer, panelX0, headerY0, panelX1, panelY1, EditorTheme.SURFACE, 1.0f);
+        UIGeometryBatch.addQuad(buffer, panelX0, headerY0, panelX1, headerY0 + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
+        UIGeometryBatch.addTruncatedText(buffer, "INSPECTOR", detX0, textTop(titleMidY, 0.85f), panelX1 - 0.015f, 0.85f, EditorTheme.TEXT, 1.0f);
     }
 
     private static void renderStateDetails(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorComponent animator, AnimatorState state) {
@@ -166,17 +206,17 @@ public class AnimatorInspectorDelegate {
         boolean entry = state == controller.getEntryState();
 
         // Title: status dot, name, status pills
-        float mid = 0.775f;
+        float mid = headerY0 - 0.035f;
         float dotH = 0.014f, dotW = UIGeometryBatch.squareWidth(buffer, dotH);
-        UIGeometryBatch.addPill(buffer, CX0 + 0.004f, mid - dotH * 0.5f, CX0 + 0.004f + dotW, mid + dotH * 0.5f, active ? EditorTheme.ACCENT : EditorTheme.GRAPHITE, 1.0f);
+        UIGeometryBatch.addPill(buffer, detX0 + 0.004f, mid - dotH * 0.5f, detX0 + 0.004f + dotW, mid + dotH * 0.5f, active ? EditorTheme.ACCENT : EditorTheme.GRAPHITE, 1.0f);
 
-        float pillsX = CX1;
+        float pillsX = detX1;
         if (active) pillsX = statusPill(buffer, "PLAYING", pillsX, mid, EditorTheme.NODE_ACTIVE);
         if (entry) pillsX = statusPill(buffer, "ENTRY", pillsX, mid, EditorTheme.NODE_ENTRY);
-        UIGeometryBatch.addTruncatedText(buffer, state.name, CX0 + dotW + 0.016f, textTop(mid, 1.0f), pillsX - 0.01f, 1.0f, EditorTheme.TEXT, 1.0f);
+        UIGeometryBatch.addTruncatedText(buffer, state.name, detX0 + dotW + 0.016f, textTop(mid, 1.0f), pillsX - 0.01f, 1.0f, EditorTheme.TEXT, 1.0f);
 
         // Properties
-        float rowMid = 0.725f;
+        float rowMid = headerY0 - 0.085f;
         textScratch.setLength(0);
         if (state.blendTree != null) {
             textScratch.append(state.blendTree.type == BlendTree.BlendType.SIMPLE_1D ? "BLEND 1D ON " : "BLEND 2D ON ").append(state.blendTree.parameterX);
@@ -204,23 +244,23 @@ public class AnimatorInspectorDelegate {
         // Outgoing transitions
         textScratch.setLength(0);
         textScratch.append("TRANSITIONS  ").append(state.transitions.size());
-        sectionHeader(buffer, textScratch, rowMid);
+        sectionHeader(buffer, textScratch, detX0, detX1, rowMid);
         rowMid -= PROP_ROW_H + 0.004f;
 
         if (state.transitions.isEmpty()) {
-            UIGeometryBatch.addBoundedText(buffer, "NO OUTGOING TRANSITIONS", CX0 + 0.008f, textTop(rowMid, 0.72f), CX1, 0.72f, EditorTheme.TEXT_DISABLED, 1.0f);
+            UIGeometryBatch.addBoundedText(buffer, "NO OUTGOING TRANSITIONS", detX0 + 0.008f, textTop(rowMid, 0.72f), detX1, 0.72f, EditorTheme.TEXT_DISABLED, 1.0f);
             return;
         }
         for (int i = 0; i < state.transitions.size(); i++) {
-            if (rowMid - PROP_ROW_H * 0.5f < DOPE_TOP + 0.005f) {
+            if (rowMid - PROP_ROW_H * 0.5f < detBottom) {
                 textScratch.setLength(0);
                 textScratch.append('+').append(state.transitions.size() - i).append(" MORE");
-                UIGeometryBatch.addRightAlignedText(buffer, textScratch, CX1, textTop(rowMid + PROP_ROW_H, 0.62f), 0.62f, EditorTheme.TEXT_DISABLED, 1.0f);
+                UIGeometryBatch.addRightAlignedText(buffer, textScratch, detX1, textTop(rowMid + PROP_ROW_H, 0.62f), 0.62f, EditorTheme.TEXT_DISABLED, 1.0f);
                 break;
             }
             AnimatorTransition t = state.transitions.get(i);
             float arrowW = UIGeometryBatch.textWidth(buffer, 2, 0.75f);
-            UIGeometryBatch.addBoundedText(buffer, "->", CX0 + 0.008f, textTop(rowMid, 0.75f), CX1, 0.75f, EditorTheme.ACCENT, 1.0f);
+            UIGeometryBatch.addBoundedText(buffer, "->", detX0 + 0.008f, textTop(rowMid, 0.75f), detX1, 0.75f, EditorTheme.ACCENT, 1.0f);
 
             textScratch.setLength(0);
             int count = t.conditions.size();
@@ -232,10 +272,10 @@ public class AnimatorInspectorDelegate {
             } else {
                 textScratch.append("AUTO");
             }
-            float condW = Math.min(UIGeometryBatch.textWidth(buffer, textScratch, 0.62f), (CX1 - CX0) * 0.5f);
-            float condX0 = CX1 - condW;
-            UIGeometryBatch.addTruncatedText(buffer, textScratch, condX0, textTop(rowMid, 0.62f), CX1, 0.62f, EditorTheme.TEXT_MUTED, 1.0f);
-            UIGeometryBatch.addTruncatedText(buffer, t.destinationStateName, CX0 + 0.016f + arrowW, textTop(rowMid, 0.75f), condX0 - 0.012f, 0.75f, EditorTheme.TEXT, 1.0f);
+            float condW = Math.min(UIGeometryBatch.textWidth(buffer, textScratch, 0.62f), (detX1 - detX0) * 0.5f);
+            float condX0 = detX1 - condW;
+            UIGeometryBatch.addTruncatedText(buffer, textScratch, condX0, textTop(rowMid, 0.62f), detX1, 0.62f, EditorTheme.TEXT_MUTED, 1.0f);
+            UIGeometryBatch.addTruncatedText(buffer, t.destinationStateName, detX0 + 0.016f + arrowW, textTop(rowMid, 0.75f), condX0 - 0.012f, 0.75f, EditorTheme.TEXT, 1.0f);
             rowMid -= PROP_ROW_H;
         }
     }
@@ -252,31 +292,31 @@ public class AnimatorInspectorDelegate {
     }
 
     private static void propertyRow(UIGeometryBatch.Buffer buffer, String label, CharSequence value, float mid) {
-        float valueX0 = CX0 + 0.12f;
-        UIGeometryBatch.addBoundedText(buffer, label, CX0 + 0.008f, textTop(mid, 0.68f), valueX0 - 0.01f, 0.68f, EditorTheme.TEXT_MUTED, 1.0f);
-        UIGeometryBatch.addTruncatedText(buffer, value, valueX0, textTop(mid, 0.78f), CX1, 0.78f, EditorTheme.TEXT, 1.0f);
+        float valueX0 = detX0 + Math.min(0.12f, (detX1 - detX0) * 0.3f);
+        UIGeometryBatch.addTruncatedText(buffer, label, detX0 + 0.008f, textTop(mid, 0.68f), valueX0 - 0.01f, 0.68f, EditorTheme.TEXT_MUTED, 1.0f);
+        UIGeometryBatch.addTruncatedText(buffer, value, valueX0, textTop(mid, 0.78f), detX1, 0.78f, EditorTheme.TEXT, 1.0f);
     }
 
-    private static void sectionHeader(UIGeometryBatch.Buffer buffer, CharSequence title, float mid) {
+    private static void sectionHeader(UIGeometryBatch.Buffer buffer, CharSequence title, float x0, float x1, float mid) {
         float h = 0.040f;
-        UIGeometryBatch.addRoundedQuad(buffer, CX0, mid - h * 0.5f, CX1, mid + h * 0.5f, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, 1.0f);
-        UIGeometryBatch.addBoundedText(buffer, title, CX0 + 0.008f, textTop(mid, 0.75f), CX1 - 0.008f, 0.75f, EditorTheme.TEXT, 1.0f);
+        UIGeometryBatch.addRoundedQuad(buffer, x0, mid - h * 0.5f, x1, mid + h * 0.5f, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, 1.0f);
+        UIGeometryBatch.addTruncatedText(buffer, title, x0 + 0.008f, textTop(mid, 0.75f), x1 - 0.008f, 0.75f, EditorTheme.TEXT, 1.0f);
     }
 
     private static void renderDopeSheet(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorComponent animator, AnimatorState state, AnimatorComponent recorder) {
         AnimationClip clip = displayClip(state, controller, animator);
-        float headerMid = (DOPE_HEADER_Y0 + DOPE_TOP) * 0.5f;
+        float headerMid = (dopeHeaderY0 + dopeTop) * 0.5f;
 
         textScratch.setLength(0);
         if (recorder == null) textScratch.append("DOPE SHEET");
-        sectionHeader(buffer, textScratch, headerMid);
+        sectionHeader(buffer, textScratch, cx0, cx1, headerMid);
         if (recorder != null) {
-            headerButton(buffer, "+ NEW CLIP", NEW_CLIP_X0, NEW_CLIP_X1, headerMid, EditorTheme.ACCENT);
-            headerButton(buffer, "RENAME", RENAME_X0, RENAME_X1, headerMid, EditorTheme.GRAPHITE);
+            headerButton(buffer, "+ NEW CLIP", newClipX0, newClipX1, headerMid, EditorTheme.ACCENT);
+            headerButton(buffer, "RENAME", renameX0, renameX1, headerMid, EditorTheme.GRAPHITE);
         }
 
         if (clip == null || clip.durationSeconds <= 0.0f) {
-            centeredTextIn(buffer, "NO CLIP ON THIS STATE", PANEL_X0, PANEL_X1, 0.0f, 0.8f, EditorTheme.TEXT_DISABLED);
+            centeredTextIn(buffer, "NO CLIP ON THIS STATE", cx0, cx1, (dopeHeaderY0 + trackBottom) * 0.5f, 0.8f, EditorTheme.TEXT_DISABLED);
             return;
         }
 
@@ -292,19 +332,19 @@ public class AnimatorInspectorDelegate {
         textScratch.append(" / ");
         AnimatorParametersDelegate.appendFixed2(textScratch, clip.durationSeconds);
         textScratch.append('s');
-        float readoutX0 = CX1 - 0.008f - UIGeometryBatch.textWidth(buffer, textScratch, 0.68f);
-        UIGeometryBatch.addBoundedText(buffer, textScratch, readoutX0, textTop(headerMid, 0.68f), CX1, 0.68f, live ? EditorTheme.TEXT : EditorTheme.TEXT_MUTED, 1.0f);
+        float readoutX0 = cx1 - 0.008f - UIGeometryBatch.textWidth(buffer, textScratch, 0.68f);
+        UIGeometryBatch.addBoundedText(buffer, textScratch, readoutX0, textTop(headerMid, 0.68f), cx1, 0.68f, live ? EditorTheme.TEXT : EditorTheme.TEXT_MUTED, 1.0f);
         if (recording) statusPill(buffer, "REC", readoutX0 - 0.008f, headerMid, EditorTheme.PLAYHEAD);
         else if (!live) statusPill(buffer, "PREVIEW", readoutX0 - 0.008f, headerMid, EditorTheme.GRAPHITE);
 
         // Track area backgrounds
-        UIGeometryBatch.addQuad(buffer, TL_X0 - 0.008f, TRACK_BOTTOM, CX1, TRACK_TOP, EditorTheme.SURFACE_SUNKEN, 1.0f);
-        UIGeometryBatch.addQuad(buffer, CX0, RULER_Y0, CX1, RULER_Y1, EditorTheme.SURFACE_RAISED, 1.0f);
-        UIGeometryBatch.addQuad(buffer, CX0, RULER_Y0 - EditorTheme.HAIRLINE * 0.5f, CX1, RULER_Y0 + EditorTheme.HAIRLINE * 0.5f, EditorTheme.BORDER, 1.0f);
+        UIGeometryBatch.addQuad(buffer, tlX0 - 0.008f, trackBottom, cx1, trackTop, EditorTheme.SURFACE_SUNKEN, 1.0f);
+        UIGeometryBatch.addQuad(buffer, cx0, rulerY0, cx1, rulerY1, EditorTheme.SURFACE_RAISED, 1.0f);
+        UIGeometryBatch.addQuad(buffer, cx0, rulerY0 - EditorTheme.HAIRLINE * 0.5f, cx1, rulerY0 + EditorTheme.HAIRLINE * 0.5f, EditorTheme.BORDER, 1.0f);
 
         textScratch.setLength(0);
         textScratch.append(Math.round(fps)).append(" FPS");
-        UIGeometryBatch.addBoundedText(buffer, textScratch, CX0 + 0.008f, textTop((RULER_Y0 + RULER_Y1) * 0.5f, 0.6f), LABEL_X1, 0.6f, EditorTheme.TEXT_MUTED, 1.0f);
+        UIGeometryBatch.addBoundedText(buffer, textScratch, cx0 + 0.008f, textTop((rulerY0 + rulerY1) * 0.5f, 0.6f), labelX1, 0.6f, EditorTheme.TEXT_MUTED, 1.0f);
 
         renderRuler(buffer, duration, fps);
         renderTracks(buffer, clip, duration, playTime, fps);
@@ -312,12 +352,12 @@ public class AnimatorInspectorDelegate {
     }
 
     private static void headerButton(UIGeometryBatch.Buffer buffer, String label, float x0, float x1, float mid, int color) {
-        UIGeometryBatch.addRoundedQuad(buffer, x0, HEADER_BTN_Y0, x1, HEADER_BTN_Y1, EditorTheme.RADIUS_SMALL, color, 1.0f);
+        UIGeometryBatch.addRoundedQuad(buffer, x0, headerBtnY0, x1, headerBtnY1, EditorTheme.RADIUS_SMALL, color, 1.0f);
         centeredTextIn(buffer, label, x0, x1, mid, 0.6f, EditorTheme.TEXT);
     }
 
     private static void renderRuler(UIGeometryBatch.Buffer buffer, float duration, float fps) {
-        float secToX = (TL_X1 - TL_X0) / duration;
+        float secToX = (tlX1 - tlX0) / duration;
         float frameDur = 1.0f / fps;
         float tickHalf = UIGeometryBatch.squareWidth(buffer, 0.0015f) * 0.5f;
 
@@ -329,7 +369,7 @@ public class AnimatorInspectorDelegate {
         int totalFrames = (int) Math.floor(duration * fps + 0.0001f);
         for (int f = 0; f <= totalFrames; f += minorStep) {
             float x = timeToX(f * frameDur, duration);
-            UIGeometryBatch.addQuad(buffer, x - tickHalf, RULER_Y0, x + tickHalf, RULER_Y0 + 0.008f, EditorTheme.TEXT_DISABLED, 1.0f);
+            UIGeometryBatch.addQuad(buffer, x - tickHalf, rulerY0, x + tickHalf, rulerY0 + 0.008f, EditorTheme.TEXT_DISABLED, 1.0f);
         }
 
         // Labeled major ticks on round seconds, with faint guides down through the tracks
@@ -342,16 +382,16 @@ public class AnimatorInspectorDelegate {
         for (int i = 0; i <= majorCount; i++) {
             float t = i * major;
             float x = timeToX(t, duration);
-            UIGeometryBatch.addQuad(buffer, x - tickHalf, RULER_Y0, x + tickHalf, RULER_Y0 + 0.018f, EditorTheme.TEXT_MUTED, 1.0f);
-            UIGeometryBatch.addQuad(buffer, x - tickHalf, TRACK_BOTTOM, x + tickHalf, TRACK_TOP, EditorTheme.BORDER, 0.6f);
+            UIGeometryBatch.addQuad(buffer, x - tickHalf, rulerY0, x + tickHalf, rulerY0 + 0.018f, EditorTheme.TEXT_MUTED, 1.0f);
+            UIGeometryBatch.addQuad(buffer, x - tickHalf, trackBottom, x + tickHalf, trackTop, EditorTheme.BORDER, 0.6f);
 
             textScratch.setLength(0);
             appendDecimal(textScratch, t, decimals);
-            UIGeometryBatch.addBoundedText(buffer, textScratch, x + 0.004f, textTop(RULER_Y1 - 0.011f, 0.55f), TL_X1 + 0.012f, 0.55f, EditorTheme.TEXT_MUTED, 1.0f);
+            UIGeometryBatch.addBoundedText(buffer, textScratch, x + 0.004f, textTop(rulerY1 - 0.011f, 0.55f), tlX1 + 0.012f, 0.55f, EditorTheme.TEXT_MUTED, 1.0f);
         }
         // Clip end marker
         float endX = timeToX(duration, duration);
-        UIGeometryBatch.addQuad(buffer, endX - tickHalf, TRACK_BOTTOM, endX + tickHalf, RULER_Y1, EditorTheme.BORDER_STRONG, 1.0f);
+        UIGeometryBatch.addQuad(buffer, endX - tickHalf, trackBottom, endX + tickHalf, rulerY1, EditorTheme.BORDER_STRONG, 1.0f);
     }
 
     private static void appendDecimal(StringBuilder sb, float v, int decimals) {
@@ -381,12 +421,12 @@ public class AnimatorInspectorDelegate {
         refreshTrackCache(clip);
         if (sortedTracks.isEmpty()) {
             maxScrollRows = 0;
-            centeredTextIn(buffer, "NO KEYFRAME TRACKS", PANEL_X0, PANEL_X1, (TRACK_TOP + TRACK_BOTTOM) * 0.5f, 0.75f, EditorTheme.TEXT_DISABLED);
+            centeredTextIn(buffer, "NO KEYFRAME TRACKS", cx0, cx1, (trackTop + trackBottom) * 0.5f, 0.75f, EditorTheme.TEXT_DISABLED);
             return;
         }
 
         int totalRows = sortedTracks.size() * 4;
-        int visibleRows = (int) ((TRACK_TOP - TRACK_BOTTOM) / TRACK_ROW_H);
+        int visibleRows = Math.max(0, (int) ((trackTop - trackBottom) / TRACK_ROW_H));
         maxScrollRows = Math.max(0, totalRows - visibleRows);
         scrollRows = Math.max(0.0f, Math.min(scrollRows, maxScrollRows));
         int firstRow = (int) scrollRows;
@@ -396,17 +436,17 @@ public class AnimatorInspectorDelegate {
             int row = firstRow + v;
             KeyframeTrack track = sortedTracks.get(row / 4);
             int channel = row % 4; // 0 = bone summary, 1 = T, 2 = R, 3 = S
-            float top = TRACK_TOP - v * TRACK_ROW_H;
+            float top = trackTop - v * TRACK_ROW_H;
             float bottom = top - TRACK_ROW_H;
             float mid = (top + bottom) * 0.5f;
 
             if (channel == 0) {
-                UIGeometryBatch.addQuad(buffer, CX0, bottom, CX1, top, EditorTheme.SURFACE_RAISED, 0.55f);
+                UIGeometryBatch.addQuad(buffer, cx0, bottom, cx1, top, EditorTheme.SURFACE_RAISED, 0.55f);
                 // Disclosure triangle (expanded) + bone name
                 float tw = UIGeometryBatch.squareWidth(buffer, 0.010f);
-                float tx = CX0 + 0.006f;
+                float tx = cx0 + 0.006f;
                 UIGeometryBatch.addTriangle(buffer, tx, mid + 0.004f, tx + tw, mid + 0.004f, tx + tw * 0.5f, mid - 0.005f, EditorTheme.TEXT_MUTED, 1.0f);
-                UIGeometryBatch.addTruncatedText(buffer, track.boneName, tx + tw + 0.008f, textTop(mid, 0.62f), LABEL_X1, 0.62f, EditorTheme.TEXT, 1.0f);
+                UIGeometryBatch.addTruncatedText(buffer, track.boneName, tx + tw + 0.008f, textTop(mid, 0.62f), labelX1, 0.62f, EditorTheme.TEXT, 1.0f);
                 renderKeys(buffer, track.positionTimes, mid, duration, playTime, halfFrame, EditorTheme.TEXT_MUTED, 0.8f);
                 renderKeys(buffer, track.rotationTimes, mid, duration, playTime, halfFrame, EditorTheme.TEXT_MUTED, 0.8f);
                 renderKeys(buffer, track.scaleTimes, mid, duration, playTime, halfFrame, EditorTheme.TEXT_MUTED, 0.8f);
@@ -416,23 +456,23 @@ public class AnimatorInspectorDelegate {
                 float[] times = channel == 1 ? track.positionTimes : (channel == 2 ? track.rotationTimes : track.scaleTimes);
 
                 float chipH = 0.014f, chipW = UIGeometryBatch.squareWidth(buffer, chipH * 0.5f);
-                float chipX = CX0 + 0.022f;
+                float chipX = cx0 + 0.022f;
                 UIGeometryBatch.addPill(buffer, chipX, mid - chipH * 0.5f, chipX + chipW, mid + chipH * 0.5f, color, 1.0f);
-                UIGeometryBatch.addBoundedText(buffer, label, chipX + chipW + 0.008f, textTop(mid, 0.55f), LABEL_X1, 0.55f,
+                UIGeometryBatch.addBoundedText(buffer, label, chipX + chipW + 0.008f, textTop(mid, 0.55f), labelX1, 0.55f,
                         times.length > 0 ? EditorTheme.TEXT_MUTED : EditorTheme.TEXT_DISABLED, 1.0f);
                 renderKeys(buffer, times, mid, duration, playTime, halfFrame, color, 1.0f);
             }
 
-            UIGeometryBatch.addQuad(buffer, CX0, bottom - EditorTheme.HAIRLINE * 0.25f, CX1, bottom + EditorTheme.HAIRLINE * 0.25f, EditorTheme.BORDER, 0.5f);
+            UIGeometryBatch.addQuad(buffer, cx0, bottom - EditorTheme.HAIRLINE * 0.25f, cx1, bottom + EditorTheme.HAIRLINE * 0.25f, EditorTheme.BORDER, 0.5f);
         }
 
         // Scroll indicator
         if (maxScrollRows > 0) {
-            float trackH = TRACK_TOP - TRACK_BOTTOM;
+            float trackH = trackTop - trackBottom;
             float thumbH = Math.max(0.04f, trackH * visibleRows / totalRows);
-            float thumbTop = TRACK_TOP - (trackH - thumbH) * (scrollRows / maxScrollRows);
+            float thumbTop = trackTop - (trackH - thumbH) * (scrollRows / maxScrollRows);
             float tw = UIGeometryBatch.squareWidth(buffer, 0.008f);
-            UIGeometryBatch.addPill(buffer, PANEL_X1 - 0.004f - tw, thumbTop - thumbH, PANEL_X1 - 0.004f, thumbTop, EditorTheme.GRAPHITE, 0.85f);
+            UIGeometryBatch.addPill(buffer, panelX1 - 0.004f - tw, thumbTop - thumbH, panelX1 - 0.004f, thumbTop, EditorTheme.GRAPHITE, 0.85f);
         }
     }
 
@@ -462,17 +502,17 @@ public class AnimatorInspectorDelegate {
     private static void renderPlayhead(UIGeometryBatch.Buffer buffer, float playTime, float duration, float fps) {
         float x = timeToX(playTime, duration);
         float lineHalf = UIGeometryBatch.squareWidth(buffer, 0.003f) * 0.5f;
-        UIGeometryBatch.addQuad(buffer, x - lineHalf, TRACK_BOTTOM, x + lineHalf, RULER_Y0, EditorTheme.PLAYHEAD, 1.0f);
+        UIGeometryBatch.addQuad(buffer, x - lineHalf, trackBottom, x + lineHalf, rulerY0, EditorTheme.PLAYHEAD, 1.0f);
 
         // Head: frame-number tag in the ruler with a pointer down onto the tracks
         textScratch.setLength(0);
         textScratch.append(Math.round(playTime * fps));
         float size = 0.55f;
         float halfW = (UIGeometryBatch.textWidth(buffer, textScratch, size) + 0.012f) * 0.5f;
-        float y0 = RULER_Y0 + 0.006f, y1 = RULER_Y1 - 0.004f;
+        float y0 = rulerY0 + 0.006f, y1 = rulerY1 - 0.004f;
         UIGeometryBatch.addRoundedQuad(buffer, x - halfW, y0, x + halfW, y1, EditorTheme.RADIUS_SMALL, EditorTheme.PLAYHEAD, 1.0f);
         float pw = UIGeometryBatch.squareWidth(buffer, 0.008f);
-        UIGeometryBatch.addTriangle(buffer, x - pw, y0, x + pw, y0, x, RULER_Y0 - 0.004f, EditorTheme.PLAYHEAD, 1.0f);
+        UIGeometryBatch.addTriangle(buffer, x - pw, y0, x + pw, y0, x, rulerY0 - 0.004f, EditorTheme.PLAYHEAD, 1.0f);
         centeredTextIn(buffer, textScratch, x - halfW, x + halfW, (y0 + y1) * 0.5f, size, EditorTheme.TEXT);
     }
 
@@ -486,9 +526,10 @@ public class AnimatorInspectorDelegate {
 
     /** Left press: a dope sheet header button, else starts a playhead scrub when it lands on the ruler or the track area. */
     public static boolean handleInspectorClick(float ndcX, float ndcY, EditorWorkspace manager) {
-        if (manager == null) return false;
+        if (manager == null || !DockPanel.ANIMATOR_INSPECTOR.rect.contains(ndcX, ndcY)) return false;
+        layout();
         if (handleHeaderButtons(ndcX, ndcY, manager)) return true;
-        if (ndcX < TL_X0 - 0.012f || ndcX > TL_X1 + 0.012f || ndcY < TRACK_BOTTOM || ndcY > RULER_Y1) return false;
+        if (ndcX < tlX0 - 0.012f || ndcX > tlX1 + 0.012f || ndcY < trackBottom || ndcY > rulerY1) return false;
         if (!seek(ndcX, manager)) return false;
         scrubbing = true;
         return true;
@@ -496,12 +537,12 @@ public class AnimatorInspectorDelegate {
 
     /** [+ NEW CLIP] / [RENAME], hit only while they are drawn (a recording animator and an inspected state). */
     private static boolean handleHeaderButtons(float ndcX, float ndcY, EditorWorkspace manager) {
-        if (ndcY < HEADER_BTN_Y0 || ndcY > HEADER_BTN_Y1 || ndcX < NEW_CLIP_X0 || ndcX > RENAME_X1) return false;
+        if (ndcY < headerBtnY0 || ndcY > headerBtnY1 || ndcX < newClipX0 || ndcX > renameX1) return false;
         AnimatorComponent recorder = manager.getRecordingAnimator();
         AnimatorController controller = manager.getActiveAnimatorController();
         if (recorder == null || resolveInspectedState(controller, manager.getActiveAnimator(), manager.getSelectedStateName()) == null) return false;
 
-        if (ndcX <= NEW_CLIP_X1) {
+        if (ndcX <= newClipX1) {
             UISoundPlayer.play(UISound.OPEN_MODAL);
             String suggested = (recorder.controller != null) ? recorder.controller.uniqueStateName("NewClip") : "NewClip";
             String name = NativeFileDialog.promptInput("New Animation Clip", "Clip name:", suggested);
@@ -513,7 +554,7 @@ public class AnimatorInspectorDelegate {
             }
             return true;
         }
-        if (ndcX >= RENAME_X0) {
+        if (ndcX >= renameX0) {
             UISoundPlayer.play(UISound.OPEN_MODAL);
             String current = (recorder.recordedPose != null) ? recorder.recordedPose.name : "NewClip";
             String name = NativeFileDialog.promptInput("Rename Clip", "Clip title:", current);
@@ -525,6 +566,7 @@ public class AnimatorInspectorDelegate {
 
     public static boolean handleCursorPos(float ndcX, float ndcY, EditorWorkspace manager) {
         if (!scrubbing) return false;
+        layout();
         if (!seek(ndcX, manager)) scrubbing = false;
         return true;
     }
@@ -536,7 +578,9 @@ public class AnimatorInspectorDelegate {
     }
 
     public static boolean handleScroll(float ndcX, float ndcY, double yOffset) {
-        if (ndcX < PANEL_X0 || ndcX > PANEL_X1 || ndcY < TRACK_BOTTOM || ndcY > TRACK_TOP) return false;
+        if (!DockPanel.ANIMATOR_INSPECTOR.rect.contains(ndcX, ndcY)) return false;
+        layout();
+        if (ndcX < cx0 || ndcX > panelX1 || ndcY < trackBottom || ndcY > trackTop) return false;
         scrollRows = Math.max(0.0f, Math.min(maxScrollRows, scrollRows - (float) yOffset * 1.5f));
         return true;
     }
@@ -553,14 +597,14 @@ public class AnimatorInspectorDelegate {
         if (isRecording(clip, recorder)) {
             // Record playhead: frame-snapped time where the next keys land
             float length = recordTimelineLength(clip, recorder);
-            float t = Math.max(0.0f, Math.min(length, (ndcX - TL_X0) / (TL_X1 - TL_X0) * length));
+            float t = Math.max(0.0f, Math.min(length, (ndcX - tlX0) / (tlX1 - tlX0) * length));
             float fps = frameRate(clip);
             manager.setRecordTime(Math.round(t * fps) / fps);
             return true;
         }
 
         float duration = clip.durationSeconds;
-        float t = (ndcX - TL_X0) / (TL_X1 - TL_X0) * duration;
+        float t = (ndcX - tlX0) / (tlX1 - tlX0) * duration;
         // Looping states wrap at exactly the clip length, so stop just short of it
         t = Math.max(0.0f, Math.min(state.isLooping ? duration * 0.9999f : duration, t));
 

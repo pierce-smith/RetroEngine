@@ -41,6 +41,13 @@ public final class DockSpace {
     private final float[] contentX1 = new float[PANEL_COUNT];
     private final float[] contentY1 = new float[PANEL_COUNT];
 
+    // Per-panel design -> screen transform (screen = design * scale + translate). Identity for reflowing panels,
+    // which are authored in screen NDC against their PanelRect; the Scene keeps a stretch from its design rect.
+    private final float[] mapSx = new float[PANEL_COUNT];
+    private final float[] mapTx = new float[PANEL_COUNT];
+    private final float[] mapSy = new float[PANEL_COUNT];
+    private final float[] mapTy = new float[PANEL_COUNT];
+
     private final List<DockNode> leaves = new ArrayList<>();
     private final List<DockNode> splits = new ArrayList<>();
 
@@ -70,6 +77,7 @@ public final class DockSpace {
             int i = p.ordinal();
             contentX0[i] = p.designX0; contentY0[i] = p.designY0;
             contentX1[i] = p.designX1; contentY1[i] = p.designY1;
+            mapSx[i] = 1.0f; mapSy[i] = 1.0f;
         }
         root = buildDefaultLayout();
     }
@@ -112,6 +120,7 @@ public final class DockSpace {
         leaves.clear();
         splits.clear();
         Arrays.fill(visible, false);
+        for (DockPanel p : DockPanel.values()) p.rect.visible = false;
         layoutNode(root, AREA_X0, AREA_Y0, AREA_X1, AREA_Y1);
 
         // Keep Scene/Animator focus on a panel the user can actually see
@@ -125,10 +134,8 @@ public final class DockSpace {
             leaves.add(n);
             DockPanel p = n.activePanel();
             if (p != null) {
-                int i = p.ordinal();
-                visible[i] = true;
-                contentX0[i] = x0; contentY0[i] = y0;
-                contentX1[i] = x1; contentY1[i] = Math.max(y0, y1 - TAB_BAR_H);
+                visible[p.ordinal()] = true;
+                computeMapping(p, x0, y0, x1, Math.max(y0, y1 - TAB_BAR_H));
             }
             return;
         }
@@ -142,6 +149,25 @@ public final class DockSpace {
             layoutNode(n.first, x0, line + GAP * 0.5f, x1, y1);
             layoutNode(n.second, x0, y0, x1, line - GAP * 0.5f);
         }
+    }
+
+    /**
+     * Publishes panel {@code p}'s tile [x0,x1]x[y0,y1] to its {@link PanelRect} and sets its transform: identity for
+     * reflowing panels (they lay out against the rect directly), a design-rect stretch for the Scene viewport.
+     */
+    private void computeMapping(DockPanel p, float x0, float y0, float x1, float y1) {
+        int i = p.ordinal();
+        contentX0[i] = x0; contentY0[i] = y0; contentX1[i] = x1; contentY1[i] = y1;
+        p.rect.set(x0, y0, x1, y1);
+        p.rect.visible = true;
+        if (p.reflows) {
+            mapSx[i] = 1.0f; mapTx[i] = 0.0f;
+            mapSy[i] = 1.0f; mapTy[i] = 0.0f;
+            return;
+        }
+        float cw = x1 - x0, ch = y1 - y0;
+        mapSx[i] = cw / (p.designX1 - p.designX0); mapTx[i] = x0 - p.designX0 * mapSx[i];
+        mapSy[i] = ch / (p.designY1 - p.designY0); mapTy[i] = y0 - p.designY0 * mapSy[i];
     }
 
     // ------------------------------------------------------------------------------------------
@@ -163,28 +189,28 @@ public final class DockSpace {
     public float getContentX1(DockPanel p) { return contentX1[p.ordinal()]; }
     public float getContentY1(DockPanel p) { return contentY1[p.ordinal()]; }
 
+    // All four conversions and beginPanel() read the same per-panel transform, so hit-testing always matches what
+    // was drawn in the last frame. For reflowing panels they are the identity.
     public float toDesignX(DockPanel p, float screenX) {
         int i = p.ordinal();
-        float w = contentX1[i] - contentX0[i];
-        if (w <= 0.0001f) return p.designX0;
-        return p.designX0 + (screenX - contentX0[i]) * (p.designX1 - p.designX0) / w;
+        if (mapSx[i] <= 1e-6f) return p.designX0;
+        return (screenX - mapTx[i]) / mapSx[i];
     }
 
     public float toDesignY(DockPanel p, float screenY) {
         int i = p.ordinal();
-        float h = contentY1[i] - contentY0[i];
-        if (h <= 0.0001f) return p.designY0;
-        return p.designY0 + (screenY - contentY0[i]) * (p.designY1 - p.designY0) / h;
+        if (mapSy[i] <= 1e-6f) return p.designY0;
+        return (screenY - mapTy[i]) / mapSy[i];
     }
 
     public float toScreenX(DockPanel p, float designX) {
         int i = p.ordinal();
-        return contentX0[i] + (designX - p.designX0) * (contentX1[i] - contentX0[i]) / (p.designX1 - p.designX0);
+        return designX * mapSx[i] + mapTx[i];
     }
 
     public float toScreenY(DockPanel p, float designY) {
         int i = p.ordinal();
-        return contentY0[i] + (designY - p.designY0) * (contentY1[i] - contentY0[i]) / (p.designY1 - p.designY0);
+        return designY * mapSy[i] + mapTy[i];
     }
 
     /** Panel whose content area (excluding tab bar) contains the point, or null. */
@@ -201,7 +227,7 @@ public final class DockSpace {
 
     public void beginPanel(UIGeometryBatch.Buffer buffer, DockPanel p) {
         int i = p.ordinal();
-        buffer.setPanelMapping(p.designX0, p.designY0, p.designX1, p.designY1,
+        buffer.setPanelTransform(mapSx[i], mapTx[i], mapSy[i], mapTy[i],
                 contentX0[i], contentY0[i], contentX1[i], contentY1[i]);
     }
 
@@ -539,7 +565,8 @@ public final class DockSpace {
 
     /** Tab bars, tile frames and splitters, drawn after panel content. */
     public void renderChrome(UIGeometryBatch.Buffer buffer) {
-        DockNode hoverSplit = (draggingSplit != null) ? draggingSplit : (draggingTab == null ? splitterAt(cursorX, cursorY) : null);
+        DockNode hoverSplit = (draggingSplit != null) ? draggingSplit
+                : (draggingTab == null ? splitterAt(cursorX, cursorY) : null);
 
         // Splitters read as the charcoal window background showing between tiles; accent while grabbed/hovered
         for (int i = 0; i < splits.size(); i++) {
@@ -588,7 +615,7 @@ public final class DockSpace {
                     }
                 }
                 int tc = active ? EditorTheme.TEXT : EditorTheme.TEXT_MUTED;
-                UIGeometryBatch.addBoundedText(buffer, p.title, tx + 0.015f, barY1 - 0.0165f, tx + w - 0.006f, TAB_TEXT_SIZE, tc, alpha);
+                UIGeometryBatch.addTruncatedText(buffer, p.title, tx + 0.015f, barY1 - 0.0165f, tx + w - 0.006f, TAB_TEXT_SIZE, tc, alpha);
                 tx += w;
             }
 

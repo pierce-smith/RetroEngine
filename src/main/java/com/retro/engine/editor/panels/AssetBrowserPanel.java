@@ -41,39 +41,76 @@ public class AssetBrowserPanel {
         return resolved;
     }
 
-    // --- Shared layout (design-space NDC) ---
-    public static final float HEADER_Y0 = -0.50f, HEADER_Y1 = -0.42f;
-    public static final float NEW_FOLDER_X0 = 0.30f, NEW_FOLDER_X1 = 0.62f;
-    public static final float IMPORT_X0 = 0.65f, IMPORT_X1 = 0.98f;
+    // --- Responsive layout, in screen NDC relative to the docked tile (DockPanel.ASSETS.rect). ---
+    // Everything below derives from the rect, and AssetBrowserInputDelegate hit-tests through the same accessors.
+    // Nothing here measures text, so input code (which has no buffer) computes the identical layout.
+    private static final float HEADER_ROW_H = 0.08f, HEADER_STACKED_ROW_H = 0.07f;
+    private static final float PAD = 0.03f;
+    private static final float BUTTON_GAP = 0.02f;
+    private static final float FULL_NEW_FOLDER_W = 0.32f, FULL_IMPORT_W = 0.33f, SHORT_BUTTON_W = 0.16f;
+    /** Tile widths at which the header drops to short button labels, then stacks the buttons under the path. */
+    private static final float FULL_LABELS_MIN_W = 1.0f, SINGLE_ROW_MIN_W = 0.55f;
 
-    public static final float CARD_START_X = -0.95f;
-    public static final float CARD_W = 0.32f, CARD_PITCH = 0.36f;
-    public static final float CARD_Y0 = -0.92f, CARD_Y1 = -0.55f;
-    public static final float CARD_LIMIT_X = 0.95f;
+    private static final float CARD_MIN_W = 0.30f, CARD_MAX_W = 0.40f, CARD_GAP = 0.04f;
+    private static final float CARD_H = 0.37f;
+    private static final float ROW_PITCH = CARD_H + 0.04f;
+    private static final float GRID_TOP_GAP = 0.03f;   // view top -> first card row
+    private static final float SCROLL_GUTTER = 0.04f;  // grid keeps clear of the scrollbar hit band
 
-    /** True when a card starting at cardX still fits in the row. */
-    public static boolean cardFits(float cardX) {
-        return cardX + CARD_PITCH - 0.01f <= CARD_LIMIT_X;
-    }
+    // Card interior, measured down from the card's top edge
+    private static final float THUMB_BOTTOM_DY = 0.185f, NAME_DY = 0.215f, SUBTITLE_DY = 0.285f;
 
-    // --- Grid + vertical scroll (cards wrap into rows; rows scroll beneath the header, clipped to the view) ---
-    public static final float VIEW_TOP = HEADER_Y0 - 0.02f, VIEW_BOTTOM = -0.99f;
-    public static final float ROW_PITCH = (CARD_Y1 - CARD_Y0) + 0.04f;
-    public static final int COLUMNS = computeColumns();
-
-    // Scrollbar (pill thumb, Inspector style); the hit band is wider than the drawn pill
-    public static final float SCROLLBAR_X0 = 0.979f, SCROLLBAR_X1 = 0.988f;
-    public static final float SCROLLBAR_HIT_X0 = 0.960f, SCROLLBAR_HIT_X1 = 1.0f;
+    // Scrollbar (pill thumb, Inspector style) along the right edge; the hit band is wider than the drawn pill
+    private static final float SCROLLBAR_PILL_OUTER = 0.012f, SCROLLBAR_PILL_INNER = 0.021f;
     private static final float MIN_THUMB_H = 0.06f;
 
     private static float scrollOffsetY = 0.0f;
     private static float maxScrollY = 0.0f;
     private static String lastFolderPath = null;
 
-    private static int computeColumns() {
-        int n = 0;
-        for (float x = CARD_START_X; cardFits(x); x += CARD_PITCH) n++;
-        return Math.max(1, n);
+    private static PanelRect rect() { return DockPanel.ASSETS.rect; }
+
+    // Header
+    private static boolean stackedHeader() { return rect().width() < SINGLE_ROW_MIN_W; }
+    private static boolean fullLabels() { return rect().width() >= FULL_LABELS_MIN_W; }
+    public static float headerY1() { return rect().y1; }
+    public static float headerY0() { return rect().y1 - (stackedHeader() ? 2.0f * HEADER_STACKED_ROW_H : HEADER_ROW_H); }
+    /** Vertical band of the breadcrumb path (the whole header unless stacked). */
+    private static float crumbY0() { return stackedHeader() ? rect().y1 - HEADER_STACKED_ROW_H : headerY0(); }
+    private static float buttonsY0() { return headerY0(); }
+    private static float buttonsY1() { return stackedHeader() ? crumbY0() : headerY1(); }
+    private static float importX1() { return rect().x1 - PAD; }
+    private static float importX0() {
+        if (stackedHeader()) return (rect().x0 + rect().x1) * 0.5f + BUTTON_GAP * 0.5f;
+        return importX1() - (fullLabels() ? FULL_IMPORT_W : SHORT_BUTTON_W);
+    }
+    private static float newFolderX1() { return importX0() - BUTTON_GAP; }
+    private static float newFolderX0() {
+        if (stackedHeader()) return rect().x0 + PAD;
+        return newFolderX1() - (fullLabels() ? FULL_NEW_FOLDER_W : SHORT_BUTTON_W);
+    }
+    private static float crumbX1() { return stackedHeader() ? rect().x1 - PAD : newFolderX0() - 0.03f; }
+
+    private static boolean inButton(float x, float y, float x0, float x1) {
+        return x >= x0 && x <= x1 && y >= buttonsY0() && y <= buttonsY1();
+    }
+    public static boolean inNewFolderButton(float x, float y) { return inButton(x, y, newFolderX0(), newFolderX1()); }
+    public static boolean inImportButton(float x, float y) { return inButton(x, y, importX0(), importX1()); }
+
+    // Grid
+    public static float viewTop() { return headerY0() - 0.02f; }
+    public static float viewBottom() { return rect().y0 + 0.01f; }
+    private static float gridX0() { return rect().x0 + PAD; }
+    private static float gridWidth() { return Math.max(CARD_MIN_W, rect().x1 - SCROLL_GUTTER - gridX0()); }
+
+    public static int columns() {
+        return Math.max(1, (int) ((gridWidth() + CARD_GAP) / (CARD_MIN_W + CARD_GAP)));
+    }
+
+    /** Cards share the row evenly, never wider than CARD_MAX_W (wide tiles leave the remainder empty). */
+    public static float cardWidth() {
+        int c = columns();
+        return Math.min(CARD_MAX_W, (gridWidth() - (c - 1) * CARD_GAP) / c);
     }
 
     public static float getScrollOffsetY() { return scrollOffsetY; }
@@ -84,34 +121,36 @@ public class AssetBrowserPanel {
 
     /** Recomputes the scroll bound for {@code slotCount} grid slots and re-clamps the offset. */
     public static void updateScrollBounds(int slotCount) {
-        int rows = (slotCount + COLUMNS - 1) / COLUMNS;
-        float contentH = rows > 0 ? (CARD_Y1 - CARD_Y0) + (rows - 1) * ROW_PITCH + (VIEW_TOP - CARD_Y1) : 0.0f;
-        maxScrollY = Math.max(0.0f, contentH - (VIEW_TOP - VIEW_BOTTOM) + 0.01f);
+        int c = columns();
+        int rows = (slotCount + c - 1) / c;
+        float contentH = rows > 0 ? CARD_H + (rows - 1) * ROW_PITCH + GRID_TOP_GAP : 0.0f;
+        maxScrollY = Math.max(0.0f, contentH - (viewTop() - viewBottom()) + 0.01f);
         scrollOffsetY = Math.max(0.0f, Math.min(maxScrollY, scrollOffsetY));
     }
 
     public static float slotX(int slot) {
-        return CARD_START_X + (slot % COLUMNS) * CARD_PITCH;
+        return gridX0() + (slot % columns()) * (cardWidth() + CARD_GAP);
     }
 
-    /** Vertical shift applied to the base card geometry (CARD_Y0..CARD_Y1) for a grid slot, scroll included. */
-    public static float slotShiftY(int slot) {
-        return -(slot / COLUMNS) * ROW_PITCH + scrollOffsetY;
+    /** Top edge of a grid slot's card, scroll included. */
+    public static float slotTop(int slot) {
+        return viewTop() - GRID_TOP_GAP - (slot / columns()) * ROW_PITCH + scrollOffsetY;
     }
 
     /** True when any part of the slot's card intersects the view. */
     public static boolean slotVisible(int slot) {
-        float dy = slotShiftY(slot);
-        return CARD_Y0 + dy < VIEW_TOP && CARD_Y1 + dy > VIEW_BOTTOM;
+        float top = slotTop(slot);
+        return top - CARD_H < viewTop() && top > viewBottom();
     }
 
     /** Grid slot under the cursor, or -1 when none (clipped areas and gaps included). */
     public static int slotAt(float ndcX, float ndcY, int slotCount) {
-        if (ndcY > VIEW_TOP || ndcY < VIEW_BOTTOM) return -1;
+        if (ndcY > viewTop() || ndcY < viewBottom()) return -1;
+        float w = cardWidth();
         for (int slot = 0; slot < slotCount; slot++) {
             if (!slotVisible(slot)) continue;
-            float x = slotX(slot), dy = slotShiftY(slot);
-            if (ndcX >= x && ndcX <= x + CARD_W && ndcY >= CARD_Y0 + dy && ndcY <= CARD_Y1 + dy) return slot;
+            float x = slotX(slot), top = slotTop(slot);
+            if (ndcX >= x && ndcX <= x + w && ndcY >= top - CARD_H && ndcY <= top) return slot;
         }
         return -1;
     }
@@ -120,24 +159,25 @@ public class AssetBrowserPanel {
     public static boolean hasScrollbar() { return maxScrollY > 0.001f; }
 
     public static float thumbHeight() {
-        float trackH = VIEW_TOP - VIEW_BOTTOM;
+        float trackH = viewTop() - viewBottom();
         return Math.max(MIN_THUMB_H, trackH * trackH / (trackH + maxScrollY));
     }
 
     public static float thumbTop() {
-        float trackH = VIEW_TOP - VIEW_BOTTOM;
-        return VIEW_TOP - (maxScrollY > 0.0f ? scrollOffsetY / maxScrollY : 0.0f) * (trackH - thumbHeight());
+        float trackH = viewTop() - viewBottom();
+        return viewTop() - (maxScrollY > 0.0f ? scrollOffsetY / maxScrollY : 0.0f) * (trackH - thumbHeight());
     }
 
     public static boolean inScrollbar(float ndcX, float ndcY) {
-        return hasScrollbar() && ndcX >= SCROLLBAR_HIT_X0 && ndcX <= SCROLLBAR_HIT_X1 && ndcY >= VIEW_BOTTOM && ndcY <= VIEW_TOP;
+        float x1 = rect().x1;
+        return hasScrollbar() && ndcX >= x1 - SCROLL_GUTTER && ndcX <= x1 && ndcY >= viewBottom() && ndcY <= viewTop();
     }
 
     /** Scrolls so the thumb's top edge sits at {@code thumbTopY} (used by thumb dragging). */
     public static void setThumbTop(float thumbTopY) {
-        float travel = (VIEW_TOP - VIEW_BOTTOM) - thumbHeight();
+        float travel = (viewTop() - viewBottom()) - thumbHeight();
         if (travel <= 0.0f) return;
-        setScrollOffsetY((VIEW_TOP - thumbTopY) / travel * maxScrollY);
+        setScrollOffsetY((viewTop() - thumbTopY) / travel * maxScrollY);
     }
 
     private static final float CARD_RADIUS = 0.018f;
@@ -145,6 +185,9 @@ public class AssetBrowserPanel {
     private static final List<AssetMeta> visibleAssetsScratch = new ArrayList<>(128);
     private static final Map<String, String> EXTENSION_BADGES = new HashMap<>();
     private static final StringBuilder crumbSb = new StringBuilder(128);
+    // Muted parent part ("ASSETS > MODELS > ") and bright current folder ("CHARS"), split so no substring is allocated
+    private static final StringBuilder crumbParentSb = new StringBuilder(128);
+    private static final StringBuilder crumbCurrentSb = new StringBuilder(64);
 
     /** Visual identity per asset type: tint, short badge code, display name, click hint. */
     private enum TypeStyle {
@@ -194,7 +237,8 @@ public class AssetBrowserPanel {
         UIGeometryBatch.Buffer buffer = ui.geometry();
         String activePath = (currentFolderPath != null) ? currentFolderPath : "";
 
-        UIGeometryBatch.addQuad(buffer, -1.0f, -1.0f, 1.0f, HEADER_Y0, EditorTheme.SURFACE, 1.0f);
+        PanelRect r = rect();
+        UIGeometryBatch.addQuad(buffer, r.x0, r.y0, r.x1, headerY0(), EditorTheme.SURFACE, 1.0f);
         renderHeader(buffer, activePath, projectRootLabel(projectRootPath));
 
         // Zero-allocation loop replacing stream().filter().toList()
@@ -218,16 +262,18 @@ public class AssetBrowserPanel {
         updateScrollBounds(slotCount);
 
         if (visibleAssetsScratch.isEmpty() && !hasUpLevel) {
-            centeredText(buffer, "NO ASSETS IN THIS FOLDER", -0.68f, 1.1f, EditorTheme.TEXT_MUTED);
-            centeredText(buffer, "DRAG & DROP FILES HERE OR CLICK + IMPORT", -0.76f, 0.85f, EditorTheme.TEXT_DISABLED);
+            float y = viewTop() - Math.min(0.16f, (viewTop() - viewBottom()) * 0.35f);
+            centeredText(buffer, "NO ASSETS IN THIS FOLDER", y, 1.1f, EditorTheme.TEXT_MUTED);
+            centeredText(buffer, "DRAG & DROP FILES HERE OR CLICK + IMPORT", y - 0.08f, 0.85f, EditorTheme.TEXT_DISABLED);
             return;
         }
 
-        buffer.pushClipY(VIEW_BOTTOM, VIEW_TOP);
+        buffer.pushClipY(viewBottom(), viewTop());
+        float cardW = cardWidth();
         int slot = 0;
         if (hasUpLevel) {
             if (slotVisible(slot)) {
-                renderCard(buffer, slotX(slot), slotShiftY(slot), TypeStyle.FOLDER, "..", "ENCLOSING FOLDER", "BACK", "UP", true);
+                renderCard(buffer, slotX(slot), slotTop(slot), cardW, TypeStyle.FOLDER, "..", "ENCLOSING FOLDER", "BACK", "UP", true);
             }
             slot++;
         }
@@ -237,7 +283,7 @@ public class AssetBrowserPanel {
             AssetMeta asset = visibleAssetsScratch.get(i);
             TypeStyle style = TypeStyle.of(asset.type);
             String badge = (style == TypeStyle.FOLDER) ? style.code : extensionBadge(asset.name, style);
-            renderCard(buffer, slotX(slot), slotShiftY(slot), style, asset.name, style.displayName, style.hint, badge, false);
+            renderCard(buffer, slotX(slot), slotTop(slot), cardW, style, asset.name, style.displayName, style.hint, badge, false);
         }
         buffer.popClipY();
 
@@ -247,7 +293,8 @@ public class AssetBrowserPanel {
     private static void renderScrollbar(UIGeometryBatch.Buffer buffer) {
         if (!hasScrollbar()) return;
         float top = thumbTop();
-        UIGeometryBatch.addPill(buffer, SCROLLBAR_X0, top - thumbHeight(), SCROLLBAR_X1, top, EditorTheme.GRAPHITE, 0.85f);
+        float x1 = rect().x1;
+        UIGeometryBatch.addPill(buffer, x1 - SCROLLBAR_PILL_INNER, top - thumbHeight(), x1 - SCROLLBAR_PILL_OUTER, top, EditorTheme.GRAPHITE, 0.85f);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -260,14 +307,16 @@ public class AssetBrowserPanel {
     }
 
     private static void renderHeader(UIGeometryBatch.Buffer buffer, String activePath, String rootLabel) {
-        UIGeometryBatch.addQuad(buffer, -1.0f, HEADER_Y0, 1.0f, HEADER_Y1, EditorTheme.BACKGROUND, 1.0f);
-        UIGeometryBatch.addQuad(buffer, -1.0f, HEADER_Y0, 1.0f, HEADER_Y0 + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
+        PanelRect r = rect();
+        float hy0 = headerY0(), hy1 = headerY1();
+        UIGeometryBatch.addQuad(buffer, r.x0, hy0, r.x1, hy1, EditorTheme.BACKGROUND, 1.0f);
+        UIGeometryBatch.addQuad(buffer, r.x0, hy0, r.x1, hy0 + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
 
         // Breadcrumb path: parents muted, current folder bright ("ASSETS > MODELS > CHARS")
-        float midY = (HEADER_Y0 + HEADER_Y1) * 0.5f;
+        float midY = (crumbY0() + hy1) * 0.5f;
         float size = 1.0f;
         float textTop = midY + size * 0.009f;
-        float maxX = NEW_FOLDER_X0 - 0.03f;
+        float maxX = crumbX1();
 
         crumbSb.setLength(0);
         crumbSb.append(rootLabel);
@@ -286,37 +335,46 @@ public class AssetBrowserPanel {
             }
         }
 
-        float x = -0.96f;
+        float x = r.x0 + PAD;
         if (activePath.isEmpty()) {
             UIGeometryBatch.addTruncatedText(buffer, crumbSb, x, textTop, maxX, size, EditorTheme.TEXT, 1.0f);
         } else {
-            UIGeometryBatch.addBoundedText(buffer, crumbSb.subSequence(0, currentStart), x, textTop, maxX, size, EditorTheme.TEXT_MUTED, 1.0f);
-            float curX = x + UIGeometryBatch.textWidth(buffer, currentStart, size);
-            if (curX < maxX) {
-                UIGeometryBatch.addTruncatedText(buffer, crumbSb.subSequence(currentStart, crumbSb.length()), curX, textTop, maxX, size, EditorTheme.TEXT, 1.0f);
+            crumbParentSb.setLength(0);
+            crumbParentSb.append(crumbSb, 0, currentStart);
+            crumbCurrentSb.setLength(0);
+            crumbCurrentSb.append(crumbSb, currentStart, crumbSb.length());
+            // Deep paths keep the current folder visible: when the whole crumb overflows, show only the current folder
+            if (x + UIGeometryBatch.textWidth(buffer, crumbSb, size) > maxX) {
+                UIGeometryBatch.addTruncatedText(buffer, crumbCurrentSb, x, textTop, maxX, size, EditorTheme.TEXT, 1.0f);
+            } else {
+                UIGeometryBatch.addBoundedText(buffer, crumbParentSb, x, textTop, maxX, size, EditorTheme.TEXT_MUTED, 1.0f);
+                float curX = x + UIGeometryBatch.textWidth(buffer, crumbParentSb, size);
+                UIGeometryBatch.addTruncatedText(buffer, crumbCurrentSb, curX, textTop, maxX, size, EditorTheme.TEXT, 1.0f);
             }
         }
 
-        float by0 = HEADER_Y0 + 0.012f, by1 = HEADER_Y1 - 0.012f;
-        UIGeometryBatch.addRoundedCard(buffer, NEW_FOLDER_X0, by0, NEW_FOLDER_X1, by1, EditorTheme.RADIUS, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
-        centeredTextIn(buffer, "+ NEW FOLDER", NEW_FOLDER_X0, NEW_FOLDER_X1, midY, 0.95f, EditorTheme.TEXT);
+        float by0 = buttonsY0() + 0.012f, by1 = buttonsY1() - 0.012f, bMid = (by0 + by1) * 0.5f;
+        boolean full = fullLabels();
+        float nx0 = newFolderX0(), nx1 = newFolderX1(), ix0 = importX0(), ix1 = importX1();
+        UIGeometryBatch.addRoundedCard(buffer, nx0, by0, nx1, by1, EditorTheme.RADIUS, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
+        centeredTextIn(buffer, full ? "+ NEW FOLDER" : "+ FOLDER", nx0, nx1, bMid, 0.95f, EditorTheme.TEXT);
 
-        UIGeometryBatch.addRoundedQuad(buffer, IMPORT_X0, by0, IMPORT_X1, by1, EditorTheme.RADIUS, EditorTheme.ACCENT, 1.0f);
-        centeredTextIn(buffer, "+ IMPORT ASSET", IMPORT_X0, IMPORT_X1, midY, 0.95f, EditorTheme.TEXT);
+        UIGeometryBatch.addRoundedQuad(buffer, ix0, by0, ix1, by1, EditorTheme.RADIUS, EditorTheme.ACCENT, 1.0f);
+        centeredTextIn(buffer, full ? "+ IMPORT ASSET" : "+ IMPORT", ix0, ix1, bMid, 0.95f, EditorTheme.TEXT);
     }
 
     // ------------------------------------------------------------------------------------------
     // Cards
     // ------------------------------------------------------------------------------------------
 
-    private static void renderCard(UIGeometryBatch.Buffer buffer, float cardX, float dy, TypeStyle style, String name, String subtitle,
-                                   String hint, String badge, boolean upLevel) {
-        float x0 = cardX, x1 = cardX + CARD_W;
-        UIGeometryBatch.addRoundedCard(buffer, x0, CARD_Y0 + dy, x1, CARD_Y1 + dy, CARD_RADIUS, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER, 1.0f);
+    private static void renderCard(UIGeometryBatch.Buffer buffer, float cardX, float top, float cardW, TypeStyle style, String name,
+                                   String subtitle, String hint, String badge, boolean upLevel) {
+        float x0 = cardX, x1 = cardX + cardW;
+        UIGeometryBatch.addRoundedCard(buffer, x0, top - CARD_H, x1, top, CARD_RADIUS, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER, 1.0f);
 
         // Thumbnail well tinted with the type color
         float tx0 = x0 + 0.014f, tx1 = x1 - 0.014f;
-        float ty0 = -0.735f + dy, ty1 = CARD_Y1 - 0.016f + dy;
+        float ty0 = top - THUMB_BOTTOM_DY, ty1 = top - 0.016f;
         UIGeometryBatch.addRoundedQuad(buffer, tx0, ty0, tx1, ty1, EditorTheme.RADIUS, EditorTheme.SURFACE_SUNKEN, 1.0f);
         UIGeometryBatch.addRoundedQuad(buffer, tx0, ty0, tx1, ty1, EditorTheme.RADIUS, style.color, 0.10f);
 
@@ -339,9 +397,9 @@ public class AssetBrowserPanel {
 
         // Asset key (ellipsized) + type / click hint
         float textX0 = x0 + 0.016f, textX1 = x1 - 0.016f;
-        UIGeometryBatch.addTruncatedText(buffer, name, textX0, -0.765f + dy, textX1, 1.0f, EditorTheme.TEXT, 1.0f);
+        UIGeometryBatch.addTruncatedText(buffer, name, textX0, top - NAME_DY, textX1, 1.0f, EditorTheme.TEXT, 1.0f);
 
-        float subTop = -0.835f + dy;
+        float subTop = top - SUBTITLE_DY;
         float hintW = 0.0f;
         if (hint != null) {
             hintW = UIGeometryBatch.textWidth(buffer, hint, 0.75f);
@@ -378,6 +436,7 @@ public class AssetBrowserPanel {
     }
 
     private static void centeredText(UIGeometryBatch.Buffer buffer, String text, float midY, float size, int rgb) {
-        centeredTextIn(buffer, text, -1.0f, 1.0f, midY, size, rgb);
+        PanelRect r = rect();
+        centeredTextIn(buffer, text, r.x0 + 0.01f, r.x1 - 0.01f, midY, size, rgb);
     }
 }

@@ -10,7 +10,9 @@ import com.retro.engine.core.NativeFileDialog;
 import com.retro.engine.ecs.components.AnimatorComponent;
 import com.retro.engine.editor.EditorTheme;
 import com.retro.engine.editor.EditorWorkspace;
+import com.retro.engine.editor.panels.DockPanel;
 import com.retro.engine.editor.panels.MenuItem;
+import com.retro.engine.editor.panels.PanelRect;
 import com.retro.engine.ui.UIGeometryBatch;
 import com.retro.engine.ui.UISoundPlayer;
 import com.retro.engine.ui.UISoundPlayer.UISound;
@@ -29,16 +31,29 @@ import java.util.List;
  */
 public class AnimatorCanvasDelegate {
 
-    // --- Layout (design-space NDC of DockPanel.ANIMATOR); input hit-tests share these values ---
-    private static final float CANVAS_X0 = -0.55f, CANVAS_Y0 = -0.50f, CANVAS_X1 = 0.55f, CANVAS_Y1 = 0.86f;
-    private static final float HEADER_Y0 = 0.81f;
-    private static final float BTN_Y0 = 0.818f, BTN_Y1 = 0.852f;
-    private static final float ADD_X0 = 0.415f, ADD_X1 = 0.54f;
-    private static final float RESET_X0 = 0.30f, RESET_X1 = 0.405f;
+    // --- Layout against DockPanel.ANIMATOR.rect (screen NDC). layout() recomputes the canvas, header and button
+    // edges; render and every input entry point call it first, so drawing and hit-testing share the same values.
+    private static float canvasX0, canvasY0, canvasX1, canvasY1;
+    private static float headerY0, btnY0, btnY1, addX0, addX1, resetX0, resetX1;
+    /** On-screen center of the graph view (middle of the canvas area below the header). */
+    private static float viewCx, viewCy;
 
-    private static final float VIEW_CX = 0.0f;
-    private static final float VIEW_CY = (CANVAS_Y0 + HEADER_Y0) * 0.5f;
+    /** Graph-space point shown at the view center at zero pan; keeps existing graphs where they were authored. */
+    private static final float GRAPH_CX = 0.0f, GRAPH_CY = 0.155f;
     private static final float MIN_ZOOM = 0.4f, MAX_ZOOM = 2.0f;
+
+    private static void layout() {
+        PanelRect r = DockPanel.ANIMATOR.rect;
+        canvasX0 = r.x0; canvasY0 = r.y0; canvasX1 = r.x1; canvasY1 = r.y1;
+        headerY0 = r.y1 - 0.05f;
+        btnY0 = r.y1 - 0.042f; btnY1 = r.y1 - 0.008f;
+        // Buttons hug the right edge and narrow with the tile so the layer breadcrumb keeps room
+        float k = Math.max(0.6f, Math.min(1.0f, r.width() / 1.1f));
+        addX1 = r.x1 - 0.01f; addX0 = addX1 - 0.125f * k;
+        resetX1 = addX0 - 0.01f; resetX0 = resetX1 - 0.105f * k;
+        viewCx = r.centerX();
+        viewCy = (r.y0 + headerY0) * 0.5f;
+    }
 
     private static final float NODE_W = 0.22f;
     private static final float NODE_H = 0.12f;
@@ -72,10 +87,10 @@ public class AnimatorCanvasDelegate {
     private static final StringBuilder labelScratch = new StringBuilder(64);
 
     // --- View transform ---
-    private static float toViewX(float graphX) { return (graphX + panX - VIEW_CX) * zoom + VIEW_CX; }
-    private static float toViewY(float graphY) { return (graphY + panY - VIEW_CY) * zoom + VIEW_CY; }
-    private static float toGraphX(float viewX) { return (viewX - VIEW_CX) / zoom + VIEW_CX - panX; }
-    private static float toGraphY(float viewY) { return (viewY - VIEW_CY) / zoom + VIEW_CY - panY; }
+    private static float toViewX(float graphX) { return (graphX + panX - GRAPH_CX) * zoom + viewCx; }
+    private static float toViewY(float graphY) { return (graphY + panY - GRAPH_CY) * zoom + viewCy; }
+    private static float toGraphX(float viewX) { return (viewX - viewCx) / zoom + GRAPH_CX - panX; }
+    private static float toGraphY(float viewY) { return (viewY - viewCy) / zoom + GRAPH_CY - panY; }
 
     /** Text scale that tracks zoom without becoming unreadable or oversized. */
     private static float textZoom() { return Math.max(0.6f, Math.min(1.3f, zoom)); }
@@ -84,12 +99,13 @@ public class AnimatorCanvasDelegate {
 
     /** {@code animator}: the instance whose playing / crossfading states are highlighted (null shows none live). */
     public static void renderCanvas(UIGeometryBatch.Buffer buffer, AnimatorController controller, AnimatorComponent animator, String selectedStateName) {
-        UIGeometryBatch.addQuad(buffer, CANVAS_X0, CANVAS_Y0, CANVAS_X1, CANVAS_Y1, EditorTheme.BACKGROUND, 1.0f);
+        layout();
+        UIGeometryBatch.addQuad(buffer, canvasX0, canvasY0, canvasX1, canvasY1, EditorTheme.BACKGROUND, 1.0f);
         renderCanvasGrid(buffer);
 
         if (controller == null) {
-            centeredText(buffer, "NO ANIMATOR CONTROLLER", VIEW_CY + 0.03f, 1.1f, EditorTheme.TEXT_MUTED);
-            centeredText(buffer, "SELECT A RIGGED ENTITY TO EDIT ITS STATE MACHINE", VIEW_CY - 0.03f, 0.75f, EditorTheme.TEXT_DISABLED);
+            centeredText(buffer, "NO ANIMATOR CONTROLLER", viewCy + 0.03f, 1.1f, EditorTheme.TEXT_MUTED);
+            centeredText(buffer, "SELECT A RIGGED ENTITY TO EDIT ITS STATE MACHINE", viewCy - 0.03f, 0.75f, EditorTheme.TEXT_DISABLED);
             renderHeader(buffer, null);
             return;
         }
@@ -192,30 +208,37 @@ public class AnimatorCanvasDelegate {
     // --- Rendering ---
 
     private static void renderHeader(UIGeometryBatch.Buffer buffer, AnimatorController controller) {
-        UIGeometryBatch.addQuad(buffer, CANVAS_X0, HEADER_Y0, CANVAS_X1, CANVAS_Y1, EditorTheme.SURFACE, 1.0f);
-        UIGeometryBatch.addQuad(buffer, CANVAS_X0, HEADER_Y0, CANVAS_X1, HEADER_Y0 + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
+        UIGeometryBatch.addQuad(buffer, canvasX0, headerY0, canvasX1, canvasY1, EditorTheme.SURFACE, 1.0f);
+        UIGeometryBatch.addQuad(buffer, canvasX0, headerY0, canvasX1, headerY0 + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
 
-        float mid = (BTN_Y0 + BTN_Y1) * 0.5f;
-        float x = CANVAS_X0 + 0.015f;
-        UIGeometryBatch.addBoundedText(buffer, "BASE LAYER", x, textTop(mid, 0.8f), RESET_X0, 0.8f, EditorTheme.TEXT_MUTED, 1.0f);
-        if (controller != null) {
-            x += UIGeometryBatch.textWidth(buffer, "BASE LAYER", 0.8f) + 0.012f;
-            UIGeometryBatch.addBoundedText(buffer, ">", x, textTop(mid, 0.8f), RESET_X0, 0.8f, EditorTheme.TEXT_DISABLED, 1.0f);
-            x += UIGeometryBatch.textWidth(buffer, 1, 0.8f) + 0.012f;
-            String name = controller.name != null ? controller.name : "CONTROLLER";
-            UIGeometryBatch.addTruncatedText(buffer, name, x, textTop(mid, 0.8f), RESET_X0 - 0.09f, 0.8f, EditorTheme.TEXT, 1.0f);
-        }
-
+        float mid = (btnY0 + btnY1) * 0.5f;
+        float x = canvasX0 + 0.015f;
+        // Zoom readout sits left of RESET VIEW when there is room; the breadcrumb takes what remains
         labelScratch.setLength(0);
         labelScratch.append(Math.round(zoom * 100.0f)).append('%');
-        UIGeometryBatch.addRightAlignedText(buffer, labelScratch, RESET_X0 - 0.012f, textTop(mid, 0.72f), 0.72f, EditorTheme.TEXT_MUTED, 1.0f);
+        float zoomW = UIGeometryBatch.textWidth(buffer, labelScratch, 0.72f);
+        boolean showZoom = resetX0 - 0.012f - zoomW - 0.03f > x + 0.08f;
+        float crumbX1 = showZoom ? resetX0 - 0.012f - zoomW - 0.03f : resetX0 - 0.012f;
+        UIGeometryBatch.addTruncatedText(buffer, "BASE LAYER", x, textTop(mid, 0.8f), crumbX1, 0.8f, EditorTheme.TEXT_MUTED, 1.0f);
+        if (controller != null) {
+            x += UIGeometryBatch.textWidth(buffer, "BASE LAYER", 0.8f) + 0.012f;
+            float nameX = x + UIGeometryBatch.textWidth(buffer, 1, 0.8f) + 0.012f;
+            if (nameX + 0.04f < crumbX1) {
+                UIGeometryBatch.addBoundedText(buffer, ">", x, textTop(mid, 0.8f), crumbX1, 0.8f, EditorTheme.TEXT_DISABLED, 1.0f);
+                String name = controller.name != null ? controller.name : "CONTROLLER";
+                UIGeometryBatch.addTruncatedText(buffer, name, nameX, textTop(mid, 0.8f), crumbX1, 0.8f, EditorTheme.TEXT, 1.0f);
+            }
+        }
+        if (showZoom) {
+            UIGeometryBatch.addRightAlignedText(buffer, labelScratch, resetX0 - 0.012f, textTop(mid, 0.72f), 0.72f, EditorTheme.TEXT_MUTED, 1.0f);
+        }
 
-        UIGeometryBatch.addRoundedCard(buffer, RESET_X0, BTN_Y0, RESET_X1, BTN_Y1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
-        centeredTextIn(buffer, "RESET VIEW", RESET_X0, RESET_X1, mid, 0.62f, EditorTheme.TEXT);
+        UIGeometryBatch.addRoundedCard(buffer, resetX0, btnY0, resetX1, btnY1, EditorTheme.RADIUS_SMALL, EditorTheme.SURFACE_RAISED, EditorTheme.BORDER_STRONG, 1.0f);
+        centeredTextIn(buffer, "RESET VIEW", resetX0, resetX1, mid, 0.62f, EditorTheme.TEXT);
 
         if (controller != null) {
-            UIGeometryBatch.addRoundedQuad(buffer, ADD_X0, BTN_Y0, ADD_X1, BTN_Y1, EditorTheme.RADIUS_SMALL, EditorTheme.ACCENT, 1.0f);
-            centeredTextIn(buffer, "+ STATE", ADD_X0, ADD_X1, mid, 0.72f, EditorTheme.TEXT);
+            UIGeometryBatch.addRoundedQuad(buffer, addX0, btnY0, addX1, btnY1, EditorTheme.RADIUS_SMALL, EditorTheme.ACCENT, 1.0f);
+            centeredTextIn(buffer, "+ STATE", addX0, addX1, mid, 0.72f, EditorTheme.TEXT);
         }
     }
 
@@ -225,22 +248,22 @@ public class AnimatorCanvasDelegate {
         float halfX = UIGeometryBatch.squareWidth(buffer, 0.0015f) * 0.5f;
         float halfY = 0.00075f;
 
-        int k0 = (int) Math.ceil(toGraphX(CANVAS_X0) / GRID_STEP);
-        int k1 = (int) Math.floor(toGraphX(CANVAS_X1) / GRID_STEP);
+        int k0 = (int) Math.ceil(toGraphX(canvasX0) / GRID_STEP);
+        int k1 = (int) Math.floor(toGraphX(canvasX1) / GRID_STEP);
         for (int k = k0; k <= k1; k++) {
             boolean major = Math.floorMod(k, GRID_MAJOR_EVERY) == 0;
             if (!major && !showMinor) continue;
             float vx = toViewX(k * GRID_STEP);
-            UIGeometryBatch.addQuad(buffer, vx - halfX, CANVAS_Y0, vx + halfX, HEADER_Y0, EditorTheme.BORDER, major ? 0.9f : 0.35f);
+            UIGeometryBatch.addQuad(buffer, vx - halfX, canvasY0, vx + halfX, headerY0, EditorTheme.BORDER, major ? 0.9f : 0.35f);
         }
 
-        k0 = (int) Math.ceil(toGraphY(CANVAS_Y0) / GRID_STEP);
-        k1 = (int) Math.floor(toGraphY(HEADER_Y0) / GRID_STEP);
+        k0 = (int) Math.ceil(toGraphY(canvasY0) / GRID_STEP);
+        k1 = (int) Math.floor(toGraphY(headerY0) / GRID_STEP);
         for (int k = k0; k <= k1; k++) {
             boolean major = Math.floorMod(k, GRID_MAJOR_EVERY) == 0;
             if (!major && !showMinor) continue;
             float vy = toViewY(k * GRID_STEP);
-            UIGeometryBatch.addQuad(buffer, CANVAS_X0, vy - halfY, CANVAS_X1, vy + halfY, EditorTheme.BORDER, major ? 0.9f : 0.35f);
+            UIGeometryBatch.addQuad(buffer, canvasX0, vy - halfY, canvasX1, vy + halfY, EditorTheme.BORDER, major ? 0.9f : 0.35f);
         }
     }
 
@@ -253,7 +276,7 @@ public class AnimatorCanvasDelegate {
                                    boolean glow, int ringColor, float progress) {
         float x1 = toViewX(graphX), y2 = toViewY(graphY);
         float x2 = x1 + graphW * zoom, y1 = y2 - graphH * zoom;
-        if (x2 < CANVAS_X0 || x1 > CANVAS_X1 || y2 < CANVAS_Y0 || y1 > HEADER_Y0) return;
+        if (x2 < canvasX0 || x1 > canvasX1 || y2 < canvasY0 || y1 > headerY0) return;
 
         float r = EditorTheme.RADIUS * zoom;
         float tz = textZoom();
@@ -366,8 +389,8 @@ public class AnimatorCanvasDelegate {
     private static void renderHintPill(UIGeometryBatch.Buffer buffer, String text) {
         float size = 0.7f;
         float w = UIGeometryBatch.textWidth(buffer, text, size) + 0.04f;
-        float y0 = CANVAS_Y0 + 0.03f, y1 = y0 + 0.045f;
-        float cx = (CANVAS_X0 + CANVAS_X1) * 0.5f;
+        float y0 = canvasY0 + 0.03f, y1 = y0 + 0.045f;
+        float cx = (canvasX0 + canvasX1) * 0.5f;
         UIGeometryBatch.addRoundedCard(buffer, cx - w * 0.5f, y0, cx + w * 0.5f, y1, (y1 - y0) * 0.5f, EditorTheme.SURFACE_RAISED, EditorTheme.YELLOW, 0.95f);
         centeredTextIn(buffer, text, cx - w * 0.5f, cx + w * 0.5f, (y0 + y1) * 0.5f, size, EditorTheme.TEXT);
     }
@@ -379,13 +402,14 @@ public class AnimatorCanvasDelegate {
     }
 
     private static void centeredText(UIGeometryBatch.Buffer buffer, String text, float midY, float size, int rgb) {
-        centeredTextIn(buffer, text, CANVAS_X0, CANVAS_X1, midY, size, rgb);
+        centeredTextIn(buffer, text, canvasX0, canvasX1, midY, size, rgb);
     }
 
     // --- Input ---
 
     public static boolean handleCanvasClick(float ndcX, float ndcY, int button, int action, EditorWorkspace manager) {
         if (manager == null) return false;
+        layout();
         AnimatorController controller = manager.getActiveAnimatorController();
 
         if (action == 1 && button == 1) { // Right press
@@ -411,12 +435,12 @@ public class AnimatorCanvasDelegate {
 
         if (action == 1 && button == 0) { // Press
             // 1. Header buttons
-            if (ndcY >= BTN_Y0 && ndcY <= BTN_Y1) {
-                if (ndcX >= ADD_X0 && ndcX <= ADD_X1) {
+            if (DockPanel.ANIMATOR.rect.contains(ndcX, ndcY) && ndcY >= btnY0 && ndcY <= btnY1) {
+                if (ndcX >= addX0 && ndcX <= addX1) {
                     promptAddState(controller);
                     return true;
                 }
-                if (ndcX >= RESET_X0 && ndcX <= RESET_X1) {
+                if (ndcX >= resetX0 && ndcX <= resetX1) {
                     resetView();
                     UISoundPlayer.play(UISound.CLICK);
                     return true;
@@ -456,6 +480,7 @@ public class AnimatorCanvasDelegate {
     }
 
     public static boolean handleCursorPos(float ndcX, float ndcY, EditorWorkspace manager) {
+        layout();
         cursorNdcX = ndcX;
         cursorNdcY = ndcY;
         if (isPanning) {
@@ -479,11 +504,12 @@ public class AnimatorCanvasDelegate {
 
     /** Mouse-wheel zoom anchored on the cursor, so the graph point under it stays put. */
     public static boolean handleScroll(float ndcX, float ndcY, double yOffset) {
+        layout();
         if (!isInsideCanvas(ndcX, ndcY)) return false;
         float gx = toGraphX(ndcX), gy = toGraphY(ndcY);
         zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * (float) Math.pow(1.1, yOffset)));
-        panX = (ndcX - VIEW_CX) / zoom + VIEW_CX - gx;
-        panY = (ndcY - VIEW_CY) / zoom + VIEW_CY - gy;
+        panX = (ndcX - viewCx) / zoom + GRAPH_CX - gx;
+        panY = (ndcY - viewCy) / zoom + GRAPH_CY - gy;
         return true;
     }
 
@@ -494,7 +520,7 @@ public class AnimatorCanvasDelegate {
     }
 
     private static boolean isInsideCanvas(float ndcX, float ndcY) {
-        return ndcX >= CANVAS_X0 && ndcX <= CANVAS_X1 && ndcY >= CANVAS_Y0 && ndcY < HEADER_Y0;
+        return DockPanel.ANIMATOR.rect.visible && ndcX >= canvasX0 && ndcX <= canvasX1 && ndcY >= canvasY0 && ndcY < headerY0;
     }
 
     /** Topmost (last-rendered) state node card under the cursor, or null. */
@@ -630,7 +656,7 @@ public class AnimatorCanvasDelegate {
             if (controller.getState(trimmed) == null) {
                 // Centered in the current view
                 AnimatorState state = new AnimatorState(trimmed, null)
-                        .setGraphPos(toGraphX(VIEW_CX) - NODE_W * 0.5f, toGraphY(VIEW_CY) + NODE_H * 0.5f);
+                        .setGraphPos(toGraphX(viewCx) - NODE_W * 0.5f, toGraphY(viewCy) + NODE_H * 0.5f);
                 controller.addState(state);
                 UISoundPlayer.play(UISound.SPAWN);
             }

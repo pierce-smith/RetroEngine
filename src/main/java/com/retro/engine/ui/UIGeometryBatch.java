@@ -107,11 +107,23 @@ public class UIGeometryBatch {
          * subsequent geometry to the screen rect, until {@link #clearPanelMapping()}.
          */
         public void setPanelMapping(float dx0, float dy0, float dx1, float dy1, float sx0, float sy0, float sx1, float sy1) {
-            this.mapSx = (sx1 - sx0) / (dx1 - dx0);
-            this.mapSy = (sy1 - sy0) / (dy1 - dy0);
-            this.mapTx = sx0 - dx0 * mapSx;
-            this.mapTy = sy0 - dy0 * mapSy;
-            this.clipX0 = sx0; this.clipY0 = sy0; this.clipX1 = sx1; this.clipY1 = sy1;
+            float sx = (sx1 - sx0) / (dx1 - dx0);
+            float sy = (sy1 - sy0) / (dy1 - dy0);
+            setPanelTransform(sx, sx0 - dx0 * sx, sy, sy0 - dy0 * sy, sx0, sy0, sx1, sy1);
+        }
+
+        /**
+         * Maps design space through {@code screen = design * scale + translate} per axis and clips all subsequent
+         * geometry to screen rect [cx0,cx1]x[cy0,cy1], until {@link #clearPanelMapping()}. Unlike
+         * {@link #setPanelMapping} the design rect need not fill the clip rect: the dock uses this to keep panels at a
+         * readable scale, letting them overflow (panned) or leave unused space instead of being squashed.
+         */
+        public void setPanelTransform(float sx, float tx, float sy, float ty, float cx0, float cy0, float cx1, float cy1) {
+            this.mapSx = sx;
+            this.mapSy = sy;
+            this.mapTx = tx;
+            this.mapTy = ty;
+            this.clipX0 = cx0; this.clipY0 = cy0; this.clipX1 = cx1; this.clipY1 = cy1;
             // Glyphs scale uniformly (never stretched) and never grow past their authored size
             this.textScale = Math.max(0.35f, Math.min(1.0f, Math.min(mapSx, mapSy)));
             this.mapped = true;
@@ -478,6 +490,65 @@ public class UIGeometryBatch {
         truncScratch.setLength(0);
         truncScratch.append(text, 0, Math.max(0, fit - 1)).append('…');
         addBoundedText(buffer, truncScratch, startX, startY, maxX + 0.001f, size, rgb, a);
+    }
+
+    /**
+     * Greedy word-wrapped text in [startX, maxX], one line every {@code lineAdvance} downward, at most {@code maxLines}
+     * lines (the last one ends in an ellipsis if text remains). Lines are staged through the buffer's scratch builder,
+     * so this does not allocate. Returns the number of lines drawn.
+     */
+    public static int addWrappedText(Buffer buffer, CharSequence text, float startX, float startY, float maxX, float lineAdvance,
+                                     int maxLines, float size, int rgb, float a) {
+        if (text == null || maxLines <= 0) return 0;
+        int len = text.length();
+        UIFont font = UIFont.active();
+        float em = font != null ? buffer.screenToLocalWidth(emScreenWidth(buffer, size)) : textWidth(buffer, 1, size);
+        float avail = em > 0.0f ? (maxX - startX) / em : Float.MAX_VALUE; // in em (font) or glyph cells (bitmap)
+        int start = 0, lines = 0;
+        float y = startY;
+        while (start < len && lines < maxLines) {
+            while (start < len && text.charAt(start) == ' ') start++;
+            if (start >= len) break;
+            boolean lastLine = (lines == maxLines - 1);
+            float ellipsis = font != null ? font.advanceOf('…') : 1.0f;
+            int end = start, lastBreak = -1;
+            float w = 0.0f;
+            while (end < len) {
+                char c = text.charAt(end);
+                float adv = font != null ? font.advanceOf(c) : 1.0f;
+                if (w + adv > avail && end > start) break;
+                if (c == ' ') lastBreak = end;
+                w += adv;
+                end++;
+            }
+            boolean truncate = false;
+            if (end < len) {
+                if (lastLine) {
+                    // Out of lines: cut where the remainder plus an ellipsis fits
+                    float budget = avail - ellipsis;
+                    end = start;
+                    w = 0.0f;
+                    while (end < len) {
+                        float adv = font != null ? font.advanceOf(text.charAt(end)) : 1.0f;
+                        if (w + adv > budget) break;
+                        w += adv;
+                        end++;
+                    }
+                    truncate = true;
+                } else if (lastBreak > start) {
+                    end = lastBreak; // break at the last space, not mid-word
+                }
+            }
+            StringBuilder line = buffer.truncScratch;
+            line.setLength(0);
+            line.append(text, start, end);
+            if (truncate) line.append('…');
+            addBoundedText(buffer, line, startX, y, maxX + 0.001f, size, rgb, a);
+            start = end;
+            lines++;
+            y -= lineAdvance;
+        }
+        return lines;
     }
 
     // --- Primitive Buffer Overloads (Zero Allocation) ---
