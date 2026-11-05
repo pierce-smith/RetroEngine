@@ -118,6 +118,8 @@ public class VulkanGpuCache {
         public int indexType = VK_INDEX_TYPE_UINT32;
         // Local-space bounding sphere radius around the mesh origin, used to fit the shadow frustum
         public float boundsRadius = 1.0f;
+        // Timeline value of the mesh's last staging upload; the buffers outlive it
+        public long uploadValue = 0L;
 
         public VulkanBuffer(long bufferHandle, long memoryHandle, int vertexCount) {
             this.bufferHandle = bufferHandle;
@@ -324,12 +326,11 @@ public class VulkanGpuCache {
     public long registerMesh(VulkanDevice device, String assetKey, float[] vertices, int vertexCount, int[] indices, int indexCount) {
         if (vertices == null || vertexCount <= 0 || vertices.length < vertexCount) return HandleRegistry.NULL_HANDLE;
         return meshHandles.register(assetKey, () -> {
-            VulkanBuffer buf = createHostVisibleBuffer(device, vertices, vertices.length / vertexCount);
+            VulkanBuffer buf = uploadVertices(device, vertices, vertices.length / vertexCount);
             if (buf != null) buf.boundsRadius = DirectionalShadowFrustum.computeLocalBoundsRadius(vertices, buf.floatStride, vertexCount);
             if (buf == null || indices == null || indexCount <= 0) return buf;
             if (!attachIndexBuffer(device, buf, indices, Math.min(indexCount, indices.length))) {
-                vkDestroyBuffer(device.getLogicalDevice(), buf.bufferHandle, null);
-                vkFreeMemory(device.getLogicalDevice(), buf.memoryHandle, null);
+                deferMeshDisposal(buf); // Its vertex upload may still be in flight
                 return null;
             }
             return buf;
@@ -347,26 +348,24 @@ public class VulkanGpuCache {
         boolean use16 = maxIndex <= 0xFFFF;
         long bufferSize = (long) indexCount * (use16 ? Short.BYTES : Integer.BYTES);
 
-        long[] handles = allocateHostVisibleBuffer(device, bufferSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+        long[] handles = allocateBuffer(device, bufferSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         if (handles == null) return false;
 
-        VkDevice vkDevice = device.getLogicalDevice();
-        try (MemoryStack stack = stackPush()) {
-            PointerBuffer pData = stack.mallocPointer(1);
-            if (vkMapMemory(vkDevice, handles[1], 0, bufferSize, 0, pData) != VK_SUCCESS) {
-                vkDestroyBuffer(vkDevice, handles[0], null);
-                vkFreeMemory(vkDevice, handles[1], null);
-                return false;
-            }
-            long dst = pData.get(0);
+        long uploadValue = uploadRing.uploadBuffer(handles[0], bufferSize, dst -> {
             if (use16) {
                 for (int i = 0; i < indexCount; i++) MemoryUtil.memPutShort(dst + (long) i * Short.BYTES, (short) indices[i]);
             } else {
                 MemoryUtil.memIntBuffer(dst, indexCount).put(indices, 0, indexCount);
             }
-            vkUnmapMemory(vkDevice, handles[1]);
+        });
+        if (uploadValue < 0L) {
+            vkDestroyBuffer(device.getLogicalDevice(), handles[0], null);
+            vkFreeMemory(device.getLogicalDevice(), handles[1], null);
+            return false;
         }
 
+        mesh.uploadValue = uploadValue;
         mesh.indexBufferHandle = handles[0];
         mesh.indexMemoryHandle = handles[1];
         mesh.indexCount = indexCount;
@@ -399,11 +398,14 @@ public class VulkanGpuCache {
 
     public void unregisterMesh(long meshHandle) {
         VulkanBuffer buf = meshHandles.remove(meshHandle);
-        if (buf == null) return;
+        if (buf != null) deferMeshDisposal(buf);
+    }
+
+    private void deferMeshDisposal(VulkanBuffer buf) {
         synchronized (deferredDisposalQueue) {
-            deferredDisposalQueue.add(new DeferredVulkanResource(buf.bufferHandle, buf.memoryHandle, totalFrameCount));
+            deferredDisposalQueue.add(new DeferredVulkanResource(buf.bufferHandle, buf.memoryHandle, 0L, 0L, 0L, totalFrameCount, buf.uploadValue, NO_TEXTURE));
             if (buf.indexBufferHandle != 0L || buf.indexMemoryHandle != 0L) {
-                deferredDisposalQueue.add(new DeferredVulkanResource(buf.indexBufferHandle, buf.indexMemoryHandle, totalFrameCount));
+                deferredDisposalQueue.add(new DeferredVulkanResource(buf.indexBufferHandle, buf.indexMemoryHandle, 0L, 0L, 0L, totalFrameCount, buf.uploadValue, NO_TEXTURE));
             }
         }
     }
@@ -537,6 +539,26 @@ public class VulkanGpuCache {
     /** The persistent bindless set 0 shared by every 3D pipeline; 0L if initialization failed. */
     public long getBindlessDescriptorSet() { return bindlessSet; }
 
+    /** Puts a mesh's vertices in device-local memory through the staging ring, so the GPU isn't reading them over the bus. */
+    private VulkanBuffer uploadVertices(VulkanDevice device, float[] vertices, int floatStride) {
+        if (floatStride <= 0) return null;
+        long bufferSize = (long) vertices.length * Float.BYTES;
+        long[] handles = allocateBuffer(device, bufferSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (handles == null) return null;
+
+        long uploadValue = uploadRing.uploadBuffer(handles[0], bufferSize, dst -> MemoryUtil.memFloatBuffer(dst, vertices.length).put(vertices));
+        if (uploadValue < 0L) {
+            vkDestroyBuffer(device.getLogicalDevice(), handles[0], null);
+            vkFreeMemory(device.getLogicalDevice(), handles[1], null);
+            return null;
+        }
+        VulkanBuffer created = new VulkanBuffer(handles[0], handles[1], vertices.length / floatStride);
+        created.floatStride = floatStride;
+        created.uploadValue = uploadValue;
+        return created;
+    }
+
     public VulkanBuffer createHostVisibleBuffer(VulkanDevice device, float[] vertices, int floatStride) {
         if (device == null || device.getLogicalDevice() == null || vertices == null || vertices.length == 0 || floatStride <= 0) return null;
 
@@ -567,6 +589,10 @@ public class VulkanGpuCache {
 
     /** Creates a host-visible, coherent buffer with bound memory; returns {buffer, memory} or null on failure. */
     static long[] allocateHostVisibleBuffer(VulkanDevice device, long bufferSize, int usage) {
+        return allocateBuffer(device, bufferSize, usage, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    }
+
+    private static long[] allocateBuffer(VulkanDevice device, long bufferSize, int usage, int memoryProperties) {
         if (device == null || device.getLogicalDevice() == null || bufferSize <= 0) return null;
         VkDevice vkDevice = device.getLogicalDevice();
 
@@ -587,8 +613,7 @@ public class VulkanGpuCache {
             // Streamed meshes land here at runtime, so a missing memory type must not orphan the buffer
             int memTypeIndex;
             try {
-                memTypeIndex = findMemoryType(device.getPhysicalDevice(), memReqs.memoryTypeBits(),
-                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                memTypeIndex = findMemoryType(device.getPhysicalDevice(), memReqs.memoryTypeBits(), memoryProperties);
             } catch (IllegalStateException e) {
                 vkDestroyBuffer(vkDevice, buffer, null);
                 throw e;
@@ -683,6 +708,8 @@ public class VulkanGpuCache {
                     .maxAnisotropy(1.0f)
                     .compareEnable(false)
                     .compareOp(VK_COMPARE_OP_ALWAYS)
+                    .minLod(0.0f)
+                    .maxLod(VK_LOD_CLAMP_NONE)
                     .borderColor(VK_BORDER_COLOR_INT_OPAQUE_BLACK)
                     .unnormalizedCoordinates(false);
 

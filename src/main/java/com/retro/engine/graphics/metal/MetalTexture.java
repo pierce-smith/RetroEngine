@@ -28,6 +28,7 @@ public class MetalTexture {
 
     private static final long SEL_GPU_RESOURCE_ID = sel_registerName("gpuResourceID");
     private static final long MTL_SAMPLER_ADDRESS_REPEAT = 2L;
+    private static final long MTL_SAMPLER_MIP_FILTER_LINEAR = 2L;
 
     public void initDefaultTextureAndSampler(long device, long objc_msgSend) {
         if (device == 0L) return;
@@ -68,6 +69,7 @@ public class MetalTexture {
         long materialDesc = invokePPP(samplerDescClass, sel_registerName("new"), objc_msgSend);
         invokePPPP(materialDesc, sel_registerName("setMinFilter:"), 1L, objc_msgSend);                    // Linear
         invokePPPP(materialDesc, sel_registerName("setMagFilter:"), 1L, objc_msgSend);
+        invokePPPP(materialDesc, sel_registerName("setMipFilter:"), MTL_SAMPLER_MIP_FILTER_LINEAR, objc_msgSend);
         invokePPPP(materialDesc, sel_registerName("setSAddressMode:"), MTL_SAMPLER_ADDRESS_REPEAT, objc_msgSend);
         invokePPPP(materialDesc, sel_registerName("setTAddressMode:"), MTL_SAMPLER_ADDRESS_REPEAT, objc_msgSend);
         materialSamplerStateHandle = invokePPPP(device, sel_registerName("newSamplerStateWithDescriptor:"), materialDesc, objc_msgSend);
@@ -82,20 +84,23 @@ public class MetalTexture {
         long descClass = objc_getClass("MTLTextureDescriptor");
         long selTex2D = sel_registerName("texture2DDescriptorWithPixelFormat:width:height:mipmapped:");
         // 70L = MTLPixelFormatRGBA8Unorm (prevents Red/Blue channel swizzling)
-        long desc = invokePPPPPPP(descClass, selTex2D, 70L, (long) width, (long) height, 0L, objc_msgSend);
+        long desc = invokePPPPPPP(descClass, selTex2D, 70L, (long) width, (long) height, 1L, objc_msgSend);
         long texture = invokePPPP(device, sel_registerName("newTextureWithDescriptor:"), desc, objc_msgSend);
         if (texture == 0L) return;
 
-        ByteBuffer buf = MemoryUtil.memAlloc(pixels.length);
+        com.retro.engine.graphics.MipChain mips = com.retro.engine.graphics.MipChain.generate(pixels, width, height);
+        ByteBuffer buf = MemoryUtil.memAlloc(mips.pixels.length);
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            buf.put(pixels).flip();
-            ByteBuffer region = stack.malloc(8 * 6);
-            region.putLong(0).putLong(0).putLong(0);
-            region.putLong(width).putLong(height).putLong(1);
-            region.flip();
-
+            buf.put(mips.pixels).flip();
             long sel_replaceRegion = sel_registerName("replaceRegion:mipmapLevel:withBytes:bytesPerRow:");
-            invokePPPPPPP(texture, sel_replaceRegion, MemoryUtil.memAddress(region), 0L, MemoryUtil.memAddress(buf), (long) width * 4L, objc_msgSend);
+            for (int level = 0; level < mips.levels(); level++) {
+                ByteBuffer region = stack.malloc(8 * 6);
+                region.putLong(0).putLong(0).putLong(0);
+                region.putLong(mips.widths[level]).putLong(mips.heights[level]).putLong(1);
+                region.flip();
+                invokePPPPPPP(texture, sel_replaceRegion, MemoryUtil.memAddress(region), (long) level,
+                        MemoryUtil.memAddress(buf) + mips.offsets[level], (long) mips.widths[level] * 4L, objc_msgSend);
+            }
         } finally {
             MemoryUtil.memFree(buf);
         }

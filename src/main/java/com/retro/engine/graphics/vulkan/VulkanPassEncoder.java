@@ -705,7 +705,7 @@ public class VulkanPassEncoder {
                 .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                 .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                 .image(image);
-        barrier.subresourceRange().aspectMask(aspectMask).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+        barrier.subresourceRange().aspectMask(aspectMask).baseMipLevel(0).levelCount(VK_REMAINING_MIP_LEVELS).baseArrayLayer(0).layerCount(1);
     }
 
     static void pipelineBarrier(VkCommandBuffer cmd, MemoryStack stack, VkImageMemoryBarrier2.Buffer barriers) {

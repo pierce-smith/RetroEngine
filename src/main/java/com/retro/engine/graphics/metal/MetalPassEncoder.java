@@ -77,7 +77,6 @@ public class MetalPassEncoder {
     private static final long MTL_RESOURCE_USAGE_READ = 1L;
     private static final long MTL_RENDER_STAGES_VERTEX_FRAGMENT = 3L;
 
-    private static final int MAX_SHADOW_BLOBS = 64;
 
     // Every pass binds buffers at slot 0 only: the DrawArgs table for 3D passes, raw vertices for window passes
     private static final int MAX_BUFFER_SLOTS = 1;
@@ -209,7 +208,7 @@ public class MetalPassEncoder {
         // Stream bone palettes once; the shadow and main passes share slot assignments
         this.commands = commands;
         this.draws = draws;
-        int entityCount = Math.min(draws.count, MetalUniformStream.MAX_ENTITIES_PER_FRAME);
+        int entityCount = draws.count;
         assignSkinningSlots(streamer, pBoneContents, entityCount);
 
         long gridBuffer = resourceCache.getGridVertexBuffer();
@@ -243,7 +242,7 @@ public class MetalPassEncoder {
         encodeScenePass(commandBuffer, framebuffer.getOffscreenColorTexture(), framebuffer.getOffscreenDepthTexture(),
                 pipeline, texture, resourceCache, streamer, entityCount, pBufferContents, currentSlotOffset,
                 defaultResourceId, editorViewProj, editorCamPos, drawGrid ? gridBuffer : 0L, groundQuadBuf,
-                MetalUniformStream.SLOT_BASE_ENTITIES, MetalUniformStream.SLOT_BASE_SHADOW_BLOBS, true);
+                streamer.slotBaseEntities(), streamer.slotBaseShadowBlobs(), true);
 
         // PASS 1B: Color-ID picking from the editor camera, with the probed texel blitted back for the host
         if (pickTarget != null && pickTarget.getOffscreenColorTexture() != 0L && pickReadbackBuffer != 0L && pipeline.getPipelineStatePick() != 0L) {
@@ -255,7 +254,7 @@ public class MetalPassEncoder {
             encodeScenePass(commandBuffer, previewTarget.getOffscreenColorTexture(), previewTarget.getOffscreenDepthTexture(),
                     pipeline, texture, resourceCache, streamer, entityCount, pBufferContents, currentSlotOffset,
                     defaultResourceId, previewViewProj, previewCamPos, 0L, groundQuadBuf,
-                    MetalUniformStream.SLOT_BASE_PREVIEW_ENTITIES, MetalUniformStream.SLOT_BASE_PREVIEW_SHADOW_BLOBS, false);
+                    streamer.slotBasePreviewEntities(), streamer.slotBasePreviewShadowBlobs(), false);
         }
     }
 
@@ -390,7 +389,6 @@ public class MetalPassEncoder {
             bindDepthStencil(shadowDepthState);
 
             for (int i = 0; i < draws.count; i++) {
-                if (shadowIndex >= MAX_SHADOW_BLOBS) break;
                 RenderCommand item = commands[draws.commandIndex[i]];
 
                 float clearance = item.py - item.groundY;
@@ -437,7 +435,7 @@ public class MetalPassEncoder {
             long vertexAddress = MetalBuffer.gpuAddress(particleVertexBuffer, send);
             float[] identityModel = streamer.createModelMatrix(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f);
             for (int b = 0; b < particleBatchCount; b++) {
-                int slot = MetalUniformStream.SLOT_BASE_PARTICLES + b;
+                int slot = streamer.slotBaseParticles() + b;
                 long baseAddr = pBufferContents + currentSlotOffset + MetalUniformStream.UNIFORM_STRIDE * slot;
                 MemoryUtil.memFloatBuffer(baseAddr + MetalUniformStream.OFFSET_MVP, 16).put(viewProj);
                 MemoryUtil.memFloatBuffer(baseAddr + MetalUniformStream.OFFSET_MODEL, 16).put(identityModel);
@@ -491,7 +489,7 @@ public class MetalPassEncoder {
             for (int i = 0; i < entityCount; i++) {
                 RenderCommand item = commands[draws.commandIndex[i]];
                 if (item.pickId == 0) continue;
-                int slot = MetalUniformStream.SLOT_BASE_PICK_ENTITIES + i;
+                int slot = streamer.slotBasePickEntities() + i;
 
                 long baseAddr = pBufferContents + currentSlotOffset + MetalUniformStream.UNIFORM_STRIDE * slot;
                 float[] mvp = streamer.createMVPFromViewProj(editorViewProj, item.px, item.py, item.pz, item.rx, item.ry, item.rz, item.sx, item.sy, item.sz);
@@ -709,7 +707,7 @@ public class MetalPassEncoder {
                 RenderCommand item = commands[draws.commandIndex[i]];
                 // Same skinning rule as the main pass: unskinned 30-float meshes draw in bind pose there too
                 boolean skinned = draws.skinnedSlot[i] >= 0;
-                int slot = MetalUniformStream.SLOT_BASE_SHADOW_CASTERS + i;
+                int slot = streamer.slotBaseShadowCasters() + i;
 
                 long baseAddr = pBufferContents + currentSlotOffset + MetalUniformStream.UNIFORM_STRIDE * slot;
                 float[] lightMvp = streamer.createLightSpaceMVPMatrix(item.px, item.py, item.pz, item.rx, item.ry, item.rz, item.sx, item.sy, item.sz);

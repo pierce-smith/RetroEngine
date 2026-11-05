@@ -63,6 +63,8 @@ The Vulkan backend is written for core 1.3, with no legacy fallbacks:
 - **`synchronization2`** for every layout transition (`vkCmdPipelineBarrier2`) and **timeline semaphores** for async
   texture uploads.
 - **3-slot ring buffers** (`VulkanRingBuffer`) for dynamic vertex data. They grow on demand.
+- **Device-local meshes.** Registered meshes upload through the staging ring (`VulkanUploadRing.uploadBuffer`) into
+  device-local memory, so discrete GPUs read vertices from VRAM. Disposal waits for the upload to finish.
 - **Persistent `VkPipelineCache`** serialized to `.pipeline_cache.bin`, validated against vendor/device ID and
   `pipelineCacheUUID`, and written atomically so a crash can't leave a truncated cache.
 
@@ -78,6 +80,10 @@ translation in the hot path.
 2. The argument table is bound **once per encoder**.
 3. Every indirectly referenced resource is made resident with **one** `useResources:count:usage:stages:` call.
 4. Each draw is an instanced draw whose `baseInstance` selects its `DrawArgs` entry.
+
+**There is no draw limit.** Uniform slots and `DrawArgs` hold one region per pass, sized for 1,024 draws to start. A
+bigger scene grows them to the next power of two at the start of a frame, after every frame in flight has retired, and
+the console logs `per-draw buffers grown to <n>`.
 
 `gpuAddress` and `gpuResourceID` require `MTLGPUFamilyMetal3` (macOS 13+). On older GPUs the backend logs a clear
 error at startup instead of failing later.
@@ -99,6 +105,16 @@ The backends call it the "4-phase pipeline." Counting every distinct render targ
 | 2 | **Color-ID pick**            | Pick target                    | Entity + gizmo IDs; one probed texel read back (editor only) |
 | 3 | **Camera preview**           | PiP color target               | Selected Camera's view, no grid (editor only) |
 | 4 | **Swapchain composition**    | Swapchain                      | Viewport blit, **or** a fullscreen post-process draw (§2.5) → **`UIGeometryBatch`** 2D overlay |
+
+### 2.0 Textures and Ground Shadows
+
+**Mipmaps.** `MipChain` builds every level on the CPU when a texture is registered, and both backends upload that same
+data, so filtering matches. Its box filter weights color by alpha, so cutouts don't pick up dark fringes. The chain is
+built at load time, not cook time. Only the material samplers use mips; UI sampling stays on the full-size level.
+
+**Ground shadow blobs.** `GroundHeightIndex` indexes every visible mesh once per frame in a hashed grid, so finding the
+surface under a draw only looks at its neighbors. Objects wider than two grid cells, such as floors, go in a short list
+that every query checks.
 
 ### 2.1 Lighting: Honest Labels
 

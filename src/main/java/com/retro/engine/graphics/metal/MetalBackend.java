@@ -434,6 +434,16 @@ public class MetalBackend implements IRenderBackend {
         inFlightFrames.acquireUninterruptibly();
         framePermitHeld = true;
 
+        // A scene that outgrew the per-draw buffers replaces them; every frame that could read the old ones must retire first
+        if (uniformStreamer.needsGrowth(drawBuffers.count)) {
+            inFlightFrames.acquireUninterruptibly(MAX_FRAMES_IN_FLIGHT - 1);
+            try {
+                uniformStreamer.growTo(metalDevice, drawBuffers.count);
+            } finally {
+                inFlightFrames.release(MAX_FRAMES_IN_FLIGHT - 1);
+            }
+        }
+
         // Release deferred resources whose last referencing frame has signalled completion
         resourceCache.beginFrame(metalDevice);
         harvestPickReadbacks();

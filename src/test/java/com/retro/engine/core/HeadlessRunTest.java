@@ -44,7 +44,9 @@ class HeadlessRunTest {
                 Main.class.getName(), "--headless"));
         command.addAll(List.of(args));
         Path log = dir.resolve("run.log");
-        Process process = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile()).start();
+        // Its own working folder, because the engine treats the working folder as a project when it holds one
+        Path workingDir = Files.createDirectories(dir.resolve("cwd"));
+        Process process = new ProcessBuilder(command).directory(workingDir.toFile()).redirectErrorStream(true).redirectOutput(log.toFile()).start();
         boolean exited = process.waitFor(90, TimeUnit.SECONDS);
         if (!exited) process.destroyForcibly().waitFor();
         String output = Files.readString(log);

@@ -20,20 +20,25 @@ public class MetalUniformStream {
     private static final int RING_SLOTS = 3;
     // 368-byte Uniforms struct rounded up to keep every slot 256-byte aligned for constant buffer binding
     public static final long UNIFORM_STRIDE = 512L;
-    public static final int MAX_ENTITIES_PER_FRAME = 256;
+    // Draws the streams start with. They grow to fit the scene, so there is no limit on draws per frame.
+    public static final int INITIAL_DRAW_CAPACITY = 1024;
+    private static final int PARTICLE_SLOTS = com.retro.engine.graphics.ParticleDrawList.MAX_BATCHES;
 
-    // Per-frame slot layout: [grid] [64 shadow blobs] [MAX_ENTITIES lit entities] [MAX_ENTITIES shadow map casters]
-    // [64 camera preview shadow blobs] [MAX_ENTITIES camera preview lit entities]. The camera preview pass gets its own
-    // slots because both passes are encoded before the GPU reads any of them. [MAX_ENTITIES Color-ID pick entities] follow.
-    public static final int SLOT_BASE_SHADOW_BLOBS = 1;
-    public static final int SLOT_BASE_ENTITIES = 1 + 64;
-    public static final int SLOT_BASE_SHADOW_CASTERS = 1 + 64 + MAX_ENTITIES_PER_FRAME;
-    public static final int SLOT_BASE_PREVIEW_SHADOW_BLOBS = 1 + 64 + 2 * MAX_ENTITIES_PER_FRAME;
-    public static final int SLOT_BASE_PREVIEW_ENTITIES = SLOT_BASE_PREVIEW_SHADOW_BLOBS + 64;
-    public static final int SLOT_BASE_PICK_ENTITIES = SLOT_BASE_PREVIEW_ENTITIES + MAX_ENTITIES_PER_FRAME;
-    // [ParticleDrawList.MAX_BATCHES particle batches] (main scene pass only) close the frame
-    public static final int SLOT_BASE_PARTICLES = SLOT_BASE_PICK_ENTITIES + MAX_ENTITIES_PER_FRAME;
-    public static final int SLOTS_PER_FRAME = SLOT_BASE_PARTICLES + com.retro.engine.graphics.ParticleDrawList.MAX_BATCHES;
+    /** Draw capacity needed for {@code draws} draws: the next power of two, so growth is rare. */
+    public static int capacityFor(int draws) {
+        return Math.max(INITIAL_DRAW_CAPACITY, Integer.highestOneBit(Math.max(draws, 1) - 1) << 1);
+    }
+
+    /** Uniform slots in one frame: the grid, six per-draw regions, then the particle batches. */
+    public static int slotsPerFrame(int capacity) {
+        return 1 + REGIONS * capacity + PARTICLE_SLOTS;
+    }
+
+    // Per-frame slot layout: [grid] [shadow blobs] [lit entities] [shadow map casters] [camera preview shadow blobs]
+    // [camera preview lit entities] [Color-ID pick entities] [particle batches, main scene pass only]. Each region holds
+    // one slot per draw. The camera preview pass gets its own slots because both passes are encoded before the GPU reads
+    // any of them.
+    private static final int REGIONS = 6;
     // One LocalLights block (blinn_phong.metal) per frame follows the uniform slots: point and spot light arrays are
     // written once per frame and every lit draw references them through Uniforms.localLights
     public static final long LIGHT_BLOCK_POINT_STRIDE = 32L;  // position, color (a = intensity)
@@ -41,9 +46,6 @@ public class MetalUniformStream {
     public static final long LIGHT_BLOCK_SPOTS_OFFSET = LIGHT_BLOCK_POINT_STRIDE * SceneLights.MAX_POINT_LIGHTS;
     // 1408-byte LocalLights struct rounded up to keep the frame regions 256-byte aligned
     public static final long LIGHT_BLOCK_SIZE = 1536L;
-    private static final long LIGHT_BLOCK_FRAME_OFFSET = UNIFORM_STRIDE * SLOTS_PER_FRAME;
-    private static final long FRAME_SLOT_SIZE = LIGHT_BLOCK_FRAME_OFFSET + LIGHT_BLOCK_SIZE;
-    private static final long TOTAL_RING_BUFFER_SIZE = FRAME_SLOT_SIZE * RING_SLOTS;
 
     // Locked Byte Offsets for MSL Uniforms Struct
     public static final long OFFSET_MVP = 0L;
@@ -70,7 +72,7 @@ public class MetalUniformStream {
     static {
         long[] float4Aligned = { OFFSET_MVP, OFFSET_MODEL, OFFSET_DIR_LIGHT, OFFSET_NUM_LIGHTS, OFFSET_DIR_LIGHT_COLOR, OFFSET_AMBIENT,
                 OFFSET_FOG, OFFSET_MAT_PARAMS, OFFSET_LIGHT_SPACE, OFFSET_SURFACE, OFFSET_VIEW_POS, OFFSET_FOG_PARAMS,
-                LIGHT_BLOCK_POINT_STRIDE, LIGHT_BLOCK_SPOT_STRIDE, LIGHT_BLOCK_SPOTS_OFFSET, LIGHT_BLOCK_FRAME_OFFSET, UNIFORM_STRIDE };
+                LIGHT_BLOCK_POINT_STRIDE, LIGHT_BLOCK_SPOT_STRIDE, LIGHT_BLOCK_SPOTS_OFFSET, UNIFORM_STRIDE };
         for (long offset : float4Aligned) {
             if (offset % 16 != 0) throw new ExceptionInInitializerError("Metal uniform offset " + offset + " is not 16-byte aligned");
         }
@@ -96,7 +98,6 @@ public class MetalUniformStream {
     public static final long DRAW_ARGS_BONES = 16L;
     public static final long DRAW_ARGS_TEXTURES = 24L; // albedo, normal, specular, lightmap, emissive (8 bytes each)
     public static final int MATERIAL_CHANNELS = 5;
-    private static final long DRAW_ARGS_FRAME_SIZE = DRAW_ARGS_STRIDE * SLOTS_PER_FRAME;
 
     // passFlags bit 4: vertex shader applies the bone palette referenced by DrawArgs.bones
     public static final int PASS_FLAG_SKINNED = 16;
@@ -115,6 +116,8 @@ public class MetalUniformStream {
     private long streamingUniformAddress = 0L;
     private long bonePaletteAddress = 0L;
     private int frameIndex = 0;
+    private int drawCapacity = INITIAL_DRAW_CAPACITY;
+    private long lightBlockFrameOffset, frameSlotSize, drawArgsFrameSize;
 
     private final float[] matP = new float[16];
     private final float[] matV = new float[16];
@@ -136,12 +139,44 @@ public class MetalUniformStream {
         long d = device.getDevice();
         long send = device.getObjcMsgSend();
 
-        streamingUniformBuffer = MetalBuffer.createUniformBuffer(d, send, TOTAL_RING_BUFFER_SIZE);
+        allocateDrawBuffers(d, send);
         bonePaletteBuffer = MetalBuffer.createUniformBuffer(d, send, BONE_FRAME_SLOT_SIZE * RING_SLOTS);
-        drawArgsBuffer = MetalBuffer.createUniformBuffer(d, send, DRAW_ARGS_FRAME_SIZE * RING_SLOTS);
-        streamingUniformAddress = MetalBuffer.gpuAddress(streamingUniformBuffer, send);
         bonePaletteAddress = MetalBuffer.gpuAddress(bonePaletteBuffer, send);
     }
+
+    private void allocateDrawBuffers(long d, long send) {
+        int slots = slotsPerFrame(drawCapacity);
+        lightBlockFrameOffset = UNIFORM_STRIDE * slots;
+        frameSlotSize = lightBlockFrameOffset + LIGHT_BLOCK_SIZE;
+        drawArgsFrameSize = DRAW_ARGS_STRIDE * slots;
+        streamingUniformBuffer = MetalBuffer.createUniformBuffer(d, send, frameSlotSize * RING_SLOTS);
+        drawArgsBuffer = MetalBuffer.createUniformBuffer(d, send, drawArgsFrameSize * RING_SLOTS);
+        streamingUniformAddress = MetalBuffer.gpuAddress(streamingUniformBuffer, send);
+    }
+
+    /** True when the buffers can't hold {@code draws} draws, so {@link #growTo} has to run before they're encoded. */
+    public boolean needsGrowth(int draws) {
+        return draws > drawCapacity;
+    }
+
+    /** Replaces the per-draw buffers with larger ones. The GPU must not be reading them: every frame has to have retired. */
+    public void growTo(MetalDevice device, int draws) {
+        long send = device.getObjcMsgSend();
+        long release = sel_registerName("release");
+        if (streamingUniformBuffer != 0L) invokePPP(streamingUniformBuffer, release, send);
+        if (drawArgsBuffer != 0L) invokePPP(drawArgsBuffer, release, send);
+        drawCapacity = capacityFor(draws);
+        allocateDrawBuffers(device.getDevice(), send);
+        System.out.println("[MetalUniformStream] Scene needs " + draws + " draws; per-draw buffers grown to " + drawCapacity + ".");
+    }
+
+    public int slotBaseShadowBlobs() { return 1; }
+    public int slotBaseEntities() { return 1 + drawCapacity; }
+    public int slotBaseShadowCasters() { return 1 + 2 * drawCapacity; }
+    public int slotBasePreviewShadowBlobs() { return 1 + 3 * drawCapacity; }
+    public int slotBasePreviewEntities() { return 1 + 4 * drawCapacity; }
+    public int slotBasePickEntities() { return 1 + 5 * drawCapacity; }
+    public int slotBaseParticles() { return 1 + REGIONS * drawCapacity; }
 
     public long getStreamingUniformBuffer() { return streamingUniformBuffer; }
     public long getBonePaletteBuffer() { return bonePaletteBuffer; }
@@ -159,7 +194,7 @@ public class MetalUniformStream {
 
     /** Byte offset of the current frame's DrawArgs table inside {@link #getDrawArgsBuffer()}. */
     public long getCurrentDrawArgsOffset() {
-        return frameIndex * DRAW_ARGS_FRAME_SIZE;
+        return frameIndex * drawArgsFrameSize;
     }
 
     public long getBonePaletteOffset(int skinnedIndex) {
@@ -195,7 +230,7 @@ public class MetalUniformStream {
      * written; the shader loops stop at those counts.
      */
     public void writeLightBlock(long pBufferContents, SceneLights lights) {
-        long block = pBufferContents + getCurrentSlotOffset() + LIGHT_BLOCK_FRAME_OFFSET;
+        long block = pBufferContents + getCurrentSlotOffset() + lightBlockFrameOffset;
         for (int i = 0; i < lights.pointCount(); i++) {
             SceneLights.Light point = lights.point(i);
             long addr = block + LIGHT_BLOCK_POINT_STRIDE * i;
@@ -238,7 +273,7 @@ public class MetalUniformStream {
         } else {
             putFloat4(baseAddr + OFFSET_DIR_LIGHT_COLOR, 0.0f, 0.0f, 0.0f, 0.0f);
         }
-        MemoryUtil.memPutLong(baseAddr + OFFSET_LOCAL_LIGHTS, streamingUniformAddress + getCurrentSlotOffset() + LIGHT_BLOCK_FRAME_OFFSET);
+        MemoryUtil.memPutLong(baseAddr + OFFSET_LOCAL_LIGHTS, streamingUniformAddress + getCurrentSlotOffset() + lightBlockFrameOffset);
     }
 
     private static void putFloat4(long addr, float x, float y, float z, float w) {
@@ -261,7 +296,7 @@ public class MetalUniformStream {
     }
 
     public long getCurrentSlotOffset() {
-        return frameIndex * FRAME_SLOT_SIZE;
+        return frameIndex * frameSlotSize;
     }
 
     public float[] createCameraViewMatrix(float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {

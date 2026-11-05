@@ -105,14 +105,14 @@ public class VulkanUploadRing {
     }
 
     /**
-     * Copies tightly packed RGBA8 pixels into mip 0 of {@code image} (created in UNDEFINED layout) and leaves it in
+     * Copies every level of {@code mips} into {@code image} (created in UNDEFINED layout) and leaves it in
      * SHADER_READ_ONLY_OPTIMAL. Returns the timeline value that signals completion, or -1 on failure.
      * Thread-safe; uploads from concurrent streamer threads are serialized through the ring.
      */
-    public synchronized long uploadImage(long image, int width, int height, byte[] pixels) {
-        if (timelineSemaphore == 0L || image == 0L || pixels == null) return -1L;
-        long size = (long) width * height * 4L;
-        if (size <= 0L || pixels.length < size || size > Integer.MAX_VALUE) return -1L;
+    public synchronized long uploadImage(long image, com.retro.engine.graphics.MipChain mips) {
+        if (timelineSemaphore == 0L || image == 0L || mips == null) return -1L;
+        byte[] pixels = mips.pixels;
+        long size = pixels.length;
 
         VkDevice vkDevice = device.getLogicalDevice();
         Slot slot = slots[nextSlot];
@@ -137,9 +137,13 @@ public class VulkanUploadRing {
                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
                     VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
 
-            VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, stack);
-            region.get(0).imageSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
-            region.get(0).imageExtent().set(width, height, 1);
+            VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(mips.levels(), stack);
+            for (int level = 0; level < mips.levels(); level++) {
+                VkBufferImageCopy copy = region.get(level);
+                copy.bufferOffset(mips.offsets[level]);
+                copy.imageSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(level).baseArrayLayer(0).layerCount(1);
+                copy.imageExtent().set(mips.widths[level], mips.heights[level], 1);
+            }
             vkCmdCopyBufferToImage(slot.cmd, slot.stagingBuffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
 
             // Second scope covers every later submission on this queue, including the frames that sample the texture
@@ -148,35 +152,79 @@ public class VulkanUploadRing {
                     VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-            if (vkEndCommandBuffer(slot.cmd) != VK_SUCCESS) return -1L;
-
-            long signalValue = submittedValue + 1L;
-            VkCommandBufferSubmitInfo.Buffer cmdInfo = VkCommandBufferSubmitInfo.calloc(1, stack)
-                    .sType$Default()
-                    .commandBuffer(slot.cmd);
-            VkSemaphoreSubmitInfo.Buffer signalInfo = VkSemaphoreSubmitInfo.calloc(1, stack)
-                    .sType$Default()
-                    .semaphore(timelineSemaphore)
-                    .value(signalValue)
-                    .stageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-            VkSubmitInfo2.Buffer submitInfo = VkSubmitInfo2.calloc(1, stack)
-                    .sType$Default()
-                    .pCommandBufferInfos(cmdInfo)
-                    .pSignalSemaphoreInfos(signalInfo);
-
-            int result;
-            synchronized (device.getQueueLock()) {
-                result = vkQueueSubmit2(device.getGraphicsQueue(), submitInfo, VK_NULL_HANDLE);
-            }
-            if (result != VK_SUCCESS) {
-                System.err.println("[VulkanUploadRing] ERROR: vkQueueSubmit2 failed for texture upload: " + result);
-                return -1L;
-            }
-
-            slot.retireValue = signalValue;
-            submittedValue = signalValue;
-            return signalValue;
+            return submit(slot, stack);
         }
+    }
+
+    /**
+     * Copies {@code size} bytes, written to the staging memory by {@code fill}, into a device-local vertex or index
+     * buffer. Returns the timeline value that signals completion, or -1 on failure. Thread-safe, like {@link #uploadImage}.
+     */
+    public synchronized long uploadBuffer(long buffer, long size, java.util.function.LongConsumer fill) {
+        if (timelineSemaphore == 0L || buffer == 0L || size <= 0L) return -1L;
+
+        VkDevice vkDevice = device.getLogicalDevice();
+        Slot slot = slots[nextSlot];
+        nextSlot = (nextSlot + 1) % SLOT_COUNT;
+        if (!waitForValue(slot.retireValue)) return -1L;
+        if (!ensureCapacity(slot, size)) return -1L;
+        fill.accept(slot.mappedAddress);
+
+        try (MemoryStack stack = stackPush()) {
+            vkResetCommandPool(vkDevice, slot.commandPool, 0);
+            VkCommandBufferBeginInfo beginInfo = VkCommandBufferBeginInfo.calloc(stack)
+                    .sType$Default()
+                    .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+            if (vkBeginCommandBuffer(slot.cmd, beginInfo) != VK_SUCCESS) return -1L;
+
+            VkBufferCopy.Buffer region = VkBufferCopy.calloc(1, stack);
+            region.get(0).size(size);
+            vkCmdCopyBuffer(slot.cmd, slot.stagingBuffer, buffer, region);
+
+            // Second scope covers every later submission on this queue, including the frames that draw the mesh
+            VkMemoryBarrier2.Buffer barrier = VkMemoryBarrier2.calloc(1, stack);
+            barrier.get(0).sType$Default()
+                    .srcStageMask(VK_PIPELINE_STAGE_2_COPY_BIT)
+                    .srcAccessMask(VK_ACCESS_2_TRANSFER_WRITE_BIT)
+                    .dstStageMask(VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT | VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT)
+                    .dstAccessMask(VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+            VkDependencyInfo dependency = VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier);
+            vkCmdPipelineBarrier2(slot.cmd, dependency);
+
+            return submit(slot, stack);
+        }
+    }
+
+    /** Ends the slot's command buffer and submits it, signalling the next timeline value. Returns it, or -1 on failure. */
+    private long submit(Slot slot, MemoryStack stack) {
+        if (vkEndCommandBuffer(slot.cmd) != VK_SUCCESS) return -1L;
+
+        long signalValue = submittedValue + 1L;
+        VkCommandBufferSubmitInfo.Buffer cmdInfo = VkCommandBufferSubmitInfo.calloc(1, stack)
+                .sType$Default()
+                .commandBuffer(slot.cmd);
+        VkSemaphoreSubmitInfo.Buffer signalInfo = VkSemaphoreSubmitInfo.calloc(1, stack)
+                .sType$Default()
+                .semaphore(timelineSemaphore)
+                .value(signalValue)
+                .stageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+        VkSubmitInfo2.Buffer submitInfo = VkSubmitInfo2.calloc(1, stack)
+                .sType$Default()
+                .pCommandBufferInfos(cmdInfo)
+                .pSignalSemaphoreInfos(signalInfo);
+
+        int result;
+        synchronized (device.getQueueLock()) {
+            result = vkQueueSubmit2(device.getGraphicsQueue(), submitInfo, VK_NULL_HANDLE);
+        }
+        if (result != VK_SUCCESS) {
+            System.err.println("[VulkanUploadRing] ERROR: vkQueueSubmit2 failed for an upload: " + result);
+            return -1L;
+        }
+
+        slot.retireValue = signalValue;
+        submittedValue = signalValue;
+        return signalValue;
     }
 
     private boolean waitForValue(long value) {

@@ -36,13 +36,14 @@ public class VulkanTextureRegistry {
         if (device == null || device.getLogicalDevice() == null || uploadRing == null || pixels == null || pixels.length == 0) return null;
 
         VkDevice vkDevice = device.getLogicalDevice();
+        com.retro.engine.graphics.MipChain mips = com.retro.engine.graphics.MipChain.generate(pixels, width, height);
 
         try (MemoryStack stack = stackPush()) {
             VkImageCreateInfo imageInfo = VkImageCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO)
                     .imageType(VK_IMAGE_TYPE_2D)
                     .extent(extent -> extent.set(width, height, 1))
-                    .mipLevels(1)
+                    .mipLevels(mips.levels())
                     .arrayLayers(1)
                     .format(VK_FORMAT_R8G8B8A8_UNORM)
                     .tiling(VK_IMAGE_TILING_OPTIMAL)
@@ -72,7 +73,7 @@ public class VulkanTextureRegistry {
             vkBindImageMemory(vkDevice, textureImage, textureImageMemory, 0);
 
             // Nothing has been submitted yet on failure, so the image can be destroyed immediately
-            long uploadValue = uploadRing.uploadImage(textureImage, width, height, pixels);
+            long uploadValue = uploadRing.uploadImage(textureImage, mips);
             if (uploadValue < 0L) {
                 vkDestroyImage(vkDevice, textureImage, null);
                 vkFreeMemory(vkDevice, textureImageMemory, null);
@@ -87,7 +88,7 @@ public class VulkanTextureRegistry {
             viewInfo.subresourceRange()
                     .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
                     .baseMipLevel(0)
-                    .levelCount(1)
+                    .levelCount(mips.levels())
                     .baseArrayLayer(0)
                     .layerCount(1);
 

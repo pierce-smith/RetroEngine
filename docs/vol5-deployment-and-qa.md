@@ -211,6 +211,9 @@ Run on **at least one Metal host and one Vulkan host** (Windows/Linux, or macOS 
 - [ ] A VOICE clip ducks BGM. A reverb zone is audible when entered. Stop un-mutes any bus a script muted.
 
 **Rendering**
+- [ ] Open the repo as a project and press Play: `Assets/Scenes/RenderCheck.rscene` tours 1,600 cubes, ground shadows and
+      a worst-case floor, and shows what to check at each stop. Run it on Metal and again with `--vulkan`.
+      `RenderCheckScene` in `src/test/java` generates the scene.
 - [ ] Shadows, point/spot lights and skinned meshes render identically on Metal and Vulkan.
 - [ ] Particles (additive and alpha, textured and untextured) and Main Camera post FX match on both backends.
       Post FX is off in the editor fly camera.

@@ -117,6 +117,7 @@ public class SceneRenderPipeline {
     // Shadow map frustum fitted around every queued draw. It follows the Directional light; without one it uses the
     // backends' default sun direction (only the directional slot samples the shadow map).
     private final DirectionalShadowFrustum shadowFrustum = new DirectionalShadowFrustum();
+    private final GroundHeightIndex groundIndex = new GroundHeightIndex();
 
     // Editor camera view-space depth row (view z = dot(row, p) + w) and range used to quantize sort-key depth
     private float depthRowX, depthRowY, depthRowZ, depthRowW;
@@ -136,7 +137,7 @@ public class SceneRenderPipeline {
 
         ViewportCamera camera = editorManager.getCameraController();
         if (camera != null) {
-            float far = camera.isPlayLocked() ? camera.getFar() : 100.0f;
+            float far = camera.getFar();
             camera.computeViewMatrix(viewScratch);
             frustumCuller.updateFromView(viewScratch, camera.getFov(), ViewportPanel.getSceneAspect(editorManager.getDockSpace()), camera.getNear(), far);
             updateDepthRow(camera, far);
@@ -205,6 +206,8 @@ public class SceneRenderPipeline {
                     if (snapshot.lights.isFull()) break;
                 }
             }
+
+            if (shadowBlobs) buildGroundIndex(entities, editorManager.getSceneManager());
 
             // 2. Traversal loop across active 3D entities with View-Frustum Culling & Skeletal Palette Extraction
             for (int ei = 0; ei < entityCount; ei++) {
@@ -304,7 +307,7 @@ public class SceneRenderPipeline {
                     cmd.rx = wt.rx(); cmd.ry = wt.ry(); cmd.rz = wt.rz();
                     cmd.sx = wt.sx(); cmd.sy = wt.sy(); cmd.sz = wt.sz();
                     // Blobs off: skip the per-draw downward raycast; an infinite clearance also fades any blob to zero
-                    cmd.groundY = shadowBlobs ? findGroundSurfaceY(entity, wt, entities, editorManager) : Float.NEGATIVE_INFINITY;
+                    cmd.groundY = shadowBlobs ? groundIndex.highestSurfaceBelow(ei, wt.px(), wt.py(), wt.pz()) : Float.NEGATIVE_INFINITY;
                     cmd.bonePalette = (anim != null && anim.skeleton != null) ? anim.bonePaletteMatrices : null;
                     cmd.pickId = ViewportPanel.pickIdFor(entity);
                     if (mat != null) {
@@ -401,6 +404,20 @@ public class SceneRenderPipeline {
         snapshot.totalActiveVertices = totalActiveVertices;
 
         return snapshot;
+    }
+
+    /** Indexes every visible mesh once, so each draw's ground lookup only looks at its neighbors. */
+    private void buildGroundIndex(List<Entity> entities, SceneWorld world) {
+        groundIndex.reset();
+        for (int i = 0, n = entities.size(); i < n; i++) {
+            Entity entity = entities.get(i);
+            MeshFilter mesh = entity.getComponent(MeshFilter.class);
+            if (mesh == null || !mesh.isVisible) continue;
+            WorldTransform wt = world.getComputedWorldTransform(entity);
+            float radius = Math.max(Math.max(0.2f, wt.sx()), Math.max(0.2f, wt.sz())) * 1.1f;
+            groundIndex.add(i, wt.px(), wt.pz(), radius, wt.py() + Math.max(0.2f, wt.sy()));
+        }
+        groundIndex.build();
     }
 
     // Particle systems visible this frame and their view depths, sorted back to front (grow-only scratch)
@@ -856,42 +873,5 @@ public class SceneRenderPipeline {
             mat.cacheChannelHandle(channel, path, handle, handleEpoch);
         }
         return handle;
-    }
-
-    private float findGroundSurfaceY(Entity currentEntity, WorldTransform currentWt, List<Entity> allEntities, EditorWorkspace workspace) {
-        float rayX = currentWt.px();
-        float rayY = currentWt.py();
-        float rayZ = currentWt.pz();
-        float bestGroundY = 0.0f;
-
-        if (allEntities != null) {
-            for (int i = 0, n = allEntities.size(); i < n; i++) {
-                Entity other = allEntities.get(i);
-                if (other == currentEntity) continue;
-                MeshFilter otherMc = other.getComponent(MeshFilter.class);
-                if (otherMc == null || !otherMc.isVisible) continue;
-
-                WorldTransform otherWt = workspace.getSceneManager().getComputedWorldTransform(other);
-                float otherX = otherWt.px();
-                float otherY = otherWt.py();
-                float otherZ = otherWt.pz();
-                float otherSx = Math.max(0.2f, otherWt.sx());
-                float otherSy = Math.max(0.2f, otherWt.sy());
-                float otherSz = Math.max(0.2f, otherWt.sz());
-
-                float dx = rayX - otherX;
-                float dz = rayZ - otherZ;
-                float radiusSq = dx * dx + dz * dz;
-                float maxRadius = Math.max(otherSx, otherSz) * 1.1f;
-
-                if (radiusSq <= maxRadius * maxRadius) {
-                    float topY = otherY + otherSy;
-                    if (topY < rayY + 0.05f && topY > bestGroundY) {
-                        bestGroundY = topY;
-                    }
-                }
-            }
-        }
-        return bestGroundY;
     }
 }
