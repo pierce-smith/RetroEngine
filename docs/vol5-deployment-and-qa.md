@@ -43,15 +43,21 @@ Everything else ships, including the `<Scene>.navmesh` files the NavMesh baker w
 
 **What you get per platform:**
 
-| Target  | Same-OS export (via `jpackage`)          | Cross-OS export (via `jlink` + target JDK jmods) |
+| Target  | Same-OS export (via `jpackage`)          | Without `jpackage` (cross-OS via `jlink` + target jmods, or a packaged editor with no JDK installed) |
 |---------|------------------------------------------|--------------------------------------------------|
 | macOS   | `.app` with embedded jlinked runtime      | `.app` bundle with script launcher |
-| Windows | `.exe` launcher with embedded runtime     | Script launcher |
+| Windows | `.exe` launcher with embedded runtime     | Same `.exe` launcher with embedded runtime |
 | Linux   | ELF launcher, plus **`.AppImage`** if `appimagetool` is on `PATH` | Script launcher |
 
 > **Candid note:** game exports produce app images, **not** `.dmg` installers or `.tar.gz` archives. For a
 > download, zip/tar the export folder yourself (`tar czf MyGame-linux.tar.gz MyGame/`), or wrap the `.app` with
-> `hdiutil create`. Native launchers can only be built on their own OS. That's a `jpackage` limitation, not ours.
+> `hdiutil create`. macOS and Linux native launchers can only be built on their own OS. That's a `jpackage`
+> limitation, not ours. Windows is the exception: the exporter assembles the same app image `jpackage` would, from
+> the launcher in the target JDK's `jdk.jpackage.jmod` (or the copy in the packaged Windows editor).
+
+**Cross-OS target JDK.** Pick a folder with the target platform's `.jmod` files, either a JDK home containing
+`jmods/` or a standalone jmods package. JDK 24+ builds such as Temurin leave `jmods/` out of the JDK download and
+offer the jmods package separately.
 
 Export options (`StandaloneExporter.Request`): executable name, target platform, startup scene, target JDK (only for
 cross-OS builds), **`includeHaptics`**, and **`iconFile`**. Haptics adds SDL for gamepad rumble at a cost of a few MB. Without it,
@@ -61,7 +67,8 @@ vibration calls do nothing.
   `vibrate` / `setVibration`, or a scene or prefab containing a Character Controller (its solver rumbles on jump and
   landing). An unreadable file counts as "uses haptics", so rumble is never dropped silently.
 - **Application icon.** **APPLICATION ICON** defaults to `src/main/resources/icons/icon.(icns|ico|png)` for the
-  target platform and is passed to `jpackage --icon`. macOS needs `.icns`, Windows `.ico`, Linux `.png`. The
+  target platform and is passed to `jpackage --icon` (embedded directly in the `.exe` when building for Windows
+  without `jpackage`). macOS needs `.icns`, Windows `.ico`, Linux `.png`. The
   overlay warns about the wrong format, and the export fails with a clear error instead of shipping a broken icon.
 - **Executable name.** 1 to 64 characters from `A-Z a-z 0-9 space _ . -`. It must start with a letter or digit
   and can't end with a dot.

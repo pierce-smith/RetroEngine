@@ -3,6 +3,7 @@ package com.retro.engine;
 import com.retro.engine.core.EngineContext;
 import com.retro.engine.core.EngineLoop;
 import com.retro.engine.core.RuntimeLoop;
+import com.retro.engine.editor.StandaloneExporter;
 
 import org.lwjgl.system.Configuration;
 
@@ -29,7 +30,9 @@ public class Main {
         // every extension (~260 bytes each) on the MemoryStack. Must be set before any thread touches MemoryStack.
         Configuration.STACK_SIZE.set(1024);
 
-        boolean isRuntime = false;
+        // Only exported games set this. Their native launchers pass --runtime only when started with no arguments of
+        // their own, so a game launched with e.g. --no-mods would otherwise open the editor
+        boolean isRuntime = System.getProperty(StandaloneExporter.GAME_DATA_PROPERTY) != null;
         boolean isHeadless = false;
         if (args != null) {
             for (String arg : args) {

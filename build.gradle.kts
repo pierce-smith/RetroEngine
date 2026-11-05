@@ -261,6 +261,7 @@ tasks.named("run") {
 //   natives/libMoltenVK.dylib              macOS only (universal arm64 + x86_64)
 //   game-runtime/                          jlinked JRE that games exported from the editor embed when
 //                                           no full JDK is installed on the user's machine
+//   game-launcher/                         Windows only: jpackage's launcher .exe, which those games are built from
 // ------------------------------------------------------------------------------------------
 
 val editorAppName: String = providers.gradleProperty("appName").orNull?.trim()?.takeIf { it.isNotEmpty() } ?: "RetroEngine"
@@ -359,6 +360,31 @@ val linkGameRuntime = tasks.register("linkGameRuntime") {
     }
 }
 
+// jpackage can't be jlinked into the editor (JDK 24+ without jmods can't link jdk.jlink), so a Windows editor on a
+// machine with no JDK would have no way to make an .exe. Its prebuilt launcher is all that step needs.
+val windowsGameLauncher = "jpackageapplauncherw.exe"
+val extractGameLauncher = tasks.register("extractGameLauncher") {
+    group = "distribution"
+    description = "Copies jpackage's Windows launcher out of the toolchain JDK for exported games."
+    val out = editorBuildDir.map { it.dir("game-launcher") }
+    val jdk = toolchainHome
+    val launcher = windowsGameLauncher
+    outputs.dir(out)
+    doLast {
+        val outDir = out.get().asFile
+        outDir.deleteRecursively()
+        outDir.mkdirs()
+        val home = jdk.get()
+        runChecked(listOf(jdkTool(home, "jimage"), "extract", "--include", "regex:.*/$launcher",
+                          "--dir", outDir.absolutePath, File(home, "lib/modules").absolutePath), "jimage extract")
+        val moduleDir = File(outDir, "jdk.jpackage")
+        val extracted = moduleDir.walk().firstOrNull { it.name == launcher }
+            ?: throw GradleException("$launcher not found in the JDK at $home")
+        extracted.copyTo(File(outDir, launcher))
+        moduleDir.deleteRecursively()
+    }
+}
+
 val stageEditor = tasks.register<Sync>("stageEditor") {
     group = "distribution"
     description = "Stages the jars, natives and embedded game runtime for jpackage."
@@ -378,6 +404,9 @@ val stageEditor = tasks.register<Sync>("stageEditor") {
         from("libs/macos/libMoltenVK.dylib") { into("natives") }
     }
     from(linkGameRuntime) { into("game-runtime") }
+    if (hostOs.isWindows) {
+        from(extractGameLauncher) { into("game-launcher") }
+    }
 
     if (hostOs.isMacOsX) {
         val identity = macSignIdentity
@@ -451,6 +480,7 @@ tasks.register("packageEditor") {
             "-Dretro.gameRuntime=\$APPDIR/game-runtime"
         )
         javaOptions.forEach { cmd += listOf("--java-options", it) }
+        if (hostOs.isWindows) cmd += listOf("--java-options", "-Dretro.gameLauncher=\$APPDIR/game-launcher/$windowsGameLauncher")
 
         when {
             hostOs.isMacOsX -> {

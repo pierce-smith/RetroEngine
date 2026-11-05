@@ -143,7 +143,9 @@ public final class BuildExporterOverlay {
             centeredTextIn(buffer, PLATFORMS[i].label, x0, x1, PLATFORM_Y, 0.72f, selected ? EditorTheme.TEXT : EditorTheme.TEXT_MUTED);
         }
         if (platform != Platform.host()) {
-            UIGeometryBatch.addTruncatedText(buffer, "CROSS-OS: SCRIPT LAUNCHER + TARGET JDK REQUIRED (NATIVE LAUNCHERS BUILD ON THEIR OWN OS)",
+            UIGeometryBatch.addTruncatedText(buffer, platform == Platform.WINDOWS
+                    ? "CROSS-OS: TARGET JDK OR JMODS PACKAGE REQUIRED"
+                    : "CROSS-OS: SCRIPT LAUNCHER + TARGET JDK REQUIRED (NATIVE LAUNCHERS BUILD ON THEIR OWN OS)",
                 WELL_X0, PLATFORM_Y - ROW_H * 0.5f - 0.012f, BTN_X1, 0.62f, EditorTheme.YELLOW, 1.0f);
         }
 
@@ -355,12 +357,12 @@ public final class BuildExporterOverlay {
         // Cross-platform builds embed the target's runtime; pick its JDK off the main thread, then launch
         Platform target = platform;
         workspace.runNativeDialogAsync(() -> NativeFileDialog.selectFolderDialog(
-                "Select " + target.label + " JDK home (contains jmods/) for the embedded runtime",
+                "Select " + target.label + " JDK home (contains jmods/) or jmods package for the embedded runtime",
                 System.getProperty("user.home") + File.separator), jdk -> {
             if (jdk == null) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
             File targetJdk = new File(jdk);
-            if (!new File(targetJdk, "jmods").isDirectory()) {
-                setStatus("SELECTED FOLDER HAS NO JMODS/ DIRECTORY", true, 0.0f);
+            if (StandaloneExporter.jmodsDir(targetJdk) == null) {
+                setStatus("SELECTED FOLDER HAS NO JMODS", true, 0.0f);
                 return;
             }
             if (running) return;
