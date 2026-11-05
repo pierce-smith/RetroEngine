@@ -49,13 +49,44 @@ Each `DockPanel` has a tab title and a `PanelRegion`: `SCENE`, `ANIMATOR`, `HIER
 Drag a tab to stack it on another leaf or split a leaf left/right/top/bottom, and drag splitters to resize.
 `resetLayout()` brings back the default.
 
-**The key trick: design space.** Panels are authored once in a fixed design-space NDC and never deal with their
-docked size. `DockSpace.beginPanel()` / `endPanel()` apply a batch transform and clip rect when drawing, and
-`toDesignX()` / `toDesignY()` map the mouse back for hit-testing. That's why a panel can move from the right column
-to the bottom strip without any changes to its code.
+**The key rule: panels lay themselves out against their tile.** Every frame, `DockSpace.layout()` writes each
+visible panel's tile (screen NDC, below its tab bar) into `DockPanel.rect`, a `PanelRect`. Panels compute every edge
+from that rect, never from fixed coordinates, so they reflow to whatever shape they're docked into. Panels used to be
+authored in one fixed "design rect" that the dock stretched per axis. That squashed rows and text below readable
+size whenever a panel moved somewhere with a different shape, so it's gone.
 
-The Scene tile reports its real pixel aspect via `DockSpace`, so the 3D projection is **never stretched** no matter
-how you dock it.
+For reflowing panels the dock's mapping is the identity. `beginPanel()` / `endPanel()` only set the clip rect,
+`toDesignX()` / `toDesignY()` return the screen point unchanged, and text draws at its authored size.
+
+How each panel adapts:
+
+| Panel | Narrow column | Wide / shallow strip |
+|-------|---------------|----------------------|
+| Inspector | Label column shrinks within limits; steppers and PICK/IMPORT buttons shrink | Content is capped at a maximum width instead of stretching rows |
+| Project (asset browser) | One card column; header stacks the path above short-label buttons | Column count and card width come from the tile width |
+| Hierarchy | Rows, indent budget and scrollbar follow the tile | Same |
+| Console | Timestamp column is dropped | Shows as many log lines as fit |
+| NavMesh Baker | Single column | Parameters flow into up to three columns (§1.8) |
+| Animator canvas | Header breadcrumb and zoom readout yield to the buttons | The graph view stays centred on the canvas |
+| Animator Parameters | Editor column shrinks within limits | Rows are capped at a maximum width |
+| Animator Inspector | State details stack above the dope sheet | Details and dope sheet sit side by side, so the timeline gets the full height |
+
+**Writing a panel:**
+
+1. Read `DockPanel.<YOUR_PANEL>.rect` and derive every x/y from it. Keep size-independent values (row heights,
+   paddings, button widths) as constants.
+2. Put the geometry in one place, either accessor methods or a `layout()` that fills static fields, and call it from
+   both render and input. Drawing and hit-testing must read the **same** numbers.
+3. Check `rect.contains(x, y)` before acting on a click. A hidden panel's rect is flagged `visible = false`, so a
+   stale tile never captures input. This matters for the Animator side panels, which share one click handler.
+4. Clamp proportions (for example a label column of 40% of the width, held between a minimum and a maximum), cap
+   content width in very wide tiles, and use `addTruncatedText` / `addWrappedText` rather than hard-cut text.
+5. Stay zero-allocation: reuse `StringBuilder` scratch buffers instead of `subSequence` or `String` concatenation in
+   the frame loop.
+
+**The Scene viewport is the one exception.** It keeps `reflows = false`. Its design rect is stretched over the tile
+so the offscreen 3D image and the gizmo overlay stay aligned, and the tile reports its real pixel aspect, so the 3D
+projection is **never stretched** no matter how you dock it.
 
 ### 1.3 The Core Panels
 
@@ -143,6 +174,10 @@ Values step with the **–** / **+** buttons. **BAKE** rasterizes the scene's st
 installs the mesh for Play, and writes `<Scene>.navmesh` next to the scene file. That file is reloaded whenever the
 scene is opened. An unsaved scene still gets the in-memory mesh, but the console asks you to save and bake again
 to write the file. **CLEAR** removes the mesh and deletes its file.
+
+The panel reflows with its tile (§1.2). In the default right column the settings stack in one column. In a wider
+tile, such as the bottom strip, they flow into two or three columns, with BAKE / CLEAR and the mesh info beside
+them. Bake results wrap over as many lines as the tile has room for (up to six) instead of being cut off.
 
 ### 1.9 Project Templates
 
