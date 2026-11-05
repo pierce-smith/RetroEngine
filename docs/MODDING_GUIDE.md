@@ -50,6 +50,9 @@ Mods/example_mod/
 
 `//` line comments are allowed in `mod.json` and `.rpatch` files.
 
+camelCase aliases are accepted too: `id` for `mod_id` (also inside dependency objects), `targetEngine`,
+`entryPoint`, `scriptSources` and `assetOverlays`.
+
 ## Load order and the VFS
 
 1. **Discover**: every `Mods/*/mod.json` is parsed. A malformed manifest skips only that mod.
@@ -76,6 +79,11 @@ Mods/example_mod/
 6. **Shaders**: overrides are mounted and the pipelines are rebuilt (see [Shaders](#shaders)).
 7. **Patch**: `.rpatch` files are applied each time their target scene loads, in mod load order. Within one mod they
    run in file-path order, with `*.editor.rpatch` files last.
+
+**Navigation meshes follow the scene file.** A scene's baked `<Scene>.navmesh` is loaded from next to the
+*resolved* scene file. If your overlay replaces a whole scene, ship its `.navmesh` beside it (bake it in the editor,
+see Volume 2 §1.8). A vanilla scene changed only by `.rpatch` keeps vanilla's navmesh, so geometry you patch in
+doesn't change where AI can walk.
 
 Mod assets stream in and are evicted exactly like vanilla ones. An asset that no live entity has referenced for 600
 frames (about 10 s at 60 FPS) is unloaded from VRAM.
@@ -104,15 +112,44 @@ frames (about 10 s at 60 FPS) is unloaded from VRAM.
   `REMOVE_ENTITY` also removes the entity's descendants. `"index"` selects among several components of the same
   type and defaults to 0.
 - **Components**: you can name built-ins (`Transform`, `Light`, `MeshFilter`, `Material`, `ScriptComponent`, …),
-  their `…Component` aliases, or mod components you registered.
+  their `…Component` aliases, or mod components you registered. The newer built-ins work the same way:
+  `ParticleSystem`, `AudioReverbZone`, `NavMeshAgent`, `SplineComponent` and `SplineFollower`. For example,
+  `{ "op": "ATTACH_COMPONENT", "entity": "torch_1", "component": "ParticleSystem", "properties": { "emissionRate": 80 } }`.
 - **Properties**: keys are `@InspectorProperty` field names or Inspector labels, matched case-insensitively.
   Values can be numbers, booleans, strings, enum names (`"point"`), or objects for string maps. Asset fields
-  resolve through the VFS.
+  resolve through the VFS. **Binary (`byte[]`) properties take a standard Base64 string** (or `null` to clear).
+  Whitespace and line breaks inside the string are ignored, so long values can be wrapped. Any other non-Base64
+  character makes the operation fail, which is logged and skipped like any other bad op. The main binary property
+  is `SplineComponent.splineData`, which holds a spline's knots (see [Spline knots](#spline-knots) below).
 - **New entities**: every new entity starts with a `Transform`. Listing `Transform` in `components` edits it rather
   than adding a second one. Prefix new ids with your `mod_id` so they never collide with vanilla ids or other mods.
 - **Errors**: a bad operation (unknown entity, component or property, or a type mismatch) is logged and skipped,
   and the rest of the patch still applies. Patches from several mods stack. Each one sees the result of the patches
   that ran before it.
+
+### Spline knots
+
+A spline's knots live in its hidden `splineData` property. Patches can modify a vanilla spline's knots or attach a
+spline with a custom path:
+
+```json
+{ "op": "ATTACH_COMPONENT", "entity": "my_mod.rail", "component": "SplineComponent",
+  "properties": { "curveType": "CATMULL_ROM", "loop": false,
+                  "splineData": "AAAAAQAAAAUAAAAAAAAAAAAA..." } }   // Base64 shortened here for readability
+```
+
+You rarely need to write the Base64 by hand. Edit the spline in [Creation Kit mode](#creation-kit-mode) and copy
+the value from the generated `.editor.rpatch`. If you do generate it (from a tool or a script), the decoded bytes are
+big-endian, in `java.io.DataOutputStream` order:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| version | `int` | `1`. Data with a newer version is ignored |
+| count | `int` | Knot count, clamped to 2..256 |
+| points | `count × 3` `float` | Knot `x, y, z`, relative to the owner's `Transform` position (rotation and scale aren't applied) |
+| handles | `count × 6` `float` | Bezier in-handle `x, y, z` then out-handle `x, y, z`, as offsets from the knot. Ignored by `CATMULL_ROM` but still required |
+
+Total size: `8 + count × 36` bytes. Leave out `pointCount`. It isn't persisted, and it's derived from the knot data.
 
 ## Custom components
 
@@ -130,7 +167,11 @@ public void onInitialize(ModContext context) {
 
 - A component needs a public no-arg constructor and a unique `order` for each `@InspectorProperty`.
 - Supported field types are `float`, `int`, `boolean`, enums, `String` (asset paths use
-  `type = PropertyType.ASSET_PICKER`), and `Map<String,String>`.
+  `type = PropertyType.ASSET_PICKER`), `Map<String,String>`, and `byte[]` (a persisted blob, usually with
+  `hidden = true`; in a `.rpatch` it's a Base64 string). `int` fields are editable in the Inspector and drag in whole
+  steps.
+- Fields are serialized in `order` sequence. Once a mod has shipped, only **append** fields with a new `order`.
+  Reordering or removing them breaks scenes and prefabs saved with the old layout.
 - Registering a name that is already taken is rejected, so pick names that won't collide.
 - Components only hold data. Per-frame logic goes in an `EntityScript` attached through a `ScriptComponent`.
   EntityScripts compile against the mod class-loader chain, so they can reference your component classes directly
@@ -185,8 +226,15 @@ file.
   built-in version.
 - **Compatibility:** start from a copy of the engine's shader and keep its vertex inputs, uniform and push-constant
   blocks, and entry points.
-- **Post-processing:** there is no separate post-processing pass. Full-screen effects are done by overriding the
-  shaders the scene is drawn with.
+- **Post-processing:** the engine has **one** fullscreen post-process pass, driven by the Main Camera's POST FX
+  fields (vignette, scanlines, chromatic aberration, saturation, contrast) and active only through a game camera.
+  To change or add a full-screen effect, override `Shaders/vulkan/postprocess.frag` (keep its push-constant block:
+  a 16-byte scene slot followed by the 8 `PostProcessSettings` floats) and `Shaders/metal/postprocess.metal` (keep
+  `postVertexMain` / `postFragmentMain`). The pass only runs while the camera's **POST FX** toggle is on. Effects
+  that need to run inside the lit shading itself are still done by overriding `blinn_phong`.
+- **Overridable shaders:** `blinn_phong`, `blinn_phong_skinned`, `shadow_depth`, `entity_id`, `pick_overlay`,
+  `infinite_grid`, `particle`, `postprocess` and `ui` on Vulkan. On Metal: `blinn_phong.metal` (which also draws
+  particles), `shadow_depth`, `entity_id`, `postprocess` and `ui`.
 
 ## Creation Kit mode
 
@@ -208,6 +256,11 @@ Limitations:
 - Only scenes are protected. Assets you import through the asset browser still land in the vanilla `Assets/` folder.
   Put mod assets in the mod's `Assets/` overlay or another mod subfolder instead.
 - New ids are written as you created them. Prefix them with your `mod_id` so they can't clash with other mods.
+- Spline edits are recorded like any other property. Knot and handle drags are written as a Base64 `splineData`
+  value next to curve type, loop and resolution. A blob that's byte-identical to the baseline isn't written, so
+  merely selecting or re-saving a spline doesn't add an operation.
+- Baking a NavMesh writes `<Scene>.navmesh` next to the vanilla scene file, so it isn't part of your mod. Bake into
+  a scene your mod owns or overrides instead.
 
 ## Packaging (.rmod)
 
@@ -230,12 +283,13 @@ Players drop the `.rmod` into the game's `Game_Data/Mods/`.
 | Class | Methods |
 |-------|---------|
 | `ModScript` | `onInitialize(ModContext)`, `onModInit()`, `onModEnable()`, `onModDisable()`, `onShutdown()`, `context()`, `logInfo/Warn/Error` |
-| `ModContext` | `registerComponent(Class)`, `registerEvents(Object)`, `eventBus()`, `vfs()`, `modFile(path)`, `modUri(path)`, `manifest()` |
-| `ModEventBus` | `register(Object)`, `subscribe(Class, ModEventListener)`, `unregister(Object)`, `post(Object)` |
+| `ModContext` | `registerComponent(Class)`, `registerEvents(Object)`, `eventBus()`, `vfs()`, `modFile(path)`, `modUri(path)`, `manifest()`, `logInfo/Warn/Error` |
+| `ModEventBus` | `register(Object)`, `subscribe(Class, ModEventListener)`, `unregister(Object)`, `post(Object)`, `hasSubscribers(Class)` |
 | `ComponentSchema` | `registerModComponent(Class, modId)` |
 | `AssetDatabase` | `mountModVFS(String modFolder)` mounts an extra mod folder and reloads the mod set. `resolveAsset(String path)` returns the final file for a path through `mod://`, the overlays, then vanilla. |
 | `SceneWorld` | `spawnEntity(id, name, meshPath)`, `findEntityByName(name)`, `findEntityById(id)`, `raycastExcluding(entity, origin..., dir..., maxDistance)` |
-| `EntityScript` | `getTransform()`, `getComponent(Class)`, `raycast(...)`, `loadScene(path)`, lifecycle and collision/trigger callbacks |
+| `EntityScript` | `getTransform()`, `getComponent(Class)`, `raycast(...)`, `loadScene(path)`, `playSound(...)` (with `AudioBus` routing), lifecycle and collision/trigger callbacks. `onEnable`/`onDisable`, `onLateUpdate`, `onMouse*` and `onDrawGizmos` are declared but not dispatched yet |
+| `SimpleEntityScript` | Everything in `EntityScript`, plus cached getters, timers/tweens, `ScriptEvents`, and the system helpers: `setDestination` / `stopNavigation`, `followSpline` / `get/setSplineProgress`, `play` / `stop` / `emit` (particles), `crossFadeAnimation` / `playAnimation`, `setBusVolume` / `setBusMuted`, `setPlayerInputEnabled`. See Volume 6 |
 
 ## Janino limitations
 

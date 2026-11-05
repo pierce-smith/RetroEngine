@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -47,8 +48,9 @@ import java.util.Set;
  *       {@link ModContext#registerComponent mod components}. {@code "index"} picks among same-type components
  *       (default 0).</li>
  *   <li>{@code "properties"} keys match {@code @InspectorProperty} field names or labels, case-insensitively.
- *       Values are numbers, booleans, strings, enum constant names, or objects for string maps. Asset paths resolve
- *       through the mod VFS ({@code mod://} URIs, then overlays, then the base Assets/ folder).</li>
+ *       Values are numbers, booleans, strings, enum constant names, or objects for string maps. Binary
+ *       ({@code byte[]}) properties such as {@code SplineComponent.splineData} take a Base64 string (or null). Asset
+ *       paths resolve through the mod VFS ({@code mod://} URIs, then overlays, then the base Assets/ folder).</li>
  *   <li>ADD_ENTITY's {@code "components"} may also be an object ({@code {"Transform": {...}}}). Listing a component
  *       the new entity already has (every entity starts with a Transform) modifies it; repeating a type adds another.</li>
  *   <li>A failing operation is logged and skipped; the rest of the patch still applies.</li>
@@ -277,6 +279,10 @@ public final class SceneDeltaPatcher {
                     return out;
                 }
             }
+            case BYTES -> {
+                if (v == null) return null;
+                if (v instanceof String s) return decodeBytes(where, s);
+            }
             default -> throw new PatchException(where + " (" + p.kind + ") cannot be set from a patch");
         }
         throw new PatchException(where + ": expected " + p.kind + ", got " + (v == null ? "null" : v.getClass().getSimpleName()));
@@ -292,6 +298,23 @@ public final class SceneDeltaPatcher {
         if (rel.startsWith("Assets/")) rel = rel.substring("Assets/".length());
         File base = new File(vfs.baseAssetsDir(), rel);
         return base.isFile() ? base.getAbsolutePath() : s;
+    }
+
+    /**
+     * Binary ({@code byte[]}) properties travel as standard Base64 strings, the form {@link SceneDeltaWriter} emits.
+     * Whitespace is ignored so long values may be wrapped; any other non-Base64 character is an error, never skipped.
+     */
+    static byte[] decodeBytes(String where, String s) throws PatchException {
+        StringBuilder compact = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (!Character.isWhitespace(ch)) compact.append(ch);
+        }
+        try {
+            return Base64.getDecoder().decode(compact.toString());
+        } catch (IllegalArgumentException e) {
+            throw new PatchException(where + ": expected a Base64 string (" + e.getMessage() + ")");
+        }
     }
 
     private static String stringify(Object v) {

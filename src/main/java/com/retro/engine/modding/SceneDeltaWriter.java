@@ -7,6 +7,8 @@ import com.retro.engine.ecs.Entity;
 import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -131,7 +133,6 @@ public final class SceneDeltaWriter {
         comp.onBeforeSerialize();
         Map<String, Object> props = new LinkedHashMap<>();
         for (ComponentSchema.Property p : schema.serializedProperties()) {
-            if (p.kind == ComponentSchema.ValueKind.BYTES) continue;
             props.put(p.name(), portable(p, p.get(comp)));
         }
         return props;
@@ -142,22 +143,34 @@ public final class SceneDeltaWriter {
         after.onBeforeSerialize();
         Map<String, Object> props = new LinkedHashMap<>();
         for (ComponentSchema.Property p : schema.serializedProperties()) {
-            if (p.kind == ComponentSchema.ValueKind.BYTES) continue;
             Object a = p.get(before), c = p.get(after);
-            if (p.kind == ComponentSchema.ValueKind.ASSET_PATH ? !samePath((String) a, (String) c) : !Objects.equals(a, c)) {
+            if (!sameValue(p, a, c)) {
                 props.put(p.name(), portable(p, c));
             }
         }
         return props;
     }
 
-    /** JSON-ready value: enums by name, maps copied, asset paths made portable. */
+    /**
+     * Value equality for diffing: asset paths by portable identity, binary blobs by content (snapshots, duplicates
+     * and undo hand out equal copies, which must not register as edits), everything else by equals().
+     */
+    private boolean sameValue(ComponentSchema.Property p, Object a, Object c) {
+        return switch (p.kind) {
+            case ASSET_PATH -> samePath((String) a, (String) c);
+            case BYTES -> Arrays.equals((byte[]) a, (byte[]) c);
+            default -> Objects.equals(a, c);
+        };
+    }
+
+    /** JSON-ready value: enums by name, maps copied, asset paths made portable, binary blobs as Base64. */
     private Object portable(ComponentSchema.Property p, Object v) {
         if (v == null) return null;
         return switch (p.kind) {
             case ENUM -> ((Enum<?>) v).name();
             case ASSET_PATH -> portablePath((String) v);
             case STRING_MAP -> new LinkedHashMap<>((Map<?, ?>) v);
+            case BYTES -> Base64.getEncoder().encodeToString((byte[]) v);
             default -> v;
         };
     }
