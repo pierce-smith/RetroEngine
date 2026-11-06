@@ -29,6 +29,9 @@ public class ScriptComponent extends Component {
 
     public transient EntityScript activeScriptInstance;
 
+    /** The live instance has had onEnable and not yet onDisable. {@link #enabled} is a plain field, so ScriptEngine compares the two each tick. */
+    public transient boolean enableDispatched;
+
     public ScriptComponent() {
         this(null, null);
     }

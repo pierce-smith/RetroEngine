@@ -934,7 +934,7 @@ Related physics changes in this release:
 | Use `crossFadeAnimation` | Swap clips by hand mid-pose | It blends, ignores repeat requests, and handles interruption |
 | Use `setPlayerInputEnabled(false)` for cutscenes | Disable or remove the player's controller | Physics keeps running, and Stop restores input |
 | Route audio to the right bus (`BGM`, `VOICE`, …) | Play music and dialogue on the default `SFX` bus | Bus volumes, mutes and ducking only work if sounds are routed |
-| Put "late" logic at the end of `onUpdate` | Rely on `onLateUpdate`, `onEnable`/`onDisable`, `onMouse*`, `onDrawGizmos` | Declared but never dispatched (Volume 1 §3.2) |
+| Put "late" logic at the end of `onUpdate` | Rely on `onLateUpdate`, `onMouse*`, `onDrawGizmos` | Declared but never dispatched (Volume 1 §3.2) |
 
 ### 6.2 Scratch Objects vs. Allocation in Update Loops
 

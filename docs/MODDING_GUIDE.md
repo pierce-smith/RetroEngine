@@ -292,7 +292,7 @@ Players drop the `.rmod` into the game's `Game_Data/Mods/`.
 | `ComponentSchema` | `registerModComponent(Class, modId)` |
 | `AssetDatabase` | `mountModVFS(String modFolder)` mounts an extra mod folder and reloads the mod set. `resolveAsset(String path)` returns the final file for a path through `mod://`, the overlays, then vanilla. |
 | `SceneWorld` | `spawnEntity(id, name, meshPath)`, `findEntityByName(name)`, `findEntityById(id)`, `raycastExcluding(entity, origin..., dir..., maxDistance)` |
-| `EntityScript` | `getTransform()`, `getComponent(Class)`, `raycast(...)`, `loadScene(path)`, `playSound(...)` (with `AudioBus` routing), lifecycle and collision/trigger callbacks. `onEnable`/`onDisable`, `onLateUpdate`, `onMouse*` and `onDrawGizmos` are declared but not dispatched yet |
+| `EntityScript` | `getTransform()`, `getComponent(Class)`, `raycast(...)`, `loadScene(path)`, `playSound(...)` (with `AudioBus` routing), lifecycle and collision/trigger callbacks. `onLateUpdate`, `onMouse*` and `onDrawGizmos` are declared but not dispatched yet |
 | `SimpleEntityScript` | Everything in `EntityScript`, plus cached getters, timers/tweens, `ScriptEvents`, and the system helpers: `setDestination` / `stopNavigation`, `followSpline` / `get/setSplineProgress`, `play` / `stop` / `emit` (particles), `crossFadeAnimation` / `playAnimation`, `setBusVolume` / `setBusMuted`, `setPlayerInputEnabled`. See Volume 6 |
 
 ## Janino limitations

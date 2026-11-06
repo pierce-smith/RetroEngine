@@ -133,13 +133,21 @@ public class ScriptEngine {
             if (entity == null) continue;
             List<Component> comps = entity.getAllComponents();
             for (int c = 0; c < comps.size(); c++) {
-                if (!(comps.get(c) instanceof ScriptComponent sc) || !sc.enabled) continue;
+                if (!(comps.get(c) instanceof ScriptComponent sc)) continue;
+                if (!sc.enabled) {
+                    if (sc.enableDispatched) dispatchDisable(entity, sc, sc.activeScriptInstance);
+                    continue;
+                }
                 if (sc.activeScriptInstance == null) {
                     instantiateAndStartScript(entity, sc, sceneWorld);
                 }
                 EntityScript script = sc.activeScriptInstance;
                 if (script == null) continue;
                 try {
+                    if (!sc.enableDispatched) {
+                        sc.enableDispatched = true;
+                        script.onEnable();
+                    }
                     script.onFrameworkUpdate(deltaTime);
                     script.onUpdate(deltaTime);
                 } catch (Throwable t) {
@@ -160,10 +168,23 @@ public class ScriptEngine {
         String scriptName = script != null ? script.getClass().getSimpleName() : String.valueOf(sc.scriptName);
         sc.activeScriptInstance = null;
         sc.enabled = false;
+        sc.enableDispatched = false;   // a script that threw gets no more callbacks, onDisable included
         logScriptError("[ScriptEngine] " + scriptName + "." + callback + "() threw on Entity '" + entity.name
                 + "'; the script is disabled until Play is stopped.", t);
         // Otherwise its event listeners keep running a script that was switched off
         if (script != null) runFrameworkDestroy(script, entity);
+    }
+
+    /** A throw here only logs: the script is already off, so there's nothing left to disable. */
+    private static void dispatchDisable(Entity entity, ScriptComponent sc, EntityScript script) {
+        sc.enableDispatched = false;
+        if (script == null) return;
+        try {
+            script.onDisable();
+        } catch (Throwable t) {
+            if (t instanceof VirtualMachineError && !(t instanceof StackOverflowError)) throw (VirtualMachineError) t;
+            logScriptError("[ScriptEngine] " + script.getClass().getSimpleName() + ".onDisable() threw on Entity '" + entity.name + "'.", t);
+        }
     }
 
     private static final int MAX_LOGGED_FRAMES = 8;
@@ -221,6 +242,7 @@ public class ScriptEngine {
                     continue;
                 }
 
+                if (sc.enableDispatched) dispatchDisable(entity, sc, previous);
                 try {
                     previous.onDestroy();
                 } catch (Throwable t) {
@@ -233,6 +255,10 @@ public class ScriptEngine {
                 try {
                     injectPropertyOverrides(replacement, sc.propertyOverrides);
                     replacement.init(entity, sceneWorld);
+                    if (sc.enabled) {
+                        sc.enableDispatched = true;
+                        replacement.onEnable();
+                    }
                     replacement.onStart();
                     System.out.println("[ScriptEngine] Hot reloaded script '" + className + "' on Entity '" + entity.name + "'");
                 } catch (Throwable t) {
@@ -323,6 +349,7 @@ public class ScriptEngine {
             if (!(comps.get(c) instanceof ScriptComponent sc) || sc.activeScriptInstance == null) continue;
             EntityScript script = sc.activeScriptInstance;
             sc.activeScriptInstance = null;
+            if (sc.enableDispatched) dispatchDisable(entity, sc, script);
             try {
                 script.onDestroy();
             } catch (Throwable t) {
@@ -523,10 +550,12 @@ public class ScriptEngine {
         try {
             injectPropertyOverrides(script, sc.propertyOverrides);
             script.init(entity, sceneWorld);
+            sc.enableDispatched = true;
+            script.onEnable();
             script.onStart();
             System.out.println("[ScriptEngine] Started script '" + clazz.getSimpleName() + "' on Entity '" + entity.name + "'");
         } catch (Throwable t) {
-            disableFailedScript(entity, sc, "onAwake/onStart", t);
+            disableFailedScript(entity, sc, "onAwake/onEnable/onStart", t);
         }
     }
 
