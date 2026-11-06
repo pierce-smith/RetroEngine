@@ -47,7 +47,7 @@ Starting out as a 1-month proof-of-concept, RetroEngine now implements a fully f
 
 ### Quickstart
 
-- Download your platform's version from the Releases section if on Windows or Apple Silicon. If on Linux or an Intel Mac, you will need to compile from source.
+- Download your platform's version from the Releases section if on Windows or Apple Silicon. If on Linux or an Intel Mac, you will need to compile from source. Linux support is experimental for now: CI runs the tests there, but it hasn't been tested on real hardware.
 - To get the most updated version, compiling from source is always recommended. Versions in the Releases section will be updated after a certain amount of commits to the source code.
 
 ### Running the Tests
