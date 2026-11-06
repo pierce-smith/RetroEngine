@@ -51,7 +51,8 @@ public final class ComponentSchema {
             AnimatorComponent.class, UICanvasComponent.class, UIPanel.class, UIText.class, UIImage.class,
             UIProgressBar.class, ParticleSystem.class, AudioReverbZone.class,
             com.retro.engine.ecs.components.NavMeshAgent.class,
-            com.retro.engine.ecs.components.SplineComponent.class, com.retro.engine.ecs.components.SplineFollower.class
+            com.retro.engine.ecs.components.SplineComponent.class, com.retro.engine.ecs.components.SplineFollower.class,
+            com.retro.engine.ecs.components.BoneSocket.class
     );
 
     /** How the inspector presents and edits a property. */

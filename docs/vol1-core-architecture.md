@@ -159,6 +159,7 @@ SimulationSystem.update
 flushPendingDestroys()                       // deferred destroy() calls (Volume 6 §2.5)
 ScriptRuntime.endFrame                       // apply this frame's camera shake
 AnimationSystem.update per AnimatorComponent // runs in every play state, not just Play
+BoneSocketSystem.update                      // Play only: entities on bones land on this frame's pose
 applyPendingSceneLoad()                      // loadScene() requests land here, after everything else
 ```
 
@@ -300,14 +301,14 @@ actually changes.
 When you bump a format version, add a real file from the old version to `src/test/resources/formats/` **before**
 changing the writer. Once the writer moves on, you can't make one any more.
 
-### 2.4 The 24 Built-In Component Types
+### 2.4 The 25 Built-In Component Types
 
 | Category    | Components |
 |-------------|------------|
 | Core        | `Transform`, `MeshFilter`, `Material`, `Light`, `Camera`, `AudioSource`, `ScriptComponent` |
 | Physics     | `RigidBodyComponent`, `BoxCollider`, `SphereCollider`, `CapsuleCollider` |
 | Controllers | `CharacterControllerComponent`, `VehicleControllerComponent` |
-| Animation   | `AnimatorComponent` |
+| Animation   | `AnimatorComponent`, `BoneSocket` |
 | Game UI     | `UICanvasComponent`, `UIPanel`, `UIText`, `UIImage`, `UIProgressBar` |
 | Effects     | `ParticleSystem` (Volume 3 §2.4) |
 | Audio       | `AudioReverbZone` (§4) |
@@ -320,7 +321,13 @@ Volume 4.
 Several components carry **runtime-only state** next to their persisted fields: an agent's corner list and
 velocity, a follower's distance and resolved spline, a particle pool. That state is not annotated, so it is never
 saved. `resetRuntime()` clears it: `NavMeshSystem` and `SplineSystem` call it on their components when Play starts
-and stops, and the Play snapshot restore calls it on `ParticleSystem`.
+and stops, and the Play snapshot restore calls it on `ParticleSystem` and `BoneSocket`.
+
+`BoneSocket` holds its entity on a bone of a rigged entity: world = target world × bone model × offset. Set
+`targetEntity` (blank means the parent), `boneName` and the offset, which is in the bone's space. It runs after
+animation, so the entity never trails the pose, which a script can't manage since scripts run before animation.
+While `active`, it owns the entity's position and rotation, and scripts attach and drop by flipping that flag. It only
+runs in Play, so the Transform you author in the editor is left alone.
 
 ---
 

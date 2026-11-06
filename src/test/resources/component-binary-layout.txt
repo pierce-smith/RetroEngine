@@ -225,3 +225,12 @@ SplineFollower 2 wrapMode ENUM since=1 prefabSince=1
 SplineFollower 3 alignToTangent BOOLEAN since=1 prefabSince=1
 SplineFollower 4 autoPlay BOOLEAN since=1 prefabSince=1
 SplineFollower 5 startProgress FLOAT since=1 prefabSince=1
+BoneSocket 0 targetEntity STRING since=1 prefabSince=1
+BoneSocket 1 boneName STRING since=1 prefabSince=1
+BoneSocket 2 active BOOLEAN since=1 prefabSince=1
+BoneSocket 3 offsetPosX FLOAT since=1 prefabSince=1
+BoneSocket 4 offsetPosY FLOAT since=1 prefabSince=1
+BoneSocket 5 offsetPosZ FLOAT since=1 prefabSince=1
+BoneSocket 6 offsetRotX FLOAT since=1 prefabSince=1
+BoneSocket 7 offsetRotY FLOAT since=1 prefabSince=1
+BoneSocket 8 offsetRotZ FLOAT since=1 prefabSince=1

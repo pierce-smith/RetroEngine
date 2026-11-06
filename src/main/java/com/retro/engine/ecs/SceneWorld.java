@@ -108,6 +108,7 @@ public class SceneWorld {
     private final List<Entity> destroyScratch = new ArrayList<>();
 
     private final HierarchySystem graphEvaluator = new HierarchySystem();
+    private final BoneSocketSystem boneSockets = new BoneSocketSystem();
     private final SimulationSystem simulationEngine = new SimulationSystem();
     private final EntitySpawner entityFactory = new EntitySpawner();
     private final AnimationSystem animationEngine = new AnimationSystem();
@@ -436,6 +437,8 @@ public class SceneWorld {
                     }
                 }
             }
+            // After animation, so an attached entity lands on this frame's pose and not the last one
+            if (simulating) boneSockets.update(sceneEntities, graphEvaluator);
         }
 
         applyPendingSceneLoad();

@@ -1,6 +1,7 @@
 package com.retro.engine.ecs.components;
 
 import com.retro.engine.ecs.Component;
+import com.retro.engine.ecs.HierarchySystem;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
 
@@ -10,9 +11,9 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
  * by {@code SimulationSystem} during Play, and are drawn by {@code SceneRenderPipeline} as camera-facing quads.
  * {@link #simulate} and the render extraction never allocate.
  *
- * <p>The emitter axis is the entity's local +Y: CONE sprays within {@link #shapeAngle} of it from a disc of
- * {@link #shapeRadius}, SPHERE sprays outward from a ball of that radius, BOX spawns inside a cube of that half-extent
- * moving along +Y.</p>
+ * <p>The emitter axis is the entity's local +Y, turned by the same rotation it renders with: CONE sprays within
+ * {@link #shapeAngle} of it from a disc of {@link #shapeRadius}, SPHERE sprays outward from a ball of that radius, BOX
+ * spawns inside a cube of that half-extent moving along +Y.</p>
  */
 public class ParticleSystem extends Component {
 
@@ -97,6 +98,7 @@ public class ParticleSystem extends Component {
     private transient float emitAccumulator;
     private transient int pendingBurst;
     private transient int rng = 0x9E3779B9;
+    private final transient double[] basis = new double[9];
 
     // Runtime GPU texture handle cache, filled by SceneRenderPipeline
     private transient long gpuTextureHandle;
@@ -182,10 +184,11 @@ public class ParticleSystem extends Component {
         }
         if (spawn <= 0) return;
 
-        // Emitter basis: rotate local axes by Z, then X, then Y (degrees)
-        float cx = (float) Math.cos(Math.toRadians(rxDeg)), sx = (float) Math.sin(Math.toRadians(rxDeg));
-        float cy = (float) Math.cos(Math.toRadians(ryDeg)), sy = (float) Math.sin(Math.toRadians(ryDeg));
-        float cz = (float) Math.cos(Math.toRadians(rzDeg)), sz = (float) Math.sin(Math.toRadians(rzDeg));
+        // Emitter basis: the rotation the entity is drawn with, so particles leave along the +Y you see
+        HierarchySystem.rotationMatrix(rxDeg, ryDeg, rzDeg, basis);
+        float m00 = (float) basis[0], m01 = (float) basis[1], m02 = (float) basis[2];
+        float m10 = (float) basis[3], m11 = (float) basis[4], m12 = (float) basis[5];
+        float m20 = (float) basis[6], m21 = (float) basis[7], m22 = (float) basis[8];
         float coneCos = (float) Math.cos(Math.toRadians(Math.max(0.0f, Math.min(90.0f, shapeAngle))));
         float lifeSpan = Math.max(0.01f, lifetime);
 
@@ -218,18 +221,14 @@ public class ParticleSystem extends Component {
                 }
             }
             int i = aliveCount++;
-            // Rotate the spawn offset and the direction into world space (Z, then X, then Y)
-            float t;
-            t = lx * cz - ly * sz; ly = lx * sz + ly * cz; lx = t;
-            t = ly * cx - lz * sx; lz = ly * sx + lz * cx; ly = t;
-            t = lx * cy + lz * sy; lz = -lx * sy + lz * cy; lx = t;
-            t = dx * cz - dy * sz; dy = dx * sz + dy * cz; dx = t;
-            t = dy * cx - dz * sx; dz = dy * sx + dz * cx; dy = t;
-            t = dx * cy + dz * sy; dz = -dx * sy + dz * cy; dx = t;
-
-            posX[i] = ox + lx; posY[i] = oy + ly; posZ[i] = oz + lz;
+            // Rotate the spawn offset and the direction into world space
+            posX[i] = ox + m00 * lx + m01 * ly + m02 * lz;
+            posY[i] = oy + m10 * lx + m11 * ly + m12 * lz;
+            posZ[i] = oz + m20 * lx + m21 * ly + m22 * lz;
             float v = speed * (0.75f + 0.5f * rand());
-            velX[i] = dx * v; velY[i] = dy * v; velZ[i] = dz * v;
+            velX[i] = (m00 * dx + m01 * dy + m02 * dz) * v;
+            velY[i] = (m10 * dx + m11 * dy + m12 * dz) * v;
+            velZ[i] = (m20 * dx + m21 * dy + m22 * dz) * v;
             age[i] = 0.0f;
             life[i] = lifeSpan * (0.8f + 0.4f * rand());
         }

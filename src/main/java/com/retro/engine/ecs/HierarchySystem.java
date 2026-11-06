@@ -274,14 +274,20 @@ public class HierarchySystem {
         for (int i = 0; i < 3; i++) {
             for (int j = 0; j < 3; j++) l[i * 3 + j] = p[i] * w[j] + p[3 + i] * w[3 + j] + p[6 + i] * w[6 + j];
         }
-        double sy = Math.max(-1.0, Math.min(1.0, l[6]));
-        tc.rotY = (float) Math.toDegrees(Math.asin(sy));
+        matrixToEuler(l, eulerScratch);
+        tc.rotX = eulerScratch[0]; tc.rotY = eulerScratch[1]; tc.rotZ = eulerScratch[2];
+    }
+
+    /** Euler degrees (x, y, z) for a row-major 3x3 from {@link #rotationMatrix}. At gimbal lock, roll folds into pitch. */
+    public static void matrixToEuler(double[] m, float[] out) {
+        double sy = Math.max(-1.0, Math.min(1.0, m[6]));
+        out[1] = (float) Math.toDegrees(Math.asin(sy));
         if (Math.abs(sy) < 0.99999) {
-            tc.rotX = (float) Math.toDegrees(Math.atan2(-l[7], l[8]));
-            tc.rotZ = (float) Math.toDegrees(Math.atan2(-l[3], l[0]));
+            out[0] = (float) Math.toDegrees(Math.atan2(-m[7], m[8]));
+            out[2] = (float) Math.toDegrees(Math.atan2(-m[3], m[0]));
         } else {
-            tc.rotX = (float) Math.toDegrees(Math.atan2(sy * l[1], l[4]));
-            tc.rotZ = 0.0f;
+            out[0] = (float) Math.toDegrees(Math.atan2(sy * m[1], m[4]));
+            out[2] = 0.0f;
         }
     }
 
@@ -310,7 +316,7 @@ public class HierarchySystem {
      * Row-major 3x3 of the renderers' model rotation (MetalUniformStream / VulkanPassEncoder): R = Rz(-z) * Ry(-y) * Rx(-x)
      * with standard right-handed axis matrices. Cameras use the same matrix (SceneRenderPipeline.computeCameraView).
      */
-    private static void rotationMatrix(float xDeg, float yDeg, float zDeg, double[] m) {
+    public static void rotationMatrix(float xDeg, float yDeg, float zDeg, double[] m) {
         double ax = Math.toRadians(xDeg), ay = Math.toRadians(yDeg), az = Math.toRadians(zDeg);
         double cx = Math.cos(ax), sx = Math.sin(ax), cy = Math.cos(ay), sy = Math.sin(ay), cz = Math.cos(az), sz = Math.sin(az);
         m[0] = cy * cz;  m[1] = cx * sz + sx * sy * cz;  m[2] = sx * sz - cx * sy * cz;
