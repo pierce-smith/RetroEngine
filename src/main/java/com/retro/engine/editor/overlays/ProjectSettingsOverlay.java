@@ -69,8 +69,15 @@ public final class ProjectSettingsOverlay {
 
     // Header tabs
     private static final float TAB_Y0 = CARD_Y1 - 0.078f, TAB_Y1 = CARD_Y1 - 0.016f;
-    private static final float TAB_RENDER_X0 = 0.08f, TAB_RENDER_X1 = 0.25f;
-    private static final float TAB_AUDIO_X0 = 0.27f, TAB_AUDIO_X1 = 0.44f;
+    private static final float TAB_RENDER_X0 = 0.03f, TAB_RENDER_X1 = 0.16f;
+    private static final float TAB_AUDIO_X0 = 0.175f, TAB_AUDIO_X1 = 0.305f;
+    private static final float TAB_RUNTIME_X0 = 0.32f, TAB_RUNTIME_X1 = 0.47f;
+    private static final int TAB_RENDER_ID = 0, TAB_AUDIO_ID = 1, TAB_RUNTIME_ID = 2;
+
+    // Runtime tab rows
+    private static final float SECTION_MEMORY_Y = 0.59f;
+    private static final float MAX_HEAP_Y = 0.52f;
+    private static final float MAX_HEAP_HINT_Y = 0.46f;
 
     private static final float ACTION_Y0 = -0.60f, ACTION_Y1 = -0.52f;
     private static final float RESET_X0 = -0.52f, RESET_X1 = -0.24f;
@@ -87,9 +94,12 @@ public final class ProjectSettingsOverlay {
     private static final int AMBIENT_INTENSITY = 9;
     private static final int BUS_FIRST = 10, BUS_LAST = 13; // BUS_FIRST + AudioBus ordinal (MASTER, BGM, SFX, VOICE)
     private static final int DUCK_LEVEL = 14, DUCK_ATTACK = 15, DUCK_RELEASE = 16;
+    private static final int MAX_HEAP = 17;
 
     // UI slider ranges (exact entry through the value prompt is clamped by ProjectSettings.sanitize instead)
     private static final float FOG_DISTANCE_SLIDER_MAX = 500.0f;
+    private static final float MAX_HEAP_SLIDER_MAX = 8192.0f;
+    private static final int MAX_HEAP_STEP_MB = 64;
 
     private static final ProjectSettings openedWith = ProjectSettings.defaults();
     private static boolean dirty = false;
@@ -97,7 +107,7 @@ public final class ProjectSettingsOverlay {
     private static boolean statusIsError = false;
 
     private static int draggingSlider = NONE;
-    private static boolean audioTab = false;
+    private static int tab = TAB_RENDER_ID;
 
     private static final ShadingModel[] SHADING_MODELS = ShadingModel.values();
     private static final float DROPDOWN_X0 = CONTROL_X0, DROPDOWN_X1 = TRACK_X1;
@@ -112,6 +122,7 @@ public final class ProjectSettingsOverlay {
         if (workspace == null || !workspace.hasActiveProject()) return;
         openedWith.copyRenderSettingsFrom(workspace.getProjectSettings());
         openedWith.copyAudioSettingsFrom(workspace.getProjectSettings());
+        openedWith.copyRuntimeSettingsFrom(workspace.getProjectSettings());
         dirty = false;
         draggingSlider = NONE;
         shadingDropdownOpen = false;
@@ -133,13 +144,15 @@ public final class ProjectSettingsOverlay {
         UIGeometryBatch.addQuad(buffer, CARD_X0, headerY0, CARD_X1, headerY0 + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
         UIGeometryBatch.addBoundedText(buffer, dirty ? "PROJECT SETTINGS *" : "PROJECT SETTINGS", CARD_X0 + 0.03f, CARD_Y1 - 0.035f,
             TAB_RENDER_X0 - 0.02f, 1.0f, EditorTheme.TEXT, 1.0f);
-        tabButton(buffer, "RENDER", TAB_RENDER_X0, TAB_RENDER_X1, !audioTab, hoverX, hoverY);
-        tabButton(buffer, "AUDIO", TAB_AUDIO_X0, TAB_AUDIO_X1, audioTab, hoverX, hoverY);
+        tabButton(buffer, "RENDER", TAB_RENDER_X0, TAB_RENDER_X1, tab == TAB_RENDER_ID, hoverX, hoverY);
+        tabButton(buffer, "AUDIO", TAB_AUDIO_X0, TAB_AUDIO_X1, tab == TAB_AUDIO_ID, hoverX, hoverY);
+        tabButton(buffer, "RUNTIME", TAB_RUNTIME_X0, TAB_RUNTIME_X1, tab == TAB_RUNTIME_ID, hoverX, hoverY);
 
         UIGeometryBatch.addRoundedQuad(buffer, CLOSE_X0, CLOSE_Y0, CLOSE_X1, CLOSE_Y1, EditorTheme.RADIUS_SMALL, EditorTheme.RED, 0.90f);
         centeredTextIn(buffer, "X", CLOSE_X0, CLOSE_X1, (CLOSE_Y0 + CLOSE_Y1) * 0.5f, 0.9f, EditorTheme.TEXT);
 
-        if (audioTab) renderAudioTab(buffer, s, hoverX, hoverY);
+        if (tab == TAB_AUDIO_ID) renderAudioTab(buffer, s, hoverX, hoverY);
+        else if (tab == TAB_RUNTIME_ID) renderRuntimeTab(buffer, s);
         else renderRenderTab(buffer, s, hoverX, hoverY);
 
         if (!status.isEmpty()) {
@@ -155,7 +168,7 @@ public final class ProjectSettingsOverlay {
         centeredTextIn(buffer, "SAVE", SAVE_X0, SAVE_X1, (ACTION_Y0 + ACTION_Y1) * 0.5f, 0.9f, EditorTheme.TEXT);
 
         // Last, so the open list draws over the rows beneath it
-        if (!audioTab && shadingDropdownOpen) dropdownList(buffer, s.getShadingModel(), hoverX, hoverY);
+        if (tab == TAB_RENDER_ID && shadingDropdownOpen) dropdownList(buffer, s.getShadingModel(), hoverX, hoverY);
     }
 
     private static void renderRenderTab(UIGeometryBatch.Buffer buffer, ProjectSettings s, float hoverX, float hoverY) {
@@ -199,6 +212,13 @@ public final class ProjectSettingsOverlay {
 
         sectionHeader(buffer, "SPATIAL REVERB", SECTION_REVERB_Y);
         toggleRow(buffer, "REVERB ZONES", REVERB_ENABLED_Y, s.reverbZonesEnabled, hoverX, hoverY);
+    }
+
+    private static void renderRuntimeTab(UIGeometryBatch.Buffer buffer, ProjectSettings s) {
+        sectionHeader(buffer, "MEMORY", SECTION_MEMORY_Y);
+        sliderRow(buffer, "MAX JAVA HEAP (MB)", MAX_HEAP_Y, MAX_HEAP, s, 0, true);
+        UIGeometryBatch.addTruncatedText(buffer, "USED BY EXPORTED GAMES. EXPORT AGAIN TO APPLY A CHANGE.", LABEL_X, MAX_HEAP_HINT_Y, VALUE_X1, 0.75f,
+            EditorTheme.TEXT_MUTED, 1.0f);
     }
 
     private static void tabButton(UIGeometryBatch.Buffer buffer, String label, float x0, float x1, boolean selected, float hoverX, float hoverY) {
@@ -347,11 +367,11 @@ public final class ProjectSettingsOverlay {
         if (workspace == null) return;
         ProjectSettings s = workspace.getProjectSettings();
 
-        if (inRect(ndcX, ndcY, TAB_RENDER_X0, TAB_Y0, TAB_RENDER_X1, TAB_Y1) || inRect(ndcX, ndcY, TAB_AUDIO_X0, TAB_Y0, TAB_AUDIO_X1, TAB_Y1)) {
-            boolean wantAudio = ndcX >= TAB_AUDIO_X0;
-            if (wantAudio != audioTab) {
+        int clickedTab = tabAt(ndcX, ndcY);
+        if (clickedTab != NONE) {
+            if (clickedTab != tab) {
                 UISoundPlayer.play(UISound.CLICK);
-                audioTab = wantAudio;
+                tab = clickedTab;
                 shadingDropdownOpen = false;
                 draggingSlider = NONE;
             }
@@ -359,7 +379,7 @@ public final class ProjectSettingsOverlay {
         }
 
         // An open list owns the click: pick an option, or close without acting on whatever lies beneath
-        if (!audioTab && shadingDropdownOpen) {
+        if (tab == TAB_RENDER_ID && shadingDropdownOpen) {
             shadingDropdownOpen = false;
             int option = dropdownOptionAt(ndcX, ndcY);
             if (option != NONE) {
@@ -371,7 +391,7 @@ public final class ProjectSettingsOverlay {
             }
             return;
         }
-        if (!audioTab && inRect(ndcX, ndcY, DROPDOWN_X0, SHADING_MODEL_Y - ROW_H * 0.5f, DROPDOWN_X1, SHADING_MODEL_Y + ROW_H * 0.5f)) {
+        if (tab == TAB_RENDER_ID && inRect(ndcX, ndcY, DROPDOWN_X0, SHADING_MODEL_Y - ROW_H * 0.5f, DROPDOWN_X1, SHADING_MODEL_Y + ROW_H * 0.5f)) {
             UISoundPlayer.play(UISound.CLICK);
             shadingDropdownOpen = true;
             return;
@@ -381,6 +401,7 @@ public final class ProjectSettingsOverlay {
             UISoundPlayer.play(UISound.CLOSE_MODAL);
             s.copyRenderSettingsFrom(openedWith);
             s.copyAudioSettingsFrom(openedWith);
+            s.copyRuntimeSettingsFrom(openedWith);
             close(workspace);
             return;
         }
@@ -390,20 +411,21 @@ public final class ProjectSettingsOverlay {
         }
         if (inRect(ndcX, ndcY, RESET_X0, ACTION_Y0, RESET_X1, ACTION_Y1)) {
             UISoundPlayer.play(UISound.CLICK);
-            if (audioTab) s.resetAudioSettings();
+            if (tab == TAB_AUDIO_ID) s.resetAudioSettings();
+            else if (tab == TAB_RUNTIME_ID) s.resetRuntimeSettings();
             else s.resetRenderSettings();
             markDirty();
             return;
         }
-        if (audioTab) {
+        if (tab == TAB_AUDIO_ID) {
             if (handleAudioToggleClick(ndcX, ndcY, s)) return;
-        } else if (hitsToggle(ndcX, ndcY, BLOBS_Y)) {
+        } else if (tab == TAB_RENDER_ID && hitsToggle(ndcX, ndcY, BLOBS_Y)) {
             UISoundPlayer.play(UISound.TOGGLE);
             s.shadowBlobsEnabled = !s.shadowBlobsEnabled;
             markDirty();
             return;
         }
-        if (!audioTab && hitsToggle(ndcX, ndcY, FOG_ENABLED_Y)) {
+        if (tab == TAB_RENDER_ID && hitsToggle(ndcX, ndcY, FOG_ENABLED_Y)) {
             UISoundPlayer.play(UISound.TOGGLE);
             s.fogEnabled = !s.fogEnabled;
             markDirty();
@@ -499,7 +521,7 @@ public final class ProjectSettingsOverlay {
 
     private static void close(EditorWorkspace workspace) {
         draggingSlider = NONE;
-        audioTab = false;
+        tab = TAB_RENDER_ID;
         shadingDropdownOpen = false;
         dirty = false;
         workspace.getOverlayManager().setActiveModal(ModalState.NONE);
@@ -530,6 +552,7 @@ public final class ProjectSettingsOverlay {
             case DUCK_LEVEL -> s.duckLevel;
             case DUCK_ATTACK -> s.duckAttack;
             case DUCK_RELEASE -> s.duckRelease;
+            case MAX_HEAP -> s.maxHeapMb;
             default -> (slider >= BUS_FIRST && slider <= BUS_LAST) ? s.busVolume[slider - BUS_FIRST] : 0.0f;
         };
     }
@@ -549,6 +572,7 @@ public final class ProjectSettingsOverlay {
             case DUCK_LEVEL -> s.duckLevel = value;
             case DUCK_ATTACK -> s.duckAttack = value;
             case DUCK_RELEASE -> s.duckRelease = value;
+            case MAX_HEAP -> s.maxHeapMb = Math.round(value / MAX_HEAP_STEP_MB) * MAX_HEAP_STEP_MB;
             default -> {
                 if (slider >= BUS_FIRST && slider <= BUS_LAST) s.busVolume[slider - BUS_FIRST] = value;
             }
@@ -562,6 +586,7 @@ public final class ProjectSettingsOverlay {
             case AMBIENT_INTENSITY -> ProjectSettings.AMBIENT_INTENSITY_MAX;
             case DUCK_ATTACK -> ProjectSettings.DUCK_ATTACK_MAX;
             case DUCK_RELEASE -> ProjectSettings.DUCK_RELEASE_MAX;
+            case MAX_HEAP -> MAX_HEAP_SLIDER_MAX;
             default -> 1.0f;
         };
     }
@@ -579,6 +604,7 @@ public final class ProjectSettingsOverlay {
             case DUCK_LEVEL -> "Ducked BGM level (0-1)";
             case DUCK_ATTACK -> "Duck attack seconds (0-" + (int) ProjectSettings.DUCK_ATTACK_MAX + ")";
             case DUCK_RELEASE -> "Duck release seconds (0-" + (int) ProjectSettings.DUCK_RELEASE_MAX + ")";
+            case MAX_HEAP -> "Max Java heap in MB (" + ProjectSettings.MIN_MAX_HEAP_MB + "-" + ProjectSettings.MAX_MAX_HEAP_MB + ")";
             case BUS_FIRST, BUS_FIRST + 1, BUS_FIRST + 2, BUS_FIRST + 3 -> BUS_LABELS[slider - BUS_FIRST] + " bus volume (0-1)";
             default -> "Value (0-1)";
         };
@@ -595,6 +621,7 @@ public final class ProjectSettingsOverlay {
             case DUCK_LEVEL -> DUCK_LEVEL_Y;
             case DUCK_ATTACK -> DUCK_ATTACK_Y;
             case DUCK_RELEASE -> DUCK_RELEASE_Y;
+            case MAX_HEAP -> MAX_HEAP_Y;
             default -> (slider >= BUS_FIRST && slider <= BUS_LAST) ? BUS_Y[slider - BUS_FIRST] : Float.NaN;
         };
     }
@@ -627,7 +654,8 @@ public final class ProjectSettingsOverlay {
     }
 
     private static int sliderAt(float x, float y) {
-        int first = audioTab ? BUS_FIRST : FOG_START, last = audioTab ? DUCK_RELEASE : AMBIENT_INTENSITY;
+        int first = tab == TAB_RUNTIME_ID ? MAX_HEAP : tab == TAB_AUDIO_ID ? BUS_FIRST : FOG_START;
+        int last = tab == TAB_RUNTIME_ID ? MAX_HEAP : tab == TAB_AUDIO_ID ? DUCK_RELEASE : AMBIENT_INTENSITY;
         for (int slider = first; slider <= last; slider++) {
             float midY = rowY(slider);
             if (inRect(x, y, sliderX0(slider), midY - ROW_H * 0.5f, sliderX1(slider), midY + ROW_H * 0.5f)) return slider;
@@ -637,13 +665,21 @@ public final class ProjectSettingsOverlay {
 
     private static final int[] SCALAR_SLIDERS = { FOG_START, FOG_END, FOG_DENSITY, AMBIENT_INTENSITY };
     private static final int[] AUDIO_SCALAR_SLIDERS = { BUS_FIRST, BUS_FIRST + 1, BUS_FIRST + 2, BUS_FIRST + 3, DUCK_LEVEL, DUCK_ATTACK, DUCK_RELEASE };
+    private static final int[] RUNTIME_SCALAR_SLIDERS = { MAX_HEAP };
 
     /** Scalar slider whose value well (right of the track) is under the point, or NONE. */
     private static int valueWellAt(float x, float y) {
-        for (int slider : audioTab ? AUDIO_SCALAR_SLIDERS : SCALAR_SLIDERS) {
+        for (int slider : tab == TAB_RUNTIME_ID ? RUNTIME_SCALAR_SLIDERS : tab == TAB_AUDIO_ID ? AUDIO_SCALAR_SLIDERS : SCALAR_SLIDERS) {
             float midY = rowY(slider);
             if (inRect(x, y, VALUE_X0, midY - ROW_H * 0.5f, VALUE_X1, midY + ROW_H * 0.5f)) return slider;
         }
+        return NONE;
+    }
+
+    private static int tabAt(float x, float y) {
+        if (inRect(x, y, TAB_RENDER_X0, TAB_Y0, TAB_RENDER_X1, TAB_Y1)) return TAB_RENDER_ID;
+        if (inRect(x, y, TAB_AUDIO_X0, TAB_Y0, TAB_AUDIO_X1, TAB_Y1)) return TAB_AUDIO_ID;
+        if (inRect(x, y, TAB_RUNTIME_X0, TAB_Y0, TAB_RUNTIME_X1, TAB_Y1)) return TAB_RUNTIME_ID;
         return NONE;
     }
 

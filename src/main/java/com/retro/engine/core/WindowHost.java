@@ -92,6 +92,7 @@ public class WindowHost {
 
     private WindowSizeListener windowSizeListener;
     private FramebufferSizeListener framebufferSizeListener;
+    private int framebufferWidth, framebufferHeight;
     private Consumer<List<String>> fileDropListener;
     private MouseClickListener mouseClickListener;
     private MouseClick3ArgListener mouseClick3ArgListener;
@@ -235,7 +236,7 @@ public class WindowHost {
                 }
             }
             if (pixels == null) {
-                System.err.println("[GLFW] Window icon not loaded (" + ICON_FILE + " / " + ICON_RESOURCE + "): "
+                Log.warn("GLFW", "Window icon not loaded (" + ICON_FILE + " / " + ICON_RESOURCE + "): "
                     + org.lwjgl.stb.STBImage.stbi_failure_reason());
                 return;
             }
@@ -247,14 +248,14 @@ public class WindowHost {
                 org.lwjgl.stb.STBImage.stbi_image_free(pixels);
             }
         } catch (java.io.IOException | RuntimeException e) {
-            System.err.println("[GLFW] Window icon setup failed: " + e);
+            Log.warn("GLFW", "Window icon setup failed: " + e);
         }
     }
 
     public boolean create() {
         GLFWErrorCallback.createPrint(System.err).set();
         if (!glfwInit()) {
-            System.err.println("[GLFW] Failed to initialize GLFW!");
+            Log.error("GLFW", "Failed to initialize GLFW!");
             return false;
         }
 
@@ -263,7 +264,7 @@ public class WindowHost {
 
         windowHandle = glfwCreateWindow(width, height, title, NULL, NULL);
         if (windowHandle == NULL) {
-            System.err.println("[GLFW] Failed to create GLFW window!");
+            Log.error("GLFW", "Failed to create GLFW window!");
             return false;
         }
 
@@ -285,6 +286,8 @@ public class WindowHost {
                     }
                 } else if (key == GLFW_KEY_F11 || (key == GLFW_KEY_ENTER && (mods & GLFW_MOD_ALT) != 0)) {
                     toggleFullscreen();
+                } else if (key == GLFW_KEY_F3) {
+                    com.retro.engine.ui.FrameStatsOverlay.onHotkey();
                 }
             }
             if (keyListener != null) {
@@ -312,7 +315,15 @@ public class WindowHost {
         });
 
         // Framebuffer Size Callback (backing pixels; differs from the window size on Retina/HiDPI displays)
+        try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
+            java.nio.IntBuffer pixelW = stack.mallocInt(1), pixelH = stack.mallocInt(1);
+            glfwGetFramebufferSize(windowHandle, pixelW, pixelH);
+            framebufferWidth = pixelW.get(0);
+            framebufferHeight = pixelH.get(0);
+        }
         glfwSetFramebufferSizeCallback(windowHandle, (window, w, h) -> {
+            framebufferWidth = w;
+            framebufferHeight = h;
             if (framebufferSizeListener != null) {
                 framebufferSizeListener.onFramebufferResize(w, h);
             }
@@ -325,7 +336,7 @@ public class WindowHost {
             for (int i = 0; i < count; i++) {
                 droppedFiles.add(nameBuffer.getStringUTF8(i));
             }
-            System.out.println("[GLFW] Files dropped into window: " + droppedFiles);
+            Log.info("GLFW", "Files dropped into window: " + droppedFiles);
             if (fileDropListener != null) {
                 fileDropListener.accept(droppedFiles);
             }
@@ -380,7 +391,7 @@ public class WindowHost {
             }
         });
 
-        System.out.println("[GLFW] Native window initialized successfully (" + width + "x" + height + ").");
+        Log.info("GLFW", "Native window initialized successfully (" + width + "x" + height + ").");
         return true;
     }
 
@@ -445,6 +456,9 @@ public class WindowHost {
     public long getNativeHandle() { return windowHandle; }
     public long getWindowHandle() { return windowHandle; }
     public int getWidth() { return width; }
+    /** Backing pixels, which is what a sharp image has to match. {@link #getWidth()} is in points on HiDPI displays. */
+    public int getFramebufferWidth() { return framebufferWidth; }
+    public int getFramebufferHeight() { return framebufferHeight; }
     public int getHeight() { return height; }
 
     public ViewportSpec getWindowInfo() {
@@ -476,11 +490,11 @@ public class WindowHost {
 
             glfwSetWindowMonitor(windowHandle, primaryMonitor, 0, 0, vidMode.width(), vidMode.height(), vidMode.refreshRate());
             isFullscreen = true;
-            System.out.println("[GLFW] Mode: Fullscreen (" + vidMode.width() + "x" + vidMode.height() + ")");
+            Log.info("GLFW", "Mode: Fullscreen (" + vidMode.width() + "x" + vidMode.height() + ")");
         } else {
             glfwSetWindowMonitor(windowHandle, NULL, windowedX, windowedY, windowedWidth, windowedHeight, 0);
             isFullscreen = false;
-            System.out.println("[GLFW] Mode: Windowed (" + windowedWidth + "x" + windowedHeight + ")");
+            Log.info("GLFW", "Mode: Windowed (" + windowedWidth + "x" + windowedHeight + ")");
         }
     }
 
@@ -525,6 +539,6 @@ public class WindowHost {
         if (old != null) {
             old.free();
         }
-        System.out.println("[GLFW] Window resources released and callbacks unbound.");
+        Log.info("GLFW", "Window resources released and callbacks unbound.");
     }
 }

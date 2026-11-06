@@ -20,12 +20,31 @@ public class VulkanQueueSubmitter {
     private VkCommandBuffer commandBuffer = null;
 
     private long imageAvailableSemaphore = 0L;
-    private long renderFinishedSemaphore = 0L;
+    // One per swapchain image: a present may still be holding the semaphore of an earlier frame, and the image index
+    // is what proves that present has finished
+    private long[] renderFinishedSemaphores = new long[0];
     private long inFlightFence = 0L;
 
     public VkCommandBuffer getCommandBuffer() { return commandBuffer; }
     public long getImageAvailableSemaphore() { return imageAvailableSemaphore; }
-    public long getRenderFinishedSemaphore() { return renderFinishedSemaphore; }
+    public long getRenderFinishedSemaphore(int imageIndex) { return renderFinishedSemaphores[imageIndex]; }
+
+    /** Grows the render-finished set to cover {@code imageCount} swapchain images. Spares are kept for a later resize. */
+    public boolean ensureRenderFinishedSemaphores(VulkanDevice deviceManager, int imageCount) {
+        if (renderFinishedSemaphores.length < imageCount) {
+            renderFinishedSemaphores = java.util.Arrays.copyOf(renderFinishedSemaphores, imageCount);
+        }
+        try (MemoryStack stack = stackPush()) {
+            VkSemaphoreCreateInfo semaphoreInfo = VkSemaphoreCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
+            LongBuffer handle = stack.mallocLong(1);
+            for (int i = 0; i < imageCount; i++) {
+                if (renderFinishedSemaphores[i] != 0L) continue;
+                if (vkCreateSemaphore(deviceManager.getDevice(), semaphoreInfo, null, handle) != VK_SUCCESS) return false;
+                renderFinishedSemaphores[i] = handle.get(0);
+            }
+        }
+        return true;
+    }
     public long getInFlightFence() { return inFlightFence; }
 
     public boolean initialize(VulkanDevice device) {
@@ -58,12 +77,9 @@ public class VulkanQueueSubmitter {
                     .sType(VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
 
             LongBuffer pSem1 = stack.mallocLong(1);
-            LongBuffer pSem2 = stack.mallocLong(1);
-            if (vkCreateSemaphore(vkDevice, semaphoreInfo, null, pSem1) != VK_SUCCESS ||
-                vkCreateSemaphore(vkDevice, semaphoreInfo, null, pSem2) != VK_SUCCESS) return false;
+            if (vkCreateSemaphore(vkDevice, semaphoreInfo, null, pSem1) != VK_SUCCESS) return false;
 
             imageAvailableSemaphore = pSem1.get(0);
-            renderFinishedSemaphore = pSem2.get(0);
 
             VkFenceCreateInfo fenceInfo = VkFenceCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO)
@@ -91,10 +107,10 @@ public class VulkanQueueSubmitter {
             vkDestroySemaphore(vkDevice, imageAvailableSemaphore, null);
             imageAvailableSemaphore = 0L;
         }
-        if (renderFinishedSemaphore != 0L) {
-            vkDestroySemaphore(vkDevice, renderFinishedSemaphore, null);
-            renderFinishedSemaphore = 0L;
+        for (long semaphore : renderFinishedSemaphores) {
+            if (semaphore != 0L) vkDestroySemaphore(vkDevice, semaphore, null);
         }
+        renderFinishedSemaphores = new long[0];
         if (commandPool != 0L) {
             if (commandBuffer != null) {
                 vkFreeCommandBuffers(vkDevice, commandPool, commandBuffer);

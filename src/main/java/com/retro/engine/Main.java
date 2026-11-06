@@ -2,8 +2,10 @@ package com.retro.engine;
 
 import com.retro.engine.core.EngineContext;
 import com.retro.engine.core.EngineLoop;
+import com.retro.engine.core.Log;
 import com.retro.engine.core.RuntimeLoop;
 import com.retro.engine.editor.StandaloneExporter;
+import com.retro.engine.ui.FrameStatsOverlay;
 
 import org.lwjgl.system.Configuration;
 
@@ -15,6 +17,11 @@ import org.lwjgl.system.Configuration;
  *   <li>{@code --headless}: simulation only, no window or GPU. Loads {@code --project <dir>} like an exported game.
  *       With {@code --frames N} it runs N frames, stops the scene and exits with one of the EXIT_ codes below</li>
  *   <li>{@code --vulkan}: force the Vulkan backend (MoltenVK on macOS)</li>
+ *   <li>{@code --gpu-debug}: enable Vulkan validation and log what it finds (see GpuDebug)</li>
+ *   <li>{@code --scene <path>}: games and headless runs start on this project-relative scene</li>
+ *   <li>{@code --frame-stats}: show the frame timing overlay (F3 toggles it)</li>
+ *   <li>{@code --bench <seconds>}: game mode, measure frame times and exit, after {@code --bench-warmup <seconds>}
+ *       (default 60). Volume 5 has the protocol</li>
  * </ul>
  * Packaged editors and exported games ({@code -Dretro.packaged=true}) have no visible console, so stdout, stderr and
  * uncaught exceptions are also written to a log file in the OS's standard log folder:
@@ -33,10 +40,13 @@ public class Main {
     /** Headless --frames: at least one script failed to compile or threw. */
     public static final int EXIT_SCRIPT_FAILED = 3;
 
+    private static final float DEFAULT_BENCH_WARMUP_SECONDS = 60.0f;
+
     public static void main(String[] args) {
         // LWJGL's default 64 KB thread stack overflows inside new VkInstance(...) on Windows NVIDIA drivers: it enumerates
         // every extension (~260 bytes each) on the MemoryStack. Must be set before any thread touches MemoryStack.
         Configuration.STACK_SIZE.set(1024);
+        boolean frameStatsFlag = hasFlag(args, "--frame-stats");
 
         // Only exported games set this. Their native launchers pass --runtime only when started with no arguments of
         // their own, so a game launched with e.g. --no-mods would otherwise open the editor
@@ -61,23 +71,27 @@ public class Main {
             e.printStackTrace();
         });
 
-        System.out.println("[Main] RetroEngine on Java " + Runtime.version() + " (" + System.getProperty("os.name") + " "
+        com.retro.engine.graphics.GpuDebug.configure(args);
+        FrameStatsOverlay.setVisible(frameStatsFlag);
+        FrameStatsOverlay.setHotkeyEnabled(frameStatsFlag || !isRuntime);
+
+        Log.info("Main", "RetroEngine on Java " + Runtime.version() + " (" + System.getProperty("os.name") + " "
                 + System.getProperty("os.arch") + ")");
 
         int exitCode = EXIT_OK;
         EngineContext context = new EngineContext();
         try {
             if (isHeadless) {
-                System.out.println("[Main] Mode: headless (--headless)");
+                Log.info("Main", "Mode: headless (--headless)");
                 System.setProperty("java.awt.headless", "true");
                 exitCode = runHeadless(context, args);
             } else if (isRuntime) {
-                System.out.println("[Main] Mode: standalone game (--runtime)");
+                Log.info("Main", "Mode: standalone game (--runtime)");
                 if (context.initialize(1280, 720, "RetroEngine Standalone Runtime", true, args)) {
-                    new RuntimeLoop(false).run(context, context.getEditorManager().getSceneManager());
+                    exitCode = runGame(context, args);
                 }
             } else {
-                System.out.println("[Main] Mode: editor");
+                Log.info("Main", "Mode: editor");
                 if (context.initialize(1280, 720, "RetroEngine Editor & Runtime", false, args)) {
                     new EngineLoop().run(context);
                 }
@@ -93,13 +107,43 @@ public class Main {
         if (exitCode != EXIT_OK) System.exit(exitCode);
     }
 
+    private static int runGame(EngineContext context, String[] args) {
+        com.retro.engine.ecs.SceneWorld world = context.getEditorManager().getSceneManager();
+        RuntimeLoop loop = new RuntimeLoop(false);
+        String bench = EngineContext.findCliValue(args, "--bench");
+        if (bench != null) {
+            String warmup = EngineContext.findCliValue(args, "--bench-warmup");
+            try {
+                loop.setBenchmark(warmup != null ? Float.parseFloat(warmup) : DEFAULT_BENCH_WARMUP_SECONDS, Float.parseFloat(bench));
+            } catch (NumberFormatException e) {
+                Log.error("Main", "--bench and --bench-warmup take a number of seconds.");
+                return EXIT_STARTUP_FAILED;
+            }
+            // An empty scene would report excellent numbers for nothing
+            if (world.getSceneEntities().isEmpty()) {
+                Log.error("Main", "The scene is empty or failed to load, so there is nothing to measure.");
+                return EXIT_STARTUP_FAILED;
+            }
+        }
+        loop.run(context, world);
+        return EXIT_OK;
+    }
+
+    private static boolean hasFlag(String[] args, String flag) {
+        if (args == null) return false;
+        for (String arg : args) {
+            if (flag.equalsIgnoreCase(arg)) return true;
+        }
+        return false;
+    }
+
     private static int runHeadless(EngineContext context, String[] args) {
         if (!context.initializeHeadless(args)) return EXIT_STARTUP_FAILED;
         com.retro.engine.ecs.SceneWorld world = context.getEditorManager().getSceneManager();
         long frames = context.getHeadlessFrames();
         // A failed scene load looks like an empty scene, and running nothing would report success
         if (frames > 0L && world.getSceneEntities().isEmpty()) {
-            System.err.println("[Main] The startup scene is empty or failed to load, so there is nothing to run.");
+            Log.error("Main", "The startup scene is empty or failed to load, so there is nothing to run.");
             return EXIT_STARTUP_FAILED;
         }
 
@@ -110,10 +154,10 @@ public class Main {
 
         int failures = com.retro.engine.scripting.ScriptEngine.getFailureCount();
         if (failures > 0) {
-            System.err.println("[Main] Headless run failed: " + failures + " script error(s).");
+            Log.error("Main", "Headless run failed: " + failures + " script error(s).");
             return EXIT_SCRIPT_FAILED;
         }
-        System.out.println("[Main] Headless run passed: " + frames + " frames, no script errors.");
+        Log.info("Main", "Headless run passed: " + frames + " frames, no script errors.");
         return EXIT_OK;
     }
 
@@ -141,9 +185,9 @@ public class Main {
             java.io.OutputStream file = new java.io.BufferedOutputStream(java.nio.file.Files.newOutputStream(log));
             System.setOut(new java.io.PrintStream(new Tee(System.out, file), true, java.nio.charset.StandardCharsets.UTF_8));
             System.setErr(new java.io.PrintStream(new Tee(System.err, file), true, java.nio.charset.StandardCharsets.UTF_8));
-            System.out.println("[Main] Logging to " + log);
+            Log.info("Main", "Logging to " + log);
         } catch (java.io.IOException e) {
-            System.err.println("[Main] Could not open log file " + log + ": " + e.getMessage());
+            Log.error("Main", "Could not open log file " + log + ": " + e.getMessage());
         }
     }
 

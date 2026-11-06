@@ -85,7 +85,7 @@ public final class RecentProjects {
                 if (!p.isEmpty() && !paths.contains(p)) paths.add(p);
             }
         } catch (IOException e) {
-            System.err.println("[RecentProjects] Could not read " + FILE + ": " + e.getMessage());
+            Log.error("RecentProjects", "Could not read " + FILE + ": " + e.getMessage());
         }
         return paths;
     }
@@ -97,7 +97,7 @@ public final class RecentProjects {
             Files.write(temp, paths, StandardCharsets.UTF_8);
             Files.move(temp, FILE, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
-            System.err.println("[RecentProjects] Could not write " + FILE + ": " + e.getMessage());
+            Log.error("RecentProjects", "Could not write " + FILE + ": " + e.getMessage());
         }
     }
 }

@@ -535,6 +535,10 @@ public class VulkanGpuCache {
     /** Re-points a {@link #registerRenderTargetView} slot at a new image view (e.g. after a target resize). */
     public void rebindRenderTargetView(int slot, long imageView) {
         if (slot == NO_TEXTURE || imageView == 0L || bindlessSet == 0L) return;
+        // A write still queued for this slot names a view the caller has just destroyed
+        synchronized (pendingTableWrites) {
+            pendingTableWrites.removeIf(w -> w.slot() == slot);
+        }
         queueTableWrite(new PendingTableWrite(slot, imageView, null, false));
     }
 

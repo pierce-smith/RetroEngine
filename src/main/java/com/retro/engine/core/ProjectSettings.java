@@ -40,6 +40,8 @@ import java.nio.file.StandardCopyOption;
  *   bool   duckingEnabled
  *   float  duckLevel, duckAttack, duckRelease
  *   bool   reverbZonesEnabled
+ *   -- version 5 --
+ *   int    maxHeapMb
  * </pre>
  * Older files load the missing fields with the render defaults, which match the engine's previous look.
  */
@@ -48,13 +50,18 @@ public final class ProjectSettings {
     public static final String FILE_NAME = "ProjectSettings.bin";
 
     static final int MAGIC = 0x5250524A; // 'RPRJ'
-    static final int VERSION = 4;
+    static final int VERSION = 5;
 
     // Editor UI ranges; values read from disk are clamped to these too
     public static final float FOG_DISTANCE_MAX = 2000.0f;
     public static final float AMBIENT_INTENSITY_MAX = 4.0f;
     public static final float DUCK_ATTACK_MAX = 2.0f;
     public static final float DUCK_RELEASE_MAX = 5.0f;
+
+    /** Bounds and default for the exported game's Java heap; -Xms is 256 MB, so the floor stays above it. */
+    public static final int MIN_MAX_HEAP_MB = 512;
+    public static final int MAX_MAX_HEAP_MB = 32768;
+    public static final int DEFAULT_MAX_HEAP_MB = 2048;
 
     public static final float DEFAULT_DUCK_LEVEL = 0.35f;
     public static final float DEFAULT_DUCK_ATTACK = 0.15f;
@@ -103,6 +110,11 @@ public final class ProjectSettings {
     public float duckRelease = DEFAULT_DUCK_RELEASE;
     /** Master switch for AudioReverbZone EFX reverb. */
     public boolean reverbZonesEnabled = true;
+
+    // --- Exported game runtime ---
+
+    /** The exported game's -Xmx in MB. It's fixed at launch, so a change only reaches the next export. */
+    public int maxHeapMb = DEFAULT_MAX_HEAP_MB;
 
     public ProjectSettings(String projectName, String startupScene) {
         this.projectName = projectName;
@@ -175,6 +187,15 @@ public final class ProjectSettings {
         copyAudioSettingsFrom(defaults());
     }
 
+    /** Copies only the exported game runtime settings from {@code other}. */
+    public void copyRuntimeSettingsFrom(ProjectSettings other) {
+        maxHeapMb = other.maxHeapMb;
+    }
+
+    public void resetRuntimeSettings() {
+        copyRuntimeSettingsFrom(defaults());
+    }
+
     /** Clamps every render setting into its valid range (also repairs NaN from a corrupt file). */
     public void sanitize() {
         if (shadingModel == null) shadingModel = RenderEnvironment.DEFAULT_SHADING_MODEL;
@@ -190,6 +211,7 @@ public final class ProjectSettings {
         duckLevel = clamp(duckLevel, 0.0f, 1.0f);
         duckAttack = clamp(duckAttack, 0.0f, DUCK_ATTACK_MAX);
         duckRelease = clamp(duckRelease, 0.0f, DUCK_RELEASE_MAX);
+        maxHeapMb = Math.max(MIN_MAX_HEAP_MB, Math.min(MAX_MAX_HEAP_MB, maxHeapMb));
     }
 
     private static float clamp(float v, float min, float max) {
@@ -239,6 +261,8 @@ public final class ProjectSettings {
             dos.writeFloat(duckAttack);
             dos.writeFloat(duckRelease);
             dos.writeBoolean(reverbZonesEnabled);
+
+            dos.writeInt(maxHeapMb);
         }
         Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }
@@ -284,6 +308,9 @@ public final class ProjectSettings {
                 s.duckAttack = dis.readFloat();
                 s.duckRelease = dis.readFloat();
                 s.reverbZonesEnabled = dis.readBoolean();
+            }
+            if (version >= 5) {
+                s.maxHeapMb = dis.readInt();
             }
             s.sanitize();
             return s;

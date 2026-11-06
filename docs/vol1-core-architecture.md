@@ -125,6 +125,9 @@ gets run automatically:
 build/install/retro-engine/bin/retro-engine --headless --project <dir> --frames 600
 ```
 
+Add `--scene <path>` to start on a project-relative scene other than the project's startup scene. It works for
+`--runtime` too, and nothing is written back to the project.
+
 With `--frames`, every frame uses the fixed 1/60 s tick with no sleeping, so runs are repeatable and fast. The scene
 is stopped at the end, so `onDestroy` runs too. Without it, the loop ticks at 60 Hz until the process is killed.
 
@@ -240,8 +243,9 @@ for (int i = 0, n = pool.getSize(); i < n; i++) {
 }
 ```
 
-> **Candid note:** entity IDs are still `String`s and the sparse map is a `HashMap<String,Integer>`. Lookups by ID
-> are not free. Dense iteration is the fast path, so write systems against it.
+> **Candid note:** entity IDs are still `String`s and the sparse map is a `HashMap<String,Integer>`, so lookups by ID
+> are not free. Dense iteration would avoid that, but no engine system uses it yet, and a pool can go stale, so treat
+> it as an unproven path rather than the way to write systems.
 
 ### 2.3 `ComponentSchema`: Reflection Done Once
 

@@ -73,7 +73,7 @@ public class EngineContext {
                 headlessFrames = 0L;
             }
             if (headlessFrames <= 0L) {
-                System.err.println("[EngineContext] --frames needs a positive number of frames, got: " + frames);
+                Log.error("EngineContext", "--frames needs a positive number of frames, got: " + frames);
                 return false;
             }
         }
@@ -83,27 +83,27 @@ public class EngineContext {
         // An explicit --project must not fall through to another folder, or a typo would test the wrong game
         String cliProject = findCliValue(args, "--project");
         if (cliProject != null && !ProjectWorkspace.isProjectDirectory(new java.io.File(cliProject.trim()).getAbsoluteFile())) {
-            System.err.println("[EngineContext] Not a RetroEngine project (missing " + ProjectWorkspace.SETTINGS_FILE + "): " + cliProject);
+            Log.error("EngineContext", "Not a RetroEngine project (missing " + ProjectWorkspace.SETTINGS_FILE + "): " + cliProject);
             return false;
         }
 
         java.io.File gameData = resolveRuntimeGameData(args);
         if (gameData == null) {
             if (headlessFrames > 0L) {
-                System.err.println("[EngineContext] --frames needs a project to run; pass --project <dir>.");
+                Log.error("EngineContext", "--frames needs a project to run; pass --project <dir>.");
                 return false;
             }
-            System.err.println("[EngineContext] No Game_Data/ or --project folder found; starting with an empty scene.");
+            Log.error("EngineContext", "No Game_Data/ or --project folder found; starting with an empty scene.");
         } else {
             try {
-                ProjectWorkspace.openRuntimeProject(editorManager, gameData);
+                ProjectWorkspace.openRuntimeProject(editorManager, gameData, findCliValue(args, "--scene"));
             } catch (java.io.IOException e) {
-                System.err.println("[EngineContext] Failed to load game data: " + e.getMessage());
+                Log.error("EngineContext", "Failed to load game data: " + e.getMessage());
                 return false;
             }
         }
 
-        System.out.println("[EngineContext] Headless context ready (no window or GPU).");
+        Log.info("EngineContext", "Headless context ready (no window or GPU).");
         return true;
     }
 
@@ -116,7 +116,7 @@ public class EngineContext {
         if (shaderRoot == null) return;
         ShaderSources.setSourceRoot(shaderRoot);
         editorManager.getAssetDatabase().watchShaderSources(shaderRoot.getPath(), renderSubmitter::requestShaderReload);
-        System.out.println("[EngineContext] Shader hot reload watching " + shaderRoot.getPath());
+        Log.info("EngineContext", "Shader hot reload watching " + shaderRoot.getPath());
     }
 
     public boolean initialize(int width, int height, String title, boolean isRuntimeOnly, String[] cliArgs) {
@@ -124,7 +124,7 @@ public class EngineContext {
         if (isRuntimeOnly) runtimeProcess = true;
         display = new DisplayService();
         if (!display.create(width, height, title)) {
-            System.err.println("[Fatal] Could not create GLFW window. Halting.");
+            Log.error("Fatal", "Could not create GLFW window. Halting.");
             display = null;
             return false;
         }
@@ -146,10 +146,11 @@ public class EngineContext {
         hotkeyHandler = new HotkeyRouter();
         streamingService = new AssetStreamer();
         renderSubmitter = new SceneRenderPipeline();
+        renderSubmitter.setWindow(window);
 
         BackendLoader loader = new BackendLoader();
         if (!loader.initializeWithFallback(display.getViewportSpec(), cliArgs)) {
-            System.err.println("[Fatal] Target backend failed to initialize with automatic fallback. Halting execution.");
+            Log.error("Fatal", "Target backend failed to initialize with automatic fallback. Halting execution.");
             shutdown();
             return false;
         }
@@ -165,7 +166,7 @@ public class EngineContext {
         display.setOnWindowSizeListener((w, h) -> {
             if (editorManager != null) {
                 editorManager.setWindowDimensions(w, h);
-                System.out.println("[Engine] Window Resized -> " + w + "x" + h);
+                Log.info("Engine", "Window Resized -> " + w + "x" + h);
             }
         });
 
@@ -273,24 +274,24 @@ public class EngineContext {
         if (isRuntimeOnly) {
             java.io.File gameData = resolveRuntimeGameData(cliArgs);
             if (gameData == null) {
-                System.err.println("[EngineContext] No Game_Data/ or --project folder found; starting with an empty scene.");
+                Log.error("EngineContext", "No Game_Data/ or --project folder found; starting with an empty scene.");
             } else {
                 try {
-                    ProjectWorkspace.openRuntimeProject(editorManager, gameData);
+                    ProjectWorkspace.openRuntimeProject(editorManager, gameData, findCliValue(cliArgs, "--scene"));
                 } catch (java.io.IOException e) {
-                    System.err.println("[EngineContext] Failed to load game data: " + e.getMessage());
+                    Log.error("EngineContext", "Failed to load game data: " + e.getMessage());
                 }
             }
         } else {
             String cliProject = findCliValue(cliArgs, "--project");
             if (cliProject != null && !openProject(cliProject)) {
-                System.err.println("[EngineContext] --project " + cliProject + " could not be opened; showing project launcher.");
+                Log.error("EngineContext", "--project " + cliProject + " could not be opened; showing project launcher.");
             } else if (cliProject == null) {
-                System.out.println("[EngineContext] No active project directory; showing project launcher.");
+                Log.info("EngineContext", "No active project directory; showing project launcher.");
             }
         }
 
-        System.out.println("[Engine] Running. Virtual Thread Asset Streaming Active (RuntimeOnly: " + isRuntimeOnly + ").");
+        Log.info("Engine", "Running. Virtual Thread Asset Streaming Active (RuntimeOnly: " + isRuntimeOnly + ").");
         return true;
     }
 
@@ -299,14 +300,14 @@ public class EngineContext {
         if (editorManager == null || projectPath == null || projectPath.trim().isEmpty()) return false;
         java.io.File dir = new java.io.File(projectPath.trim()).getAbsoluteFile();
         if (!ProjectWorkspace.isProjectDirectory(dir)) {
-            System.err.println("[EngineContext] Not a RetroEngine project (missing " + ProjectWorkspace.SETTINGS_FILE + "): " + dir);
+            Log.error("EngineContext", "Not a RetroEngine project (missing " + ProjectWorkspace.SETTINGS_FILE + "): " + dir);
             return false;
         }
         try {
             ProjectWorkspace.openProject(editorManager, dir);
             return true;
         } catch (java.io.IOException e) {
-            System.err.println("[EngineContext] Failed to open project: " + e.getMessage());
+            Log.error("EngineContext", "Failed to open project: " + e.getMessage());
             return false;
         }
     }
@@ -334,7 +335,7 @@ public class EngineContext {
         return false;
     }
 
-    private static String findCliValue(String[] args, String flag) {
+    public static String findCliValue(String[] args, String flag) {
         if (args == null) return null;
         for (int i = 0; i < args.length; i++) {
             if (flag.equalsIgnoreCase(args[i]) && i + 1 < args.length) return args[i + 1];
@@ -411,6 +412,6 @@ public class EngineContext {
         cameraController = null;
         hotkeyHandler = null;
         renderSubmitter = null;
-        System.out.println("[EngineContext] Shutdown complete and references unbound.");
+        Log.info("EngineContext", "Shutdown complete and references unbound.");
     }
 }

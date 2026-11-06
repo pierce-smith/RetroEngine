@@ -20,39 +20,42 @@ public class BackendLoader {
         String targetClassName;
 
         if (forceVulkan) {
-            System.out.println("[HostBoot] Driver Override Triggered: Selecting Vulkan backend (MoltenVK active on macOS)...");
+            Log.info("HostBoot", "Driver Override Triggered: Selecting Vulkan backend (MoltenVK active on macOS)...");
             targetClassName = VULKAN_CLASS;
         } else if (os.contains("mac") || os.contains("darwin")) {
-            System.out.println("[HostBoot] OS Detected: macOS. Selecting default Metal backend...");
+            Log.info("HostBoot", "OS Detected: macOS. Selecting default Metal backend...");
+        if (com.retro.engine.graphics.GpuDebug.isEnabled()) {
+            Log.warn("GpuDebug", "--gpu-debug validates Vulkan, so add --vulkan. For Metal, launch with MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1.");
+        }
             targetClassName = METAL_CLASS;
         } else if (os.contains("win") || os.contains("nux") || os.contains("nix")) {
-            System.out.println("[HostBoot] OS Detected: Windows/Linux. Selecting Vulkan backend...");
+            Log.info("HostBoot", "OS Detected: Windows/Linux. Selecting Vulkan backend...");
             targetClassName = VULKAN_CLASS;
         } else {
-            System.err.println("[HostBoot] ERROR: Unsupported OS: " + os);
+            Log.error("HostBoot", "Unsupported OS: " + os);
             return false;
         }
 
         try {
-            System.out.println("[HostBoot] Instantiating RHI class: " + targetClassName);
+            Log.info("HostBoot", "Instantiating RHI class: " + targetClassName);
             Class<?> backendClass = Class.forName(targetClassName);
             Object instance = backendClass.getDeclaredConstructor().newInstance();
 
             if (instance instanceof IRenderBackend backend) {
                 this.activeBackend = backend;
-                System.out.println("[HostBoot] Loaded backend: " + backend.getDeviceName());
+                Log.info("HostBoot", "Loaded backend: " + backend.getDeviceName());
                 return true;
             } else {
-                System.err.println("[HostBoot] ERROR: Class does not implement IRenderBackend!");
+                Log.error("HostBoot", "Class does not implement IRenderBackend!");
                 return false;
             }
 
         } catch (ClassNotFoundException e) {
-            System.err.println("[HostBoot] ERROR: Backend class not found: " + targetClassName);
+            Log.error("HostBoot", "Backend class not found: " + targetClassName);
             e.printStackTrace();
             return false;
         } catch (Exception e) {
-            System.err.println("[HostBoot] ERROR: Failed to instantiate backend!");
+            Log.error("HostBoot", "Failed to instantiate backend!");
             e.printStackTrace();
             return false;
         }
@@ -64,20 +67,20 @@ public class BackendLoader {
 
         if (forceVulkan || (!os.contains("mac") && !os.contains("darwin"))) {
             if (forceVulkan) {
-                System.out.println("[HostBoot] Driver Override Triggered: Selecting Vulkan backend (MoltenVK active on macOS)...");
+                Log.info("HostBoot", "Driver Override Triggered: Selecting Vulkan backend (MoltenVK active on macOS)...");
             } else {
-                System.out.println("[HostBoot] OS Detected: Windows/Linux. Selecting Vulkan backend...");
+                Log.info("HostBoot", "OS Detected: Windows/Linux. Selecting Vulkan backend...");
             }
             return tryInitializeBackend(VULKAN_CLASS, windowInfo);
         }
 
         // On macOS: Try default Metal backend first
-        System.out.println("[HostBoot] OS Detected: macOS. Selecting default Metal backend...");
+        Log.info("HostBoot", "OS Detected: macOS. Selecting default Metal backend...");
         if (tryInitializeBackend(METAL_CLASS, windowInfo)) {
             return true;
         }
 
-        System.out.println("[HostBoot] Metal backend failed initialization. Attempting automatic fallback to Vulkan (MoltenVK)...");
+        Log.info("HostBoot", "Metal backend failed initialization. Attempting automatic fallback to Vulkan (MoltenVK)...");
         if (activeBackend != null) {
             try {
                 activeBackend.shutdown();
@@ -86,11 +89,11 @@ public class BackendLoader {
         }
 
         if (tryInitializeBackend(VULKAN_CLASS, windowInfo)) {
-            System.out.println("[HostBoot] Automatic fallback to Vulkan (MoltenVK) succeeded!");
+            Log.info("HostBoot", "Automatic fallback to Vulkan (MoltenVK) succeeded!");
             return true;
         }
 
-        System.err.println("[HostBoot] FATAL ERROR: Both Metal and Vulkan backends failed to initialize!");
+        Log.error("HostBoot", "Both Metal and Vulkan backends failed to initialize!");
         return false;
     }
 
@@ -122,31 +125,31 @@ public class BackendLoader {
 
     private boolean tryInitializeBackend(String className, ViewportSpec windowInfo) {
         try {
-            System.out.println("[HostBoot] Instantiating RHI class: " + className);
+            Log.info("HostBoot", "Instantiating RHI class: " + className);
             Class<?> backendClass = Class.forName(className);
             Object instance = backendClass.getDeclaredConstructor().newInstance();
 
             if (instance instanceof IRenderBackend backend) {
-                System.out.println("[HostBoot] Initializing backend instance...");
+                Log.info("HostBoot", "Initializing backend instance...");
                 if (backend.initialize(windowInfo)) {
                     this.activeBackend = backend;
-                    System.out.println("[HostBoot] Successfully initialized backend: " + backend.getDeviceName());
+                    Log.info("HostBoot", "Successfully initialized backend: " + backend.getDeviceName());
                     return true;
                 } else {
-                    System.err.println("[HostBoot] Backend initialization returned false for " + className);
+                    Log.error("HostBoot", "Backend initialization returned false for " + className);
                     try { backend.shutdown(); } catch (Exception ignored) {}
                     return false;
                 }
             } else {
-                System.err.println("[HostBoot] ERROR: Class does not implement IRenderBackend: " + className);
+                Log.error("HostBoot", "Class does not implement IRenderBackend: " + className);
                 return false;
             }
         } catch (ClassNotFoundException e) {
-            System.err.println("[HostBoot] ERROR: Backend class not found: " + className);
+            Log.error("HostBoot", "Backend class not found: " + className);
             e.printStackTrace();
             return false;
         } catch (Exception e) {
-            System.err.println("[HostBoot] ERROR: Failed to instantiate or initialize backend: " + className);
+            Log.error("HostBoot", "Failed to instantiate or initialize backend: " + className);
             e.printStackTrace();
             return false;
         }

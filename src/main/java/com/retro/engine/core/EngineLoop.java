@@ -38,6 +38,7 @@ public class EngineLoop {
             long frameStartNs = System.nanoTime();
             float frameDelta = Math.min((frameStartNs - lastFrameStartNs) / 1_000_000_000.0f, MAX_FRAME_DELTA);
             lastFrameStartNs = frameStartNs;
+            FrameTimings.MAIN.begin();
 
             window.pollEvents();
 
@@ -73,12 +74,14 @@ public class EngineLoop {
                 );
             }
 
+            FrameTimings.MAIN.mark(FrameTimings.POLL);
+
             // Scene simulation. A crash here stops Play instead of closing the editor and losing unsaved work.
             if (editorManager != null) {
                 try {
                     editorManager.update(frameDelta);
                 } catch (RuntimeException | StackOverflowError e) {
-                    System.err.println("[EngineLoop] Scene update failed; stopping Play mode.");
+                    Log.error("EngineLoop", "Scene update failed; stopping Play mode.");
                     e.printStackTrace();
                     try {
                         editorManager.stop();
@@ -88,15 +91,20 @@ public class EngineLoop {
                 }
             }
 
+            FrameTimings.MAIN.mark(FrameTimings.UPDATE);
+
             // Single Scene Graph & Virtual Thread Streaming Render Pass
             if (renderSubmitter != null) {
                 renderSubmitter.submitFrame(editorManager, streamingService, rhi);
             }
+            FrameTimings.MAIN.mark(FrameTimings.SUBMIT);
 
             if (rhi != null) {
                 rhi.beginFrame();
                 rhi.endFrame();
+                FrameTimings.MAIN.mark(FrameTimings.RENDER);
                 rhi.present();
+                FrameTimings.MAIN.mark(FrameTimings.PRESENT);
             }
 
             // --- Sub-Millisecond Precision Frame Pacing Loop ---
@@ -116,6 +124,7 @@ public class EngineLoop {
                     Thread.onSpinWait();
                 }
             }
+            FrameTimings.MAIN.mark(FrameTimings.PACE);
         }
     }
 }

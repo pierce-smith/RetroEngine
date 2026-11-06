@@ -1,5 +1,8 @@
 package com.retro.engine.graphics.vulkan;
 
+import com.retro.engine.core.Log;
+import com.retro.engine.graphics.GpuDebug;
+
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.glfw.GLFWVulkan;
 import org.lwjgl.system.MemoryStack;
@@ -24,6 +27,7 @@ import static org.lwjgl.system.MemoryStack.stackPush;
 public class VulkanDevice {
 
     private VkInstance instance;
+    private VulkanValidation validation; // Only with --gpu-debug and the layer installed
     private VkPhysicalDevice physicalDevice;
     private VkDevice device;
 
@@ -70,6 +74,16 @@ public class VulkanDevice {
                     .sType$Default()
                     .pApplicationInfo(appInfo);
 
+            if (GpuDebug.isEnabled()) {
+                if (VulkanValidation.isLayerAvailable(stack)) {
+                    validation = new VulkanValidation();
+                    createInfo.ppEnabledLayerNames(stack.pointers(stack.UTF8(VulkanValidation.LAYER)));
+                    createInfo.pNext(validation.createInfo(stack).address());
+                } else {
+                    Log.warn("GpuDebug", VulkanValidation.LAYER + " is not installed, so validation is off. Install the Vulkan SDK.");
+                }
+            }
+
             if (Platform.get() == Platform.MACOSX) {
                 Set<String> supportedExtensions = getSupportedInstanceExtensions(stack);
                 List<String> requiredExtensions = new ArrayList<>();
@@ -84,6 +98,7 @@ public class VulkanDevice {
                 if (supportedExtensions.contains(KHRGetPhysicalDeviceProperties2.VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME)) {
                     requiredExtensions.add(KHRGetPhysicalDeviceProperties2.VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
                 }
+                if (validation != null) requiredExtensions.add(EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 
                 PointerBuffer ppEnabledExtensions = stack.mallocPointer(requiredExtensions.size());
                 for (String ext : requiredExtensions) {
@@ -98,7 +113,14 @@ public class VulkanDevice {
                 }
             } else {
                 // Windows / Linux: bypass portability settings completely and pass required GLFW extensions directly
-                createInfo.ppEnabledExtensionNames(glfwExtensions);
+                if (validation == null) {
+                    createInfo.ppEnabledExtensionNames(glfwExtensions);
+                } else {
+                    PointerBuffer withDebug = stack.mallocPointer(glfwExtensions.remaining() + 1);
+                    for (int i = glfwExtensions.position(); i < glfwExtensions.limit(); i++) withDebug.put(glfwExtensions.get(i));
+                    withDebug.put(stack.UTF8(EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME)).flip();
+                    createInfo.ppEnabledExtensionNames(withDebug);
+                }
             }
 
             PointerBuffer pInstance = stack.mallocPointer(1);
@@ -109,6 +131,7 @@ public class VulkanDevice {
             }
 
             instance = new VkInstance(pInstance.get(0), createInfo);
+            if (validation != null) validation.attach(instance);
             System.out.println("[VulkanDevice] " + getDriverName() + " VkInstance created successfully.");
             return true;
         }
@@ -349,6 +372,8 @@ public class VulkanDevice {
             device = null;
         }
         if (instance != null) {
+            if (validation != null) validation.destroy(instance);
+            validation = null;
             VK10.vkDestroyInstance(instance, null);
             instance = null;
         }

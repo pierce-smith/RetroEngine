@@ -93,12 +93,12 @@ public class GamepadManager {
         try {
             sdlAvailable = SDL_InitSubSystem(SDL_INIT_GAMEPAD);
             if (!sdlAvailable) {
-                System.err.println("[Gamepad] SDL gamepad init failed, vibration disabled: " + SDL_GetError());
+                Log.warn("Gamepad", "SDL gamepad init failed, vibration disabled: " + SDL_GetError());
             }
         } catch (LinkageError e) {
-            System.out.println("[Gamepad] SDL is not part of this build; vibration disabled.");
+            Log.info("Gamepad", "SDL is not part of this build; vibration disabled.");
         } catch (Throwable t) {
-            System.err.println("[Gamepad] SDL unavailable, vibration disabled: " + t);
+            Log.warn("Gamepad", "SDL unavailable, vibration disabled: " + t);
         }
     }
 
@@ -108,7 +108,7 @@ public class GamepadManager {
             if (in == null) return;
             applyMappings(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8), "bundled " + BUNDLED_DB);
         } catch (java.io.IOException e) {
-            System.err.println("[Gamepad] Could not read bundled controller mappings: " + e.getMessage());
+            Log.warn("Gamepad", "Could not read bundled controller mappings: " + e.getMessage());
         }
     }
 
@@ -119,7 +119,7 @@ public class GamepadManager {
         try {
             applyMappings(java.nio.file.Files.readString(db.toPath()), db.toString());
         } catch (java.io.IOException e) {
-            System.err.println("[Gamepad] Could not read " + db + ": " + e.getMessage());
+            Log.warn("Gamepad", "Could not read " + db + ": " + e.getMessage());
         }
     }
 
@@ -134,9 +134,9 @@ public class GamepadManager {
         }
         if (filtered.isEmpty()) return;
         if (updateMappings(filtered.toString())) {
-            System.out.println("[Gamepad] Loaded controller mappings from " + source);
+            Log.info("Gamepad", "Loaded controller mappings from " + source);
         } else {
-            System.err.println("[Gamepad] Failed to parse controller mappings in " + source);
+            Log.warn("Gamepad", "Failed to parse controller mappings in " + source);
         }
     }
 
@@ -178,7 +178,7 @@ public class GamepadManager {
 
         if (found < 0) {
             if (activeJoystick >= 0) {
-                System.out.println("[Gamepad] Disconnected: " + activeName);
+                Log.info("Gamepad", "Disconnected: " + activeName);
             }
             activeJoystick = -1;
             activeName = null;
@@ -192,7 +192,7 @@ public class GamepadManager {
             stopVibration(); // A burst belongs to the controller that was active when it started
             activeJoystick = found;
             activeName = glfwGetGamepadName(found);
-            System.out.println("[Gamepad] Active controller: " + activeName + " (joystick " + (found + 1) + ")");
+            Log.info("Gamepad", "Active controller: " + activeName + " (joystick " + (found + 1) + ")");
         }
 
         for (int i = 0; i <= GLFW_GAMEPAD_BUTTON_LAST; i++) {
@@ -219,9 +219,9 @@ public class GamepadManager {
             String name = glfwGetJoystickName(jid);
             String variant = findVersionVariant(guid);
             if (variant != null && updateMappings(guid + variant.substring(variant.indexOf(','))) && glfwJoystickIsGamepad(jid)) {
-                System.out.println("[Gamepad] '" + name + "' (GUID " + guid + ") mapped using firmware variant " + variant.substring(0, variant.indexOf(',')));
+                Log.info("Gamepad", "'" + name + "' (GUID " + guid + ") mapped using firmware variant " + variant.substring(0, variant.indexOf(',')));
             } else {
-                System.err.println("[Gamepad] Joystick " + (jid + 1) + " '" + name + "' (GUID " + guid
+                Log.warn("Gamepad", "Joystick " + (jid + 1) + " '" + name + "' (GUID " + guid
                         + ") has no gamepad mapping and is ignored. Add its line to " + USER_DB + " in the working directory.");
             }
         }
@@ -359,7 +359,7 @@ public class GamepadManager {
 
         sdlGamepad = SDL_OpenGamepad(chosen);
         if (sdlGamepad == 0L) {
-            System.err.println("[Gamepad] Could not open '" + activeName + "' for vibration: " + SDL_GetError());
+            Log.warn("Gamepad", "Could not open '" + activeName + "' for vibration: " + SDL_GetError());
             return 0L;
         }
         sdlBoundJoystick = activeJoystick;

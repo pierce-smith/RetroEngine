@@ -1,5 +1,6 @@
 package com.retro.engine.graphics;
 
+import com.retro.engine.core.WindowHost;
 import com.retro.engine.assets.AssetStreamer;
 import com.retro.engine.assets.MeshBufferData;
 import com.retro.engine.assets.MeshImporter;
@@ -104,6 +105,12 @@ public class SceneRenderPipeline {
     private final FrustumCuller frustumCuller = new FrustumCuller();
     private final FrustumCuller previewCuller = new FrustumCuller();
     private final GameUIRenderer gameUiRenderer = new GameUIRenderer();
+
+    // A dock drag changes the scene's size every frame, so a new size has to hold this long before targets are rebuilt.
+    // The old target is stretched to fit in the meantime
+    private static final int TARGET_SETTLE_FRAMES = 6;
+    private WindowHost window;
+    private int wantedTargetW, wantedTargetH, appliedTargetW, appliedTargetH, targetSettleFrames;
     private final float[] viewScratch = new float[16];
     private final float[] listenerEye = new float[3];
 
@@ -604,6 +611,7 @@ public class SceneRenderPipeline {
         rhi.setPickOverlay(snapshot.gizmoPickVertices, snapshot.gizmoPickVertexCount);
         ViewportPanel.updatePicking(rhi);
         rhi.setPostProcess(snapshot.postProcess);
+        syncRenderTargetSize(rhi, snapshot);
         rhi.setSceneViewport(snapshot.sceneMinX, snapshot.sceneMinY, snapshot.sceneMaxX, snapshot.sceneMaxY, snapshot.sceneAspect);
         rhi.setCameraPreview(snapshot.cameraPreviewActive, snapshot.cameraPreviewViewProj,
                 snapshot.cameraPreviewPosX, snapshot.cameraPreviewPosY, snapshot.cameraPreviewPosZ);
@@ -641,6 +649,31 @@ public class SceneRenderPipeline {
         }
     }
 
+    /** The window whose pixels the 3D target matches. Without one, the backend keeps its starting size. */
+    public void setWindow(WindowHost window) {
+        this.window = window;
+    }
+
+    /** Renders the scene at the pixel size it covers on screen, on every backend, so nothing is upscaled. */
+    private void syncRenderTargetSize(IRenderBackend rhi, RenderSceneSnapshot snapshot) {
+        if (window == null) return;
+        int w = Math.round((snapshot.sceneMaxX - snapshot.sceneMinX) * 0.5f * window.getFramebufferWidth());
+        int h = Math.round((snapshot.sceneMaxY - snapshot.sceneMinY) * 0.5f * window.getFramebufferHeight());
+        if (w <= 0 || h <= 0) return; // Minimized, or the scene tile is hidden
+        if (w != wantedTargetW || h != wantedTargetH) {
+            targetSettleFrames = appliedTargetW == 0 ? 0 : TARGET_SETTLE_FRAMES;
+            wantedTargetW = w;
+            wantedTargetH = h;
+        }
+        if (targetSettleFrames > 0) {
+            targetSettleFrames--;
+        } else if (w != appliedTargetW || h != appliedTargetH) {
+            rhi.resizeViewport(w, h);
+            appliedTargetW = w;
+            appliedTargetH = h;
+        }
+    }
+
     /**
      * Fills the snapshot's UI stream: game UI first (drawn over the composited 3D image, clipped to the game viewport),
      * then the editor UI on top. Standalone builds carry the game UI only.
@@ -653,6 +686,8 @@ public class SceneRenderPipeline {
                 editorManager.getSceneEntities(), editorManager.getSceneManager(),
                 snapshot.sceneMinX, snapshot.sceneMinY, snapshot.sceneMaxX, snapshot.sceneMaxY,
                 windowW, windowH, camera, snapshot.sceneAspect);
+        com.retro.engine.ui.FrameStatsOverlay.draw(game, com.retro.engine.core.FrameTimings.MAIN,
+                snapshot.sceneMinX, snapshot.sceneMinY, snapshot.sceneMaxX, snapshot.sceneMaxY, windowW, windowH);
         int gameFloats = game.getSize();
 
         int editorFloats = (editorVerts != null) ? editorVertexCount * UIGeometryBatch.VERTEX_STRIDE : 0;

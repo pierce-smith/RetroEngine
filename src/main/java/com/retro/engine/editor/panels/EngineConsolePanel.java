@@ -256,7 +256,7 @@ public class EngineConsolePanel {
                 String line = lineBuffer.toString();
                 lineBuffer.reset();
                 if (targetStream != null) targetStream.println(line);
-                log(level, line);
+                log(line.contains("] WARN: ") ? LogLevel.WARN : level, line);
             } else if (b != '\r') {
                 lineBuffer.write(b);
             }

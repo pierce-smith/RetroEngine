@@ -18,10 +18,12 @@ import com.retro.engine.graphics.SceneRenderPipeline;
 public class RuntimeLoop {
 
     private static final float TARGET_HEADLESS_TICK_TIME = 1.0f / 60.0f; // 60 Hz headless tick
+    private static final long MAX_BENCH_FPS = 2000L; // Sizes the capture buffer; faster frames past the end go uncounted
 
     private boolean running = false;
     private boolean headless = false;
     private long maxFrames = 0L;
+    private long benchWarmupNs, benchCaptureNs;
 
     public RuntimeLoop() {}
 
@@ -45,6 +47,15 @@ public class RuntimeLoop {
         this.maxFrames = maxFrames;
     }
 
+    /**
+     * Windowed only: runs for {@code warmupSeconds}, measures every frame for {@code captureSeconds}, logs one
+     * "[Bench]" result line, then stops. This is the capture step of the Volume 5 benchmark protocol.
+     */
+    public void setBenchmark(float warmupSeconds, float captureSeconds) {
+        benchWarmupNs = (long) (warmupSeconds * 1_000_000_000.0);
+        benchCaptureNs = (long) (captureSeconds * 1_000_000_000.0);
+    }
+
     public boolean isRunning() {
         return running;
     }
@@ -58,7 +69,7 @@ public class RuntimeLoop {
      */
     public void run(EngineContext context, SceneWorld sceneWorld) {
         if (context == null || sceneWorld == null) {
-            System.err.println("[RuntimeLoop] Error: Invalid EngineContext or SceneWorld provided.");
+            Log.error("RuntimeLoop", "Error: Invalid EngineContext or SceneWorld provided.");
             return;
         }
 
@@ -77,14 +88,29 @@ public class RuntimeLoop {
 
         long lastTime = System.nanoTime();
 
-        System.out.println("[RuntimeLoop] Executing Standalone Game Loop (Headless Mode: " + headless + ")");
+        Log.info("RuntimeLoop", "Executing Standalone Game Loop (Headless Mode: " + headless + ")");
 
         long frame = 0L;
         boolean limited = headless && maxFrames > 0L;
+        FrameTimings timings = FrameTimings.MAIN;
+        long benchStartNs = System.nanoTime();
+        boolean benchCapturing = false;
 
         while (running && (headless || (window != null && !window.shouldClose())) && !(limited && frame >= maxFrames)) {
             frame++;
             long currentTime = System.nanoTime();
+            timings.begin();
+
+            if (benchCaptureNs > 0L) {
+                long benchElapsedNs = currentTime - benchStartNs;
+                if (!benchCapturing && benchElapsedNs >= benchWarmupNs) {
+                    benchCapturing = true;
+                    timings.startCapture((int) Math.min(Integer.MAX_VALUE - 8L, benchCaptureNs / 1_000_000_000L * MAX_BENCH_FPS));
+                } else if (benchCapturing && benchElapsedNs >= benchWarmupNs + benchCaptureNs) {
+                    reportBenchmark(timings.finishCapture(), sceneWorld);
+                    break;
+                }
+            }
             float rawDeltaTime = (currentTime - lastTime) / 1_000_000_000.0f;
             lastTime = currentTime;
 
@@ -95,9 +121,11 @@ public class RuntimeLoop {
                 if (window != null) {
                     window.pollEvents();
                 }
+                timings.mark(FrameTimings.POLL);
 
                 // 2. Continuous Scene World Simulation Tick
                 sceneWorld.update(deltaTime);
+                timings.mark(FrameTimings.UPDATE);
 
                 // 3. Fullscreen viewport at the WindowHost size, viewed through the scene's Main Camera
                 if (window != null) GameView.setFullscreen(window.getWidth(), window.getHeight());
@@ -116,10 +144,13 @@ public class RuntimeLoop {
 
                     // No editor grid in standalone; the UI stream already carries only the game HUD
                     rhi.updateGridMesh(null, 0);
+                    timings.mark(FrameTimings.SUBMIT);
 
                     rhi.beginFrame();
                     rhi.endFrame();
+                    timings.mark(FrameTimings.RENDER);
                     rhi.present();
+                    timings.mark(FrameTimings.PRESENT);
                 }
             } else {
                 // Headless: pure simulation tick with no GPU context
@@ -142,6 +173,20 @@ public class RuntimeLoop {
 
         if (limited) sceneWorld.stop();
         this.running = false;
-        System.out.println("[RuntimeLoop] Standalone Game Loop Terminated after " + frame + " frames.");
+        Log.info("RuntimeLoop", "Standalone Game Loop Terminated after " + frame + " frames.");
+    }
+
+    private static void reportBenchmark(FrameTimings.Capture c, SceneWorld world) {
+        if (c == null) {
+            Log.error("Bench", "No frames were captured.");
+            return;
+        }
+        StringBuilder sb = new StringBuilder(String.format(java.util.Locale.ROOT,
+                "entities=%d frames=%d median=%.2fms p99=%.2fms max=%.2fms",
+                world.getSceneEntities().size(), c.frames(), c.medianMs(), c.p99Ms(), c.maxMs()));
+        for (int i = 0; i < FrameTimings.PHASE_COUNT; i++) {
+            sb.append(String.format(java.util.Locale.ROOT, " %s=%.2f", FrameTimings.phaseName(i).toLowerCase(java.util.Locale.ROOT), c.phaseAverageMs()[i]));
+        }
+        Log.info("Bench", sb.toString());
     }
 }

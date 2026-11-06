@@ -23,11 +23,11 @@ Starting out as a 1-month proof-of-concept, RetroEngine now implements a fully f
 
 - **Modern Java 25 Core**: Leverages JDK 25 Virtual Threads for low-overhead async asset loading and parallel execution.
 - **Dual Graphics RHI (Vulkan 1.3 & Metal 3)**: Low-level rendering hardware abstraction layer supporting cross-platform Vulkan on Windows/Linux/macOS and native Metal 3 on macOS.
-- **Zero-Allocation ECS Kernel**: Cache-friendly Entity Component System engineered to keep garbage collection pauses off the frame loop.
+- **Low-Allocation Simulation**: Entities and components built to keep garbage collection pauses off the frame loop. The simulation is measured allocation-free per frame in the test suite. The renderer isn't measured yet.
 - **Janino Live Scripting**: Instant in-memory Java compilation for runtime gameplay script hot-reloading.
 - **Dockable Visual Editor**: Integrated workspace hosting 3D scene viewports, spatial transform gizmos, asset browsers, and inspector panels.
 - **Mesh Decimator**: Implements a mesh decimator that targets high vertex meshes and obliterates them down to a target of ~4,500 vertices. This has been a bigger pain of the features to implement and expect bugs on meshes made of a bunch of other submodules.
-- **Modding Suite**: A fully featured modding engine / runtime for all exported games!
+- **Modding Suite**: A modding runtime for all exported games. Mods are trusted code: they run with the same access to the player's machine as the game itself, so players should only install mods they trust.
 
 ---
 
@@ -42,7 +42,7 @@ Starting out as a 1-month proof-of-concept, RetroEngine now implements a fully f
 ### Prerequisites
 
 - **JDK 25** (or newer)
-- **Gradle 8.x+**
+- Gradle isn't needed separately: use the included wrapper (`./gradlew`, Gradle 9.6)
 - GPU supporting **Vulkan 1.3** (Windows/Linux) or **Metal 3** (macOS 13+)
 
 ### Quickstart

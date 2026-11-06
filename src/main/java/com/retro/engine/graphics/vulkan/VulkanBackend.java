@@ -1,5 +1,6 @@
 package com.retro.engine.graphics.vulkan;
 
+import com.retro.engine.core.Log;
 import com.retro.engine.graphics.RenderEnvironment;
 import com.retro.engine.graphics.BufferDesc;
 import com.retro.engine.graphics.GraphicsAPI;
@@ -195,6 +196,11 @@ public class VulkanBackend implements IRenderBackend {
             activeImageIndex = swapchainManager.acquireNextImage(deviceManager, queueSubmitter.getImageAvailableSemaphore());
         }
         if (activeImageIndex < 0) return;
+        if (!queueSubmitter.ensureRenderFinishedSemaphores(deviceManager, activeImageIndex + 1)) {
+            Log.error("VulkanBackend", "Could not create a render-finished semaphore; skipping this frame.");
+            activeImageIndex = -1;
+            return;
+        }
 
         vkResetFences(device, queueSubmitter.getInFlightFence());
 
@@ -423,7 +429,7 @@ public class VulkanBackend implements IRenderBackend {
 
             VkSemaphoreSubmitInfo.Buffer signals = VkSemaphoreSubmitInfo.calloc(1, stack);
             signals.get(0).sType$Default()
-                    .semaphore(queueSubmitter.getRenderFinishedSemaphore())
+                    .semaphore(queueSubmitter.getRenderFinishedSemaphore(activeImageIndex))
                     .stageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
 
             VkSubmitInfo2.Buffer submitInfo = VkSubmitInfo2.calloc(1, stack)
@@ -445,7 +451,7 @@ public class VulkanBackend implements IRenderBackend {
     @Override
     public void present() {
         if (activeImageIndex < 0) return;
-        swapchainManager.presentImage(deviceManager, activeImageIndex, queueSubmitter.getRenderFinishedSemaphore());
+        swapchainManager.presentImage(deviceManager, activeImageIndex, queueSubmitter.getRenderFinishedSemaphore(activeImageIndex));
     }
 
     @Override
@@ -492,7 +498,9 @@ public class VulkanBackend implements IRenderBackend {
     }
     @Override
     public void resizeViewport(int width, int height) {
+        if (width == targetPass.getWidth() && height == targetPass.getHeight()) return;
         long previousView = targetPass.getOffscreenImageView();
+        vkDeviceWaitIdle(deviceManager.getDevice()); // The last frame may still be reading the old images
         targetPass.resizeViewport(deviceManager, width, height);
         long view = targetPass.getOffscreenImageView();
         if (view != previousView) gpuCache.rebindRenderTargetView(sceneColorSlot, view);

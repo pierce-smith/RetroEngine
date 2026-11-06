@@ -129,6 +129,7 @@ public final class StandaloneExporter {
     /** Optional override pointing at a full JDK whose jpackage/jlink the exporter should use. */
     public static final String JDK_PROPERTY = "retro.jdk";
     private static final String ENGINE_JAR = "retro-engine.jar";
+    static final String LEGAL_NOTICES_FILE = "THIRD_PARTY_NOTICES.txt";
     private static final String SDL_JAR_PREFIX = "lwjgl-sdl";
     /** GUI-subsystem launcher in jdk.jpackage: no console window, reads app/<name>.cfg, starts runtime/bin/jli.dll. */
     private static final String WINDOWS_LAUNCHER_ENTRY = "classes/jdk/jpackage/internal/resources/jpackageapplauncherw.exe";
@@ -314,6 +315,7 @@ public final class StandaloneExporter {
             progress.report(0.40f, "STAGING RUNTIME LIBRARIES");
             stageClasspath(app);
             stageNativeLibraries(new File(app, "natives"));
+            writeLegalNotices(app);
 
             // 4. Native packaging
             progress.report(0.55f, useJpackage ? "PACKAGING NATIVE LAUNCHER (JPACKAGE)"
@@ -433,6 +435,21 @@ public final class StandaloneExporter {
         Files.move(temp, out.toPath(), StandardCopyOption.REPLACE_EXISTING);
     }
 
+    /**
+     * Every shipped game carries the engine and its dependencies, so it has to carry their notices and licenses too.
+     * A missing resource fails the export rather than shipping a build without them.
+     */
+    static void writeLegalNotices(File app) throws IOException {
+        StringBuilder text = new StringBuilder();
+        for (String resource : List.of("/legal/NOTICE.txt", "/legal/LICENSE.txt")) {
+            try (var in = StandaloneExporter.class.getResourceAsStream(resource)) {
+                if (in == null) throw new IOException("Engine build has no " + resource + "; rebuild the engine");
+                text.append(new String(in.readAllBytes(), StandardCharsets.UTF_8)).append(System.lineSeparator());
+            }
+        }
+        Files.writeString(new File(app, LEGAL_NOTICES_FILE).toPath(), text, StandardCharsets.UTF_8);
+    }
+
     /** Vulkan portability layer for macOS; Windows/Linux use the system Vulkan loader installed with the GPU driver. */
     private void stageNativeLibraries(File nativesDir) throws IOException {
         if (req.platform != Platform.MACOS) return;
@@ -458,20 +475,42 @@ public final class StandaloneExporter {
         return null;
     }
 
-    private List<String> jvmOptions(String appDirToken) {
+    private List<String> jvmOptions(String appDirToken) throws IOException {
+        int maxHeapMb = ProjectWorkspace.readSettings(req.projectDir).maxHeapMb;
+        String logName = req.executableName.replace(' ', '_'); // no spaces: a jpackage option is one token
         List<String> opts = new ArrayList<>(List.of(
-            "-Xms256m", "-Xmx512m",
+            "-Xms256m", "-Xmx" + maxHeapMb + "m",
             "-Dorg.lwjgl.system.stack.size=128",
             "--enable-native-access=ALL-UNNAMED",
             // No console when launched from Finder / Explorer: Main tees output into the OS log folder
             "-Dretro.packaged=true",
-            "-D" + Main.LOG_NAME_PROPERTY + "=" + req.executableName.replace(' ', '_'), // no spaces: a jpackage option is one token
+            "-D" + Main.LOG_NAME_PROPERTY + "=" + logName,
             "-D" + GAME_DATA_PROPERTY + "=" + appDirToken + "/" + GAME_DATA_DIR));
+        opts.addAll(crashFileOptions(req.platform, logName));
         if (req.platform == Platform.MACOS) {
             opts.add("-XstartOnFirstThread");
             opts.add("-Dorg.lwjgl.vulkan.libname=" + appDirToken + "/natives/libMoltenVK.dylib");
         }
         return opts;
+    }
+
+    /**
+     * Sends JVM crash reports and out-of-memory heap dumps to the folder Main logs to, which it creates at startup. The
+     * launcher expands {@code $HOME} / {@code $LOCALAPPDATA} (jpackage's and the shell's alike), and Linux can't honor
+     * XDG_STATE_HOME here because an unset variable would stay literal. If the folder is unusable the JVM falls back to
+     * the working directory. The dump name has no PID on purpose: the JVM won't overwrite it, so a player's disk holds
+     * at most one.
+     */
+    static List<String> crashFileOptions(Platform platform, String logName) {
+        String dir = switch (platform) {
+            case MACOS -> "$HOME/Library/Logs/RetroEngine";
+            case WINDOWS -> "$LOCALAPPDATA/RetroEngine/logs";
+            case LINUX -> "$HOME/.local/state/retroengine";
+        };
+        return List.of(
+            "-XX:ErrorFile=" + dir + "/" + logName + "_crash_%p.log",
+            "-XX:+HeapDumpOnOutOfMemoryError",
+            "-XX:HeapDumpPath=" + dir + "/" + logName + "_oom.hprof");
     }
 
     // ------------------------------------------------------------------------------------------
@@ -672,7 +711,7 @@ public final class StandaloneExporter {
         }
     }
 
-    private String shellOptions(String appDirVar) {
+    private String shellOptions(String appDirVar) throws IOException {
         StringBuilder sb = new StringBuilder();
         for (String o : jvmOptions(appDirVar)) sb.append('"').append(o).append("\" ");
         return sb.toString().trim();

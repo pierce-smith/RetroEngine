@@ -126,7 +126,7 @@ public final class ProjectWorkspace {
         loadStartupScene(workspace, projectDir, created);
         RecentProjects.record(projectDir);
         com.retro.engine.editor.RecentProjectsMenu.record(projectDir);
-        System.out.println("[Project] Created project '" + cleanName + "' at " + projectDir.getAbsolutePath()
+        Log.info("Project", "Created project '" + cleanName + "' at " + projectDir.getAbsolutePath()
             + " from template '" + template.displayName() + "'.");
         return projectDir;
     }
@@ -156,7 +156,7 @@ public final class ProjectWorkspace {
         loadStartupScene(workspace, dir, settings);
         RecentProjects.record(dir);
         com.retro.engine.editor.RecentProjectsMenu.record(dir);
-        System.out.println("[Project] Opened project '" + settings.projectName + "' (" + dir.getAbsolutePath() + ")");
+        Log.info("Project", "Opened project '" + settings.projectName + "' (" + dir.getAbsolutePath() + ")");
     }
 
     /**
@@ -164,8 +164,14 @@ public final class ProjectWorkspace {
      * Cooked .rpack packages under Game_Data/Cooked/ take priority over the raw sources when streaming.
      */
     public static void openRuntimeProject(EditorWorkspace workspace, File gameDataDir) throws IOException {
+        openRuntimeProject(workspace, gameDataDir, null);
+    }
+
+    /** As above, starting on {@code sceneOverride} (project-relative) when it isn't null. Nothing is written back. */
+    public static void openRuntimeProject(EditorWorkspace workspace, File gameDataDir, String sceneOverride) throws IOException {
         File dir = gameDataDir.getAbsoluteFile();
         ProjectSettings settings = readSettings(dir);
+        if (sceneOverride != null) settings.startupScene = sceneOverride;
         if (!workspace.getAssetDatabase().openProject(dir.getAbsolutePath())) {
             throw new IOException("Could not bind asset registry to " + dir.getAbsolutePath());
         }
@@ -174,7 +180,7 @@ public final class ProjectWorkspace {
         if (ModLoader.isRuntimeModsEnabled()) ModLoader.loadForProject(dir);
         String sceneError = loadStartupScene(workspace, dir, settings);
         if (sceneError != null) throw new IOException("Startup scene " + settings.startupScene + ": " + sceneError);
-        System.out.println("[Runtime] Loaded game '" + settings.projectName + "' (startup scene: " + settings.startupScene + ")");
+        Log.info("Runtime", "Loaded game '" + settings.projectName + "' (startup scene: " + settings.startupScene + ")");
     }
 
     /** Returns the load error, or null. SceneWorld has already reported it, so the editor can carry on. */

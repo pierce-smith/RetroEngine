@@ -69,7 +69,7 @@ val hostOs: OperatingSystem = OperatingSystem.current()
  */
 fun engineJvmArgs(moltenVkPath: String): List<String> = buildList {
     add("-Xms256m")
-    add("-Xmx512m")
+    add("-Xmx2g") // Editor only; exported games take theirs from ProjectSettings.maxHeapMb
     add("-Dorg.lwjgl.system.stack.size=128") // Boosts LWJGL thread stack capacity
     add("--enable-native-access=ALL-UNNAMED")
     if (hostOs.isMacOsX) {
@@ -87,7 +87,7 @@ tasks.withType<JavaCompile> {
     options.encoding = "UTF-8"
 }
 
-// Tests run on the shipped heap size, with no window or GPU, and with a throwaway home folder so nothing touches the
+// Tests run on a quarter of the shipped heap so leaks show up early, with no window or GPU, and with a throwaway home folder so nothing touches the
 // developer's real ~/.retroengine. Timing-sensitive tests are tagged "perf": shared CI machines are too noisy for them.
 tasks.withType<Test>().configureEach {
     maxHeapSize = "512m"
@@ -250,6 +250,11 @@ tasks.register("compileShaders") {
     group = "build"
     description = "Compiles all shader backends."
     dependsOn("compileVulkanShaders", compileMetalShaders)
+}
+
+// Exports write these into every game (StandaloneExporter.writeLegalNotices)
+tasks.named<ProcessResources>("processResources") {
+    from(files("LICENSE.txt", "NOTICE.txt")) { into("legal") }
 }
 
 tasks.named("processResources") {
@@ -435,6 +440,7 @@ val stageEditor = tasks.register<Sync>("stageEditor") {
     if (hostOs.isMacOsX) {
         from("libs/macos/libMoltenVK.dylib") { into("natives") }
     }
+    from(files("LICENSE.txt", "NOTICE.txt")) { into("legal") }
     from(linkGameRuntime) { into("game-runtime") }
     if (hostOs.isWindows) {
         from(extractGameLauncher) { into("game-launcher") }
@@ -507,7 +513,16 @@ tasks.register("packageEditor") {
             if (!appIcon.name.lowercase().endsWith(".$expected")) throw GradleException("-PappIcon must be a .$expected file on this OS: $appIcon")
             cmd += listOf("--icon", appIcon.absolutePath)
         }
+        // Main logs to this folder and creates it at startup. The launcher expands the variable (see StandaloneExporter)
+        val crashDir = when {
+            hostOs.isMacOsX -> "\$HOME/Library/Logs/RetroEngine"
+            hostOs.isWindows -> "\$LOCALAPPDATA/RetroEngine/logs"
+            else -> "\$HOME/.local/state/retroengine"
+        }
         val javaOptions = engineJvmArgs("\$APPDIR/natives/libMoltenVK.dylib") + listOf(
+            "-XX:ErrorFile=$crashDir/editor_crash_%p.log",
+            "-XX:+HeapDumpOnOutOfMemoryError",
+            "-XX:HeapDumpPath=$crashDir/editor_oom.hprof",
             "-Dretro.packaged=true",
             "-Dretro.gameRuntime=\$APPDIR/game-runtime"
         )

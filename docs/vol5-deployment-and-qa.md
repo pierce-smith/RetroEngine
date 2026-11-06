@@ -26,7 +26,15 @@ Game_Data/Assets/                      scenes, scripts, materials, audio
 Game_Data/.retro/                      UUID registry, so asset references resolve unchanged
 Game_Data/Cooked/                      .rpack packages from RpackCooker
 Game_Data/Mods/                        empty, with a README. Players drop mods here (Volume 4)
+THIRD_PARTY_NOTICES.txt                engine and dependency notices, plus the Apache license
 ```
+
+The Java heap limit comes from **Project Settings > Runtime** (`maxHeapMb`, 2 GB by default). It's fixed when the game
+launches, so export again to apply a change.
+
+`THIRD_PARTY_NOTICES.txt` is generated from the engine's `NOTICE.txt` and `LICENSE.txt`, and an export fails without
+them. **Keep it with your game.** The list covers the engine only, so add notices for any assets or code you bring
+yourself. OpenAL Soft is LGPL, and the file explains how it's used and where its source is.
 
 The project's own dev `Mods/` folder is **never** shipped.
 
@@ -126,8 +134,16 @@ Packaged builds (`-Dretro.packaged=true`) have no visible console, so `Main` tee
   while the file write still succeeds.
 - **Uncaught exceptions on any thread** are logged with the thread name, and fatal loop errors are logged *before*
   `shutdown()` runs.
+- **JVM crashes** (usually a graphics driver) write `<name>_crash_<pid>.log` to the same folder. On Linux that's always
+  `~/.local/state/retroengine/`, because launch options can't read an unset `XDG_STATE_HOME`.
+- **Running out of memory** writes `<name>_oom.hprof` there. The JVM never overwrites this file, so one player's disk
+  holds at most one dump. Delete it to allow another.
 
-When a player reports a crash, ask for `<name>.log.1`.
+When a player reports a crash, ask for `<name>.log.1` and any `<name>_crash_*.log`.
+
+Engine code logs through `com.retro.engine.core.Log`: `Log.info("Tag", "message")`, with `debug`, `warn` and `error`
+alongside it. Choose the threshold with `-Dretro.log=debug|info|warn|error`. Older code still prints directly to
+`System.out`, and both reach the same log.
 
 ### 2.2 Hardening Already in Place
 
@@ -211,6 +227,8 @@ Run on **at least one Metal host and one Vulkan host** (Windows/Linux, or macOS 
 - [ ] A VOICE clip ducks BGM. A reverb zone is audible when entered. Stop un-mutes any bus a script muted.
 
 **Rendering**
+- [ ] Run with `--vulkan --gpu-debug` (below) and read the `[GpuDebug]` lines in the log. There should be no new
+      errors.
 - [ ] Open `src/test/resources/TestProject` as a project and press Play: `Assets/Scenes/RenderCheck.rscene` tours 1,600 cubes, ground shadows and
       a worst-case floor, and shows what to check at each stop. Run it on Metal and again with `--vulkan`.
       `RenderCheckScene` in `src/test/java` generates the scene.
@@ -242,21 +260,40 @@ Repeatable numbers need a repeatable setup:
    power mode, no screen recording. Record OS, GPU, driver, and backend.
 2. **Warm-up.** Let the scene run **60 seconds** before measuring, so JIT compilation (C2) and asset streaming
    settle.
-3. **Scenes.** Use fixed, committed scenes:
-   - *Empty:* camera + sun. This is the floor cost of the loop and editor.
-   - *Static load:* 1,000 meshes, 1 material. Tests draw submission.
-   - *Light load:* 32 point + 8 spot lights. Tests the lighting path.
-   - *Physics load:* 500 dynamic boxes dropped on a plane. Tests the solver and broadphase.
-   - *Skinning load:* 64 animated skinned characters (the per-frame palette cap).
-   - *Particle load:* 32 systems (the per-frame batch cap) × 4,096 particles, half additive, half alpha.
-   - *Navigation load:* 100 `NavMeshAgent`s re-pathing across a baked mesh. `findPath` must not allocate.
-4. **Capture.** Read frame time, draw calls, vertices and heap from `EngineConsolePanel` (<kbd>~</kbd>) over a
-   **60-second window**. Report the **median and 99th percentile frame time**, not average FPS.
+3. **Scenes.** Use the committed scenes in `src/test/resources/TestProject/Assets/Scenes/`. `BenchmarkScenes` in
+   `src/test/java` generates them, and `./gradlew test` runs each one headless so they keep loading:
+   - *Empty* (`BenchEmpty`): camera + sun. This is the floor cost of the loop.
+   - *Static load* (`BenchStatic`): 1,000 meshes, 1 material. Tests draw submission.
+   - *Light load* (`BenchLights`): 32 point + 8 spot lights. Tests the lighting path.
+   - *Physics load* (`BenchPhysics`): 500 dynamic boxes dropped on a plane. Tests the solver and broadphase.
+   - *Skinning load* (`BenchSkinning`): 64 animated skinned characters (the per-frame palette cap).
+   - *Particle load* (`BenchParticles`): 32 systems (the per-frame batch cap) × 4,096 particles, half additive, half
+     alpha.
+   - *Navigation load* (`BenchNavigation`): 100 `NavMeshAgent`s re-pathing across a baked mesh. `findPath` must not
+     allocate.
+4. **Capture.** Run the game with `--bench`, which warms up, measures, logs one `[Bench]` line and exits:
+
+   ```bash
+   --runtime --project <dir> --scene Assets/Scenes/BenchStatic.rscene --bench 60 --bench-warmup 60
+   ```
+
+   Report the **median and 99th percentile frame time**, not average FPS. The line also gives the average milliseconds
+   per loop phase. Frame time includes the wait for vsync, so 16.67 ms means the frame made its deadline.
 5. **GC check.** Run with `-Xlog:gc:file=gc.log`. In a steady-state scene, **any young-generation GC during the
    capture window is a regression** against the zero-allocation goal. Track down the allocation with JFR
    (`-XX:StartFlightRecording`, *Allocation by Class*).
 6. **Compare backends.** On macOS, run each scene on Metal and again with `--vulkan`. A gap of more than 15%
    between backends on the same hardware is worth investigating.
+
+**Live timing.** <kbd>F3</kbd> shows the same figures over the viewport in the editor. In a game, start with
+`--frame-stats`, which shows the overlay and turns F3 on. These are CPU timings: `RENDER` includes any wait for the GPU,
+and there are no GPU timers yet.
+
+**Vulkan validation.** `--gpu-debug` turns on the Khronos validation layer and logs each distinct problem once, with
+totals at shutdown. It needs the [Vulkan SDK](https://vulkan.lunarg.com). Without it, the engine warns and runs
+normally. On a Mac with more than one Vulkan driver installed, choose MoltenVK with
+`VK_DRIVER_FILES=/usr/local/share/vulkan/icd.d/MoltenVK_icd.json`. Metal has its own validation, enabled with
+`MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1` in the environment.
 
 > The target is a **flat 16.67 ms** frame line with **no GC spikes**. If you see sawtooth heap growth in the
 > console, the frame loop is allocating somewhere.
