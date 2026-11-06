@@ -3,7 +3,17 @@
 
 // Directional shadow map depth pass: depth is written by fixed function, this stage only applies the
 // foliage alpha cutout so leaf cards cast shaped shadows. Binding 2 (the shadow map itself) is never touched.
+// Every output of the shared blinn_phong vertex stages is declared, so the stages' interfaces match. Only vTexCoord is read
+layout(location = 0) in vec3 vFragPos;
+layout(location = 1) in vec3 vNormal;
 layout(location = 2) in vec2 vTexCoord;
+layout(location = 3) in vec4 vColor;
+layout(location = 4) in vec3 vTangent;
+layout(location = 5) in vec3 vBitangent;
+layout(location = 6) in float vViewDist;
+layout(location = 7) in vec4 vLightSpacePos;
+layout(location = 8) in vec2 vLightmapUV;
+layout(location = 9) in vec3 v_GouraudLightColor;
 
 layout(set = 0, binding = 1) uniform sampler u_MaterialSampler;
 // Bindless material texture table (partially bound); indexed with dynamically uniform push constant slots

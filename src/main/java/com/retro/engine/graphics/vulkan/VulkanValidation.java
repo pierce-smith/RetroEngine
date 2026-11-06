@@ -18,15 +18,25 @@ import java.util.Set;
 
 /**
  * Receives validation layer messages for {@code --gpu-debug}. A problem in a draw repeats every frame, so each distinct
- * message is logged once and only counted after that. {@link #destroy} logs the totals.
+ * message is logged once and only counted after that. Distinct means distinct text: one message ID covers every instance
+ * of a rule, and MoltenVK reports everything under ID 0, so an ID alone would hide all but the first of them.
+ * {@link #destroy} logs the totals.
  */
 final class VulkanValidation {
 
     static final String LAYER = "VK_LAYER_KHRONOS_validation";
     private static final String TAG = "GpuDebug";
 
-    private final Set<Integer> seen = new HashSet<>();
-    private int errors, warnings;
+    /** Stops a message with per-frame text, such as a changing handle, from filling the log. */
+    private static final int MAX_LOGGED_MESSAGES = 200;
+
+    // MoltenVK 1.4.2 tests only the format's blend capability, never blendEnable, so it reports every integer color
+    // attachment. Only the Color-ID pick target is one, and its pipelines all set blendEnable to false.
+    private static final String MOLTENVK_INTEGER_BLEND_MESSAGE =
+            "VK_ERROR_FEATURE_NOT_PRESENT: Blending is enabled for attachment with format VK_FORMAT_R8G8B8A8_UINT";
+
+    private final Set<String> seen = new HashSet<>();
+    private int errors, warnings, ignored;
     private VkDebugUtilsMessengerCallbackEXT callback;
     private long messenger;
 
@@ -72,18 +82,26 @@ final class VulkanValidation {
     private int onMessage(int severity, int types, long callbackData, long userData) {
         VkDebugUtilsMessengerCallbackDataEXT data = VkDebugUtilsMessengerCallbackDataEXT.create(callbackData);
         boolean error = (severity & EXTDebugUtils.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0;
+        String message = data.pMessageString();
+        if (isKnownFalsePositive(message)) {
+            synchronized (this) { ignored++; }
+            return VK10.VK_FALSE;
+        }
         boolean firstTime;
         synchronized (this) {
             if (error) errors++;
             else warnings++;
-            firstTime = seen.add(data.messageIdNumber());
+            firstTime = seen.size() < MAX_LOGGED_MESSAGES && seen.add(message);
         }
         if (firstTime) {
-            String message = data.pMessageString();
             if (error) Log.error(TAG, message);
             else Log.warn(TAG, message);
         }
         return VK10.VK_FALSE;
+    }
+
+    static boolean isKnownFalsePositive(String message) {
+        return message != null && message.startsWith(MOLTENVK_INTEGER_BLEND_MESSAGE);
     }
 
     void destroy(VkInstance instance) {
@@ -92,7 +110,8 @@ final class VulkanValidation {
         if (callback != null) callback.free();
         callback = null;
         synchronized (this) {
-            Log.info(TAG, "Validation finished: " + errors + " error(s), " + warnings + " warning(s), " + seen.size() + " distinct.");
+            Log.info(TAG, "Validation finished: " + errors + " error(s), " + warnings + " warning(s), " + seen.size() + " distinct, "
+                    + ignored + " known MoltenVK false positive(s) ignored.");
         }
     }
 }

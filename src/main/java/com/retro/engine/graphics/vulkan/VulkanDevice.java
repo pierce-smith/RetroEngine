@@ -217,8 +217,20 @@ public class VulkanDevice {
                 return false;
             }
 
+            // With the extension on, a portability feature counts as off unless it is enabled here, so every one the
+            // device has is passed through. Shadow maps need mutableComparisonSamplers, for one
+            VkPhysicalDevicePortabilitySubsetFeaturesKHR portabilityFeatures = null;
+            if (enabledDeviceExtensions.contains("VK_KHR_portability_subset")) {
+                portabilityFeatures = VkPhysicalDevicePortabilitySubsetFeaturesKHR.calloc(stack).sType$Default();
+                VkPhysicalDeviceFeatures2 portabilityQuery = VkPhysicalDeviceFeatures2.calloc(stack)
+                        .sType$Default()
+                        .pNext(portabilityFeatures.address());
+                VK11.vkGetPhysicalDeviceFeatures2(physicalDevice, portabilityQuery);
+            }
+
             VkPhysicalDeviceVulkan12Features features12 = VkPhysicalDeviceVulkan12Features.calloc(stack)
                     .sType$Default()
+                    .pNext(portabilityFeatures != null ? portabilityFeatures.address() : 0L)
                     .separateDepthStencilLayouts(separateDepthStencilLayouts)
                     .runtimeDescriptorArray(true)
                     .descriptorBindingPartiallyBound(true)
