@@ -56,7 +56,7 @@ public class VehicleSuspensionSolver {
                 float wy = wheelMounts[i][1];
                 float wz = wheelMounts[i][2];
 
-                physicsSystem.raycastExcludingInPlace(body.entity, wx, wy, wz, 0.0f, -1.0f, 0.0f, maxRayDist, sharedRaycastHit);
+                physicsSystem.raycastExcludingInPlace(body.entity, wx, wy, wz, 0.0f, -1.0f, 0.0f, maxRayDist, sharedRaycastHit, body.collisionMask);
 
                 if (sharedRaycastHit.hit) {
                     vc.wheelGrounded[i] = true;
@@ -88,15 +88,7 @@ public class VehicleSuspensionSolver {
 
             vc.currentSpeed *= Math.max(0.0f, 1.0f - 1.5f * dt);
 
-            if (body.treeNodeId != -1) {
-                float minX = body.px - physicsSystem.getHalfWidthX(body);
-                float maxX = body.px + physicsSystem.getHalfWidthX(body);
-                float minY = body.py - physicsSystem.getHalfWidthY(body);
-                float maxY = body.py + physicsSystem.getHalfWidthY(body);
-                float minZ = body.pz - physicsSystem.getHalfWidthZ(body);
-                float maxZ = body.pz + physicsSystem.getHalfWidthZ(body);
-                physicsSystem.getBroadphaseSolver().updateLeaf(body.treeNodeId, minX, minY, minZ, maxX, maxY, maxZ);
-            }
+            physicsSystem.refreshBody(body);
         }
     }
 }

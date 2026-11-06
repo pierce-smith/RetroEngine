@@ -27,6 +27,13 @@ public class CapsuleCollider extends Component {
     @InspectorProperty(order = 5, label = "TRIGGER", type = PropertyType.TOGGLE)
     public boolean isTrigger = false;
 
+    @InspectorProperty(order = 6, label = "LAYER", min = 0, max = 31, step = 1, since = 10, prefabSince = 9)
+    public int collisionLayer = 0;
+
+    /** Layer numbers this collider touches, such as "0,3". Empty means every layer. */
+    @InspectorProperty(order = 7, label = "COLLIDES WITH", since = 10, prefabSince = 9)
+    public String collidesWith = "";
+
     public CapsuleCollider() {}
 
     @Override

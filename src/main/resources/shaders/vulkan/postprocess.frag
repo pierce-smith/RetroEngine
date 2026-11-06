@@ -6,7 +6,7 @@
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 outFragColor;
 
-layout(set = 0, binding = 1) uniform sampler u_MaterialSampler;
+layout(set = 0, binding = 5) uniform sampler u_ScreenSampler;
 layout(set = 0, binding = 4) uniform texture2D u_Textures[];
 
 layout(push_constant) uniform PostFXPushConstants {
@@ -23,11 +23,11 @@ layout(push_constant) uniform PostFXPushConstants {
 } fx;
 
 vec3 sampleScene(vec2 uv) {
-    return texture(sampler2D(u_Textures[fx.sceneSlot], u_MaterialSampler), clamp(uv, 0.0, 1.0)).rgb;
+    return texture(sampler2D(u_Textures[fx.sceneSlot], u_ScreenSampler), clamp(uv, 0.0, 1.0)).rgb;
 }
 
 void main() {
-    vec2 size = vec2(textureSize(sampler2D(u_Textures[fx.sceneSlot], u_MaterialSampler), 0));
+    vec2 size = vec2(textureSize(sampler2D(u_Textures[fx.sceneSlot], u_ScreenSampler), 0));
     vec2 dir = vUV - 0.5;
 
     vec2 off = dir * 2.0 * fx.chromatic / size;

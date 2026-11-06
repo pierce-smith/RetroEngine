@@ -112,7 +112,9 @@ public class SceneWorld {
     private final EntitySpawner entityFactory = new EntitySpawner();
     private final AnimationSystem animationEngine = new AnimationSystem();
 
-    public SceneWorld() {}
+    public SceneWorld() {
+        simulationEngine.getPhysicsWorld().setHierarchy(graphEvaluator);
+    }
 
     /** Receives a readable message when a scene or prefab can't be loaded or saved. Errors are always logged as well. */
     public void setDataErrorListener(java.util.function.Consumer<String> listener) {

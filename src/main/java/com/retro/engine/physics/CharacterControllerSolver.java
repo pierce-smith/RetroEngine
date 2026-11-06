@@ -181,23 +181,25 @@ public class CharacterControllerSolver {
                 if (pad != null) pad.setVibration(0.0f, JUMP_RUMBLE_STRENGTH, JUMP_RUMBLE_DURATION);
             }
 
-            // Probe from the body centre: the ray must start outside the floor, and the collider's real half
+            // Probe from the collider's centre: the ray must start outside the floor, and the collider's real half
             // height (box or capsule, scaled) is the distance from centre to feet
-            float halfHeight = physicsSystem.getHalfWidthY(body);
+            float halfHeight = body.hy;
             cc.velocityY += PhysicsSystem.GRAVITY * cc.gravityMultiplier * dt;
             float fallDistance = Math.max(0.0f, -cc.velocityY * dt);
             // Grounded bodies also look stepOffset below the feet so they stick to the ground walking down steps
             float reach = halfHeight + GROUND_SKIN + Math.max(fallDistance, cc.isGrounded ? cc.stepOffset : 0.0f);
 
-            physicsSystem.raycastExcludingInPlace(body.entity, body.px, body.py, body.pz, 0.0f, -1.0f, 0.0f, reach, sharedRaycastHit);
+            physicsSystem.raycastExcludingInPlace(body.entity, body.px + body.ox, body.py + body.oy, body.pz + body.oz,
+                    0.0f, -1.0f, 0.0f, reach, sharedRaycastHit, body.collisionMask);
 
-            if (sharedRaycastHit.hit && cc.velocityY <= 0.0f) {
+            // A surface steeper than slopeLimit doesn't hold the character up: it falls, and contacts slide it down
+            if (sharedRaycastHit.hit && cc.velocityY <= 0.0f && sharedRaycastHit.normalY >= walkableNormalY(cc)) {
                 if (!cc.isGrounded && pad != null) {
                     playLandingRumble(pad, -cc.velocityY);
                 }
                 cc.isGrounded = true;
                 cc.velocityY = 0.0f;
-                body.py = sharedRaycastHit.pointY + halfHeight;
+                body.py = sharedRaycastHit.pointY + halfHeight - body.oy;
             } else {
                 cc.isGrounded = false;
                 body.py += cc.velocityY * dt;
@@ -209,15 +211,121 @@ public class CharacterControllerSolver {
             cc.velocityX *= Math.max(0.0f, 1.0f - 10.0f * dt);
             cc.velocityZ *= Math.max(0.0f, 1.0f - 10.0f * dt);
 
-            if (body.treeNodeId != -1) {
-                float minX = body.px - physicsSystem.getHalfWidthX(body);
-                float maxX = body.px + physicsSystem.getHalfWidthX(body);
-                float minY = body.py - physicsSystem.getHalfWidthY(body);
-                float maxY = body.py + physicsSystem.getHalfWidthY(body);
-                float minZ = body.pz - physicsSystem.getHalfWidthZ(body);
-                float maxZ = body.pz + physicsSystem.getHalfWidthZ(body);
-                physicsSystem.getBroadphaseSolver().updateLeaf(body.treeNodeId, minX, minY, minZ, maxX, maxY, maxZ);
+            physicsSystem.refreshBody(body);
+        }
+    }
+
+    private static float walkableNormalY(CharacterControllerComponent cc) {
+        return (float) Math.cos(Math.toRadians(cc.slopeLimit)) - SLOPE_TOLERANCE; // A slope right at the limit is walkable
+    }
+
+    /**
+     * Characters move without sweeping, so this moves them back out of whatever isn't dynamic. Dynamic bodies were
+     * already handled by the contact solver, which treats a character as immovable. Each contact is measured against
+     * how far earlier contacts already moved the character, so two touching wall pieces don't push it out twice.
+     */
+    void resolveContacts(ContactManifold[] manifolds, int count, PhysicsSystem physicsSystem) {
+        for (int i = 0; i < count; i++) {
+            ContactManifold m = manifolds[i];
+            PhysicsSystem.PhysicsBody a = m.a, b = m.b;
+            boolean aCharacter = a.characterController != null, bCharacter = b.characterController != null;
+            if ((!aCharacter && !bCharacter) || a.invMass > 0.0f || b.invMass > 0.0f) continue;
+
+            for (int j = 0; j < m.count; j++) {
+                ContactManifold.Point p = m.points[j];
+                float moved = (b.pushX - a.pushX) * p.nx + (b.pushY - a.pushY) * p.ny + (b.pushZ - a.pushZ) * p.nz;
+                float overlap = -(p.separation + moved);
+                if (overlap <= PhysicsSystem.TOUCH_TOLERANCE) continue;
+
+                if (aCharacter && bCharacter) {
+                    pushCharacter(a, -p.nx, -p.ny, -p.nz, overlap * 0.5f);
+                    pushCharacter(b, p.nx, p.ny, p.nz, overlap * 0.5f);
+                    physicsSystem.refreshBody(a);
+                    physicsSystem.refreshBody(b);
+                } else if (aCharacter) {
+                    resolveAgainstSolid(a, b, p, -p.nx, -p.ny, -p.nz, overlap, physicsSystem);
+                    physicsSystem.refreshBody(a);
+                } else {
+                    resolveAgainstSolid(b, a, p, p.nx, p.ny, p.nz, overlap, physicsSystem);
+                    physicsSystem.refreshBody(b);
+                }
             }
+        }
+    }
+
+    /** {@code nx, ny, nz} points from the solid toward the character. */
+    private void resolveAgainstSolid(PhysicsSystem.PhysicsBody character, PhysicsSystem.PhysicsBody solid,
+                                     ContactManifold.Point contact, float nx, float ny, float nz, float overlap,
+                                     PhysicsSystem physicsSystem) {
+        CharacterControllerComponent cc = character.characterController;
+        if (ny >= walkableNormalY(cc)) {
+            // Ground: lift straight up, so standing on a slope doesn't slide the character down it
+            float lift = overlap / ny;
+            character.py += lift;
+            character.pushY += lift;
+            if (cc.velocityY < 0.0f) cc.velocityY = 0.0f;
+            return;
+        }
+        if (ny > -0.5f && tryStepUp(character, solid, contact, nx, nz, physicsSystem)) return;
+        if (ny > 0.0f) {
+            // Too steep to stand on, so it must not lift the character either: push sideways and let gravity do the rest
+            float len = (float) Math.sqrt(nx * nx + nz * nz);
+            pushCharacter(character, nx / len, 0.0f, nz / len, overlap / len);
+            return;
+        }
+        pushCharacter(character, nx, ny, nz, overlap);
+    }
+
+    // Float slack so a rise of exactly stepOffset (e.g. 0.3 m steps with a 0.3 m offset) still counts
+    private static final float STEP_TOLERANCE = 0.02f;
+    private static final float STEP_PROBE_INSET = 0.1f;
+    private static final float SLOPE_TOLERANCE = 0.001f;
+    private final RaycastHit stepProbe = new RaycastHit();
+
+    /**
+     * Side contact between a grounded character and an obstacle whose top is no more than the controller's stepOffset
+     * above the character's feet: lift the character onto it instead of pushing it back. The ground probe then snaps it
+     * to the new surface on the next step. Returns true when it stepped.
+     */
+    private boolean tryStepUp(PhysicsSystem.PhysicsBody character, PhysicsSystem.PhysicsBody obstacle, ContactManifold.Point contact,
+                              float nx, float nz, PhysicsSystem physicsSystem) {
+        CharacterControllerComponent cc = character.characterController;
+        if (!cc.isGrounded || cc.velocityY > 0.0f) return false;
+        float top = obstacle.shape == PhysicsSystem.PhysicsBody.SHAPE_MESH
+                ? meshStepTop(character, contact, nx, nz, physicsSystem) : obstacle.maxY;
+        float rise = top - character.minY;
+        if (rise <= 0.0f || rise > cc.stepOffset + STEP_TOLERANCE) return false;
+        character.py += rise;
+        character.pushY += rise;
+        return true;
+    }
+
+    /**
+     * Height of the walkable surface just past a mesh contact, or -infinity when there isn't one in reach. A mesh's
+     * bounds say nothing about the step in front of the character, and a wall touches a capsule low down too, so this
+     * looks down from stepOffset above the feet, a little way into the obstacle.
+     */
+    private float meshStepTop(PhysicsSystem.PhysicsBody character, ContactManifold.Point contact, float nx, float nz, PhysicsSystem physicsSystem) {
+        CharacterControllerComponent cc = character.characterController;
+        float len = (float) Math.sqrt(nx * nx + nz * nz);
+        if (len < 1e-4f) return Float.NEGATIVE_INFINITY;
+        float reach = cc.stepOffset + STEP_TOLERANCE;
+        physicsSystem.raycastExcludingInPlace(character.entity, contact.x - nx / len * STEP_PROBE_INSET, character.minY + reach,
+                contact.z - nz / len * STEP_PROBE_INSET, 0.0f, -1.0f, 0.0f, reach, stepProbe, character.collisionMask);
+        return stepProbe.hit && stepProbe.normalY >= walkableNormalY(cc) ? stepProbe.pointY : Float.NEGATIVE_INFINITY;
+    }
+
+    /** Moves a character along a unit direction and cancels its velocity into the surface it was pushed out of. */
+    private static void pushCharacter(PhysicsSystem.PhysicsBody body, float nx, float ny, float nz, float distance) {
+        CharacterControllerComponent cc = body.characterController;
+        float mx = nx * distance, my = ny * distance, mz = nz * distance;
+        body.px += mx; body.py += my; body.pz += mz;
+        body.pushX += mx; body.pushY += my; body.pushZ += mz;
+        float into = cc.velocityX * nx + cc.velocityY * ny + cc.velocityZ * nz;
+        if (into < 0.0f) {
+            cc.velocityX -= into * nx;
+            cc.velocityY -= into * ny;
+            cc.velocityZ -= into * nz;
         }
     }
 

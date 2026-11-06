@@ -47,7 +47,7 @@ public final class ComponentSchema {
     private static final List<Class<? extends Component>> REGISTERED = List.of(
             Transform.class, MeshFilter.class, Material.class, Light.class, AudioSource.class, Camera.class,
             ScriptComponent.class, RigidBodyComponent.class, BoxCollider.class, SphereCollider.class,
-            CapsuleCollider.class, CharacterControllerComponent.class, VehicleControllerComponent.class,
+            CapsuleCollider.class, com.retro.engine.ecs.components.MeshCollider.class, CharacterControllerComponent.class, VehicleControllerComponent.class,
             AnimatorComponent.class, UICanvasComponent.class, UIPanel.class, UIText.class, UIImage.class,
             UIProgressBar.class, ParticleSystem.class, AudioReverbZone.class,
             com.retro.engine.ecs.components.NavMeshAgent.class,

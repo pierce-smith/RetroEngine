@@ -1,6 +1,6 @@
 # Volume 4: Physics & Modding
 
-> **A deterministic 60 Hz solver, and a modding platform built into the engine from day one.**
+> **A fixed-timestep 60 Hz solver, and a modding platform built into the engine from day one.**
 > Minecraft became Minecraft because of its modders. Morrowind and Skyrim are still played two decades on for the
 > same reason. Modding in RetroEngine is part of the core design, not a later add-on.
 
@@ -42,7 +42,8 @@ not in `onUpdate`.
 | Component                       | Key fields |
 |---------------------------------|------------|
 | `RigidBodyComponent`            | `motionType` (`STATIC` / `KINEMATIC` / `DYNAMIC`), `mass`, `useGravity`, `linearDrag`, `angularDrag`, `friction`, `restitution` |
-| `BoxCollider` / `SphereCollider` / `CapsuleCollider` | Shape dimensions, `isTrigger` |
+| `BoxCollider` / `SphereCollider` / `CapsuleCollider` | Shape dimensions, offset, `isTrigger`, `collisionLayer`, `collidesWith` |
+| `MeshCollider`                  | `meshPath` (empty uses the entity's Mesh Filter), `collisionLayer`, `collidesWith`. Static only |
 | `CharacterControllerComponent`  | `moveSpeed`, `sprintSpeedMultiplier`, `jumpForce`, `stepOffset`, `slopeLimit`, `gravityMultiplier`, `isGrounded`, `inputEnabled` |
 | `VehicleControllerComponent`    | 4-wheel raycast suspension: `engineTorque`, `maxSpeed`, `steeringAngle`, `brakeForce`, `suspensionStiffness` / `Damping` / `RestLength`, `wheelRadius`, `wheelTrackWidth`, `wheelBase` |
 
@@ -57,13 +58,34 @@ has a `NavMeshAgent` is **nav-driven** (`PhysicsBody.navDriven`). Its horizontal
 Only `DYNAMIC` bodies (plus character and vehicle controllers) write their results back to `Transform`. Static and
 kinematic bodies are read-only to the solver.
 
+**Shapes are real.** Boxes rotate with their entity, spheres and capsules are round, and colliders honor their offset
+and their parents. A capsule's axis is its local Y. Non-uniform scale can't make a sphere an ellipsoid, so a sphere uses
+its largest scale. Character colliders always stay upright, whatever the entity's rotation.
+
+**Dynamic bodies** tumble, use `mass` in every contact, and use `friction` (the square root of the two bodies' values, and
+a collider with no `RigidBody` counts as 0.5). Impacts under 1 m/s don't bounce, so bodies can settle. There are no joints
+and no sleeping, so a settled body still costs solver time. A rough cost is 3 µs per box per step.
+
+**Mesh colliders** are for level geometry. Their triangles load when Play starts, from the same cooked package the
+renderer uses, and their scale is read once. They never move, even with a `RigidBody`. Characters, spheres and capsules
+get exact contacts. A box checks corners only, so two edges crossing with no corner inside either shape make no contact.
+Navmesh baking doesn't read mesh colliders yet, and the editor doesn't draw them.
+
+**Collision layers.** `collisionLayer` is 0 to 31. `collidesWith` lists layers, such as `0,3`, and empty means all of
+them. Both bodies have to agree, so either side can opt out. Triggers, character ground probes and vehicle wheels follow
+the same rules.
+
+**Fast bodies.** A dynamic body that would move more than half its smallest radius in a step sweeps ahead and stops at
+the first immovable surface. Two fast dynamic bodies can still pass through each other.
+
 ### 1.3 Solver Stages
 
 | Stage        | Class                       | Job |
 |--------------|-----------------------------|-----|
 | Broadphase   | `BroadphaseSolver`          | Dynamic AABB tree (BVH) with SAH insertion, AVL balancing, 20 cm fat-AABB margin |
-| Narrowphase  | `NarrowphaseSolver`         | Box / sphere / capsule manifolds, trigger volumes, positional separation |
-| Characters   | `CharacterControllerSolver` | Ground probe, step snapping, gravity, friction. Classic third-person feel, gamepad-first |
+| Narrowphase  | `NarrowphaseSolver`         | Contact points between oriented boxes, spheres, capsules and triangle meshes |
+| Solver       | `ContactSolver`             | Warm-started sequential impulses: mass, friction, restitution, then a split-impulse pass for overlap |
+| Characters   | `CharacterControllerSolver` | Ground probe, slopes, step snapping, gravity, friction. Classic third-person feel, gamepad-first |
 | Vehicles     | `VehicleSuspensionSolver`   | Per-wheel raycast suspension |
 | Contacts     | `ContactPairSet`            | Enter / Stay / Exit tracking for collision and trigger callbacks |
 
@@ -71,13 +93,23 @@ The fat-AABB margin means a body that moves a few centimeters doesn't reinsert i
 
 **Step-up contacts.** When a **grounded** character (not moving upward) touches the side of a static or kinematic
 obstacle whose top is no more than `stepOffset` above its feet (plus 2 cm of float slack, so a 0.3 m step with a
-0.3 m offset still counts), the narrowphase **lifts the character onto it** instead of pushing it back. The ground
+0.3 m offset still counts), the character solver **lifts the character onto it** instead of pushing it back. The ground
 probe snaps it to the new surface on the next step. Dynamic bodies and other characters are never stepped onto.
 This is what lets characters and nav agents climb stairs without ramps.
 
+**Slopes.** A surface no steeper than `slopeLimit` holds a character up, and standing on it doesn't slide them. Anything
+steeper can't lift them: they are pushed sideways and gravity takes them down it.
+
+**Characters and dynamic bodies.** The solver treats a character as immovable, so a character pushes a crate at walking
+speed whatever the crate weighs. A crate pinned against a wall doesn't stop the character either.
+
+**Vehicles.** A vehicle with no dynamic `RigidBody` doesn't stop at walls. It raises collision events and pushes dynamic
+bodies aside.
+
 ### 1.4 Raycasts
 
-Rays hit solid colliders only. They pass through triggers, and so does every character's ground probe.
+Rays hit solid colliders only, on their true surface. They pass through triggers, and so does every character's ground
+probe. A ray that starts inside a box, sphere or capsule ignores that shape. Mesh colliders are hit from either side.
 
 ```java
 // Convenience: allocates one RaycastHit
@@ -88,6 +120,8 @@ private final RaycastHit scratch = new RaycastHit();
 physics.raycastExcludingInPlace(self, ox, oy, oz, dx, dy, dz, 50f, scratch);
 if (scratch.hit) { /* scratch.entity, scratch.distance, scratch.point*, scratch.normal* */ }
 ```
+
+To see only some layers, add a mask with one bit per layer: `(1 << 0) | (1 << 3)` sees layers 0 and 3.
 
 Rays are pruned hierarchically through the BVH. In anything that runs every frame, **use the `InPlace` variant.**
 

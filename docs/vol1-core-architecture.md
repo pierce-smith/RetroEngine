@@ -282,7 +282,7 @@ actually changes.
 > **Binary layout rule:** fields are serialized **in `order` sequence**. Never reorder, insert or remove annotated
 > fields. Append new ones with the next `order`, and gate them with `since` / `prefabSince` and a format version bump.
 
-**File format.** Scenes (format 9) and prefabs (format 8) share these guarantees, and older files keep loading:
+**File format.** Scenes (format 10) and prefabs (format 9) share these guarantees, and older files keep loading:
 
 - **Saves are all-or-nothing.** The file is built in memory, then swapped in atomically by `AtomicFile`. Anything that
   goes wrong along the way leaves the old file untouched.

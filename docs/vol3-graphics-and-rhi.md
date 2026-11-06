@@ -112,6 +112,9 @@ The backends call it the "4-phase pipeline." Counting every distinct render targ
 data, so filtering matches. Its box filter weights color by alpha, so cutouts don't pick up dark fringes. The chain is
 built at load time, not cook time. Only the material samplers use mips; UI sampling stays on the full-size level.
 
+**Filtering.** Scene materials default to nearest-neighbor, for both texels and mip selection, so low-res art stays
+blocky. UI text and post-processing keep linear filtering through their own sampler (`u_ScreenSampler` on Vulkan).
+
 **Ground shadow blobs.** `GroundHeightIndex` indexes every visible mesh once per frame in a hashed grid, so finding the
 surface under a draw only looks at its neighbors. Objects wider than two grid cells, such as floors, go in a short list
 that every query checks.

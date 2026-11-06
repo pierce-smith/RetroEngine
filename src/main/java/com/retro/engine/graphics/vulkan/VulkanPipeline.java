@@ -118,17 +118,18 @@ public class VulkanPipeline {
         try (MemoryStack stack = stackPush()) {
             // 1. 3D Scene Pass Layout: one bindless set shared by the scene, skinned, blob and shadow depth pipelines.
             // No dynamic descriptors: the palette slot travels in push constants, so the set is bound once per pass.
-            VkDescriptorSetLayoutBinding.Buffer bindings3D = VkDescriptorSetLayoutBinding.calloc(5, stack);
+            VkDescriptorSetLayoutBinding.Buffer bindings3D = VkDescriptorSetLayoutBinding.calloc(6, stack);
             bindings3D.get(0).binding(VulkanGpuCache.BINDING_LIGHT_UBO).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
             bindings3D.get(1).binding(VulkanGpuCache.BINDING_MATERIAL_SAMPLER).descriptorType(VK_DESCRIPTOR_TYPE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
             bindings3D.get(2).binding(VulkanGpuCache.BINDING_SHADOW_MAP).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
             bindings3D.get(3).binding(VulkanGpuCache.BINDING_BONE_PALETTES).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_VERTEX_BIT);
             bindings3D.get(4).binding(VulkanGpuCache.BINDING_TEXTURE_TABLE).descriptorType(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).descriptorCount(bindlessTextureCapacity).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+            bindings3D.get(5).binding(VulkanGpuCache.BINDING_SCREEN_SAMPLER).descriptorType(VK_DESCRIPTOR_TYPE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
 
             // Only the texture table is partially bound: slots without a registered texture are never written
             VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlags = VkDescriptorSetLayoutBindingFlagsCreateInfo.calloc(stack)
                     .sType$Default()
-                    .pBindingFlags(stack.ints(0, 0, 0, 0, VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT));
+                    .pBindingFlags(stack.ints(0, 0, 0, 0, VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT, 0));
 
             VkDescriptorSetLayoutCreateInfo dsCreateInfo3D = VkDescriptorSetLayoutCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)

@@ -17,7 +17,6 @@ import com.retro.engine.ecs.SceneWorld;
 import com.retro.engine.ecs.components.BoxCollider;
 import com.retro.engine.ecs.components.RigidBodyComponent;
 import com.retro.engine.ecs.components.Transform;
-import com.retro.engine.testing.KnownIssue;
 import com.retro.engine.testing.TestEntities;
 
 import org.junit.jupiter.api.Test;
@@ -26,8 +25,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * What collision is supposed to do. The @KnownIssue tests are the physics section of the 1.0 diagnostic: they turn
- * into plain regression tests as the solver work lands.
+ * What collision is supposed to do, including every physics measurement from the 1.0 diagnostic.
  */
 class PhysicsCollisionTest {
 
@@ -98,7 +96,6 @@ class PhysicsCollisionTest {
     }
 
     @Test
-    @KnownIssue("Spheres collide as boxes (diagnostic 5.3)")
     void spheresThatDoNotTouchDoNotCollide() {
         Entity a = sphere(0, 0, 0, 0.5f, STATIC);
         Entity b = sphere(0.8f, 0.7f, 0, 0.5f, DYNAMIC); // centers 1.06 apart, radii sum to 1.0
@@ -109,7 +106,6 @@ class PhysicsCollisionTest {
     }
 
     @Test
-    @KnownIssue("Equal X and Y overlap picks the Z axis and teleports the body (diagnostic section 4)")
     void tiedOverlapDoesNotTeleportAlongAnUninvolvedAxis() {
         Entity a = sphere(0, 0, 0, 0.5f, STATIC);
         Entity b = sphere(0.8f, 0.8f, 0, 0.5f, DYNAMIC);
@@ -119,7 +115,6 @@ class PhysicsCollisionTest {
     }
 
     @Test
-    @KnownIssue("Collider rotation is ignored (diagnostic 5.3)")
     void rayMissesPastTheEdgeOfARotatedPlate() {
         Entity plate = box(0, 0, 0, 4, 0.2f, 4, STATIC);
         plate.getTransform().rotZ = 45.0f; // true half-width on X is now about 1.48
@@ -130,7 +125,6 @@ class PhysicsCollisionTest {
     }
 
     @Test
-    @KnownIssue("Bodies read local Transform values, not world ones (diagnostic 5.3)")
     void parentedColliderIsFoundAtItsWorldPosition() {
         SceneWorld world = new SceneWorld();
         Entity parent = world.spawnEntity("parent", "parent", null);
@@ -154,7 +148,6 @@ class PhysicsCollisionTest {
     }
 
     @Test
-    @KnownIssue("Collider offsets are ignored (diagnostic 5.3)")
     void colliderOffsetMovesTheCollider() {
         Entity e = box(0, 0, 0, 1, 1, 1, STATIC);
         e.getComponent(BoxCollider.class).offsetX = 5.0f;
@@ -166,7 +159,6 @@ class PhysicsCollisionTest {
     }
 
     @Test
-    @KnownIssue("Contacts ignore mass and transfer no momentum (diagnostic 5.3)")
     void heavyBodyPlowsThroughALightOne() {
         Entity heavy = box(0, 0, 0, 1, 1, 1, DYNAMIC);
         Entity light = box(1.2f, 0, 0, 1, 1, 1, DYNAMIC);
@@ -184,7 +176,6 @@ class PhysicsCollisionTest {
     }
 
     @Test
-    @KnownIssue("RigidBodyComponent.friction is never read (diagnostic 5.3)")
     void frictionStopsASlidingBox() {
         Entity floor = box(0, -0.5f, 0, 200, 1, 200, STATIC);
         Entity slider = box(0, 0.5f, 0, 1, 1, 1, DYNAMIC);
@@ -198,7 +189,6 @@ class PhysicsCollisionTest {
     }
 
     @Test
-    @KnownIssue("No continuous collision, so fast bodies tunnel (diagnostic 5.3)")
     void fastBodyDoesNotPassThroughAThinWall() {
         Entity wall = box(0, 0, 0, 0.2f, 10, 10, STATIC);
         Entity bullet = sphere(-5.5f, 0, 0, 0.05f, DYNAMIC); // 1 m per step, so no step lands inside the wall

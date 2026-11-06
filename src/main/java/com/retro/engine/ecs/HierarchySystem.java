@@ -251,6 +251,44 @@ public class HierarchySystem {
         return wt;
     }
 
+    /** Sets an entity's local position and rotation so that it lands on the given world pose, whatever its parent is. */
+    public void setWorldPose(Entity entity, List<Entity> sceneEntities, float px, float py, float pz, float rx, float ry, float rz) {
+        Transform tc = entity.getTransform();
+        if (tc == null) return;
+        ensureEntityIndex(sceneEntities);
+        Entity parent = entityMapScratch.get(entity.parentId);
+        WorldTransform parentWt = parent != null ? getComputedWorldTransform(parent, sceneEntities) : null;
+        if (parentWt == null) {
+            tc.posX = px; tc.posY = py; tc.posZ = pz;
+            tc.rotX = rx; tc.rotY = ry; tc.rotZ = rz;
+            return;
+        }
+        double[] p = matScratchA, w = matScratchB, l = matScratchC;
+        rotationMatrix(parentWt.rx(), parentWt.ry(), parentWt.rz(), p);
+        rotationMatrix(rx, ry, rz, w);
+        double dx = px - parentWt.px(), dy = py - parentWt.py(), dz = pz - parentWt.pz();
+        tc.posX = (float) ((p[0] * dx + p[3] * dy + p[6] * dz) / nonZero(parentWt.sx()));
+        tc.posY = (float) ((p[1] * dx + p[4] * dy + p[7] * dz) / nonZero(parentWt.sy()));
+        tc.posZ = (float) ((p[2] * dx + p[5] * dy + p[8] * dz) / nonZero(parentWt.sz()));
+        // Local rotation = parent^T * world
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) l[i * 3 + j] = p[i] * w[j] + p[3 + i] * w[3 + j] + p[6 + i] * w[6 + j];
+        }
+        double sy = Math.max(-1.0, Math.min(1.0, l[6]));
+        tc.rotY = (float) Math.toDegrees(Math.asin(sy));
+        if (Math.abs(sy) < 0.99999) {
+            tc.rotX = (float) Math.toDegrees(Math.atan2(-l[7], l[8]));
+            tc.rotZ = (float) Math.toDegrees(Math.atan2(-l[3], l[0]));
+        } else {
+            tc.rotX = (float) Math.toDegrees(Math.atan2(sy * l[1], l[4]));
+            tc.rotZ = 0.0f;
+        }
+    }
+
+    private static float nonZero(float v) {
+        return Math.abs(v) > 1e-6f ? v : 1.0f;
+    }
+
     public float[] rotateVector(float x, float y, float z, float pitchDeg, float yawDeg, float rollDeg) {
         return rotateVector(x, y, z, pitchDeg, yawDeg, rollDeg, rotScratch);
     }

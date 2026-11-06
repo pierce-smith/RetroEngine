@@ -368,6 +368,23 @@ public abstract class EntityScript {
         return out.hit;
     }
 
+    /**
+     * The same raycast limited to some collision layers. {@code layerMask} has one bit per layer, so
+     * {@code (1 << 0) | (1 << 3)} sees layers 0 and 3 only.
+     */
+    public boolean raycast(float rayOriginX, float rayOriginY, float rayOriginZ,
+                           float rayDirX, float rayDirY, float rayDirZ, float maxDistance, RaycastHit out, int layerMask) {
+        if (out == null) return false;
+        if (sceneWorld == null || sceneWorld.getPhysicsWorld() == null) {
+            out.hit = false;
+            out.entity = null;
+            out.distance = Float.MAX_VALUE;
+            return false;
+        }
+        sceneWorld.getPhysicsWorld().raycastExcludingInPlace(entity, rayOriginX, rayOriginY, rayOriginZ, rayDirX, rayDirY, rayDirZ, maxDistance, out, layerMask);
+        return out.hit;
+    }
+
     // =========================================================================
     // Controller Haptics
     // =========================================================================

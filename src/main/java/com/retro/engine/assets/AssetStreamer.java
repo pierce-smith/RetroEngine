@@ -57,6 +57,14 @@ public class AssetStreamer {
         return cooked.isFile() ? cooked.getPath() : null;
     }
 
+    /** Reads a mesh on the calling thread, cooked package first, for systems that need its data rather than a GPU handle. */
+    public static MeshBufferData readMeshNow(String filePath) {
+        if (filePath == null || filePath.isEmpty()) return null;
+        String cooked = filePath.endsWith(".rpack") ? filePath : findCookedPackage(filePath);
+        MeshBufferData data = cooked != null ? RpackCooker.readRpackMesh(cooked) : null;
+        return data != null ? data : MeshImporter.loadModel(filePath);
+    }
+
     private final Map<String, MeshBufferData> modelCache = new ConcurrentHashMap<>();
     private final Map<String, PixelBufferData> textureCache = new ConcurrentHashMap<>();
 

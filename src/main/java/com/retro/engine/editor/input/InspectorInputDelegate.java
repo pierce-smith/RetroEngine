@@ -815,6 +815,7 @@ public class InspectorInputDelegate {
         addComponentItem(items, entities, "+ Box Collider", BoxCollider.class, BoxCollider::new);
         addComponentItem(items, entities, "+ Sphere Collider", SphereCollider.class, SphereCollider::new);
         addComponentItem(items, entities, "+ Capsule Collider", CapsuleCollider.class, CapsuleCollider::new);
+        addComponentItem(items, entities, "+ Mesh Collider", com.retro.engine.ecs.components.MeshCollider.class, com.retro.engine.ecs.components.MeshCollider::new);
         addComponentItem(items, entities, "+ Light Source", Light.class, Light::new);
         addComponentItem(items, entities, "+ Audio Source", AudioSource.class, AudioSource::new);
         addComponentItem(items, entities, "+ Audio Reverb Zone", com.retro.engine.ecs.components.AudioReverbZone.class, com.retro.engine.ecs.components.AudioReverbZone::new);

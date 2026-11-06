@@ -19,7 +19,7 @@ public class PrefabSerializer {
 
     public static final int PREFAB_MAGIC = 0x50524546; // 'PREF' in ASCII
     // Version 2 layout: no asset UUIDs, reduced Material record (fields gated with prefabSince = 3 are omitted)
-    public static final int PREFAB_VERSION = 8; // Version 8 (self-contained components, checksum)
+    public static final int PREFAB_VERSION = 9; // Version 9 (collision layers, mesh collider)
 
     public record PrefabTemplate(List<Entity> entities, String rootEntityId) {}
 

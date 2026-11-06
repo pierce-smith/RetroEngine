@@ -36,9 +36,10 @@ public class BroadphaseSolver {
     private int nodeCount = 0;
 
     // Stack buffers for zero-allocation tree traversal
-    private final int[] queryStack = new int[128];
-    private final int[] pairStack = new int[128];
-    private final int[] raycastStack = new int[128];
+    private final int[] queryStack = new int[1024];
+    private final int[] pairStack = new int[1024];
+    private final int[] raycastStack = new int[1024];
+    private final ShapeRaycast shapeRaycast = new ShapeRaycast();
 
     public BroadphaseSolver() {
         for (int i = 0; i < nodes.length; i++) {
@@ -482,92 +483,68 @@ public class BroadphaseSolver {
     }
 
     public void raycastInPlace(Entity excludeEntity, float rayOriginX, float rayOriginY, float rayOriginZ,
-                               float rayDirX, float rayDirY, float rayDirZ, float maxDistance,
-                               RaycastHit outHit, PhysicsSystem physicsSystem) {
+                               float rayDirX, float rayDirY, float rayDirZ, float maxDistance, RaycastHit outHit, int layerMask) {
+        float dirLen = (float) Math.sqrt(rayDirX * rayDirX + rayDirY * rayDirY + rayDirZ * rayDirZ);
+        if (dirLen <= 0.00001f) {
+            outHit.hit = false;
+            outHit.distance = 0.0f;
+            outHit.entity = null;
+            return;
+        }
+        cast(excludeEntity, rayOriginX, rayOriginY, rayOriginZ, rayDirX / dirLen, rayDirY / dirLen, rayDirZ / dirLen,
+                maxDistance, 0.0f, false, layerMask, outHit);
+    }
+
+    /**
+     * Closest solid shape along a unit ray. {@code inflate} makes it a sphere sweep of that radius, and
+     * {@code immovableOnly} skips dynamic bodies. Only layers in {@code layerMask} count. Triggers aren't solid, so rays pass through them, including every
+     * character's ground probe.
+     */
+    void cast(Entity excludeEntity, float ox, float oy, float oz, float dx, float dy, float dz, float maxDistance,
+              float inflate, boolean immovableOnly, int layerMask, RaycastHit outHit) {
         outHit.hit = false;
         outHit.distance = 0.0f;
         outHit.entity = null;
-
         if (rootId == -1) return;
 
-        float dirLen = (float) Math.sqrt(rayDirX * rayDirX + rayDirY * rayDirY + rayDirZ * rayDirZ);
-        if (dirLen <= 0.00001f) return;
-
-        float dx = rayDirX / dirLen;
-        float dy = rayDirY / dirLen;
-        float dz = rayDirZ / dirLen;
-
+        float reach = maxDistance;
+        float ix = 1.0f / (dx != 0 ? dx : 1e-8f), iy = 1.0f / (dy != 0 ? dy : 1e-8f), iz = 1.0f / (dz != 0 ? dz : 1e-8f);
         int stackTop = 0;
         raycastStack[stackTop++] = rootId;
 
         while (stackTop > 0) {
-            int currId = raycastStack[--stackTop];
-            Node node = nodes[currId];
-
-            float t1 = (node.minX - rayOriginX) / (dx != 0 ? dx : 1e-8f);
-            float t2 = (node.maxX - rayOriginX) / (dx != 0 ? dx : 1e-8f);
-            float t3 = (node.minY - rayOriginY) / (dy != 0 ? dy : 1e-8f);
-            float t4 = (node.maxY - rayOriginY) / (dy != 0 ? dy : 1e-8f);
-            float t5 = (node.minZ - rayOriginZ) / (dz != 0 ? dz : 1e-8f);
-            float t6 = (node.maxZ - rayOriginZ) / (dz != 0 ? dz : 1e-8f);
-
+            Node node = nodes[raycastStack[--stackTop]];
+            float t1 = (node.minX - inflate - ox) * ix, t2 = (node.maxX + inflate - ox) * ix;
+            float t3 = (node.minY - inflate - oy) * iy, t4 = (node.maxY + inflate - oy) * iy;
+            float t5 = (node.minZ - inflate - oz) * iz, t6 = (node.maxZ + inflate - oz) * iz;
             float tmin = Math.max(Math.max(Math.min(t1, t2), Math.min(t3, t4)), Math.min(t5, t6));
             float tmax = Math.min(Math.min(Math.max(t1, t2), Math.max(t3, t4)), Math.max(t5, t6));
 
             // Node bounds only gate traversal: a ray starting inside a node (tmin < 0) can still hit its children
-            if (tmax >= Math.max(tmin, 0.0f) && tmin <= maxDistance) {
-                if (node.isLeaf()) {
-                    PhysicsSystem.PhysicsBody body = node.body;
-                    // Triggers aren't solid: rays pass through them, including every character's ground probe
-                    if (body != null && !body.isTrigger() && (excludeEntity == null || body.entity != excludeEntity)) {
-                        float bodyMinX = body.px - physicsSystem.getHalfWidthX(body);
-                        float bodyMaxX = body.px + physicsSystem.getHalfWidthX(body);
-                        float bodyMinY = body.py - physicsSystem.getHalfWidthY(body);
-                        float bodyMaxY = body.py + physicsSystem.getHalfWidthY(body);
-                        float bodyMinZ = body.pz - physicsSystem.getHalfWidthZ(body);
-                        float bodyMaxZ = body.pz + physicsSystem.getHalfWidthZ(body);
-
-                        float bt1 = (bodyMinX - rayOriginX) / (dx != 0 ? dx : 1e-8f);
-                        float bt2 = (bodyMaxX - rayOriginX) / (dx != 0 ? dx : 1e-8f);
-                        float bt3 = (bodyMinY - rayOriginY) / (dy != 0 ? dy : 1e-8f);
-                        float bt4 = (bodyMaxY - rayOriginY) / (dy != 0 ? dy : 1e-8f);
-                        float bt5 = (bodyMinZ - rayOriginZ) / (dz != 0 ? dz : 1e-8f);
-                        float bt6 = (bodyMaxZ - rayOriginZ) / (dz != 0 ? dz : 1e-8f);
-
-                        float btmin = Math.max(Math.max(Math.min(bt1, bt2), Math.min(bt3, bt4)), Math.min(bt5, bt6));
-                        float btmax = Math.min(Math.min(Math.max(bt1, bt2), Math.max(bt3, bt4)), Math.max(bt5, bt6));
-
-                        if (btmax >= btmin && btmin >= 0.0f && btmin <= maxDistance) {
-                            if (!outHit.hit || btmin < outHit.distance) {
-                                float hitPx = rayOriginX + dx * btmin;
-                                float hitPy = rayOriginY + dy * btmin;
-                                float hitPz = rayOriginZ + dz * btmin;
-
-                                float nx = 0.0f, ny = 1.0f, nz = 0.0f;
-                                if (Math.abs(hitPx - bodyMinX) < 0.01f) nx = -1.0f;
-                                else if (Math.abs(hitPx - bodyMaxX) < 0.01f) nx = 1.0f;
-                                else if (Math.abs(hitPy - bodyMinY) < 0.01f) ny = -1.0f;
-                                else if (Math.abs(hitPy - bodyMaxY) < 0.01f) ny = 1.0f;
-                                else if (Math.abs(hitPz - bodyMinZ) < 0.01f) nz = -1.0f;
-                                else if (Math.abs(hitPz - bodyMaxZ) < 0.01f) nz = 1.0f;
-
-                                outHit.entity = body.entity;
-                                outHit.distance = btmin;
-                                outHit.pointX = hitPx;
-                                outHit.pointY = hitPy;
-                                outHit.pointZ = hitPz;
-                                outHit.normalX = nx;
-                                outHit.normalY = ny;
-                                outHit.normalZ = nz;
-                                outHit.hit = true;
-                            }
-                        }
-                    }
-                } else {
-                    raycastStack[stackTop++] = node.left;
-                    raycastStack[stackTop++] = node.right;
-                }
+            if (tmax < Math.max(tmin, 0.0f) || tmin > reach) continue;
+            if (!node.isLeaf()) {
+                raycastStack[stackTop++] = node.left;
+                raycastStack[stackTop++] = node.right;
+                continue;
             }
+
+            PhysicsSystem.PhysicsBody body = node.body;
+            if (body == null || body.isTrigger() || body.entity == excludeEntity) continue;
+            if (immovableOnly && body.invMass > 0.0f) continue;
+            if ((body.layerBit & layerMask) == 0) continue;
+            float t = shapeRaycast.cast(body, ox, oy, oz, dx, dy, dz, reach, inflate);
+            if (t < 0.0f) continue;
+
+            reach = t; // Anything further away can't win, so stop looking past it
+            outHit.hit = true;
+            outHit.entity = body.entity;
+            outHit.distance = t;
+            outHit.pointX = ox + dx * t;
+            outHit.pointY = oy + dy * t;
+            outHit.pointZ = oz + dz * t;
+            outHit.normalX = shapeRaycast.normalX;
+            outHit.normalY = shapeRaycast.normalY;
+            outHit.normalZ = shapeRaycast.normalZ;
         }
     }
 

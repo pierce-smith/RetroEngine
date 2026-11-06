@@ -92,6 +92,7 @@ public class VulkanGpuCache {
     public static final int BINDING_SHADOW_MAP = 2;
     public static final int BINDING_BONE_PALETTES = 3;
     public static final int BINDING_TEXTURE_TABLE = 4;
+    public static final int BINDING_SCREEN_SAMPLER = 5;
 
     // Material channels, in push constant order: texIndices.xyzw then texIndices2.x
     public static final int CHANNEL_ALBEDO = 0;
@@ -211,6 +212,7 @@ public class VulkanGpuCache {
 
     // Bindless descriptor state: a dedicated one-set pool that is never reset
     private long materialSampler = 0L;
+    private long screenSampler = 0L;
     private long bindlessPool = 0L;
     private long bindlessSet = 0L;
     private int bindlessCapacity = 0;
@@ -669,7 +671,7 @@ public class VulkanGpuCache {
             System.err.println("[VulkanGpuCache] ERROR: Failed to allocate the " + SHADOW_MAP_SIZE + "x" + SHADOW_MAP_SIZE + " directional shadow map.");
             return false;
         }
-        if (!createMaterialSampler(device)) {
+        if (!createSetSamplers(device)) {
             System.err.println("[VulkanGpuCache] ERROR: Failed to create the shared material sampler.");
             return false;
         }
@@ -694,13 +696,20 @@ public class VulkanGpuCache {
         return true;
     }
 
-    private boolean createMaterialSampler(VulkanDevice device) {
+    /** Scene textures stay blocky up close and snap between mips; screen-space reads keep linear filtering. */
+    private boolean createSetSamplers(VulkanDevice device) {
+        materialSampler = createRepeatSampler(device, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST);
+        screenSampler = createRepeatSampler(device, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR);
+        return materialSampler != 0L && screenSampler != 0L;
+    }
+
+    private long createRepeatSampler(VulkanDevice device, int filter, int mipmapMode) {
         try (MemoryStack stack = stackPush()) {
             VkSamplerCreateInfo samplerInfo = VkSamplerCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO)
-                    .magFilter(VK_FILTER_LINEAR)
-                    .minFilter(VK_FILTER_LINEAR)
-                    .mipmapMode(VK_SAMPLER_MIPMAP_MODE_LINEAR)
+                    .magFilter(filter)
+                    .minFilter(filter)
+                    .mipmapMode(mipmapMode)
                     .addressModeU(VK_SAMPLER_ADDRESS_MODE_REPEAT)
                     .addressModeV(VK_SAMPLER_ADDRESS_MODE_REPEAT)
                     .addressModeW(VK_SAMPLER_ADDRESS_MODE_REPEAT)
@@ -714,9 +723,7 @@ public class VulkanGpuCache {
                     .unnormalizedCoordinates(false);
 
             LongBuffer pSampler = stack.mallocLong(1);
-            if (vkCreateSampler(device.getLogicalDevice(), samplerInfo, null, pSampler) != VK_SUCCESS) return false;
-            materialSampler = pSampler.get(0);
-            return true;
+            return vkCreateSampler(device.getLogicalDevice(), samplerInfo, null, pSampler) == VK_SUCCESS ? pSampler.get(0) : 0L;
         }
     }
 
@@ -726,7 +733,7 @@ public class VulkanGpuCache {
         try (MemoryStack stack = stackPush()) {
             VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(5, stack);
             poolSizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1);
-            poolSizes.get(1).type(VK_DESCRIPTOR_TYPE_SAMPLER).descriptorCount(1);
+            poolSizes.get(1).type(VK_DESCRIPTOR_TYPE_SAMPLER).descriptorCount(2);
             poolSizes.get(2).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1);
             poolSizes.get(3).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1);
             poolSizes.get(4).type(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).descriptorCount(bindlessCapacity);
@@ -751,18 +758,20 @@ public class VulkanGpuCache {
 
             VkDescriptorBufferInfo.Buffer lightInfo = VkDescriptorBufferInfo.calloc(1, stack).buffer(lightUbo.bufferHandle).offset(0).range(LIGHT_UBO_SIZE);
             VkDescriptorImageInfo.Buffer samplerInfo = VkDescriptorImageInfo.calloc(1, stack).sampler(materialSampler);
+            VkDescriptorImageInfo.Buffer screenSamplerInfo = VkDescriptorImageInfo.calloc(1, stack).sampler(screenSampler);
             VkDescriptorImageInfo.Buffer shadowInfo = VkDescriptorImageInfo.calloc(1, stack)
                     .imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(shadowMapImageView).sampler(shadowMapSampler);
             VkDescriptorBufferInfo.Buffer paletteInfo = VkDescriptorBufferInfo.calloc(1, stack).buffer(palette.bufferHandle).offset(0).range(VK_WHOLE_SIZE);
             VkDescriptorImageInfo.Buffer whiteInfo = VkDescriptorImageInfo.calloc(1, stack)
                     .imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).imageView(white.imageViewHandle);
 
-            VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(5, stack);
+            VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(6, stack);
             writes.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(bindlessSet).dstBinding(BINDING_LIGHT_UBO).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).pBufferInfo(lightInfo);
             writes.get(1).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(bindlessSet).dstBinding(BINDING_MATERIAL_SAMPLER).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_SAMPLER).pImageInfo(samplerInfo);
             writes.get(2).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(bindlessSet).dstBinding(BINDING_SHADOW_MAP).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(shadowInfo);
             writes.get(3).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(bindlessSet).dstBinding(BINDING_BONE_PALETTES).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(paletteInfo);
             writes.get(4).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(bindlessSet).dstBinding(BINDING_TEXTURE_TABLE).dstArrayElement(WHITE_TEXTURE_SLOT).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).pImageInfo(whiteInfo);
+            writes.get(5).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(bindlessSet).dstBinding(BINDING_SCREEN_SAMPLER).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_SAMPLER).pImageInfo(screenSamplerInfo);
 
             vkUpdateDescriptorSets(vkDevice, writes, null);
             return true;
@@ -1157,6 +1166,10 @@ public class VulkanGpuCache {
         if (materialSampler != 0L) {
             vkDestroySampler(vkDevice, materialSampler, null);
             materialSampler = 0L;
+        }
+        if (screenSampler != 0L) {
+            vkDestroySampler(vkDevice, screenSampler, null);
+            screenSampler = 0L;
         }
 
         textureRegistry.cleanup(vkDevice);
