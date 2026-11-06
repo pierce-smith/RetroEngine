@@ -718,6 +718,10 @@ The runtime bus layer **resets to unity when Play stops**, so a pause-menu mute 
 level, `EntityScript` also offers `playSound(path, volume, spatial, AudioBus, ducksBgm)`, `playSoundAt(path,
 volume, x, y, z[, AudioBus])` and `stopAllSounds()`. One-shots share a pool of 32 sources (Volume 1 §4.1).
 
+An entity can carry several `AudioSource`s, for layers that share a position such as an engine's idle and load loops.
+Each one plays, pauses, tracks the entity and is disposed on its own. `audio()` returns the first; use
+`entity.getComponents(AudioSource.class)` for the rest. One-shots take their distances from the first source.
+
 **Camera shake keeps the logical pose and the rendered pose separate.** This matters more than it looks. A
 naive shake writes an offset into the camera transform, and then the mouse-look script reads that offset back,
 adds to it, and the camera slowly drifts off. `ScriptCameraShake` avoids that by only touching the transform

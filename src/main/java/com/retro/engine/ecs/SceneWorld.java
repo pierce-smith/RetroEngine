@@ -390,8 +390,7 @@ public class SceneWorld {
     private void clearRegistryAndRebind(List<Entity> newEntities, boolean disposeOld) {
         for (Entity e : sceneEntities) {
             if (e != null) {
-                AudioSource ac = e.getComponent(AudioSource.class);
-                if (ac != null) {
+                for (AudioSource ac : e.getComponents(AudioSource.class)) {
                     if (disposeOld) ac.dispose();
                     else ac.stop();
                 }
@@ -653,8 +652,7 @@ public class SceneWorld {
     // --- DELEGATED ENTITY FACTORY OPERATIONS ---
     public void deleteEntity(Entity target) {
         if (target != null) {
-            AudioSource ac = target.getComponent(AudioSource.class);
-            if (ac != null) ac.dispose();
+            for (AudioSource ac : target.getComponents(AudioSource.class)) ac.dispose();
 
             unregisterEntityHandle(target);
             entityFactory.deleteEntity(target, sceneEntities);

@@ -169,10 +169,13 @@ public class SimulationSystem {
         for (int i = 0; i < activeEntities.size(); i++) {
             Entity entity = activeEntities.get(i);
             if (entity == null) continue;
-            AudioSource audioSource = entity.getComponent(AudioSource.class);
-            if (audioSource != null && audioSource.state == AudioSource.PlaybackState.PLAYING) {
-                audioSource.pause();
-                pausedAudioSources.add(audioSource);
+            List<Component> components = entity.getAllComponents();
+            for (int c = 0; c < components.size(); c++) {
+                if (components.get(c) instanceof AudioSource audioSource
+                        && audioSource.state == AudioSource.PlaybackState.PLAYING) {
+                    audioSource.pause();
+                    pausedAudioSources.add(audioSource);
+                }
             }
         }
     }
@@ -188,8 +191,10 @@ public class SimulationSystem {
         for (int i = 0; i < activeEntities.size(); i++) {
             Entity entity = activeEntities.get(i);
             if (entity == null) continue;
-            AudioSource audioSource = entity.getComponent(AudioSource.class);
-            if (audioSource != null && audioSource.playOnStart) audioSource.play();
+            List<Component> components = entity.getAllComponents();
+            for (int c = 0; c < components.size(); c++) {
+                if (components.get(c) instanceof AudioSource audioSource && audioSource.playOnStart) audioSource.play();
+            }
         }
         updateSpatialAudio(0.0f, activeEntities, sceneWorld); // Place sources before the first mixed frame
     }
@@ -222,14 +227,28 @@ public class SimulationSystem {
         for (int i = 0; i < activeEntities.size(); i++) {
             Entity entity = activeEntities.get(i);
             if (entity == null) continue;
-            AudioSource audioSource = entity.getComponent(AudioSource.class);
-            if (audioSource == null || audioSource.getSourceHandle() == 0) continue;
-            SceneWorld.WorldTransform wt = (sceneWorld != null) ? sceneWorld.getComputedWorldTransform(entity) : null;
-            if (wt != null) {
-                audioSource.updateSpatial(wt.px(), wt.py(), wt.pz());
-            } else {
-                Transform tc = entity.getTransform();
-                if (tc != null) audioSource.updateSpatial(tc.posX, tc.posY, tc.posZ);
+            // An entity can carry several sources; they share its position, so it's resolved once, on the first live one
+            List<Component> components = entity.getAllComponents();
+            boolean placed = false;
+            float x = 0.0f, y = 0.0f, z = 0.0f;
+            for (int c = 0; c < components.size(); c++) {
+                if (!(components.get(c) instanceof AudioSource audioSource) || audioSource.getSourceHandle() == 0) continue;
+                if (!placed) {
+                    SceneWorld.WorldTransform wt = (sceneWorld != null) ? sceneWorld.getComputedWorldTransform(entity) : null;
+                    if (wt != null) {
+                        x = wt.px();
+                        y = wt.py();
+                        z = wt.pz();
+                    } else {
+                        Transform tc = entity.getTransform();
+                        if (tc == null) break;
+                        x = tc.posX;
+                        y = tc.posY;
+                        z = tc.posZ;
+                    }
+                    placed = true;
+                }
+                audioSource.updateSpatial(x, y, z);
             }
         }
         AudioEngine.updateOneShots();
