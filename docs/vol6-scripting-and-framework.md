@@ -200,9 +200,7 @@ next script tick → recompile once → for each live instance:
 
 You don't need to call `super.onUpdate()`. Override `onUpdate` and the framework still ticks.
 
-> **Ordering trap:** Inspector property overrides are injected *after* `init()`, which means after `onAwake()`.
-> In `onAwake`, your `public float speed` still holds its initializer value. **Read Inspector-tuned fields in
-> `onStart`.**
+> Inspector property overrides are injected before `init()`, so `onAwake` already sees Inspector-tuned values.
 
 ### 2.2 The `ComponentCache` Model
 
@@ -370,8 +368,8 @@ render
 #### Mid-play prefab instantiation
 
 ```java
-Entity coin = spawnPrefab("Prefabs/Coin.rprefab", x, y, z);   // returns the root, or null
-Entity fx   = spawnPrefab("Prefabs/Spark.rprefab");          // overload: spawn at the prefab's saved position
+Entity coin = spawnPrefab("Prefabs/Coin.prefab.bin", x, y, z);   // returns the root, or null
+Entity fx   = spawnPrefab("Prefabs/Spark.prefab.bin");          // overload: spawn at the prefab's saved position
 ```
 
 `SceneWorld.instantiatePrefabRuntime` was written for spawning during gameplay, not for the editor's "drag prefab
@@ -614,7 +612,7 @@ logs the problem and stops in the last state instead of hanging the frame.
 > access them reliably under Janino. Do the same in your own FSM scripts.
 
 The full working example is in `scripting/framework/examples/EnemyAIStateScript.java`. It runs perception on a 5 Hz
-staggered timer instead of every frame, checks line of sight with multi-pass raycasts that skip trigger volumes, and
+staggered timer instead of every frame, checks line of sight with a raycast, and
 draws its state with `ScriptDebug`.
 
 ---
@@ -667,6 +665,10 @@ playSpatialSound("Assets/Audio/pickup.wav", 0.8f);     // 3D-attenuated, from th
 playGlobalSound("Assets/Audio/stinger.wav");           // non-spatial, full volume (UI, music stingers)
 shakeCamera(0.35f, 0.25f);                              // intensity ~0..1, seconds
 ```
+
+Clip paths resolve through mod overrides and then the project's `Assets/` folder, so `Assets/Audio/x.ogg` and
+`Audio/x.ogg` both work wherever the game runs from. A clip that can't be found logs one error and fails a headless
+`--frames` run.
 
 **Mixer buses** (Volume 1 §4.2). The calls above go to the `SFX` bus. Each one has overloads that take an
 `AudioBus` or a bus name (`"MASTER"`, `"BGM"`, `"SFX"`, `"VOICE"`, case-insensitive, unknown names fall back to
@@ -749,7 +751,7 @@ saveGame();                                                 // force a write now
 
 | Aspect | Behavior |
 |--------|----------|
-| File | `~/.retroengine/saves/<project>.properties`. `<project>` is the folder containing `Assets/`, sanitized to `[A-Za-z0-9-_.]`. |
+| File | `~/.retroengine/saves/<project>.properties`. `<project>` is the folder containing `Assets/` (for an exported game, the project's name, because every export's folder is `Game_Data`), sanitized to `[A-Za-z0-9-_.]`. |
 | Format | `java.util.Properties`: plain text that's easy to diff. Values are stored as strings and read back with the typed getters (`getBool` accepts `true`/`false`/`1`/`0`). |
 | When it writes | `saveGame()`, **when Play stops in the editor**, and from a **JVM shutdown hook** when the game exits. It writes only when something changed. |
 | Crash safety | **Write-then-rename:** the data goes to `<file>.tmp` first and then replaces the save, so a crash mid-write never leaves a truncated file. |
@@ -878,7 +880,6 @@ Related physics changes in this release:
 | ✓ Do | ✗ Don't | Why |
 |------|---------|-----|
 | Extend `SimpleEntityScript` | Extend raw `EntityScript` for gameplay | Cached getters, auto-ticked timers and tweens, auto-cleanup |
-| Read Inspector fields in `onStart` | Read them in `onAwake` | Overrides are injected after `onAwake` (§2.1) |
 | Cache `findPlayer` / `findEntity` in `onStart` | Call them in `onUpdate` | Both scan the whole scene |
 | Create `ScriptTask`s and states once, as fields | Write `new ScriptTask() {…}` in `onUpdate` | Every anonymous-class instance is an allocation |
 | Use `runAfter` / `runEvery` | Use `Thread`, `Timer`, `sleep`, executors | Off-thread ECS writes race the frame. `sleep` freezes everything. |

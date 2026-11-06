@@ -75,12 +75,25 @@ public final class SceneLights {
                 hasDirectional = true;
                 return directional;
             case POINT:
-                return pointCount < MAX_POINT_LIGHTS ? points[pointCount++] : null;
+                if (pointCount < MAX_POINT_LIGHTS) return points[pointCount++];
+                warnOverCapacity("point", MAX_POINT_LIGHTS);
+                return null;
             case SPOT:
-                return spotCount < MAX_SPOT_LIGHTS ? spots[spotCount++] : null;
+                if (spotCount < MAX_SPOT_LIGHTS) return spots[spotCount++];
+                warnOverCapacity("spot", MAX_SPOT_LIGHTS);
+                return null;
             default:
                 throw new IllegalArgumentException("Unknown light type " + type);
         }
+    }
+
+    private static boolean warnedOverCapacity = false;
+
+    /** Once per process: the same lights go over the limit every frame. */
+    private static void warnOverCapacity(String type, int limit) {
+        if (warnedOverCapacity) return;
+        warnedOverCapacity = true;
+        System.err.println("[SceneLights] More than " + limit + " " + type + " lights are active. The extra lights are not drawn.");
     }
 
     public boolean isEmpty() {

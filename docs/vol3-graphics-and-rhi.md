@@ -136,6 +136,14 @@ Vulkan, `Uniforms.fogParams.w` on Metal):
 Blinn-Phong is `0` on purpose, so a zeroed uniform slot keeps the per-pixel look. An unknown persisted name (from a
 newer editor) falls back to the default.
 
+### 2.1a Unlit Meshes
+
+A model whose materials are all unlit (glTF `KHR_materials_unlit`, or the same no-shading model from another format)
+draws its albedo with no lights, ambient or received shadows. It still takes vertex color, emissive and fog, and still
+casts shadows. The flag is per mesh (`MeshBufferData.unlit`), comes from the importer and survives cooking in a trailer
+after the `.rpack` payload. It reaches the shaders as `isUnlit = 3` on Metal and `surface.w` on Vulkan. Sub-meshes merge
+into one draw, so a model that mixes unlit and lit materials draws lit and logs a warning.
+
 ### 2.2 Skeletal Skinning
 
 | Layout   | Stride            | Pipeline |

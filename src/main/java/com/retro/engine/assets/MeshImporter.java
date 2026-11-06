@@ -5,6 +5,7 @@ import com.retro.engine.core.EngineContext;
 import com.retro.engine.ecs.components.AnimatorComponent;
 
 import org.lwjgl.assimp.*;
+import org.lwjgl.system.MemoryStack;
 
 import java.io.File;
 import java.nio.IntBuffer;
@@ -111,9 +112,10 @@ public class MeshImporter {
                 AssimpSource source = new AssimpSource(instances, skinned);
                 MeshBufferData data = MeshDecimator.buildOrDecimate(source, RW35_TARGET_MAX_VERTICES);
                 if (data != null) {
+                    data.unlit = allMaterialsUnlit(scene, file.getName());
                     System.out.println("[MeshImporter] Successfully loaded 3D mesh " + file.getName() + " with " + data.vertexCount
                             + " vertices from " + instances.size() + " sub-meshes (" + source.stride + "-float stride"
-                            + (skinned ? ", " + skeleton.getBoneCount() + " bones" : "") + ").");
+                            + (skinned ? ", " + skeleton.getBoneCount() + " bones" : "") + (data.unlit ? ", unlit" : "") + ").");
                     return data;
                 }
             }
@@ -125,6 +127,35 @@ public class MeshImporter {
         }
 
         return createDefaultCube();
+    }
+
+    /**
+     * Whether every material the meshes use is unlit (glTF KHR_materials_unlit, or the equivalent no-shading model in
+     * other formats). Sub-meshes merge into one draw, so unlit is all-or-nothing: a mix stays lit.
+     */
+    private static boolean allMaterialsUnlit(AIScene scene, String fileName) {
+        int unlit = 0;
+        int numMeshes = scene.mNumMeshes();
+        for (int i = 0; i < numMeshes; i++) {
+            int materialIndex = AIMesh.create(scene.mMeshes().get(i)).mMaterialIndex();
+            if (materialIndex >= 0 && materialIndex < scene.mNumMaterials()
+                    && isUnlit(AIMaterial.create(scene.mMaterials().get(materialIndex)))) {
+                unlit++;
+            }
+        }
+        if (unlit > 0 && unlit < numMeshes) {
+            System.err.println("[MeshImporter] " + fileName + " mixes unlit and lit materials; drawing all of it lit.");
+        }
+        return numMeshes > 0 && unlit == numMeshes;
+    }
+
+    private static boolean isUnlit(AIMaterial material) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            IntBuffer shadingModel = stack.mallocInt(1);
+            int result = aiGetMaterialIntegerArray(material, AI_MATKEY_SHADING_MODEL, aiTextureType_NONE, 0,
+                    shadingModel, stack.ints(1));
+            return result == aiReturn_SUCCESS && shadingModel.get(0) == aiShadingMode_Unlit;
+        }
     }
 
     /** Public entry for pre-expanded triangle soups (3 consecutive vertices per face). */

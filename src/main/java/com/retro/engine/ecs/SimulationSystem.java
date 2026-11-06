@@ -90,13 +90,19 @@ public class SimulationSystem {
     }
 
     public List<Entity> stop(List<Entity> activeEntities) {
+        return stop(activeEntities, false);
+    }
+
+    /** {@code sceneTransition}: the game is moving to another scene, so its audio mix carries over. */
+    public List<Entity> stop(List<Entity> activeEntities, boolean sceneTransition) {
         if (playState == PlayState.SIMULATING || playState == PlayState.PAUSED) {
             ScriptEngine.destroyScripts(activeEntities);
             physicsWorld.cleanup();
             navigation.resetAgents(activeEntities);
             splines.reset(activeEntities);
             AudioEngine.stopAllOneShots();
-            AudioMixerService.resetRuntime();
+            if (sceneTransition) AudioMixerService.releaseDuck();
+            else AudioMixerService.resetRuntime();
             AudioReverbSystem.reset();
             pausedAudioSources.clear();
             Input.stopVibration();

@@ -28,6 +28,8 @@ public final class RenderCommand {
     public float roughness;
     public float normalStrength;
     public float emissiveIntensity;
+    /** Albedo is drawn as-is: no scene lights, ambient or received shadows. Fog, emissive and shadow casting still apply. */
+    public boolean unlit;
 
     /** Color-ID value written by the pick pass ({@link IRenderBackend#PICK_ID_NONE} = not pickable). */
     public int pickId;
@@ -45,6 +47,7 @@ public final class RenderCommand {
         roughness = 0.6f;
         normalStrength = 1.0f;
         emissiveIntensity = 1.0f;
+        unlit = false;
         pickId = IRenderBackend.PICK_ID_NONE;
         bonePalette = null;
     }

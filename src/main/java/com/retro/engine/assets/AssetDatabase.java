@@ -249,6 +249,7 @@ public class AssetDatabase {
         if (!savedFolder.isEmpty() && findFolder(savedFolder) != null) currentFolderPath = savedFolder;
         saveManifest();
 
+        SkeletonImporter.clearCache();
         com.retro.engine.scripting.ScriptEngine.setProjectAssetsRoot(getProjectAssetsPath());
         startWatching();
         System.out.println("[AssetDatabase] Bound to project " + activeProjectPath + " (" + assetDirectory.size() + " entries under Assets/).");

@@ -148,27 +148,25 @@ public class CharacterControllerSolver {
         boolean jump = jumpRequested;
         jumpRequested = false;
 
+        PhysicsSystem.PhysicsBody inputOwner = findInputOwner(activeBodies);
+
         for (int i = 0, n = activeBodies.size(); i < n; i++) {
             PhysicsSystem.PhysicsBody body = activeBodies.get(i);
             CharacterControllerComponent cc = body.characterController;
             if (cc == null) continue;
 
-            // get/put rather than computeIfAbsent: the capturing lambda would allocate every step
-            CameraRig rig = rigs.get(cc);
-            if (rig == null) {
-                rig = resolveCameraRig(body.entity);
-                rigs.put(cc, rig);
-            }
+            CameraRig rig = rigOf(body);
+            boolean owned = body == inputOwner && cc.inputEnabled;
             if (rig.orbit() != null && !cursorLockRequested) {
                 cursorLockRequested = true; // Once per session, so a script that frees the cursor keeps it free
                 Input.setCursorLocked(true);
             }
-            if (hasLookInput && cc.inputEnabled && rig.orbit() != null) {
+            if (hasLookInput && owned && rig.orbit() != null) {
                 applyOrbit(rig.orbit(), body, lookYaw, lookPitch);
             }
 
             // Only override while there is input, so script-set velocities and friction coasting still apply otherwise
-            if (hasMoveInput && cc.inputEnabled && !body.navDriven) {
+            if (hasMoveInput && owned) {
                 float yaw = (float) Math.toRadians(worldYaw(rig));
                 float sin = (float) Math.sin(yaw), cos = (float) Math.cos(yaw);
                 // Camera right = (cos, 0, sin), forward = (sin, 0, -cos): yaw 0 looks down -Z
@@ -177,7 +175,7 @@ public class CharacterControllerSolver {
                 cc.velocityZ = (inputRight * sin - inputForward * cos) * speed;
             }
 
-            if (jump && cc.inputEnabled && cc.isGrounded && !body.navDriven) {
+            if (jump && owned && cc.isGrounded) {
                 cc.velocityY = cc.jumpForce;
                 cc.isGrounded = false;
                 if (pad != null) pad.setVibration(0.0f, JUMP_RUMBLE_STRENGTH, JUMP_RUMBLE_DURATION);
@@ -221,6 +219,31 @@ public class CharacterControllerSolver {
                 physicsSystem.getBroadphaseSolver().updateLeaf(body.treeNodeId, minX, minY, minZ, maxX, maxY, maxZ);
             }
         }
+    }
+
+    /**
+     * The one character the keyboard and gamepad drive: the first with a camera on its own transform tree, else the
+     * first in the scene. Nav-driven characters never qualify. Found every step, so a respawned player takes over.
+     */
+    private PhysicsSystem.PhysicsBody findInputOwner(List<PhysicsSystem.PhysicsBody> activeBodies) {
+        PhysicsSystem.PhysicsBody first = null;
+        for (int i = 0, n = activeBodies.size(); i < n; i++) {
+            PhysicsSystem.PhysicsBody body = activeBodies.get(i);
+            if (body.characterController == null || body.navDriven) continue;
+            if (rigOf(body).orbit() != null) return body;
+            if (first == null) first = body;
+        }
+        return first;
+    }
+
+    private CameraRig rigOf(PhysicsSystem.PhysicsBody body) {
+        // get/put rather than computeIfAbsent: the capturing lambda would allocate every step
+        CameraRig rig = rigs.get(body.characterController);
+        if (rig == null) {
+            rig = resolveCameraRig(body.entity);
+            rigs.put(body.characterController, rig);
+        }
+        return rig;
     }
 
     private static void playLandingRumble(GamepadManager pad, float impactSpeed) {

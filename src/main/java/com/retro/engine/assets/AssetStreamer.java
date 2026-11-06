@@ -28,6 +28,9 @@ import javax.imageio.ImageIO;
  * asset a live entity uses each frame, and {@link #sweepUnreferenced} evicts assets nothing has marked for a grace
  * period, releasing both the CPU copy and the GPU handle. Scene unloads and entity deletions therefore return their
  * VRAM and host RAM without explicit hooks, and an undo within the grace period finds the asset still resident.
+ *
+ * Texture pixels leave the heap once the GPU has them (the backends copy them during registerTexture), and only
+ * {@value #MAX_CONCURRENT_TEXTURE_DECODES} textures decode at a time, so heap use doesn't grow with a project's textures.
  */
 public class AssetStreamer {
 
@@ -59,6 +62,13 @@ public class AssetStreamer {
 
     private final Set<String> activeModelRequests = ConcurrentHashMap.newKeySet();
     private final Set<String> activeTextureRequests = ConcurrentHashMap.newKeySet();
+    // Textures that couldn't be loaded, with the file's timestamp at the time. The render loop asks for a missing
+    // texture every frame, so this stops it re-reading the file until the file changes
+    private final Map<String, Long> failedTextures = new ConcurrentHashMap<>();
+
+    // One 2K texture peaks near 55 MB of heap while it decodes and builds mips, and a 4K texture four times that
+    private static final int MAX_CONCURRENT_TEXTURE_DECODES = 2;
+    private final Semaphore textureDecodeSlots = new Semaphore(MAX_CONCURRENT_TEXTURE_DECODES);
 
     private final ConcurrentLinkedQueue<String> completedUploadsQueue = new ConcurrentLinkedQueue<>();
 
@@ -100,6 +110,8 @@ public class AssetStreamer {
         this.renderBackend = backend;
         if (backend == null) return;
         modelCache.forEach(this::registerMeshHandle);
+        // Textures with no pixels left belong to the previous backend, so they stream again
+        textureCache.values().removeIf(data -> data.pixels == null);
         textureCache.forEach(this::registerTextureHandle);
     }
 
@@ -116,16 +128,18 @@ public class AssetStreamer {
         }
     }
 
-    private void registerTextureHandle(String key, PixelBufferData data) {
+    /** True when the GPU now holds the texture. */
+    private boolean registerTextureHandle(String key, PixelBufferData data) {
         IRenderBackend backend = renderBackend;
-        if (backend == null || data == null) return;
+        if (backend == null || data == null) return false;
         long handle = backend.registerTexture(key, data.pixels, data.width, data.height);
-        if (handle == 0L) return;
+        if (handle == 0L) return false;
         Long previous = textureHandles.put(key, handle);
         if (previous != null && previous != handle) {
             handleEpoch.incrementAndGet();
             backend.unregisterTexture(previous);
         }
+        return true;
     }
 
     private void trackResidency(Map<String, Residency> table, String key, boolean texture) {
@@ -272,10 +286,13 @@ public class AssetStreamer {
 
     public void requestTextureAsync(String filePath) {
         if (filePath == null || filePath.trim().isEmpty()) return;
-        if (textureCache.containsKey(filePath) || !activeTextureRequests.add(filePath)) return;
+        if (textureCache.containsKey(filePath) || isUnchangedFailure(filePath) || !activeTextureRequests.add(filePath)) return;
 
         ioExecutor.submit(() -> {
+            boolean decoding = false;
             try {
+                textureDecodeSlots.acquire();
+                decoding = true;
                 PixelBufferData data = null;
 
                 // 1. Fast Path: Read pre-cooked VRAM package (.rpack) if available
@@ -296,16 +313,19 @@ public class AssetStreamer {
                         if (image != null) {
                             int w = image.getWidth();
                             int h = image.getHeight();
-                            int[] pixelsInt = new int[w * h];
-                            image.getRGB(0, 0, w, h, pixelsInt, 0, w);
-
+                            // A row at a time: a whole-image int[] would be one more full copy on the heap
+                            int[] row = new int[w];
                             byte[] pixelsByte = new byte[w * h * 4];
-                            for (int i = 0; i < pixelsInt.length; i++) {
-                                int argb = pixelsInt[i];
-                                pixelsByte[i * 4]     = (byte) ((argb >> 16) & 0xFF); // R
-                                pixelsByte[i * 4 + 1] = (byte) ((argb >> 8) & 0xFF);  // G
-                                pixelsByte[i * 4 + 2] = (byte) (argb & 0xFF);         // B
-                                pixelsByte[i * 4 + 3] = (byte) ((argb >> 24) & 0xFF); // A
+                            int out = 0;
+                            for (int y = 0; y < h; y++) {
+                                image.getRGB(0, y, w, 1, row, 0, w);
+                                for (int x = 0; x < w; x++) {
+                                    int argb = row[x];
+                                    pixelsByte[out++] = (byte) ((argb >> 16) & 0xFF); // R
+                                    pixelsByte[out++] = (byte) ((argb >> 8) & 0xFF);  // G
+                                    pixelsByte[out++] = (byte) (argb & 0xFF);         // B
+                                    pixelsByte[out++] = (byte) ((argb >> 24) & 0xFF); // A
+                                }
                             }
                             data = new PixelBufferData(pixelsByte, w, h);
                         }
@@ -313,17 +333,33 @@ public class AssetStreamer {
                 }
 
                 if (data != null && data.pixels != null && data.pixels.length > 0) {
-                    registerTextureHandle(filePath, data);
-                    textureCache.put(filePath, data);
+                    textureCache.put(filePath, registerTextureHandle(filePath, data) ? data.withoutPixels() : data);
                     trackResidency(textureResidency, filePath, true);
                     completedUploadsQueue.add("[Texture] " + new File(filePath).getName());
+                } else {
+                    failTexture(filePath, "the file is missing or isn't a readable image");
                 }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt(); // Shutting down
             } catch (Exception e) {
-                System.err.println("[AssetStreamer] Error streaming texture '" + filePath + "': " + e.getMessage());
+                failTexture(filePath, e.toString());
+            } catch (OutOfMemoryError e) {
+                failTexture(filePath, "it needs more memory than the heap has free");
             } finally {
+                if (decoding) textureDecodeSlots.release();
                 activeTextureRequests.remove(filePath);
             }
         });
+    }
+
+    private boolean isUnchangedFailure(String filePath) {
+        Long failedAt = failedTextures.get(filePath);
+        return failedAt != null && failedAt == new File(filePath).lastModified();
+    }
+
+    private void failTexture(String filePath, String reason) {
+        failedTextures.put(filePath, new File(filePath).lastModified());
+        System.err.println("[AssetStreamer] Could not load texture '" + filePath + "': " + reason);
     }
 
     public boolean isMeshLoaded(String filePath) {
@@ -341,6 +377,7 @@ public class AssetStreamer {
         return modelCache.get(filePath);
     }
 
+    /** Size and name of a loaded texture. Its pixels are null once the GPU holds them. */
     public PixelBufferData getTexture(String filePath) {
         if (filePath == null) return null;
         return textureCache.get(filePath);
@@ -366,6 +403,7 @@ public class AssetStreamer {
     public void reloadTextureAsync(String filePath) {
         if (filePath == null) return;
         textureCache.remove(filePath);
+        failedTextures.remove(filePath);
         unregisterTextureHandle(filePath);
         requestTextureAsync(filePath);
     }
@@ -381,6 +419,7 @@ public class AssetStreamer {
         trackedResidency.clear();
         activeModelRequests.clear();
         activeTextureRequests.clear();
+        failedTextures.clear();
         completedUploadsQueue.clear();
         System.out.println("[AssetStreamer] Asset caches flushed.");
     }

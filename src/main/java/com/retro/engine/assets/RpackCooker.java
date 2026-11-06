@@ -29,6 +29,8 @@ public class RpackCooker {
     public static final int TYPE_MESH = 1;
     public static final int TYPE_TEXTURE = 2;
     private static final int HEADER_SIZE = 8 + 4 + 16 + 4 + 4 + 4; // 40 Bytes
+    /** Mesh trailer: one big-endian int of flags after the payload. Packs cooked before it existed read as flags = 0. */
+    private static final int MESH_FLAG_UNLIT = 1;
 
     public static boolean cookMeshToRpack(String modelFilePath, String rpackOutputPath) {
         return cookMeshToRpack(modelFilePath, rpackOutputPath, null);
@@ -84,6 +86,11 @@ public class RpackCooker {
 
             channel.write(payloadBuf);
 
+            ByteBuffer trailer = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN);
+            trailer.putInt(meshData.unlit ? MESH_FLAG_UNLIT : 0);
+            trailer.flip();
+            channel.write(trailer);
+
             System.out.println("[RpackCooker] Successfully cooked mesh '" + new File(modelFilePath).getName() +
                     "' -> '" + outFile.getName() + "' (" + meshData.vertexCount + " verts, " + stride + "-float stride).");
             return true;
@@ -125,7 +132,12 @@ public class RpackCooker {
             float[] vertices = new float[floatCount];
             floatBufBytes.asFloatBuffer().get(vertices);
 
-            return new MeshBufferData(vertices, vertexCount);
+            MeshBufferData data = new MeshBufferData(vertices, vertexCount);
+            ByteBuffer trailer = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN);
+            if (channel.read(trailer) == 4) {
+                data.unlit = (trailer.getInt(0) & MESH_FLAG_UNLIT) != 0;
+            }
+            return data;
         } catch (Exception e) {
             System.err.println("[RpackCooker] Failed to read mesh .rpack '" + rpackFilePath + "': " + e.getMessage());
             return null;

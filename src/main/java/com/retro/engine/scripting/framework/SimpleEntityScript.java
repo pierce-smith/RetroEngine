@@ -466,8 +466,13 @@ public abstract class SimpleEntityScript extends EntityScript {
         return sceneWorld != null && sceneWorld.isPendingDestroy(entity);
     }
 
+    /** False once {@code target} is destroyed or queued for it, so a kept reference can be dropped. False for null. */
+    public boolean isAlive(Entity target) {
+        return sceneWorld != null && target != null && sceneWorld.isValidHandle(target.getHandle()) && !sceneWorld.isPendingDestroy(target);
+    }
+
     /**
-     * Instantiates a prefab (e.g. "Prefabs/Coin.rprefab") and returns its root entity, or null when it could not be
+     * Instantiates a prefab (e.g. "Prefabs/Coin.prefab.bin") and returns its root entity, or null when it could not be
      * loaded. Reads the prefab from disk and creates entities: call it on events, not every frame.
      */
     public Entity spawnPrefab(String assetPath) {

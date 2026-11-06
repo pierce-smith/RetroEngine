@@ -60,7 +60,7 @@ layout(std140, set = 0, binding = 0) uniform LightBuffer {
 layout(push_constant) uniform MeshPushConstants {
     mat4 model;
     vec4 params;       // x = passFlags (1.0 = shadow blob, 2.0 = shadow map depth), y = heightFade, z = reflection, w = emissiveIntensity
-    vec4 surface;      // x = specularStrength, y = roughness, z = normalStrength, w = unused
+    vec4 surface;      // x = specularStrength, y = roughness, z = normalStrength, w = unlit (1.0 = skip scene lighting)
     ivec4 texIndices;  // bindless slots: x = albedo, y = normal, z = specular/roughness, w = lightmap/AO (-1 = channel absent)
     ivec4 texIndices2; // x = emissive slot, y = bone palette slot, z = camera view (0 = editor, 1 = camera preview), w = unused
 } u_PushConstants;
@@ -153,7 +153,7 @@ void main() {
     vLightSpacePos = u_Lights.lightSpaceMatrix * worldPos;
 
     // Lighting is only needed by the lit pass in Gouraud mode; shadow blob and shadow map depth draws skip it
-    v_GouraudLightColor = (u_Lights.shadingModel > 0.5 && u_PushConstants.params.x < 0.5)
+    v_GouraudLightColor = (u_Lights.shadingModel > 0.5 && u_PushConstants.params.x < 0.5 && u_PushConstants.surface.w < 0.5)
                         ? computeGouraudLight(worldPos.xyz, vNormal) : vec3(0.0);
 
     // Shadow map depth pass renders the same geometry from the directional light

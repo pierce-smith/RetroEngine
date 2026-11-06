@@ -1,9 +1,6 @@
 package com.retro.engine.scripting.framework.examples;
 
 import com.retro.engine.ecs.Entity;
-import com.retro.engine.ecs.components.BoxCollider;
-import com.retro.engine.ecs.components.CapsuleCollider;
-import com.retro.engine.ecs.components.SphereCollider;
 import com.retro.engine.physics.RaycastHit;
 import com.retro.engine.scripting.framework.ScriptDebug;
 import com.retro.engine.scripting.framework.ScriptState;
@@ -227,32 +224,11 @@ public class EnemyAIStateScript extends SimpleEntityScript {
         }
 
         // Line of sight: the first solid thing the ray hits must be the player (or nothing before reaching them).
-        // Trigger volumes (door zones, pickups) don't block vision, so the ray continues past them.
         float dist = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (dist < 1e-3f) return true;
         float nx = dx / dist, ny = dy / dist, nz = dz / dist;
-        float ox = myPos.x, oy = myPos.y + eyeHeight, oz = myPos.z;
-        float remaining = dist;
-        for (int pass = 0; pass < 4; pass++) {
-            if (!raycast(ox, oy, oz, nx, ny, nz, remaining, sightHit)) return true;
-            if (sightHit.entity == player || sightHit.distance >= remaining - 0.3f) return true;
-            if (!isTriggerOnly(sightHit.entity)) return false;
-            float advance = sightHit.distance + 0.05f;
-            ox += nx * advance; oy += ny * advance; oz += nz * advance;
-            remaining -= advance;
-            if (remaining <= 0.0f) return true;
-        }
-        return false;
-    }
-
-    /** True when every collider on {@code e} is a trigger (it has at least one, and none are solid). */
-    boolean isTriggerOnly(Entity e) {
-        if (e == null) return false;
-        BoxCollider box = (BoxCollider) e.getComponent(BoxCollider.class);
-        SphereCollider sphere = (SphereCollider) e.getComponent(SphereCollider.class);
-        CapsuleCollider capsule = (CapsuleCollider) e.getComponent(CapsuleCollider.class);
-        if (box == null && sphere == null && capsule == null) return false;
-        return (box == null || box.isTrigger) && (sphere == null || sphere.isTrigger) && (capsule == null || capsule.isTrigger);
+        if (!raycast(myPos.x, myPos.y + eyeHeight, myPos.z, nx, ny, nz, dist, sightHit)) return true;
+        return sightHit.entity == player || sightHit.distance >= dist - 0.3f;
     }
 
     void strike() {

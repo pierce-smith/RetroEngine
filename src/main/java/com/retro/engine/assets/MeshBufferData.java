@@ -21,6 +21,9 @@ public class MeshBufferData {
     public final int[] indices;
     public final int indexCount;
 
+    /** Draws albedo with no scene lighting; set by the importer from the source material and kept through cooking. */
+    public boolean unlit;
+
     public MeshBufferData(float[] vertices, int vertexCount) {
         this(vertices, vertexCount, null, 0);
     }

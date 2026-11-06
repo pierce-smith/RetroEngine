@@ -2,6 +2,7 @@ package com.retro.engine.assets;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.List;
 
 /**
@@ -114,18 +115,28 @@ final class MeshDecimator {
         public void position(int v, float[] out) { parent.position(vertexBase + v, out); }
     }
 
-    /** Writes the source straight into a triangle-list buffer when it fits the budget, otherwise decimates it. */
+    /**
+     * Writes the source straight into a triangle-list buffer when it fits the budget, otherwise decimates it. The budget
+     * counts the distinct vertices triangles reference, not expanded corners: each vertex is shared by about six
+     * triangles, so counting corners would decimate a mesh that is well within budget.
+     */
     static MeshBufferData buildOrDecimate(VertexSource src, int maxTargetVerts) {
         int[] tri = new int[3];
         int validTriangles = 0;
+        BitSet referenced = new BitSet(src.vertexCount());
         for (int t = 0; t < src.triangleCount(); t++) {
-            if (src.triangle(t, tri)) validTriangles++;
+            if (src.triangle(t, tri)) {
+                validTriangles++;
+                referenced.set(tri[0]);
+                referenced.set(tri[1]);
+                referenced.set(tri[2]);
+            }
         }
         if (validTriangles == 0) return null;
 
-        long cornerCount = validTriangles * 3L;
-        if (cornerCount > maxTargetVerts) {
-            System.out.println("[MeshDecimator] High-poly model detected (" + cornerCount + " verts). Executing RenderWare 3.5 target voxel vertex collapse...");
+        int vertexCount = referenced.cardinality();
+        if (vertexCount > maxTargetVerts) {
+            System.out.println("[MeshDecimator] High-poly model detected (" + vertexCount + " verts). Executing RenderWare 3.5 target voxel vertex collapse...");
             if (src instanceof GroupedSource grouped && grouped.groupCount() > 1) {
                 return decimateGrouped(grouped, maxTargetVerts);
             }

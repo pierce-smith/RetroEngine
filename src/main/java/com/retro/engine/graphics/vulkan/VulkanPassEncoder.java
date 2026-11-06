@@ -654,8 +654,8 @@ public class VulkanPassEncoder {
         for (int m = 0; m < 16; m++) push.putFloat(model[m]);
         // params: passFlags, heightFade, reflection, emissiveIntensity
         push.putFloat(passFlag).putFloat(1.0f).putFloat(entity.reflect).putFloat(entity.emissiveIntensity);
-        // surface: specularStrength, roughness, normalStrength, unused
-        push.putFloat(entity.specularStrength).putFloat(entity.roughness).putFloat(entity.normalStrength).putFloat(0.0f);
+        // surface: specularStrength, roughness, normalStrength, unlit
+        push.putFloat(entity.specularStrength).putFloat(entity.roughness).putFloat(entity.normalStrength).putFloat(entity.unlit ? 1.0f : 0.0f);
         // texIndices: albedo, normal, specular/roughness, lightmap/AO
         int base = d * VulkanDrawBuffers.CHANNELS;
         int[] slots = draws.textureSlots;

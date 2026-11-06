@@ -37,7 +37,7 @@ struct Uniforms {
     float4 fogColorDensity;   // 192: rgb = fogColor, w = opacity at fog end (1 = fog on, 0 = fog disabled)
     float4 matParams;         // 208: x = reflectStrength, y = shadowOpacity, z = shadowMapBias
     uint materialMask;        // 224: bit 0 albedo, 1 normal, 2 specular, 3 lightmap, 4 emissive
-    uint isUnlit;             // 228: 0 = Lit Model, 1 = Procedural Grid, 2 = Billboard Particles
+    uint isUnlit;             // 228: 0 = Lit Model, 1 = Procedural Grid, 2 = Billboard Particles, 3 = Unlit Model
     uint stride;              // 232
     uint passFlags;           // 236: bit 0 shadowBlob, bit 1 reflection, bit 4 skinned
     float4x4 lightSpace;      // 240: directional shadow map view-projection
@@ -382,7 +382,7 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
         return gridColor;
     }
 
-    // Mode 0: Standard Opaque 3D Mesh Lighting
+    // Modes 0 and 3: Standard Opaque 3D Mesh, lit or unlit
     // Same rules as blinn_phong.frag: albedo alpha drives the cutout and output alpha, and vertex color tints rgb
     // only when it is non-black
     uint mask = uniforms.materialMask;
@@ -410,7 +410,10 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
     float3 N = geomN;
     float3 finalRGB;
 
-    if (gouraud) {
+    if (uniforms.isUnlit == 3u) {
+        // Shading is authored into the texture (glTF KHR_materials_unlit); scene lights and ambient don't apply
+        finalRGB = baseColor.rgb;
+    } else if (gouraud) {
         // The vertex stage already lit the surface; albedo modulates the interpolated light color
         finalRGB = baseColor.rgb * in.gouraudLightColor;
     } else {

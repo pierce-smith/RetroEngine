@@ -518,7 +518,8 @@ public class BroadphaseSolver {
             if (tmax >= Math.max(tmin, 0.0f) && tmin <= maxDistance) {
                 if (node.isLeaf()) {
                     PhysicsSystem.PhysicsBody body = node.body;
-                    if (body != null && (excludeEntity == null || body.entity != excludeEntity)) {
+                    // Triggers aren't solid: rays pass through them, including every character's ground probe
+                    if (body != null && !body.isTrigger() && (excludeEntity == null || body.entity != excludeEntity)) {
                         float bodyMinX = body.px - physicsSystem.getHalfWidthX(body);
                         float bodyMaxX = body.px + physicsSystem.getHalfWidthX(body);
                         float bodyMinY = body.py - physicsSystem.getHalfWidthY(body);

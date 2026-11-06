@@ -162,6 +162,8 @@ public class EntitySpawner {
 
     public static void attachAnimatorIfRigged(Entity entity, String meshPath) {
         if (entity == null || meshPath == null || meshPath.trim().isEmpty()) return;
+        // OBJ can't hold a rig, and exports don't ship the source file once it's cooked
+        if (meshPath.trim().toLowerCase(java.util.Locale.ROOT).endsWith(".obj")) return;
         try {
             SkeletonImporter.SkeletonImportResult result = SkeletonImporter.loadSkeletonAndAnimations(meshPath);
             boolean hasBones = (result != null && result.skeleton() != null && result.skeleton().getBoneCount() > 0);

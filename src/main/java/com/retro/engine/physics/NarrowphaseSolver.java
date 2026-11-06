@@ -27,22 +27,12 @@ public class NarrowphaseSolver {
         float overlapZ = (halfAz + halfBz) - Math.abs(dz);
 
         if (overlapX > 0 && overlapY > 0 && overlapZ > 0) {
-            boolean isATrigger = (a.boxCollider != null && a.boxCollider.isTrigger) ||
-                                 (a.sphereCollider != null && a.sphereCollider.isTrigger) ||
-                                 (a.capsuleCollider != null && a.capsuleCollider.isTrigger);
-            boolean isBTrigger = (b.boxCollider != null && b.boxCollider.isTrigger) ||
-                                 (b.sphereCollider != null && b.sphereCollider.isTrigger) ||
-                                 (b.capsuleCollider != null && b.capsuleCollider.isTrigger);
-
-            if (isATrigger || isBTrigger) {
+            if (a.isTrigger() || b.isTrigger()) {
                 physicsSystem.recordTrigger(a, b);
                 return;
             }
 
-            if (a.rigidBody != null && a.rigidBody.motionType == RigidBodyComponent.MotionType.STATIC &&
-                b.rigidBody != null && b.rigidBody.motionType == RigidBodyComponent.MotionType.STATIC) {
-                return;
-            }
+            if (isStatic(a) && isStatic(b)) return;
 
             // Contact normal (A -> B) along the axis of least penetration
             float sepX = 0, sepY = 0, sepZ = 0, penetration;
@@ -65,6 +55,12 @@ public class NarrowphaseSolver {
             if (sepY == 0.0f && (tryStepUp(a, b, halfAy, halfBy) || tryStepUp(b, a, halfBy, halfAy))) return;
             separateBodies(a, b, sepX * penetration, sepY * penetration, sepZ * penetration, restitution);
         }
+    }
+
+    /** A collider with no RigidBody or controller is scenery, the same as a STATIC body. */
+    private static boolean isStatic(PhysicsSystem.PhysicsBody body) {
+        if (body.characterController != null || body.vehicleController != null) return false;
+        return body.rigidBody == null || body.rigidBody.motionType == RigidBodyComponent.MotionType.STATIC;
     }
 
     // Float slack so a rise of exactly stepOffset (e.g. 0.3 m steps with a 0.3 m offset) still counts

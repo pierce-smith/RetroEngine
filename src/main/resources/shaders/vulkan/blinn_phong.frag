@@ -61,7 +61,7 @@ layout(set = 0, binding = 4) uniform texture2D u_Textures[];
 layout(push_constant) uniform MeshPushConstants {
     mat4 model;
     vec4 params;       // x = passFlags (1.0 = shadow blob, 2.0 = shadow map depth), y = heightFade, z = reflection, w = emissiveIntensity
-    vec4 surface;      // x = specularStrength, y = roughness, z = normalStrength, w = unused
+    vec4 surface;      // x = specularStrength, y = roughness, z = normalStrength, w = unlit (1.0 = skip scene lighting)
     ivec4 texIndices;  // bindless slots: x = albedo, y = normal, z = specular/roughness, w = lightmap/AO (-1 = channel absent)
     ivec4 texIndices2; // x = emissive slot, y = bone palette slot, z = camera view (0 = editor, 1 = camera preview), w = unused
 } u_PushConstants;
@@ -188,7 +188,10 @@ void main() {
     vec3 N = geomN;
     vec3 finalRGB;
 
-    if (gouraud) {
+    if (u_PushConstants.surface.w > 0.5) {
+        // Shading is authored into the texture (glTF KHR_materials_unlit); scene lights and ambient don't apply
+        finalRGB = baseColor.rgb;
+    } else if (gouraud) {
         // The vertex stage already lit the surface; albedo modulates the interpolated light color
         finalRGB = baseColor.rgb * v_GouraudLightColor;
     } else {

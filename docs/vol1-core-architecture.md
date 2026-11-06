@@ -133,7 +133,7 @@ is stopped at the end, so `onDestroy` runs too. Without it, the loop ticks at 60
 | `0` | Every frame ran, with no script errors |
 | `1` | The engine crashed with an uncaught exception |
 | `2` | Bad arguments, the project couldn't be opened, or the startup scene is empty or failed to load |
-| `3` | `--frames` only: a script failed to compile or threw |
+| `3` | `--frames` only: a script failed to compile or threw, an event listener threw, or a script asked for a clip, prefab or scene that doesn't exist |
 
 An empty scene counts as a failure because a run that tested nothing mustn't report success. The automated suite uses
 this to run each template in a fresh JVM (Volume 5 §3.0).
@@ -148,7 +148,7 @@ ScriptRuntime.beginFrame                     // remove last frame's camera shake
 SimulationSystem.update
   0.  NavMeshSystem.update                   // resolve path requests, steer agents (Volume 4 §1.5)
   0b. SplineSystem.update                    // advance Spline Followers (Volume 4 §1.6)
-  1.  PhysicsSystem.step                     // fixed 60 Hz, at most 2 steps (Volume 4 §1.1)
+  1.  PhysicsSystem.step                     // fixed 60 Hz, at most 6 steps (Volume 4 §1.1)
   2.  ScriptEngine.updateScripts             // onFrameworkUpdate + onUpdate per script
   3.  spatial audio                          // source positions, bus mix, ducking, reverb zones (§4)
   4.  particle simulation                    // after scripts, so this frame's play()/stop()/emit() apply now

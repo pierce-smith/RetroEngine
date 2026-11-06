@@ -363,7 +363,7 @@ public class MetalPassEncoder {
                 MemoryUtil.memPutFloat(baseAddr + MetalUniformStream.OFFSET_VIEW_POS + 8L, camPos[2]);
 
                 MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_MATERIAL_MASK, draws.materialMask[i]);
-                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_IS_UNLIT, 0);
+                MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_IS_UNLIT, item.unlit ? MetalUniformStream.UNLIT_MODEL : 0);
                 MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_STRIDE, draws.floatStride[i]);
 
                 int passFlags = 0;

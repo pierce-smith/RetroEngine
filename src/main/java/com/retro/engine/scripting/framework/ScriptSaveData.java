@@ -1,5 +1,7 @@
 package com.retro.engine.scripting.framework;
 
+import com.retro.engine.core.ProjectWorkspace;
+import com.retro.engine.editor.StandaloneExporter;
 import com.retro.engine.scripting.ScriptEngine;
 
 import java.io.File;
@@ -13,7 +15,8 @@ import java.util.Properties;
  *
  * <p>Values are kept in memory and written to {@code ~/.retroengine/saves/<project>.properties} when
  * {@link #save()} is called, when Play stops in the editor, and when the game process exits. Each project folder gets
- * its own file. Values are stored as text, so read them back with the typed getters.</p>
+ * its own file, and each exported game gets one named after its project. Values are stored as text, so read them back
+ * with the typed getters.</p>
  *
  * <p>Setting values formats them as text and may allocate; that is fine for events such as a pickup or a checkpoint,
  * but avoid writing save data every frame. Reads of booleans / numbers parse the stored text on each call, so cache
@@ -178,7 +181,7 @@ public final class ScriptSaveData {
         if (assetsRoot != null) {
             File root = new File(assetsRoot).getAbsoluteFile();
             File projectDir = root.getName().equalsIgnoreCase("Assets") ? root.getParentFile() : root;
-            if (projectDir != null && !projectDir.getName().isEmpty()) project = projectDir.getName();
+            if (projectDir != null && !projectDir.getName().isEmpty()) project = saveName(projectDir);
         }
         StringBuilder safe = new StringBuilder(project.length());
         for (int i = 0; i < project.length(); i++) {
@@ -187,6 +190,18 @@ public final class ScriptSaveData {
         }
         return new File(new File(new File(System.getProperty("user.home"), ".retroengine"), "saves"),
                 safe + ".properties").getAbsolutePath();
+    }
+
+    /** Exported games all sit in a folder called Game_Data, so the folder can't tell them apart: use the project's name. */
+    private static String saveName(File projectDir) {
+        if (!StandaloneExporter.GAME_DATA_DIR.equals(projectDir.getName())) return projectDir.getName();
+        try {
+            String name = ProjectWorkspace.readSettings(projectDir).projectName;
+            if (name != null && !name.isBlank()) return name;
+        } catch (IOException e) {
+            System.err.println("[ScriptSaveData] Could not read the project name in " + projectDir + ": " + e.getMessage());
+        }
+        return projectDir.getName();
     }
 
     private static void installShutdownHook() {

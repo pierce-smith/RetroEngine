@@ -310,6 +310,7 @@ public class SceneRenderPipeline {
                     cmd.groundY = shadowBlobs ? groundIndex.highestSurfaceBelow(ei, wt.px(), wt.py(), wt.pz()) : Float.NEGATIVE_INFINITY;
                     cmd.bonePalette = (anim != null && anim.skeleton != null) ? anim.bonePaletteMatrices : null;
                     cmd.pickId = ViewportPanel.pickIdFor(entity);
+                    cmd.unlit = drawn.unlit;
                     if (mat != null) {
                         if (texturePath != null) {
                             long albedo = mat.getCachedTextureHandle(texturePath, handleEpoch);

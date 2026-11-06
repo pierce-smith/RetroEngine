@@ -30,6 +30,11 @@ public class PixelBufferData {
         this("UNNAMED", "", width, height, 4, pixels);
     }
 
+    /** The same image description with no pixel data, for an image that now lives on the GPU. */
+    public PixelBufferData withoutPixels() {
+        return new PixelBufferData(name, path, width, height, channels, null);
+    }
+
     public String name() { return name; }
     public String path() { return path; }
     public String filePath() { return path; }

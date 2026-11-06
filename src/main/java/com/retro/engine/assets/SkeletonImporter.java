@@ -56,15 +56,42 @@ public class SkeletonImporter {
     }
 
 
-    public static SkeletonImportResult loadSkeletonAndAnimations(String filePath) {
+    /** One import of a file, kept while the file is unchanged. A null result is a file Assimp could not read. */
+    private record CachedImport(long modified, long length, SkeletonImportResult result) {}
+
+    private static final Map<String, CachedImport> importCache = new HashMap<>();
+    private static final Set<String> reportedMissing = new HashSet<>();
+
+    /** Drops every cached import. Call when the project changes. */
+    public static synchronized void clearCache() {
+        importCache.clear();
+        reportedMissing.clear();
+    }
+
+    /**
+     * Skeleton and clips of a model. Every caller of the same unchanged file gets the same result, because these are
+     * shared, read-only assets (see {@link Skeleton}) and a spawn must not pay for an import or a private copy.
+     */
+    public static synchronized SkeletonImportResult loadSkeletonAndAnimations(String filePath) {
         if (filePath == null || filePath.trim().isEmpty()) return null;
 
         File file = resolveModelFile(filePath);
         if (file == null || !file.exists()) {
-            System.err.println("[SkeletonImporter] Model file not found: " + filePath);
+            if (reportedMissing.add(filePath)) System.err.println("[SkeletonImporter] Model file not found: " + filePath);
             return null;
         }
 
+        String resolvedPath = file.getAbsolutePath();
+        long modified = file.lastModified(), length = file.length();
+        CachedImport cached = importCache.get(resolvedPath);
+        if (cached != null && cached.modified() == modified && cached.length() == length) return cached.result();
+
+        SkeletonImportResult result = importModel(file);
+        importCache.put(resolvedPath, new CachedImport(modified, length, result));
+        return result;
+    }
+
+    private static SkeletonImportResult importModel(File file) {
         String resolvedPath = file.getAbsolutePath();
 
         AIScene scene = aiImportFile(resolvedPath, STRUCTURE_FLAGS);
@@ -150,7 +177,7 @@ public class SkeletonImporter {
         }
 
         aiReleaseImport(scene);
-        return new SkeletonImportResult(skeleton.getBoneCount() > 0 ? skeleton : null, animations);
+        return new SkeletonImportResult(skeleton.getBoneCount() > 0 ? skeleton : null, List.copyOf(animations));
     }
 
     /**

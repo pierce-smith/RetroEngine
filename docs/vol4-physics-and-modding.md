@@ -16,7 +16,7 @@ same height on a 30 FPS laptop and a 144 Hz desktop.
 ```java
 public static final float FIXED_TIMESTEP    = 1.0f / 60.0f;
 public static final float GRAVITY           = -9.81f;
-public static final int   MAX_PHYSICS_STEPS = 2;
+public static final int   MAX_PHYSICS_STEPS = 6;
 
 accumulator += Math.min(deltaTime, 0.1f);           // dt clamp: never feed more than 100 ms
 while (accumulator >= FIXED_TIMESTEP && steps < MAX_PHYSICS_STEPS) {
@@ -24,15 +24,15 @@ while (accumulator >= FIXED_TIMESTEP && steps < MAX_PHYSICS_STEPS) {
     accumulator -= FIXED_TIMESTEP;
     steps++;
 }
-if (steps >= MAX_PHYSICS_STEPS) accumulator = 0.0f;  // drop the backlog instead of spiraling
+if (steps >= MAX_PHYSICS_STEPS && accumulator >= FIXED_TIMESTEP) accumulator = 0.0f;  // drop the backlog instead of spiraling
 ```
 
 There are **two layers of defense against the spiral of death**:
 
 1. **`dt < 0.1 s` clamp.** It's applied in the engine loop (Volume 1) and again here. A debugger break can't
    inject ten seconds of simulation.
-2. **Step cap of 2.** If the machine can't keep up, physics slows down gracefully instead of trying to catch up
-   with more and more steps every frame.
+2. **Step cap of 6.** That matches the clamp, so physics keeps pace with scripts down to 10 FPS. Below that, both
+   lose the same time rather than drifting apart.
 
 `onPhysicsUpdate(fixedDeltaTime)` in scripts runs inside this fixed step. Put forces and velocity changes there,
 not in `onUpdate`.
@@ -48,7 +48,9 @@ not in `onUpdate`.
 
 **`inputEnabled`** (runtime only) suspends a character's movement, look and jump input without touching physics:
 gravity, ground snapping and collisions keep working. Cutscenes use it through
-`SimpleEntityScript.setPlayerInputEnabled(false)`. It isn't saved, and Stop resets it to `true`. A character that also
+`SimpleEntityScript.setPlayerInputEnabled(false)`. It isn't saved, and Stop resets it to `true`. The keyboard and gamepad
+drive one character: the first with a camera on its own transform tree, else the first in the scene. Others move only
+through their velocity or a `NavMeshAgent`. A character that also
 has a `NavMeshAgent` is **nav-driven** (`PhysicsBody.navDriven`). Its horizontal velocity comes from the agent
 (§1.5), so player move and jump input is ignored, but look input still applies.
 
@@ -74,6 +76,8 @@ probe snaps it to the new surface on the next step. Dynamic bodies and other cha
 This is what lets characters and nav agents climb stairs without ramps.
 
 ### 1.4 Raycasts
+
+Rays hit solid colliders only. They pass through triggers, and so does every character's ground probe.
 
 ```java
 // Convenience: allocates one RaycastHit

@@ -27,7 +27,7 @@ public final class SceneManager {
         }
         if (w.resolveScenePath(scenePath) == null) {
             // System.err is captured by the Engine Console panel
-            System.err.println("[SceneManager] loadScene('" + scenePath + "') failed: scene not found in the project VFS (Assets/ or mod overlays). The current scene stays loaded.");
+            ScriptEngine.reportFailure("[SceneManager] loadScene('" + scenePath + "') failed: scene not found in the project VFS (Assets/ or mod overlays). The current scene stays loaded.");
             return;
         }
         w.requestSceneLoad(scenePath);

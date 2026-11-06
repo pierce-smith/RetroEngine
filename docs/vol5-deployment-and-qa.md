@@ -138,7 +138,7 @@ When a player reports a crash, ask for `<name>.log.1`.
 | Bad shader edit                          | Previous pipelines stay live (Volume 3) |
 | UBO layout drift                         | `ExceptionInInitializerError` at class load (Volume 3) |
 | Mod init throws / bad `.rpatch` op       | Mod unloaded + dependents / op skipped (Volume 4) |
-| Long frame / debugger break              | `dt` clamped to 0.1 s, physics capped at 2 steps |
+| Long frame / debugger break              | `dt` clamped to 0.1 s, physics capped at 6 steps |
 | NVIDIA `VkInstance` stack overflow       | LWJGL `MemoryStack` raised to 1 MB before any thread starts |
 | Crash mid-write of pipeline cache        | Atomic write. Validated against device UUID on load |
 | GPU lacks Vulkan 1.3 / Metal 3 features  | Clear startup error naming the missing feature. macOS falls back from Metal to MoltenVK |

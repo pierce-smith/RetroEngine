@@ -7,7 +7,8 @@ import com.retro.engine.core.ProjectSettings;
  *
  * <p>Two layers are multiplied together: the project mix (copied from {@link ProjectSettings} every frame, edited in
  * Project Settings > Audio) and a runtime mix that scripts drive through {@code setBusVolume} / {@code setBusMuted}.
- * The runtime layer resets to unity whenever Play stops, so a script cannot leave the editor muted.
+ * The runtime layer resets to unity whenever Play stops, so a script cannot leave the editor muted. It survives scene
+ * transitions, because a player's volume settings have to outlast a level.
  *
  * <p>Ducking: while any VOICE clip or a clip flagged as "ducks BGM" is audible, the BGM bus eases toward
  * {@code duckLevel} over {@code duckAttack} seconds, and back to full over {@code duckRelease} seconds once they stop.
@@ -89,6 +90,11 @@ public final class AudioMixerService {
             runtimeVolume[i] = 1.0f;
             runtimeMuted[i] = false;
         }
+        releaseDuck();
+    }
+
+    /** Ends any duck at once, keeping the runtime layer (called on scene transitions, whose clips have stopped). */
+    public static void releaseDuck() {
         duckGain = 1.0f;
         duckTriggeredThisFrame = false;
     }

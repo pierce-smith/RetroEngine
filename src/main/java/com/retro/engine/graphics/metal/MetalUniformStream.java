@@ -58,6 +58,8 @@ public class MetalUniformStream {
     public static final long OFFSET_MAT_PARAMS = 208L;
     public static final long OFFSET_MATERIAL_MASK = 224L;
     public static final long OFFSET_IS_UNLIT = 228L;
+    /** isUnlit value for a model drawn without scene lighting (see blinn_phong.metal). */
+    public static final int UNLIT_MODEL = 3;
     public static final long OFFSET_STRIDE = 232L;
     public static final long OFFSET_PASS_FLAGS = 236L;
     public static final long OFFSET_LIGHT_SPACE = 240L;

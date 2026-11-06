@@ -30,7 +30,8 @@ public class PhysicsSystem {
 
     public static final float FIXED_TIMESTEP = 1.0f / 60.0f; // 60 Hz
     public static final float GRAVITY = -9.81f; // m/s^2
-    public static final int MAX_PHYSICS_STEPS = 2; // Guard against accumulator catch-up spirals
+    // MAX_FRAME_DELTA / FIXED_TIMESTEP: physics keeps pace with script time down to 10 FPS, and a bad frame can't spiral
+    public static final int MAX_PHYSICS_STEPS = 6;
 
     public static class PhysicsBody {
         public Entity entity;
@@ -54,6 +55,12 @@ public class PhysicsSystem {
 
         public PhysicsBody(Entity entity) {
             this.entity = entity;
+            bindComponents();
+            syncFromTransform();
+        }
+
+        /** Reads the entity's physics components. */
+        void bindComponents() {
             this.rigidBody = entity.getComponent(RigidBodyComponent.class);
             this.boxCollider = entity.getComponent(BoxCollider.class);
             this.sphereCollider = entity.getComponent(SphereCollider.class);
@@ -61,7 +68,18 @@ public class PhysicsSystem {
             this.characterController = entity.getComponent(CharacterControllerComponent.class);
             this.vehicleController = entity.getComponent(VehicleControllerComponent.class);
             this.navDriven = entity.getComponent(com.retro.engine.ecs.components.NavMeshAgent.class) != null;
-            syncFromTransform();
+        }
+
+        /** True when physics moves this body, so its position here is newer than the Transform's. */
+        public boolean isSimulated() {
+            return (rigidBody != null && rigidBody.motionType == RigidBodyComponent.MotionType.DYNAMIC)
+                    || characterController != null || vehicleController != null;
+        }
+
+        /** True when any collider is a trigger: it reports overlaps but is not solid. */
+        public boolean isTrigger() {
+            return (boxCollider != null && boxCollider.isTrigger) || (sphereCollider != null && sphereCollider.isTrigger)
+                    || (capsuleCollider != null && capsuleCollider.isTrigger);
         }
 
         public void syncFromTransform() {
@@ -109,8 +127,9 @@ public class PhysicsSystem {
     private float accumulator = 0.0f;
     private final RaycastHit sharedRaycastHit = new RaycastHit();
 
-    // Entities spawned mid-play; turned into bodies at the start of the next step so no solver loop sees them mid-iteration
-    private final List<Entity> pendingBodyEntities = new ArrayList<>();
+    // Bodies of entities spawned mid-play. Scripts can reach them at once through getBody; they join the simulation at
+    // the start of the next step so no solver loop sees them mid-iteration
+    private final List<PhysicsBody> pendingBodies = new ArrayList<>();
 
     public BroadphaseSolver getBroadphaseSolver() {
         return broadphaseSolver;
@@ -132,21 +151,23 @@ public class PhysicsSystem {
     }
 
     /**
-     * Adds an entity spawned during play (e.g. an instantiated prefab) to the simulation. The body is created at the
-     * start of the next step; entities without physics components are ignored.
+     * Adds an entity spawned during play (e.g. an instantiated prefab) to the simulation. The body exists at once, so
+     * a script can set its velocity in onStart, and starts simulating on the next step. Entities without physics
+     * components are ignored.
      */
     public void registerRuntimeEntity(Entity entity) {
         if (!isPhysicsEntity(entity) || entity.id == null || bodyMap.containsKey(entity.id)) return;
-        if (!pendingBodyEntities.contains(entity)) pendingBodyEntities.add(entity);
+        PhysicsBody body = new PhysicsBody(entity);
+        bodyMap.put(entity.id, body);
+        pendingBodies.add(body);
     }
 
     /** Removes an entity's body (e.g. one destroyed during play) from the bodies list and the broadphase tree. */
     public void removeRuntimeEntity(Entity entity) {
-        if (entity == null) return;
-        pendingBodyEntities.remove(entity);
-        if (entity.id == null) return;
+        if (entity == null || entity.id == null) return;
         PhysicsBody body = bodyMap.remove(entity.id);
         if (body == null) return;
+        pendingBodies.remove(body);
         activeBodies.remove(body);
         if (body.treeNodeId != -1) {
             broadphaseSolver.removeLeaf(body.treeNodeId);
@@ -157,6 +178,10 @@ public class PhysicsSystem {
     private void addBody(Entity entity) {
         PhysicsBody body = new PhysicsBody(entity);
         bodyMap.put(entity.id, body);
+        insertBody(body);
+    }
+
+    private void insertBody(PhysicsBody body) {
         activeBodies.add(body);
 
         float minX = body.px - getHalfWidthX(body);
@@ -169,16 +194,19 @@ public class PhysicsSystem {
     }
 
     private void flushPendingBodies() {
-        for (int i = 0; i < pendingBodyEntities.size(); i++) {
-            Entity e = pendingBodyEntities.get(i);
-            if (e != null && e.id != null && !bodyMap.containsKey(e.id)) addBody(e);
+        for (int i = 0; i < pendingBodies.size(); i++) {
+            PhysicsBody body = pendingBodies.get(i);
+            // Its script may have moved it or added components since it spawned
+            body.bindComponents();
+            body.syncFromTransform();
+            insertBody(body);
         }
-        pendingBodyEntities.clear();
+        pendingBodies.clear();
     }
 
     public void initWorld(List<Entity> sceneEntities) {
         bodyMap.clear();
-        pendingBodyEntities.clear();
+        pendingBodies.clear();
         activeBodies.clear();
         broadphaseSolver.clear();
         broadphasePairs.clear();
@@ -198,10 +226,10 @@ public class PhysicsSystem {
     }
 
     public void step(float deltaTime, List<Entity> sceneEntities) {
-        if (activeBodies.isEmpty() && sceneEntities != null) {
+        if (activeBodies.isEmpty() && pendingBodies.isEmpty() && sceneEntities != null) {
             initWorld(sceneEntities);
         }
-        if (!pendingBodyEntities.isEmpty()) flushPendingBodies();
+        if (!pendingBodies.isEmpty()) flushPendingBodies();
 
         for (int i = 0, n = activeBodies.size(); i < n; i++) {
             PhysicsBody body = activeBodies.get(i);
@@ -229,18 +257,14 @@ public class PhysicsSystem {
             physicsRan = true;
         }
 
-        if (steps >= MAX_PHYSICS_STEPS) {
+        if (steps >= MAX_PHYSICS_STEPS && accumulator >= FIXED_TIMESTEP) {
             accumulator = 0.0f;
         }
 
         if (physicsRan) {
             for (int i = 0, n = activeBodies.size(); i < n; i++) {
                 PhysicsBody body = activeBodies.get(i);
-                if (body.rigidBody != null && body.rigidBody.motionType == RigidBodyComponent.MotionType.DYNAMIC) {
-                    body.syncToTransform();
-                } else if (body.characterController != null || body.vehicleController != null) {
-                    body.syncToTransform();
-                }
+                if (body.isSimulated()) body.syncToTransform();
             }
         }
     }
@@ -412,7 +436,7 @@ public class PhysicsSystem {
     }
 
     public void cleanup() {
-        pendingBodyEntities.clear();
+        pendingBodies.clear();
         bodyMap.clear();
         activeBodies.clear();
         broadphaseSolver.clear();

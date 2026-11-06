@@ -1,5 +1,8 @@
 package com.retro.engine.audio;
 
+import com.retro.engine.modding.ModLoader;
+import com.retro.engine.scripting.ScriptEngine;
+
 import org.lwjgl.openal.AL;
 import org.lwjgl.openal.ALC;
 import org.lwjgl.openal.ALC10;
@@ -17,7 +20,9 @@ import java.nio.ByteOrder;
 import java.nio.IntBuffer;
 import java.nio.ShortBuffer;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 import static org.lwjgl.openal.AL10.*;
 
@@ -43,6 +48,7 @@ public final class AudioEngine {
 
     /** Cache key is path + "#mono" or "#native"; values are AL buffer names. */
     private static final Map<String, Integer> bufferCache = new HashMap<>();
+    private static final Set<String> missingClips = new HashSet<>();
 
     // One-shot pool (parallel arrays indexed by pool slot)
     private static final int[] oneShotSources = new int[MAX_ONE_SHOTS];
@@ -122,18 +128,35 @@ public final class AudioEngine {
     /** Returns a cached AL buffer for the file, decoding it on first request; 0 when it cannot be loaded. */
     public static synchronized int getBuffer(String path, boolean forceMono) {
         if (path == null || path.isBlank() || !ensureInitialized()) return 0;
-        String key = path + (forceMono ? "#mono" : "#native");
+        String file = resolveClipPath(path);
+        String key = file + (forceMono ? "#mono" : "#native");
         Integer cached = bufferCache.get(key);
         if (cached != null) return cached;
 
-        int buffer = decodeToBuffer(path, forceMono);
+        int buffer = decodeToBuffer(file, forceMono);
         if (buffer != 0) bufferCache.put(key, buffer);
         return buffer;
     }
 
+    /**
+     * File behind a clip path: mod overrides first, then the project's Assets/ folder, so scripts can write
+     * {@code Assets/Audio/x.ogg} or {@code Audio/x.ogg} wherever the game runs from. Other paths come back unchanged.
+     */
+    public static String resolveClipPath(String path) {
+        String resolved = ModLoader.resolveAssetPath(path);
+        if (!resolved.equals(path) || new File(path).isAbsolute()) return resolved;
+        String assetsRoot = ScriptEngine.getProjectAssetsRoot();
+        if (assetsRoot == null) return path;
+        String relative = path.trim().replace('\\', '/');
+        if (relative.startsWith("Assets/")) relative = relative.substring("Assets/".length());
+        File inProject = new File(assetsRoot, relative);
+        return inProject.isFile() ? inProject.getAbsolutePath() : path;
+    }
+
     private static int decodeToBuffer(String path, boolean forceMono) {
         if (!new File(path).isFile()) {
-            System.err.println("[AudioEngine] Audio file not found: " + path);
+            // Once per clip: a script usually asks again every shot
+            if (missingClips.add(path)) ScriptEngine.reportFailure("[AudioEngine] Audio file not found: " + path);
             return 0;
         }
         String lower = path.toLowerCase();

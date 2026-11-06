@@ -43,6 +43,12 @@ public class ScriptEngine {
         return failureCount.get();
     }
 
+    /** Logs an error a script caused outside a script callback, such as a missing asset, and counts it as a failure. */
+    public static void reportFailure(String message) {
+        failureCount.incrementAndGet();
+        System.err.println(message);
+    }
+
     // Reusable URLClassLoader to prevent Metaspace and classloader leaks across re-compilations
     private static URLClassLoader scriptClassLoader;
 
@@ -75,8 +81,8 @@ public class ScriptEngine {
     public static void invalidateScript(String scriptPath) {
         String className = cleanClassName(scriptPath);
         if (className == null) return;
-        compiledClassCache.remove(className);
-        failedScriptCache.remove(className);
+        compiledClassCache.keySet().removeIf(key -> isKeyOf(key, className));
+        failedScriptCache.removeIf(key -> isKeyOf(key, className));
         pendingHotSwaps.add(className);
         System.out.println("[ScriptEngine] Script source changed on disk: " + className + " (queued for hot reload).");
     }
@@ -156,6 +162,8 @@ public class ScriptEngine {
         sc.enabled = false;
         logScriptError("[ScriptEngine] " + scriptName + "." + callback + "() threw on Entity '" + entity.name
                 + "'; the script is disabled until Play is stopped.", t);
+        // Otherwise its event listeners keep running a script that was switched off
+        if (script != null) runFrameworkDestroy(script, entity);
     }
 
     private static final int MAX_LOGGED_FRAMES = 8;
@@ -223,8 +231,8 @@ public class ScriptEngine {
 
                 sc.activeScriptInstance = replacement;
                 try {
-                    replacement.init(entity, sceneWorld);
                     injectPropertyOverrides(replacement, sc.propertyOverrides);
+                    replacement.init(entity, sceneWorld);
                     replacement.onStart();
                     System.out.println("[ScriptEngine] Hot reloaded script '" + className + "' on Entity '" + entity.name + "'");
                 } catch (Throwable t) {
@@ -245,7 +253,11 @@ public class ScriptEngine {
                 EntityScript script = sc.activeScriptInstance;
                 if (script == null) continue;
                 try {
+                    // The body is ahead of the Transform between steps. Sync around the call, so the script reads the
+                    // current position and anything it writes reaches the body
+                    if (body.isSimulated()) body.syncToTransform();
                     script.onPhysicsUpdate(fixedDeltaTime);
+                    body.syncFromTransform();
                 } catch (Throwable t) {
                     disableFailedScript(body.entity, sc, "onPhysicsUpdate", t);
                 }
@@ -338,11 +350,12 @@ public class ScriptEngine {
         String cleanClassName = cleanClassName(rawName);
         if (cleanClassName == null) return null;
 
-        if (failedScriptCache.contains(cleanClassName)) {
+        String cacheKey = cacheKey(cleanClassName, sourcePathHint);
+        if (failedScriptCache.contains(cacheKey)) {
             return null;
         }
 
-        Class<?> clazz = compiledClassCache.get(cleanClassName);
+        Class<?> clazz = compiledClassCache.get(cacheKey);
         if (clazz != null) return clazz;
 
         File diskScriptFile = locateScriptSource(rawName, sourcePathHint, cleanClassName + ".java");
@@ -354,8 +367,9 @@ public class ScriptEngine {
         for (String candidate : candidateClassNames) {
             try {
                 clazz = Class.forName(candidate, true, scriptParentLoader());
-                if (clazz != null) {
-                    compiledClassCache.put(cleanClassName, clazz);
+                // Only scripts: a user's SceneManager.java must not resolve to the engine's class of that name
+                if (EntityScript.class.isAssignableFrom(clazz)) {
+                    compiledClassCache.put(cacheKey, clazz);
                     return clazz;
                 }
             } catch (ClassNotFoundException ignored) {}
@@ -364,13 +378,22 @@ public class ScriptEngine {
         if (diskScriptFile != null && diskScriptFile.exists()) {
             clazz = compileAndLoadJavaFile(diskScriptFile, cleanClassName, declaredPackage);
             if (clazz != null) {
-                compiledClassCache.put(cleanClassName, clazz);
+                compiledClassCache.put(cacheKey, clazz);
                 return clazz;
             }
         }
 
-        failedScriptCache.add(cleanClassName);
+        failedScriptCache.add(cacheKey);
         return null;
+    }
+
+    /** Scripts in different folders can share a class name, so the source path is part of the cache key when known. */
+    private static String cacheKey(String className, String sourcePathHint) {
+        return (sourcePathHint == null || sourcePathHint.isBlank()) ? className : className + "@" + sourcePathHint.trim();
+    }
+
+    private static boolean isKeyOf(String key, String className) {
+        return key.equals(className) || key.startsWith(className + "@");
     }
 
     /** Fully qualified names a script class may have: its declared package, the default script packages, then none. */
@@ -498,8 +521,8 @@ public class ScriptEngine {
         }
         sc.activeScriptInstance = script;
         try {
-            script.init(entity, sceneWorld);
             injectPropertyOverrides(script, sc.propertyOverrides);
+            script.init(entity, sceneWorld);
             script.onStart();
             System.out.println("[ScriptEngine] Started script '" + clazz.getSimpleName() + "' on Entity '" + entity.name + "'");
         } catch (Throwable t) {
@@ -512,6 +535,13 @@ public class ScriptEngine {
         if (sourcePathHint != null && !sourcePathHint.trim().isEmpty()) {
             File hint = new File(sourcePathHint.trim());
             if (hint.isFile()) return hint;
+            // Scenes store absolute paths, which go stale in an export or a moved project: keep the part under Assets/
+            String path = sourcePathHint.trim().replace('\\', '/');
+            int assets = path.lastIndexOf("/Assets/");
+            if (assets >= 0 && projectAssetsRoot != null) {
+                File moved = new File(projectAssetsRoot, path.substring(assets + "/Assets/".length()));
+                if (moved.isFile()) return moved;
+            }
         }
         File raw = new File(rawName);
         if (raw.isFile()) return raw;
@@ -579,7 +609,8 @@ public class ScriptEngine {
             for (String c : candidates) {
                 try {
                     Class<?> compiledClass = cl.loadClass(c);
-                    if (compiledClass != null) {
+                    // loadClass also reaches the parent, which may hold an engine class of the same name
+                    if (compiledClass.getClassLoader() == cl) {
                         System.out.println("[ScriptEngine] Janino successfully compiled script in-memory: " + compiledClass.getName());
                         return compiledClass;
                     }

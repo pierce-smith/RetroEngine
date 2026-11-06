@@ -1,6 +1,7 @@
 package com.retro.engine.scripting.framework;
 
 import com.retro.engine.ecs.Entity;
+import com.retro.engine.scripting.ScriptEngine;
 
 /**
  * Global, allocation-free publish/subscribe bus for gameplay scripts. Every subscribed listener receives every event
@@ -55,7 +56,7 @@ public final class ScriptEvents {
                     l.onScriptEvent(eventName, source, text, number);
                 } catch (RuntimeException e) {
                     // One broken listener must not stop the event reaching the others
-                    System.err.println("[ScriptEvents] Listener " + l.getClass().getSimpleName() + " threw on '" + eventName + "': " + e);
+                    ScriptEngine.reportFailure("[ScriptEvents] Listener " + l.getClass().getSimpleName() + " threw on '" + eventName + "': " + e);
                 }
             }
         } finally {

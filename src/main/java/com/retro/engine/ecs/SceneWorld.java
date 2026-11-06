@@ -310,7 +310,7 @@ public class SceneWorld {
         pendingDestroys.clear();
         // Undo framework frame state (camera shake offsets, debug lines, event listeners) before the snapshot restore
         if (leavingPlayMode) ScriptRuntime.onPlayStopped(sceneEntities);
-        List<Entity> restored = simulationEngine.stop(sceneEntities);
+        List<Entity> restored = simulationEngine.stop(sceneEntities, !restoreOrigin);
         syncAnimationPlayState();
         if (restored != null) {
             clearRegistryAndRebind(restored);
@@ -468,11 +468,14 @@ public class SceneWorld {
         pendingScenePath = null;
         // Abort before tearing anything down: a bad path or file must not swap the running scene for an empty one
         if (resolveScenePath(path) == null) {
-            System.err.println("[SceneWorld] Scene transition aborted: '" + path + "' could not be resolved through the project VFS.");
+            ScriptEngine.reportFailure("[SceneWorld] Scene transition aborted: '" + path + "' could not be resolved through the project VFS.");
             return;
         }
         SceneSerializer.SceneLoadData data = readScene(path, lastAssetDatabase);
-        if (data.failed()) return;
+        if (data.failed()) {
+            ScriptEngine.reportFailure("[SceneWorld] Scene transition aborted: '" + path + "' could not be loaded.");
+            return;
+        }
 
         boolean wasRunning = simulationEngine.getPlayState() != PlayState.EDITING;
         // Tear down the running scene without jumping back to the origin; this restores it to its pre-play state
@@ -578,7 +581,7 @@ public class SceneWorld {
         ModLoader.onPrefabSpawned(resolved, spawned, this::deleteEntity);
         setSelection(previousSelection, previousPrimary);
         if (spawned == null || spawned.isEmpty()) {
-            System.err.println("[SceneWorld] Prefab '" + prefabPath + "' could not be instantiated (missing or unreadable).");
+            ScriptEngine.reportFailure("[SceneWorld] Prefab '" + prefabPath + "' could not be instantiated (missing or unreadable).");
             return null;
         }
         if (simulationEngine.getPlayState() != PlayState.EDITING) {

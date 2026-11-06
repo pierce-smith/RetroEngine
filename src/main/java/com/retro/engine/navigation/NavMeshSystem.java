@@ -118,8 +118,8 @@ public final class NavMeshSystem {
 
         float vLen2 = a.velocityX * a.velocityX + a.velocityZ * a.velocityZ;
         if (vLen2 > 1e-4f && a.angularSpeed > 0.0f) {
-            // Yaw 0 faces -Z (CharacterControllerSolver convention)
-            float wantYaw = (float) Math.toDegrees(Math.atan2(a.velocityX, -a.velocityZ));
+            // Models face +Z at yaw 0, matching EntityScript.getForward and SimpleEntityScript.turnTowards
+            float wantYaw = (float) Math.toDegrees(Math.atan2(-a.velocityX, a.velocityZ));
             float delta = wrap(wantYaw - t.rotY);
             float maxTurn = a.angularSpeed * dt;
             if (delta > maxTurn) delta = maxTurn; else if (delta < -maxTurn) delta = -maxTurn;
