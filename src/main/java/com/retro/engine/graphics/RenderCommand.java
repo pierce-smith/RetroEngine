@@ -30,6 +30,9 @@ public final class RenderCommand {
     public float emissiveIntensity;
     /** Albedo is drawn as-is: no scene lights, ambient or received shadows. Fog, emissive and shadow casting still apply. */
     public boolean unlit;
+    /** Blended over the surface after opaque geometry, with no depth writes, shadow casting or picking. */
+    public boolean decal;
+    public float decalOpacity;
 
     /** Color-ID value written by the pick pass ({@link IRenderBackend#PICK_ID_NONE} = not pickable). */
     public int pickId;
@@ -48,6 +51,8 @@ public final class RenderCommand {
         normalStrength = 1.0f;
         emissiveIntensity = 1.0f;
         unlit = false;
+        decal = false;
+        decalOpacity = 0.0f;
         pickId = IRenderBackend.PICK_ID_NONE;
         bonePalette = null;
     }

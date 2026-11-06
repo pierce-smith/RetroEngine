@@ -35,11 +35,11 @@ struct Uniforms {
     float4 dirLightColor;     // 160: rgb = directional light color
     float4 ambientColor;      // 176: rgb = ambient color * intensity (ProjectSettings)
     float4 fogColorDensity;   // 192: rgb = fogColor, w = opacity at fog end (1 = fog on, 0 = fog disabled)
-    float4 matParams;         // 208: x = reflectStrength, y = shadowOpacity, z = shadowMapBias
+    float4 matParams;         // 208: x = reflectStrength, y = shadowOpacity, z = shadowMapBias, w = decal opacity
     uint materialMask;        // 224: bit 0 albedo, 1 normal, 2 specular, 3 lightmap, 4 emissive
     uint isUnlit;             // 228: 0 = Lit Model, 1 = Procedural Grid, 2 = Billboard Particles, 3 = Unlit Model
     uint stride;              // 232
-    uint passFlags;           // 236: bit 0 shadowBlob, bit 1 reflection, bit 4 skinned
+    uint passFlags;           // 236: bit 0 shadowBlob, bit 1 reflection, bit 4 skinned, bit 5 decal
     float4x4 lightSpace;      // 240: directional shadow map view-projection
     float4 surface;           // 304: x = specularStrength, y = roughness, z = normalStrength, w = emissiveIntensity
     float4 viewPos;           // 320: xyz = camera world position
@@ -67,6 +67,12 @@ constant uint MAT_NORMAL   = 2u;
 constant uint MAT_SPECULAR = 4u;
 constant uint MAT_LIGHTMAP = 8u;
 constant uint MAT_EMISSIVE = 16u;
+
+constant uint PASS_DECAL = 32u;
+// Decals sit exactly on their surface, so depth is pulled toward the camera by this fraction of the view distance.
+// Scaling (w - z) rather than offsetting z keeps the pull proportional to distance, where a flat bias would shrink to
+// nothing up close and swallow whole objects far away.
+constant float DECAL_DEPTH_PULL = 0.0005;
 
 struct VertexOut {
     float4 position [[position]];
@@ -277,6 +283,9 @@ vertex VertexOut vertexMain(uint vertexID [[vertex_id]],
     }
 
     out.position = uniforms.mvp * localPos;
+    if ((uniforms.passFlags & PASS_DECAL) != 0u) {
+        out.position.z = out.position.w - (out.position.w - out.position.z) * (1.0 + DECAL_DEPTH_PULL);
+    }
     out.worldPos = (uniforms.model * localPos).xyz;
     out.viewDist = out.position.w;
     out.drawIndex = drawIndex;
@@ -387,7 +396,21 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
     // only when it is non-black
     uint mask = uniforms.materialMask;
     float4 texColor = ((mask & MAT_ALBEDO) != 0u) ? args.albedo.sample(smp, in.uv) : float4(1.0);
-    if (texColor.a < 0.25) {
+    // Decals blend by coverage instead of cutting out. Skinned decals keep whole triangles, so the box edge is enforced
+    // here, and vertex alpha carries the fade on steep or receding surfaces
+    bool decal = (uniforms.passFlags & PASS_DECAL) != 0u;
+    float decalCoverage = 0.0;
+    if (decal) {
+        if ((mask & MAT_ALBEDO) == 0u) {
+            float2 c = in.uv * 2.0 - 1.0;
+            float soft = saturate(1.0 - dot(c, c));
+            texColor.a = soft * soft;
+        }
+        decalCoverage = texColor.a * in.color.a * uniforms.matParams.w;
+        if (decalCoverage < 0.004 || any(in.uv < 0.0) || any(in.uv > 1.0)) {
+            discard_fragment();
+        }
+    } else if (texColor.a < 0.25) {
         discard_fragment();
     }
     float4 baseColor = texColor;
@@ -500,5 +523,5 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
 
     finalRGB = mix(finalRGB, uniforms.fogColorDensity.rgb, fogAmount(uniforms, in.viewDist));
 
-    return float4(finalRGB, baseColor.a);
+    return float4(finalRGB, decal ? decalCoverage : baseColor.a);
 }

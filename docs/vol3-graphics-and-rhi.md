@@ -224,6 +224,39 @@ step, even while stopped) and `clear()`.
   dedicated particle mode and premultiplied blend state.
 - **Cost.** Simulation and extraction don't allocate. The draw list's storage only grows.
 
+### 2.4a Decals
+
+A decal stamps an image onto whatever meshes lie inside a box: blood, bullet holes, scorch marks. Hand-placed ones are a
+`Decal` component, which projects along the entity's -Y, so a new entity stamps straight down. Scripts make them during
+play with `spawnDecal` (Volume 6 §2.6). `DecalTextures.BLOOD`, `BULLET_HOLE` and `SCORCH` are generated at runtime, so
+they work in a project with no decal art. Any texture works; its alpha is the decal's shape.
+
+**Mesh decals, not screen-space ones.** `DecalBuilder` cuts the part of each target mesh inside the box into new
+geometry, stored in that mesh's local space. `SceneRenderPipeline` then queues it as a normal `RenderCommand` with the
+target's transform, bone palette, lightmap and unlit flag. So a decal gets the surface's lights, shadows, Gouraud or
+Blinn-Phong shading and fog from the normal lit shader, and it rides moving meshes with no per-frame work.
+
+- **Static targets** are clipped exactly to the box.
+- **Skinned targets** keep whole triangles with their original bone weights, because a clipped vertex can't reproduce
+  the skinning of the corners around it and would sink into a bending limb. Triangles are tested in the current pose,
+  and the shader discards everything outside the 0..1 UV range.
+- **Facing.** Surfaces turned further than `maxAngle` from the decal's normal are skipped, which also keeps a decal from
+  printing through to the far side of a wall. Vertex alpha fades surfaces approaching that angle.
+- **Drawing.** Decals have the `decal` flag on `RenderCommand`: they sort after all opaque draws, in spawn order so newer
+  marks layer on top, and blend by coverage instead of the 0.25 alpha cutout. They test depth without writing it, and
+  they cast no shadow and can't be picked. Metal sets `passFlags` bit 5 and Vulkan pushes `params.x = -1`.
+- **Depth.** The vertex stages pull decal depth 0.05% of the view distance toward the camera. It stays proportional to
+  distance, so it neither z-fights far away nor shows through nearby objects.
+- **Bone palettes** are shared by identity, so any number of decals on a character costs its one palette slot.
+
+**Lifetime.** `DecalSystem` (owned by `SceneWorld`) queues spawns and builds them at render extraction, at most 32 a
+frame, when the frame's pose is known. Spawned decals are capped at 256 (`setMaxDecals`), oldest first, and are cleared
+when Play stops. `lifetime` and `fadeTime` remove one sooner. Hand-placed decals don't count against the cap. They
+rebuild in the editor when they or a nearby surface change, and hold still during Play.
+
+**Cost.** Each decal piece is one draw and one small mesh upload at spawn. A spawn walks every triangle of each mesh whose
+bounds reach the box, so a very large single mesh costs more to hit than the same level split into pieces.
+
 ### 2.5 Camera Post-Processing
 
 The scene image can be composited through **one fullscreen post-process pass** instead of a plain blit. It is

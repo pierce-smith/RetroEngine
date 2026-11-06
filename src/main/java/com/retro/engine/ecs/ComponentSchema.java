@@ -52,7 +52,8 @@ public final class ComponentSchema {
             UIProgressBar.class, ParticleSystem.class, AudioReverbZone.class,
             com.retro.engine.ecs.components.NavMeshAgent.class,
             com.retro.engine.ecs.components.SplineComponent.class, com.retro.engine.ecs.components.SplineFollower.class,
-            com.retro.engine.ecs.components.BoneSocket.class
+            com.retro.engine.ecs.components.BoneSocket.class,
+            com.retro.engine.ecs.components.Decal.class
     );
 
     /** How the inspector presents and edits a property. */

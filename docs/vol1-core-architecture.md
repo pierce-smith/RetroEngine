@@ -310,7 +310,7 @@ changing the writer. Once the writer moves on, you can't make one any more.
 | Controllers | `CharacterControllerComponent`, `VehicleControllerComponent` |
 | Animation   | `AnimatorComponent`, `BoneSocket` |
 | Game UI     | `UICanvasComponent`, `UIPanel`, `UIText`, `UIImage`, `UIProgressBar` |
-| Effects     | `ParticleSystem` (Volume 3 §2.4) |
+| Effects     | `ParticleSystem` (Volume 3 §2.4), `Decal` (Volume 3 §2.4a) |
 | Audio       | `AudioReverbZone` (§4) |
 | Navigation  | `NavMeshAgent` (Volume 4 §1.5) |
 | Paths       | `SplineComponent`, `SplineFollower` (Volume 4 §1.6) |

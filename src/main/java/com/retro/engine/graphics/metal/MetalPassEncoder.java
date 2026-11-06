@@ -158,6 +158,8 @@ public class MetalPassEncoder {
         this.pickTexelY = texelY;
     }
 
+    private final float[][][] slotPalettes = new float[MetalUniformStream.MAX_SKINNED_ENTITIES_PER_FRAME][][];
+
     // Particle batches for the main scene pass (arrays owned by MetalBackend, rewritten only between frames)
     private int particleBatchCount = 0;
     private int[] particleFirst, particleCount;
@@ -335,6 +337,8 @@ public class MetalPassEncoder {
                 RenderCommand item = commands[draws.commandIndex[i]];
                 boolean skinned = draws.skinnedSlot[i] >= 0;
                 int slot = entitySlotBase + i;
+                // Decals sort after every opaque draw and blend over them, so they test depth without writing it
+                if (item.decal) bindDepthStencil(noDepthWriteState(pipeline));
 
                 float[] mvpModel = streamer.createMVPFromViewProj(viewProj, item.px, item.py, item.pz, item.rx, item.ry, item.rz, item.sx, item.sy, item.sz);
                 float[] modelMat = streamer.getModelMatrix();
@@ -351,6 +355,7 @@ public class MetalPassEncoder {
                 streamer.writeDrawEnvironment(baseAddr, lights.environment());
 
                 MemoryUtil.memPutFloat(baseAddr + 208L, item.reflect);
+                MemoryUtil.memPutFloat(baseAddr + 220L, item.decalOpacity);
                 MemoryUtil.memPutFloat(baseAddr + 216L, DirectionalShadowFrustum.SHADOW_BIAS);
                 streamer.writeLightSpaceMatrix(baseAddr);
 
@@ -372,6 +377,9 @@ public class MetalPassEncoder {
                 }
                 if (skinned) {
                     passFlags |= MetalUniformStream.PASS_FLAG_SKINNED;
+                }
+                if (item.decal) {
+                    passFlags |= MetalUniformStream.PASS_FLAG_DECAL;
                 }
                 MemoryUtil.memPutInt(baseAddr + MetalUniformStream.OFFSET_PASS_FLAGS, passFlags);
 
@@ -456,6 +464,10 @@ public class MetalPassEncoder {
 
         invokePPP(encoder3D, SEL_END_ENCODING, send);
         encoder = 0L;
+    }
+
+    private static long noDepthWriteState(MetalPipeline pipeline) {
+        return pipeline.getDepthStencilStateShadow() != 0L ? pipeline.getDepthStencilStateShadow() : pipeline.getDepthStencilState3D();
     }
 
     /**
@@ -667,12 +679,22 @@ public class MetalPassEncoder {
         for (int i = 0; i < count; i++) {
             float[][] palette = commands[draws.commandIndex[i]].bonePalette;
             draws.skinnedSlot[i] = -1;
-            if (draws.floatStride[i] >= 30 && palette != null && pBoneContents != 0L
-                    && skinnedIndex < MetalUniformStream.MAX_SKINNED_ENTITIES_PER_FRAME) {
+            if (draws.floatStride[i] < 30 || palette == null || pBoneContents == 0L) continue;
+
+            // Decals on a character share its palette, so a bloodied rig still costs one slot
+            int shared = -1;
+            for (int s = 0; s < skinnedIndex && shared < 0; s++) {
+                if (slotPalettes[s] == palette) shared = s;
+            }
+            if (shared >= 0) {
+                draws.skinnedSlot[i] = shared;
+            } else if (skinnedIndex < MetalUniformStream.MAX_SKINNED_ENTITIES_PER_FRAME) {
                 streamer.writeBonePalette(pBoneContents, skinnedIndex, palette);
+                slotPalettes[skinnedIndex] = palette;
                 draws.skinnedSlot[i] = skinnedIndex++;
             }
         }
+        java.util.Arrays.fill(slotPalettes, 0, skinnedIndex, null);
     }
 
     /**
@@ -705,6 +727,7 @@ public class MetalPassEncoder {
 
             for (int i = 0; i < entityCount; i++) {
                 RenderCommand item = commands[draws.commandIndex[i]];
+                if (item.decal) continue;
                 // Same skinning rule as the main pass: unskinned 30-float meshes draw in bind pose there too
                 boolean skinned = draws.skinnedSlot[i] >= 0;
                 int slot = streamer.slotBaseShadowCasters() + i;

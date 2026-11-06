@@ -63,6 +63,7 @@ public class VulkanPipeline {
     private long graphicsPipeline3D = 0L;
     private long graphicsPipelineShadow = 0L;
     private long graphicsPipelineSkinned = 0L;
+    private long graphicsPipelineSkinnedDecal = 0L;
     // Depth-only directional shadow map pipelines (static 88 B and skinned 120 B strides)
     private long graphicsPipelineShadowDepth = 0L;
     private long graphicsPipelineShadowDepthSkinned = 0L;
@@ -368,7 +369,8 @@ public class VulkanPipeline {
     private long[] pipelineHandles() {
         return new long[] { graphicsPipeline3D, graphicsPipelineShadow, graphicsPipelineSkinned, graphicsPipelineShadowDepth,
                 graphicsPipelineShadowDepthSkinned, graphicsPipelinePick, graphicsPipelinePickSkinned, graphicsPipelinePickOverlay,
-                graphicsPipelineGrid, graphicsPipelineGridLines, graphicsPipelineUI, graphicsPipelinePost, graphicsPipelineParticles };
+                graphicsPipelineGrid, graphicsPipelineGridLines, graphicsPipelineUI, graphicsPipelinePost, graphicsPipelineParticles,
+                graphicsPipelineSkinnedDecal };
     }
 
     private void setPipelineHandles(long[] h) {
@@ -385,6 +387,7 @@ public class VulkanPipeline {
         graphicsPipelineUI = h[10];
         graphicsPipelinePost = h[11];
         graphicsPipelineParticles = h[12];
+        graphicsPipelineSkinnedDecal = h[13];
     }
 
     private static void destroyPipelines(VkDevice vkDevice, long[] handles) {
@@ -584,6 +587,13 @@ public class VulkanPipeline {
                     if (vkCreateGraphicsPipelines(vkDevice, cacheHandle, pipelineInfoSkinned, null, pPipelineSkinned) == VK_SUCCESS) {
                         graphicsPipelineSkinned = pPipelineSkinned.get(0);
                         System.out.println("[VulkanPipeline] Created GPU Skinned 3D VkPipeline [0x" + Long.toHexString(graphicsPipelineSkinned) + "].");
+                    }
+
+                    // 2C-2. Skinned decals: the same stages with depth writes off. Static decals share the blob pipeline
+                    pipelineInfoSkinned.pDepthStencilState(depthStencilShadow);
+                    LongBuffer pPipelineSkinnedDecal = stack.mallocLong(1);
+                    if (vkCreateGraphicsPipelines(vkDevice, cacheHandle, pipelineInfoSkinned, null, pPipelineSkinnedDecal) == VK_SUCCESS) {
+                        graphicsPipelineSkinnedDecal = pPipelineSkinnedDecal.get(0);
                     }
 
                     graphicsPipelineShadowDepthSkinned = createShadowDepthPipeline(vkDevice, cacheHandle, vertSkinnedModule, vertexInputSkinned, inputAssembly, viewportState, rasterizer, multisampling, dynamicState3D);
@@ -874,6 +884,7 @@ public class VulkanPipeline {
     public long getGraphicsPipeline3D() { return graphicsPipeline3D; }
     public long getGraphicsPipelineShadow() { return graphicsPipelineShadow != 0L ? graphicsPipelineShadow : graphicsPipeline3D; }
     public long getGraphicsPipelineSkinned() { return graphicsPipelineSkinned; }
+    public long getGraphicsPipelineSkinnedDecal() { return graphicsPipelineSkinnedDecal; }
     public long getGraphicsPipelineShadowDepth() { return graphicsPipelineShadowDepth; }
     public long getGraphicsPipelineShadowDepthSkinned() { return graphicsPipelineShadowDepthSkinned; }
     public long getGraphicsPipelinePick() { return graphicsPipelinePick; }
@@ -905,6 +916,7 @@ public class VulkanPipeline {
         if (graphicsPipeline3D != 0L) { vkDestroyPipeline(vkDevice, graphicsPipeline3D, null); graphicsPipeline3D = 0L; }
         if (graphicsPipelineShadow != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineShadow, null); graphicsPipelineShadow = 0L; }
         if (graphicsPipelineSkinned != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineSkinned, null); graphicsPipelineSkinned = 0L; }
+        if (graphicsPipelineSkinnedDecal != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineSkinnedDecal, null); graphicsPipelineSkinnedDecal = 0L; }
         if (graphicsPipelineShadowDepth != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineShadowDepth, null); graphicsPipelineShadowDepth = 0L; }
         if (graphicsPipelineShadowDepthSkinned != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelineShadowDepthSkinned, null); graphicsPipelineShadowDepthSkinned = 0L; }
         if (graphicsPipelinePick != 0L) { vkDestroyPipeline(vkDevice, graphicsPipelinePick, null); graphicsPipelinePick = 0L; }

@@ -4,7 +4,9 @@ import com.retro.engine.core.WindowHost;
 import com.retro.engine.assets.AssetStreamer;
 import com.retro.engine.assets.MeshBufferData;
 import com.retro.engine.assets.MeshImporter;
+import com.retro.engine.ecs.DecalSystem;
 import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.HierarchySystem;
 import com.retro.engine.ecs.SceneWorld;
 import com.retro.engine.ecs.SceneWorld.WorldTransform;
 import com.retro.engine.ecs.components.AnimatorComponent;
@@ -356,6 +358,11 @@ public class SceneRenderPipeline {
             totalActiveVertices += snapshot.particles.vertexCount;
         }
 
+        // 4. Decals, after the entities so they sort last in submission order and draw over what they landed on
+        if (entities != null) {
+            entityDrawCalls += extractDecals(queue, editorManager.getSceneManager(), streamingService, environment, previewActive);
+        }
+
         // Mods: RenderPassEvent may queue extra draws, add lights or tweak this frame's environment before sorting
         activeSnapshot = snapshot;
         ModLoader.onRenderPass(this, streamingService, queue, snapshot.lights, environment, GameView.isFullscreen());
@@ -413,6 +420,125 @@ public class SceneRenderPipeline {
 
         return snapshot;
     }
+
+    /**
+     * Queues every visible decal piece with its target's current transform, bones, lightmap and lit state. All decals
+     * share one sort key, so the stable sort keeps them in {@link DecalSystem} order and newer marks layer over older
+     * ones. A piece isn't added to the shadow frustum, since decals don't cast. Returns the draws queued.
+     */
+    private int extractDecals(RenderQueue queue, SceneWorld world, AssetStreamer streamer, RenderEnvironment environment, boolean previewActive) {
+        DecalSystem decals = world.getDecals();
+        bindDecalStreamer(streamer);
+        decals.sync(world, decalMeshes, decalMeshRelease);
+        int draws = 0;
+        for (int i = 0, n = decals.getLiveCount(); i < n; i++) {
+            DecalSystem.Live live = decals.getLive(i);
+            DecalSpec spec = live.spec;
+            float opacity = live.opacity();
+            if (opacity <= 0.0f || live.pieces.isEmpty()) continue;
+
+            long albedo = resolveDecalTexture(spec.texturePath, streamer);
+            long normal = resolveDecalTexture(spec.normalPath, streamer);
+            if (albedo == DECAL_TEXTURE_PENDING || normal == DECAL_TEXTURE_PENDING) continue;
+
+            for (int p = 0, pieces = live.pieces.size(); p < pieces; p++) {
+                DecalSystem.Piece piece = live.pieces.get(p);
+                Entity target = world.getEntityByHandle(piece.target);
+                MeshFilter filter = target != null ? target.getComponent(MeshFilter.class) : null;
+                if (filter == null || !filter.isVisible) continue;
+
+                WorldTransform wt = world.getComputedWorldTransform(target);
+                if (!isDecalVisible(piece, wt, streamer, filter, environment, previewActive)) continue;
+
+                long mesh = streamer.resolveMeshHandle(piece.meshKey, piece.mesh);
+                RenderCommand cmd = queue.add();
+                cmd.meshHandle = mesh;
+                cmd.px = wt.px(); cmd.py = wt.py(); cmd.pz = wt.pz();
+                cmd.rx = wt.rx(); cmd.ry = wt.ry(); cmd.rz = wt.rz();
+                cmd.sx = wt.sx(); cmd.sy = wt.sy(); cmd.sz = wt.sz();
+                cmd.groundY = Float.NEGATIVE_INFINITY; // no ground shadow blob
+                cmd.albedoTexture = albedo;
+                cmd.normalTexture = normal;
+                cmd.specularStrength = spec.specularStrength;
+                cmd.roughness = spec.roughness;
+                cmd.normalStrength = spec.normalStrength;
+                cmd.decal = true;
+                cmd.decalOpacity = opacity;
+
+                MeshBufferData source = streamer.getModel(filter.meshAssetPath);
+                cmd.unlit = source != null && source.unlit;
+                Material material = target.getComponent(Material.class);
+                if (material != null) {
+                    cmd.lightmapTexture = resolveChannelHandle(material, Material.CHANNEL_LIGHTMAP, streamer, streamer.getHandleEpoch());
+                }
+                if (piece.skinned) {
+                    AnimatorComponent animator = target.getComponent(AnimatorComponent.class);
+                    if (animator != null && animator.skeleton != null) cmd.bonePalette = animator.bonePaletteMatrices;
+                }
+                cmd.sortKey = RenderQueue.packKey(true, RenderQueue.PASS_SCENE, 0, 0, 0);
+                draws++;
+            }
+        }
+        return draws;
+    }
+
+    private static final long DECAL_TEXTURE_PENDING = -1L;
+
+    // Built once per streamer, so per-frame decal syncing doesn't allocate lambdas
+    private AssetStreamer decalStreamer;
+    private java.util.function.Function<String, MeshBufferData> decalMeshes;
+    private java.util.function.Consumer<String> decalMeshRelease;
+
+    private void bindDecalStreamer(AssetStreamer streamer) {
+        if (decalStreamer == streamer) return;
+        decalStreamer = streamer;
+        decalMeshes = path -> {
+            if (!streamer.isMeshLoaded(path)) streamer.requestModelAsync(path);
+            return streamer.getModel(path);
+        };
+        decalMeshRelease = streamer::releaseMeshHandle;
+    }
+
+    /** GPU handle for a decal channel: 0L when it has none, {@link #DECAL_TEXTURE_PENDING} while it streams in. */
+    private long resolveDecalTexture(String path, AssetStreamer streamer) {
+        if (path == null || path.isEmpty()) return 0L;
+        if (DecalTextures.isBuiltin(path)) {
+            long handle = streamer.getTextureHandle(path);
+            return handle != 0L ? handle : streamer.resolveTextureHandle(path, DecalTextures.generate(path));
+        }
+        streamer.markTextureReferenced(path);
+        if (!streamer.isTextureLoaded(path)) {
+            streamer.requestTextureAsync(path);
+            return DECAL_TEXTURE_PENDING;
+        }
+        return streamer.getTextureHandle(path);
+    }
+
+    /** The same frustum and fog rules as the entity loop, on the piece's own bounds. Skinned pieces use the whole rig's. */
+    private boolean isDecalVisible(DecalSystem.Piece piece, WorldTransform wt, AssetStreamer streamer, MeshFilter filter,
+                                   RenderEnvironment environment, boolean previewActive) {
+        float maxScale = Math.max(Math.abs(wt.sx()), Math.max(Math.abs(wt.sy()), Math.abs(wt.sz())));
+        float x, y, z, radius;
+        if (piece.skinned) {
+            MeshBufferData source = streamer.getModel(filter.meshAssetPath);
+            x = wt.px(); y = wt.py(); z = wt.pz();
+            radius = (source != null ? source.boundsRadius() : 1.0f) * maxScale * 2.0f;
+        } else {
+            HierarchySystem.rotationMatrix(wt.rx(), wt.ry(), wt.rz(), decalRotation);
+            float lx = piece.centerX * wt.sx(), ly = piece.centerY * wt.sy(), lz = piece.centerZ * wt.sz();
+            x = wt.px() + (float) (decalRotation[0] * lx + decalRotation[1] * ly + decalRotation[2] * lz);
+            y = wt.py() + (float) (decalRotation[3] * lx + decalRotation[4] * ly + decalRotation[5] * lz);
+            z = wt.pz() + (float) (decalRotation[6] * lx + decalRotation[7] * ly + decalRotation[8] * lz);
+            radius = Math.max(piece.radius * maxScale, 0.01f);
+        }
+        float nearDepth = -(depthRowX * x + depthRowY * y + depthRowZ * z + depthRowW) - radius;
+        if (frustumCuller.isSphereVisible(x, y, z, radius) && !environment.isFogCulled(nearDepth)) return true;
+        if (!previewActive) return false;
+        float previewNearDepth = -(previewView[2] * x + previewView[6] * y + previewView[10] * z + previewView[14]) - radius;
+        return previewCuller.isSphereVisible(x, y, z, radius) && !environment.isFogCulled(previewNearDepth);
+    }
+
+    private final double[] decalRotation = new double[9];
 
     /** Indexes every visible mesh once, so each draw's ground lookup only looks at its neighbors. */
     private void buildGroundIndex(List<Entity> entities, SceneWorld world) {

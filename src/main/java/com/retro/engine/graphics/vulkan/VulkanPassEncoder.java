@@ -30,6 +30,7 @@ public class VulkanPassEncoder {
 
     // Pass flags read by blinn_phong.frag (params.x)
     private static final float PASS_SCENE = 0.0f;
+    private static final float PASS_DECAL = -1.0f; // lit scene draw that blends, with params.y as its opacity
     private static final float PASS_SHADOW_BLOB = 1.0f;
     private static final float PASS_SHADOW_DEPTH = 2.0f;
 
@@ -382,14 +383,18 @@ public class VulkanPassEncoder {
                 boolean skinnedLayout = draws.skinnedLayout[i];
                 if (skinnedLayout && (skinnedPipeline == 0L || bonePaletteBuf == null)) continue;
 
-                long wantedPipeline = skinnedLayout ? skinnedPipeline : pipelineManager.getGraphicsPipeline3D();
+                // Decals sort after every opaque draw and blend over them, so they test depth without writing it
+                long wantedPipeline = entity.decal
+                        ? (skinnedLayout ? pipelineManager.getGraphicsPipelineSkinnedDecal() : pipelineManager.getGraphicsPipelineShadow())
+                        : (skinnedLayout ? skinnedPipeline : pipelineManager.getGraphicsPipeline3D());
+                if (wantedPipeline == 0L) continue;
                 if (wantedPipeline != boundPipeline) {
                     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, wantedPipeline);
                     boundPipeline = wantedPipeline;
                 }
 
                 computeModelMatrixInPlace(entity.px, entity.py, entity.pz, entity.rx, entity.ry, entity.rz, entity.sx, entity.sy, entity.sz, modelMatrixScratch);
-                writeEntityPush(meshPush, modelMatrixScratch, PASS_SCENE, entity, draws, i, cameraView);
+                writeEntityPush(meshPush, modelMatrixScratch, entity.decal ? PASS_DECAL : PASS_SCENE, entity, draws, i, cameraView);
                 vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, meshPush);
 
                 drawMesh(cmd, pBuffers, pOffsets, i);
@@ -653,7 +658,7 @@ public class VulkanPassEncoder {
         push.clear();
         for (int m = 0; m < 16; m++) push.putFloat(model[m]);
         // params: passFlags, heightFade, reflection, emissiveIntensity
-        push.putFloat(passFlag).putFloat(1.0f).putFloat(entity.reflect).putFloat(entity.emissiveIntensity);
+        push.putFloat(passFlag).putFloat(entity.decal ? entity.decalOpacity : 1.0f).putFloat(entity.reflect).putFloat(entity.emissiveIntensity);
         // surface: specularStrength, roughness, normalStrength, unlit
         push.putFloat(entity.specularStrength).putFloat(entity.roughness).putFloat(entity.normalStrength).putFloat(entity.unlit ? 1.0f : 0.0f);
         // texIndices: albedo, normal, specular/roughness, lightmap/AO
@@ -781,6 +786,7 @@ public class VulkanPassEncoder {
 
             for (int i = 0; i < draws.count; i++) {
                 RenderCommand entity = commands[draws.commandIndex[i]];
+                if (entity.decal) continue;
 
                 // Same pipeline-selection rules as the main 3D pass so casters and receivers always match
                 boolean skinnedLayout = draws.skinnedLayout[i];

@@ -421,6 +421,35 @@ the player has moved more than `repathDistance`, instead of every frame.
 spawns a burst on the next simulation step, even while stopped. Particles are simulated after scripts, so calls made
 in `onUpdate` take effect the same frame.
 
+#### Decals (Volume 3 §2.4a)
+
+`spawnDecal` is on `EntityScript`. It stamps an image onto the meshes at a point, and the mark stays on them as they
+move or animate. Decals are cleared when Play stops.
+
+```java
+private final RaycastHit hit = new RaycastHit();
+
+if (raycast(eyeX, eyeY, eyeZ, dirX, dirY, dirZ, 100.0f, hit)) {
+    spawnDecal(DecalTextures.BULLET_HOLE, hit, 0.15f);   // texture, where, width. Rotation is random
+}
+```
+
+For anything else, fill a `DecalSpec`. It is copied on spawn, so keep one per weapon and reuse it:
+
+```java
+DecalSpec blood = new DecalSpec(DecalTextures.BLOOD, 0.8f);
+blood.setHit(hit);
+blood.target = hit.entity;     // only this entity. blood.exclude skips one instead
+blood.depth = 1.0f;            // colliders sit off the skin, so reach further on characters
+blood.roughness = 0.25f;       // wet
+blood.lifetime = 30.0f;        // seconds; 0 = until the 256-decal budget evicts it
+spawnDecal(blood);
+```
+
+A capsule hit lands on the capsule, not the body inside it, so a small box can miss the mesh. Raise `depth` for characters.
+If the mesh is on a child of the entity that owns the collider, set `target` to that child, not `hit.entity`.
+Scripts import `com.retro.engine.graphics.DecalSpec` and `DecalTextures`.
+
 #### Animation (`AnimatorComponent`, Volume 3 §2.2.1)
 
 ```java

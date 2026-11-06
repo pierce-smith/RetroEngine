@@ -15,6 +15,7 @@ import com.retro.engine.ecs.components.MeshFilter;
 import com.retro.engine.ecs.components.RigidBodyComponent;
 import com.retro.engine.ecs.components.Transform;
 import com.retro.engine.ecs.components.VehicleControllerComponent;
+import com.retro.engine.graphics.DecalSpec;
 import com.retro.engine.physics.PhysicsSystem;
 import com.retro.engine.physics.RaycastHit;
 
@@ -383,6 +384,28 @@ public abstract class EntityScript {
         }
         sceneWorld.getPhysicsWorld().raycastExcludingInPlace(entity, rayOriginX, rayOriginY, rayOriginZ, rayDirX, rayDirY, rayDirZ, maxDistance, out, layerMask);
         return out.hit;
+    }
+
+    // =========================================================================
+    // Decals
+    // =========================================================================
+
+    /**
+     * Stamps a decal where a raycast landed, at a random rotation so repeats don't look identical. {@code texture} is a
+     * texture path or a built-in such as {@code DecalTextures.BLOOD}; {@code size} is its width in world units. Returns
+     * false when the raycast missed.
+     */
+    public boolean spawnDecal(String texture, RaycastHit hit, float size) {
+        if (hit == null || !hit.hit) return false;
+        DecalSpec spec = new DecalSpec(texture, size).setHit(hit);
+        spec.rotation = (float) (Math.random() * 360.0);
+        spawnDecal(spec);
+        return true;
+    }
+
+    /** Stamps a decal with every option set by hand. The spec is copied, so keep one per weapon and reuse it. */
+    public void spawnDecal(DecalSpec spec) {
+        if (sceneWorld != null) sceneWorld.getDecals().spawn(spec);
     }
 
     // =========================================================================

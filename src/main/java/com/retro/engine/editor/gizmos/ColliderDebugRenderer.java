@@ -59,6 +59,33 @@ public class ColliderDebugRenderer {
             if (vc != null) {
                 renderVehicleController(buffer, tc, vc, isSelected, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
             }
+
+            com.retro.engine.ecs.components.Decal decal = entity.getComponent(com.retro.engine.ecs.components.Decal.class);
+            if (decal != null && isSelected) {
+                renderDecalBox(buffer, tc, decal, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+            }
+        }
+    }
+
+    /** The projection box, in the entity's rotation, so a decal placed in the editor shows what it will reach. */
+    private static void renderDecalBox(UIGeometryBatch.Buffer buffer, Transform tc, com.retro.engine.ecs.components.Decal decal,
+                                       ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
+        double[] rotation = new double[9];
+        com.retro.engine.ecs.HierarchySystem.rotationMatrix(tc.rotX, tc.rotY, tc.rotZ, rotation);
+        float hx = decal.width * tc.scaleX * 0.5f, hy = decal.depth * tc.scaleY * 0.5f, hz = decal.height * tc.scaleZ * 0.5f;
+
+        float[][] corners = new float[8][3];
+        for (int i = 0; i < 8; i++) {
+            float x = (i & 1) == 0 ? -hx : hx, y = (i & 2) == 0 ? -hy : hy, z = (i & 4) == 0 ? -hz : hz;
+            corners[i][0] = tc.posX + (float) (rotation[0] * x + rotation[1] * y + rotation[2] * z);
+            corners[i][1] = tc.posY + (float) (rotation[3] * x + rotation[4] * y + rotation[5] * z);
+            corners[i][2] = tc.posZ + (float) (rotation[6] * x + rotation[7] * y + rotation[8] * z);
+        }
+        int[][] edges = { {0,1}, {2,3}, {4,5}, {6,7}, {0,2}, {1,3}, {4,6}, {5,7}, {0,4}, {1,5}, {2,6}, {3,7} };
+        for (int[] edge : edges) {
+            draw3DLine(buffer, corners[edge[0]][0], corners[edge[0]][1], corners[edge[0]][2],
+                                corners[edge[1]][0], corners[edge[1]][1], corners[edge[1]][2],
+                                0.0025f, 0.95f, 0.35f, 0.75f, 0.95f, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
         }
     }
 

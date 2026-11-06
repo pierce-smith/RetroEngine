@@ -33,6 +33,10 @@ import java.util.List;
  */
 public class SceneWorld {
 
+    public DecalSystem getDecals() {
+        return decals;
+    }
+
     public PhysicsSystem getPhysicsWorld() {
         return simulationEngine.getPhysicsWorld();
     }
@@ -109,6 +113,7 @@ public class SceneWorld {
 
     private final HierarchySystem graphEvaluator = new HierarchySystem();
     private final BoneSocketSystem boneSockets = new BoneSocketSystem();
+    private final DecalSystem decals = new DecalSystem();
     private final SimulationSystem simulationEngine = new SimulationSystem();
     private final EntitySpawner entityFactory = new EntitySpawner();
     private final AnimationSystem animationEngine = new AnimationSystem();
@@ -311,6 +316,7 @@ public class SceneWorld {
     private void stopSimulation(boolean restoreOrigin) {
         boolean leavingPlayMode = simulationEngine.getPlayState() != PlayState.EDITING;
         pendingDestroys.clear();
+        decals.clearSpawned();
         // Undo framework frame state (camera shake offsets, debug lines, event listeners) before the snapshot restore
         if (leavingPlayMode) ScriptRuntime.onPlayStopped(sceneEntities);
         List<Entity> restored = simulationEngine.stop(sceneEntities, !restoreOrigin);
@@ -424,6 +430,7 @@ public class SceneWorld {
         if (simulating) {
             flushPendingDestroys();
             ScriptRuntime.endFrame(sceneEntities);
+            decals.update(deltaTime);
         }
         
         // Per-frame Skeletal Animation Keyframe Sampling & Pose Matrix Palette Evaluation

@@ -821,6 +821,7 @@ public class InspectorInputDelegate {
         addComponentItem(items, entities, "+ Audio Reverb Zone", com.retro.engine.ecs.components.AudioReverbZone.class, com.retro.engine.ecs.components.AudioReverbZone::new);
         addComponentItem(items, entities, "+ Particle System", com.retro.engine.ecs.components.ParticleSystem.class, com.retro.engine.ecs.components.ParticleSystem::new);
         addComponentItem(items, entities, "+ Bone Socket", com.retro.engine.ecs.components.BoneSocket.class, com.retro.engine.ecs.components.BoneSocket::new);
+        addComponentItem(items, entities, "+ Decal", com.retro.engine.ecs.components.Decal.class, com.retro.engine.ecs.components.Decal::new);
         if (entities.size() == 1) {
             // Not limited to one per entity: an unbound SCRIPT picker attaches an additional ScriptComponent
             items.add(new MenuItem("+ Script Component", () -> {

@@ -249,6 +249,21 @@ public class AssetStreamer {
         return handle;
     }
 
+    /** Frees geometry registered through {@link #resolveMeshHandle}; a later resolve uploads it again. */
+    public void releaseMeshHandle(String assetKey) {
+        unregisterMeshHandle(assetKey);
+    }
+
+    /** Texture counterpart of {@link #resolveMeshHandle}, for generated images. */
+    public long resolveTextureHandle(String assetKey, PixelBufferData data) {
+        long handle = getTextureHandle(assetKey);
+        if (handle == 0L) {
+            registerTextureHandle(assetKey, data);
+            handle = getTextureHandle(assetKey);
+        }
+        return handle;
+    }
+
     /** Changes whenever any handle is unregistered; a cached handle is only valid for the epoch it was read in. */
     public int getHandleEpoch() {
         return handleEpoch.get();

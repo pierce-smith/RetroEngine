@@ -60,7 +60,7 @@ layout(set = 0, binding = 4) uniform texture2D u_Textures[];
 // 128 bytes: must stay byte-identical to the block in blinn_phong.vert
 layout(push_constant) uniform MeshPushConstants {
     mat4 model;
-    vec4 params;       // x = passFlags (1.0 = shadow blob, 2.0 = shadow map depth), y = heightFade, z = reflection, w = emissiveIntensity
+    vec4 params;       // x = passFlags (-1.0 = decal, 1.0 = shadow blob, 2.0 = shadow map depth), y = heightFade or decal opacity, z = reflection, w = emissiveIntensity
     vec4 surface;      // x = specularStrength, y = roughness, z = normalStrength, w = unlit (1.0 = skip scene lighting)
     ivec4 texIndices;  // bindless slots: x = albedo, y = normal, z = specular/roughness, w = lightmap/AO (-1 = channel absent)
     ivec4 texIndices2; // x = emissive slot, y = bone palette slot, z = camera view (0 = editor, 1 = camera preview), w = unused
@@ -162,8 +162,22 @@ void main() {
 
     vec4 texColor = sampleChannel(u_PushConstants.texIndices.x, vTexCoord, vec4(1.0));
 
-    // Foliage / Leaf Billboard Alpha Cutout Masking (Discard transparent empty space)
-    if (texColor.a < 0.25) {
+    // Decals blend by coverage instead of cutting out. Skinned decals keep whole triangles, so the box edge is enforced
+    // here, and vertex alpha carries the fade on steep or receding surfaces
+    bool decal = u_PushConstants.params.x < -0.5;
+    float decalCoverage = 0.0;
+    if (decal) {
+        if (u_PushConstants.texIndices.x < 0) {
+            vec2 c = vTexCoord * 2.0 - 1.0;
+            float soft = clamp(1.0 - dot(c, c), 0.0, 1.0);
+            texColor.a = soft * soft;
+        }
+        decalCoverage = texColor.a * vColor.a * u_PushConstants.params.y;
+        if (decalCoverage < 0.004 || any(lessThan(vTexCoord, vec2(0.0))) || any(greaterThan(vTexCoord, vec2(1.0)))) {
+            discard;
+        }
+    } else if (texColor.a < 0.25) {
+        // Foliage / Leaf Billboard Alpha Cutout Masking (Discard transparent empty space)
         discard;
     }
 
@@ -271,5 +285,5 @@ void main() {
 
     finalRGB = mix(finalRGB, u_Lights.fogColorDensity.rgb, fogAmount(vViewDist));
 
-    outFragColor = vec4(finalRGB, baseColor.a);
+    outFragColor = vec4(finalRGB, decal ? decalCoverage : baseColor.a);
 }

@@ -988,14 +988,26 @@ public class VulkanGpuCache {
 
             // slot 0 stays identity for palette-less skinned meshes
             draws.paletteSlot[d] = 0;
-            if (draws.skinnedLayout[d] && bonePaletteBuf != null && cmd.bonePalette != null
-                    && skinnedIndex < MAX_SKINNED_ENTITIES_PER_FRAME - 1) {
-                int paletteSlot = ++skinnedIndex;
-                writeBonePalette(paletteSlot, cmd.bonePalette);
-                draws.paletteSlot[d] = paletteSlot;
+            if (draws.skinnedLayout[d] && bonePaletteBuf != null && cmd.bonePalette != null) {
+                // Decals on a character share its palette, so a bloodied rig still costs one slot
+                int shared = 0;
+                for (int s = 1; s <= skinnedIndex && shared == 0; s++) {
+                    if (slotPalettes[s] == cmd.bonePalette) shared = s;
+                }
+                if (shared != 0) {
+                    draws.paletteSlot[d] = shared;
+                } else if (skinnedIndex < MAX_SKINNED_ENTITIES_PER_FRAME - 1) {
+                    int paletteSlot = ++skinnedIndex;
+                    writeBonePalette(paletteSlot, cmd.bonePalette);
+                    slotPalettes[paletteSlot] = cmd.bonePalette;
+                    draws.paletteSlot[d] = paletteSlot;
+                }
             }
         }
+        java.util.Arrays.fill(slotPalettes, 0, skinnedIndex + 1, null);
     }
+
+    private final float[][][] slotPalettes = new float[MAX_SKINNED_ENTITIES_PER_FRAME][][];
 
     public VulkanBuffer getOrCreateLightUniformBuffer(VulkanDevice device) {
         if (lightUniformBuffer != null) return lightUniformBuffer;
