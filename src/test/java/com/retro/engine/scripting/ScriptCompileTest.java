@@ -25,7 +25,7 @@ class ScriptCompileTest {
 
     public static Stream<Path> shippedScripts() throws IOException {
         Stream<Path> all = Stream.empty();
-        for (String root : List.of("src/main/resources/templates", "src/main/resources/starter", "Assets/Scripts",
+        for (String root : List.of("src/main/resources/templates", "src/main/resources/starter", "src/test/resources/TestProject/Assets/Scripts",
                 "src/main/java/com/retro/engine/scripting/framework/examples")) {
             all = Stream.concat(all, javaFiles(Path.of(root)).stream());
         }

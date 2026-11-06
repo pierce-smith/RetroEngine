@@ -1,0 +1,16 @@
+{
+  "id": "third_person_example",
+  "name": "Third Person Example",
+  "description": "Third-person character on the CharacterController: orbit camera, walk/sprint/sneak animation, and a patrolling NPC that backs away from the player.",
+  "startupScene": "Assets/Scenes/Main.rscene",
+  "scene": "main.rscene",
+  "files": [
+    "Meshes/hero_character.glb",
+    "Meshes/npc_thug.glb",
+    "Textures/hero_character_diffuse.png",
+    "Textures/npc_thug_diffuse.png",
+    "Prefabs/ThirdPersonController.prefab.bin",
+    "Scripts/ThirdPersonScript.java",
+    "Scripts/ThugPatrolScript.java"
+  ]
+}

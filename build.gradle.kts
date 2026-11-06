@@ -258,12 +258,14 @@ tasks.named("processResources") {
 
 tasks.register<JavaExec>("cookAssets") {
     group = "build"
-    description = "Automatically bakes raw Assets/ into binary .rpack packages using RpackCookerCli."
+    description = "Bakes a project's raw Assets/ into .rpack packages using RpackCookerCli. Defaults to the test project; -PcookProject=<dir> picks another."
     dependsOn(tasks.named("classes"))
 
     mainClass.set("com.retro.engine.assets.RpackCookerCli")
     classpath = sourceSets["main"].runtimeClasspath
-    args = listOf("--dir", "Assets", "--out", "Cooked")
+    val project = file(providers.gradleProperty("cookProject").getOrElse("src/test/resources/TestProject"))
+    // Never Cooked/ inside the test project: everything under src/test/resources is copied onto the test classpath
+    args = listOf("--dir", project.resolve("Assets").path, "--out", layout.buildDirectory.dir("cooked").get().asFile.path)
 }
 
 tasks.named("run") {

@@ -33,7 +33,7 @@ public class ThirdPersonScript extends SimpleEntityScript {
     public float sneakSpeed = 0.6f;
     public float sprintSpeed = 4.5f;
 
-    // Ground speed each clip was authored for (printed by tools/blender/generate_hero_character.py)
+    // Ground speed each clip was authored for; change these if you swap the clips
     public float walkClipSpeed = 1.02f;
     public float sneakClipSpeed = 0.39f;
     public float sprintClipSpeed = 4.06f;

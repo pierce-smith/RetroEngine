@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.retro.engine.core.ProjectWorkspace;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.SceneWorld;
 import com.retro.engine.ecs.components.AnimatorComponent;
@@ -13,31 +14,55 @@ import com.retro.engine.ecs.components.BoxCollider;
 import com.retro.engine.ecs.components.RigidBodyComponent;
 import com.retro.engine.ecs.components.Transform;
 import com.retro.engine.ecs.serialization.PrefabSerializer;
+import com.retro.engine.editor.EditorWorkspace;
+import com.retro.engine.editor.templates.TemplateManager;
 import com.retro.engine.tools.ThirdPersonScene;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
+import java.io.IOException;
 import java.lang.reflect.Field;
+import java.nio.file.Path;
 import java.util.List;
 
-/** Plays the real ThirdPersonController prefab and script with simulated input. */
+/** Plays the prefab and script a Third Person Example project ships with, using simulated input. */
 class ThirdPersonControllerTest {
 
     private static final float DT = 1.0f / 60.0f;
     private static final int W = 87, D = 68, SHIFT = 340, CTRL = 341;
 
+    @TempDir static Path dir;
+    private static EditorWorkspace workspace;
+    private static File project;
+
     private SceneWorld world;
     private Entity player, hero, camera;
     private AnimatorComponent animator;
+
+    @BeforeAll
+    static void createProject() throws IOException {
+        workspace = new EditorWorkspace();
+        project = ProjectWorkspace.createProject(workspace, dir.toFile(), "Game", TemplateManager.THIRD_PERSON_EXAMPLE);
+    }
+
+    @AfterAll
+    static void closeProject() {
+        ScriptEngine.setProjectAssetsRoot(null);
+    }
 
     @BeforeEach
     void spawn() {
         Input.clearState();
         world = new SceneWorld();
         solid("Floor", 0, -0.5f, 0, 200, 1, 200);
-        List<Entity> prefab = PrefabSerializer.instantiatePrefab(ThirdPersonScene.PREFAB, world, null);
+        List<Entity> prefab = PrefabSerializer.instantiatePrefab(
+                new File(project, ThirdPersonScene.PREFAB).getPath(), world, workspace.getAssetDatabase());
         assertEquals(3, prefab.size());
         player = prefab.get(0);
         player.getTransform().posY = 0.95f;

@@ -1,0 +1,18 @@
+# Third Person Example scene descriptor (TEXT, not a binary scene). TemplateManager bakes it into the binary
+# Assets/Scenes/Main.rscene when a project is created. The format is described in first_person_example/main.rscene.
+#
+# The Plane mesh sits at y=0, so the collider is its own entity with its top face at y=0: both characters stand on the
+# visible floor rather than a slab above it.
+entity Ground         | mesh=Meshes/Plane.obj | scale=8,1,8 | texture=Textures/Checker.png
+entity GroundCollider | pos=0,-0.1,0 | scale=8,1,8 | box=10,0.2,10 | body=static
+# Player root -> Main Camera, Hero. Keep the root unrotated: only the Hero child turns (see ThirdPersonScript)
+entity Player         | prefab=Prefabs/ThirdPersonController.prefab.bin | pos=0,0.95,8
+entity Sun            | pos=0,20,0 | rot=55,35,0 | light
+# Things to run around, and to back the camera into
+entity Wall           | mesh=Meshes/Cube.obj | pos=0,1.5,-12 | scale=16,3,1    | texture=Textures/Checker.png | box=1,1,1 | body=static
+entity Pillar A       | mesh=Meshes/Cube.obj | pos=-6,1.5,-4 | scale=1.5,3,1.5 | texture=Textures/Checker.png | box=1,1,1 | body=static
+entity Pillar B       | mesh=Meshes/Cube.obj | pos=6,1.5,-4  | scale=1.5,3,1.5 | texture=Textures/Checker.png | box=1,1,1 | body=static
+entity Crate          | mesh=Meshes/Cube.obj | pos=3,0.5,4   | scale=1,1,1     | texture=Textures/Checker.png | box=1,1,1 | body=static
+# Walks to patrolOffset and back over the baked NavMesh. The kinematic capsule keeps the player from walking through
+# him; its origin is at his feet, hence the offset. The agent's speed is set by ThugPatrolScript
+entity Thug           | mesh=Meshes/npc_thug.glb | pos=-4,0,-1 | texture=Textures/npc_thug_diffuse.png | capsule=0.35,1.8,0.9 | body=kinematic | navagent=0.89,0.1,0 | script=Scripts/ThugPatrolScript.java

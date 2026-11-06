@@ -2,7 +2,7 @@
 # Assets/Scenes/Main.rscene when a project is created: binary scenes/prefabs only resolve once the new
 # project's AssetDatabase exists, so author scenes in the editor and keep this file as the recipe.
 # Format: entity <Name> | key=value | ...   (asset paths are relative to Assets/)
-# Keys: mesh, pos, rot, scale, texture, box=sx,sy,sz[,trigger], sphere=r[,trigger], capsule=r,h,
+# Keys: mesh, pos, rot, scale, texture, box=sx,sy,sz[,trigger], sphere=r[,trigger], capsule=r,h[,offsetY],
 #       body=static|kinematic|dynamic, script=<file>, camera, light, particles=fire|sparks, parent=<EntityName>,
 #       navagent=speed,stoppingDistance,baseOffset (NavMeshAgent; a .navmesh is baked for scenes that have agents),
 #       spline=x,y,z;x,y,z;... (Catmull-Rom knots relative to pos),

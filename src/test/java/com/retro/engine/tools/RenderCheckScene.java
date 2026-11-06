@@ -22,12 +22,14 @@ import java.util.List;
 import javax.imageio.ImageIO;
 
 /**
- * Writes Assets/Scenes/RenderCheck.rscene and its textures, for judging the renderer by eye (Volume 5 §3.1). Scenes are
- * binary, so this is the readable source. Rerun it from the repo root to change the scene, then commit what it writes.
+ * Writes the test project's Assets/Scenes/RenderCheck.rscene and its textures, for judging the renderer by eye (Volume 5
+ * §3.1). Scenes are binary, so this is the readable source. Rerun it from the repo root to change the scene, then commit
+ * what it writes.
  */
 public final class RenderCheckScene {
 
     public static final int GRID = 40;
+    public static final String PROJECT = "src/test/resources/TestProject";
     public static final String SCENE = "Assets/Scenes/RenderCheck.rscene";
     private static final float SPACING = 2.0f;
     private static final String CUBE = "Assets/Meshes/Cube.obj", PLANE = "Assets/Meshes/Plane.obj", ARMS = "Assets/Meshes/arms_rig.glb";
@@ -154,20 +156,20 @@ public final class RenderCheckScene {
 
     private static void copyResource(String resource, String target) throws IOException {
         try (InputStream in = RenderCheckScene.class.getResourceAsStream(resource)) {
-            Files.copy(in, new File(target).toPath(), StandardCopyOption.REPLACE_EXISTING);
+            Files.copy(in, new File(PROJECT, target).toPath(), StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
     public static void main(String[] args) throws IOException {
         copyResource("/starter/Meshes/Cube.obj", CUBE);
         copyResource("/starter/Meshes/Plane.obj", PLANE);
-        writeCubeTexture(new File(CUBE_TEXTURE));
-        writeFloorTexture(new File(FLOOR_TEXTURE));
-        if (!SceneSerializer.saveScene(SCENE, build())) throw new IOException("Could not write " + SCENE);
+        writeCubeTexture(new File(PROJECT, CUBE_TEXTURE));
+        writeFloorTexture(new File(PROJECT, FLOOR_TEXTURE));
+        if (!SceneSerializer.saveScene(new File(PROJECT, SCENE).getPath(), build())) throw new IOException("Could not write " + SCENE);
 
         // Opening the project then lands straight on this scene, ready for Play. Blobs are what station 2 checks, and fog
         // would hide the far side of the grid
-        File project = new File(".").getCanonicalFile();
+        File project = new File(PROJECT).getCanonicalFile();
         ProjectSettings settings = ProjectWorkspace.readSettings(project);
         settings.startupScene = SCENE;
         settings.shadowBlobsEnabled = true;

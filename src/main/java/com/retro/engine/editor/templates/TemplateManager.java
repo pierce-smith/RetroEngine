@@ -53,10 +53,12 @@ public final class TemplateManager {
         "Primitive models, a default material and texture, a test script and a spinning-cube Main.rscene.", true, null);
     public static final ProjectTemplate FIRST_PERSON_EXAMPLE = new ProjectTemplate("first_person_example", "First Person Example",
         "Collect-a-thon microgame: FPS arms prefab on the CharacterController, punch/guard, collectibles, score, victory and restart.", true, "first_person_example");
+    public static final ProjectTemplate THIRD_PERSON_EXAMPLE = new ProjectTemplate("third_person_example", "Third Person Example",
+        "Third-person character on the CharacterController: orbit camera, walk/sprint/sneak animation and a patrolling NPC.", true, "third_person_example");
     public static final ProjectTemplate INFINITE_DRIVER = new ProjectTemplate("infinite_driver", "Infinite Driver",
         "Endless highway microgame: steer a PSX car smoothly around procedurally spawned obstacles as the speed ramps up.", true, "infinite_driver");
 
-    private static final List<ProjectTemplate> TEMPLATES = List.of(BLANK, STARTER_CONTENT, FIRST_PERSON_EXAMPLE, INFINITE_DRIVER);
+    private static final List<ProjectTemplate> TEMPLATES = List.of(BLANK, STARTER_CONTENT, FIRST_PERSON_EXAMPLE, THIRD_PERSON_EXAMPLE, INFINITE_DRIVER);
     private static final String ROOT = "/templates/";
 
     private TemplateManager() {}
@@ -221,8 +223,9 @@ public final class TemplateManager {
                         }
                         case "capsule" -> {
                             CapsuleCollider c = new CapsuleCollider();
-                            float[] v = floats(val, 2);
+                            float[] v = floats(val, val.split(",").length == 3 ? 3 : 2);
                             c.radius = v[0]; c.height = v[1];
+                            if (v.length == 3) c.offsetY = v[2];
                             e.addComponent(c);
                         }
                         case "body" -> {

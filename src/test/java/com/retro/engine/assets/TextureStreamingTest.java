@@ -139,6 +139,9 @@ class TextureStreamingTest {
             Path broken = dir.resolve("broken.png");
             Files.write(broken, new byte[] { 1, 2, 3 });
             requestForTwentyFrames(broken.toString());
+            // The decode runs on its own thread, so wait for its report rather than assume twenty frames were long enough
+            await(() -> log.toString().contains("Could not load texture"));
+            requestForTwentyFrames(broken.toString());
         } finally {
             System.setErr(err);
         }

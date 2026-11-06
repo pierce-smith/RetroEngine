@@ -178,7 +178,8 @@ class SceneSerializerTest {
     }
 
     public static Stream<Path> committedScenes() {
-        return Stream.of(Path.of("Assets/Scenes/MainLevel.rscene"), Path.of("Assets/Scenes/test.rscene"), Path.of("Assets/Scenes/RenderCheck.rscene"));
+        Path scenes = Path.of("src/test/resources/TestProject/Assets/Scenes");
+        return Stream.of(scenes.resolve("MainLevel.rscene"), scenes.resolve("test.rscene"), scenes.resolve("RenderCheck.rscene"));
     }
 
     public static class ProbeComponent extends Component {

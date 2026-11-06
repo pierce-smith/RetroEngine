@@ -199,6 +199,7 @@ binary `.rscene` once the project's `AssetDatabase` is bound.
 | Template | What it shows |
 |----------|---------------|
 | **First Person Example** (`first_person_example`) | `CharacterController` FPS arms prefab, punch/guard animation blending, collectibles, a NavMesh-driven `ChaserScript` enemy, and an `OpeningCutsceneScript` flyover that rides a spline. Scenes with a `NavMeshAgent` get their `.navmesh` baked with default settings when the project is created |
+| **Third Person Example** (`third_person_example`) | `ThirdPersonController` prefab on the built-in `CharacterController`: orbit camera that pulls in front of walls, walk/sprint/sneak animation that follows ground speed, and a NavMesh `ThugPatrolScript` NPC that patrols and backs away from the player |
 | **Infinite Driver** (`infinite_driver`) | `VehicleController` endless highway with procedurally spawned obstacles, and optional BGM/SFX routed through the mixer buses |
 
 ---
