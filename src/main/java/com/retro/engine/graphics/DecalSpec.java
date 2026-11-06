@@ -43,6 +43,8 @@ public final class DecalSpec {
     public float lifetime;
     /** Seconds of fade at the end of {@link #lifetime}. */
     public float fadeTime = 1.0f;
+    /** Seconds to spread out from nothing at its center, slowing as it goes, like a pool of blood. 0 appears at full size. */
+    public float growTime;
 
     public boolean affectSkinned = true;
     /** When set, only this entity receives the decal. */
@@ -91,7 +93,7 @@ public final class DecalSpec {
         s.width = width; s.height = height; s.depth = depth;
         s.colorR = colorR; s.colorG = colorG; s.colorB = colorB; s.opacity = opacity;
         s.specularStrength = specularStrength; s.roughness = roughness; s.normalStrength = normalStrength;
-        s.maxAngle = maxAngle; s.lifetime = lifetime; s.fadeTime = fadeTime;
+        s.maxAngle = maxAngle; s.lifetime = lifetime; s.fadeTime = fadeTime; s.growTime = growTime;
         s.affectSkinned = affectSkinned; s.target = target; s.exclude = exclude;
         return s;
     }

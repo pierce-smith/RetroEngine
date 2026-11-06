@@ -66,6 +66,32 @@ class DecalSystemTest {
     }
 
     @Test
+    void aGrowingDecalSpreadsFromNothingAndSlowsToAStop() {
+        addFloor("floor");
+        DecalSystem decals = world.getDecals();
+        DecalSpec spec = hole();
+        spec.growTime = 2.0f;
+        decals.spawn(spec);
+        sync();
+        DecalSystem.Live live = decals.getLive(0);
+        assertTrue(live.growth() > 0.0f && live.growth() < 0.01f, "starts as nothing, but never zero: shaders divide by it");
+
+        decals.update(1.0f);
+        assertEquals(0.75f, live.growth(), 1e-5f, "past the halfway size at half time, because it slows");
+        decals.update(5.0f);
+        assertEquals(1.0f, live.growth());
+    }
+
+    @Test
+    void aDecalWithNoGrowTimeAppearsAtFullSize() {
+        addFloor("floor");
+        DecalSystem decals = world.getDecals();
+        decals.spawn(hole());
+        sync();
+        assertEquals(1.0f, decals.getLive(0).growth());
+    }
+
+    @Test
     void aDecalInMidairLeavesNothingBehind() {
         addFloor("floor");
         DecalSpec spec = hole();

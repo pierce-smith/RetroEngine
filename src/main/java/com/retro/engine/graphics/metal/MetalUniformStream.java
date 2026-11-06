@@ -103,7 +103,7 @@ public class MetalUniformStream {
 
     // passFlags bit 4: vertex shader applies the bone palette referenced by DrawArgs.bones
     public static final int PASS_FLAG_SKINNED = 16;
-    // passFlags bit 5: decal blending in the lit shader, with the opacity in matParams.w
+    // passFlags bit 5: decal blending in the lit shader, with the opacity in matParams.w and growth in matParams.y
     public static final int PASS_FLAG_DECAL = 32;
 
     // Bone palettes (64 column-major float4x4) are too large for the 256-byte uniform slot,

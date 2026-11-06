@@ -355,6 +355,7 @@ public class MetalPassEncoder {
                 streamer.writeDrawEnvironment(baseAddr, lights.environment());
 
                 MemoryUtil.memPutFloat(baseAddr + 208L, item.reflect);
+                MemoryUtil.memPutFloat(baseAddr + 212L, item.decalGrowth);
                 MemoryUtil.memPutFloat(baseAddr + 220L, item.decalOpacity);
                 MemoryUtil.memPutFloat(baseAddr + 216L, DirectionalShadowFrustum.SHADOW_BIAS);
                 streamer.writeLightSpaceMatrix(baseAddr);

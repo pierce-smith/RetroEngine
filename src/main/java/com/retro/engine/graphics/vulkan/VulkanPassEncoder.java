@@ -668,10 +668,11 @@ public class VulkanPassEncoder {
             .putInt(slots[base + VulkanGpuCache.CHANNEL_NORMAL])
             .putInt(slots[base + VulkanGpuCache.CHANNEL_SPECULAR])
             .putInt(slots[base + VulkanGpuCache.CHANNEL_LIGHTMAP]);
-        // texIndices2: emissive, bone palette slot, camera view, pick ID (read only by entity_id.frag)
+        // texIndices2: emissive, bone palette slot, camera view, pick ID (read only by entity_id.frag). Decals are never
+        // picked, so theirs holds the bits of their growth instead
         push.putInt(slots[base + VulkanGpuCache.CHANNEL_EMISSIVE])
             .putInt(draws.paletteSlot[d])
-            .putInt(cameraView).putInt(entity.pickId);
+            .putInt(cameraView).putInt(entity.decal ? Float.floatToRawIntBits(entity.decalGrowth) : entity.pickId);
         push.flip();
     }
 

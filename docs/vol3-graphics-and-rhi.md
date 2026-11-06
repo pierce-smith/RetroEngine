@@ -251,7 +251,9 @@ Blinn-Phong shading and fog from the normal lit shader, and it rides moving mesh
 
 **Lifetime.** `DecalSystem` (owned by `SceneWorld`) queues spawns and builds them at render extraction, at most 32 a
 frame, when the frame's pose is known. Spawned decals are capped at 256 (`setMaxDecals`), oldest first, and are cleared
-when Play stops. `lifetime` and `fadeTime` remove one sooner. Hand-placed decals don't count against the cap. They
+when Play stops. `lifetime` and `fadeTime` remove one sooner. `growTime` spreads one out from nothing at its center, easing to a stop:
+the geometry is built at full size and the vertex stage scales its UVs, so growing costs no rebuild and the fragment
+stage's 0..1 discard does the cropping. Hand-placed decals don't count against the cap. They
 rebuild in the editor when they or a nearby surface change, and hold still during Play.
 
 **Cost.** Each decal piece is one draw and one small mesh upload at spawn. A spawn walks every triangle of each mesh whose

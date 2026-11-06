@@ -464,6 +464,7 @@ public class SceneRenderPipeline {
                 cmd.normalStrength = spec.normalStrength;
                 cmd.decal = true;
                 cmd.decalOpacity = opacity;
+                cmd.decalGrowth = live.growth();
 
                 MeshBufferData source = streamer.getModel(filter.meshAssetPath);
                 cmd.unlit = source != null && source.unlit;

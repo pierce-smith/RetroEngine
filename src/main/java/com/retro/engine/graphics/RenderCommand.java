@@ -33,6 +33,8 @@ public final class RenderCommand {
     /** Blended over the surface after opaque geometry, with no depth writes, shadow casting or picking. */
     public boolean decal;
     public float decalOpacity;
+    /** How far a decal has spread, 0..1: its image is scaled by this around the center of its UVs. */
+    public float decalGrowth = 1.0f;
 
     /** Color-ID value written by the pick pass ({@link IRenderBackend#PICK_ID_NONE} = not pickable). */
     public int pickId;
@@ -53,6 +55,7 @@ public final class RenderCommand {
         unlit = false;
         decal = false;
         decalOpacity = 0.0f;
+        decalGrowth = 1.0f;
         pickId = IRenderBackend.PICK_ID_NONE;
         bonePalette = null;
     }

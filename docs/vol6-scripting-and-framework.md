@@ -443,6 +443,7 @@ blood.target = hit.entity;     // only this entity. blood.exclude skips one inst
 blood.depth = 1.0f;            // colliders sit off the skin, so reach further on characters
 blood.roughness = 0.25f;       // wet
 blood.lifetime = 30.0f;        // seconds; 0 = until the 256-decal budget evicts it
+blood.growTime = 4.0f;         // seconds to spread out from nothing; 0 = appears at full size
 spawnDecal(blood);
 ```
 

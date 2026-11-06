@@ -63,7 +63,7 @@ layout(push_constant) uniform MeshPushConstants {
     vec4 params;       // x = passFlags (-1.0 = decal, 1.0 = shadow blob, 2.0 = shadow map depth), y = heightFade or decal opacity, z = reflection, w = emissiveIntensity
     vec4 surface;      // x = specularStrength, y = roughness, z = normalStrength, w = unlit (1.0 = skip scene lighting)
     ivec4 texIndices;  // bindless slots: x = albedo, y = normal, z = specular/roughness, w = lightmap/AO (-1 = channel absent)
-    ivec4 texIndices2; // x = emissive slot, y = bone palette slot, z = camera view (0 = editor, 1 = camera preview), w = unused
+    ivec4 texIndices2; // x = emissive slot, y = bone palette slot, z = camera view (0 = editor, 1 = camera preview), w = pick ID, or decal growth bits
 } u_PushConstants;
 
 // Returns the fallback for absent channels; the branch is uniform across the draw, so implicit LOD stays valid

@@ -62,7 +62,7 @@ layout(push_constant) uniform MeshPushConstants {
     vec4 params;       // x = passFlags (-1.0 = decal, 1.0 = shadow blob, 2.0 = shadow map depth), y = heightFade or decal opacity, z = reflection, w = emissiveIntensity
     vec4 surface;      // x = specularStrength, y = roughness, z = normalStrength, w = unlit (1.0 = skip scene lighting)
     ivec4 texIndices;  // bindless slots: x = albedo, y = normal, z = specular/roughness, w = lightmap/AO (-1 = channel absent)
-    ivec4 texIndices2; // x = emissive slot, y = bone palette slot, z = camera view (0 = editor, 1 = camera preview), w = unused
+    ivec4 texIndices2; // x = emissive slot, y = bone palette slot, z = camera view (0 = editor, 1 = camera preview), w = pick ID, or decal growth bits
 } u_PushConstants;
 
 // Adds one light's Lambert diffuse and Blinn-Phong specular, identical to blinn_phong.frag
@@ -161,7 +161,11 @@ void main() {
                                                            : u_Lights.proj * u_Lights.view * worldPos;
     vec4 clipPos = (u_PushConstants.params.x > 1.5) ? vLightSpacePos : cameraClip;
     // Decals sit exactly on their surface; pull depth toward the camera by a fraction of the view distance (see blinn_phong.metal)
-    if (u_PushConstants.params.x < -0.5) clipPos.z = clipPos.w - (clipPos.w - clipPos.z) * 1.0005;
+    if (u_PushConstants.params.x < -0.5) {
+        clipPos.z = clipPos.w - (clipPos.w - clipPos.z) * 1.0005;
+        // Growing: the image shrinks around its center, and the fragment stage discards the UVs this pushes outside 0..1
+        vTexCoord = (vTexCoord - 0.5) / intBitsToFloat(u_PushConstants.texIndices2.w) + 0.5;
+    }
     vViewDist = clipPos.w;
     gl_Position = clipPos;
 }

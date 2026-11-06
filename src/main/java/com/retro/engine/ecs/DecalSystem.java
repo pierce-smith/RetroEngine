@@ -33,6 +33,8 @@ public final class DecalSystem {
     private static final int MAX_BUILDS_PER_FRAME = 32;
     /** Headless runs never reach render extraction, so an unbuilt queue has to stay bounded on its own. */
     private static final int MAX_PENDING = 1024;
+    /** The smallest growth the shaders divide by. Far below a pixel, so a decal still looks like nothing. */
+    private static final float MIN_GROWTH = 0.001f;
 
     /** One decal's geometry on one target mesh. */
     public static final class Piece {
@@ -74,6 +76,13 @@ public final class DecalSystem {
                 if (remaining < spec.fadeTime) opacity *= Math.max(0.0f, remaining / spec.fadeTime);
             }
             return opacity;
+        }
+
+        /** Current size as a fraction of the full decal. The pipeline scales its UVs, so growing never rebuilds geometry. */
+        public float growth() {
+            if (spec.growTime <= 0.0f) return 1.0f;
+            float t = Math.min(age / spec.growTime, 1.0f);
+            return Math.max(t * (2.0f - t), MIN_GROWTH);
         }
     }
 

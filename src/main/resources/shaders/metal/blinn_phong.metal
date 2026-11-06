@@ -35,7 +35,7 @@ struct Uniforms {
     float4 dirLightColor;     // 160: rgb = directional light color
     float4 ambientColor;      // 176: rgb = ambient color * intensity (ProjectSettings)
     float4 fogColorDensity;   // 192: rgb = fogColor, w = opacity at fog end (1 = fog on, 0 = fog disabled)
-    float4 matParams;         // 208: x = reflectStrength, y = shadowOpacity, z = shadowMapBias, w = decal opacity
+    float4 matParams;         // 208: x = reflectStrength, y = shadowOpacity, z = shadowMapBias, w = decal opacity. y is decal growth on a decal draw
     uint materialMask;        // 224: bit 0 albedo, 1 normal, 2 specular, 3 lightmap, 4 emissive
     uint isUnlit;             // 228: 0 = Lit Model, 1 = Procedural Grid, 2 = Billboard Particles, 3 = Unlit Model
     uint stride;              // 232
@@ -285,6 +285,8 @@ vertex VertexOut vertexMain(uint vertexID [[vertex_id]],
     out.position = uniforms.mvp * localPos;
     if ((uniforms.passFlags & PASS_DECAL) != 0u) {
         out.position.z = out.position.w - (out.position.w - out.position.z) * (1.0 + DECAL_DEPTH_PULL);
+        // Growing: the image shrinks around its center, and the fragment stage discards the UVs this pushes outside 0..1
+        out.uv = (out.uv - 0.5) / uniforms.matParams.y + 0.5;
     }
     out.worldPos = (uniforms.model * localPos).xyz;
     out.viewDist = out.position.w;
