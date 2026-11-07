@@ -8,7 +8,6 @@ import com.retro.engine.ecs.components.BoxCollider;
 import com.retro.engine.ecs.components.CapsuleCollider;
 import com.retro.engine.ecs.components.CharacterControllerComponent;
 import com.retro.engine.ecs.components.MeshCollider;
-import com.retro.engine.ecs.components.MeshFilter;
 import com.retro.engine.ecs.components.RigidBodyComponent;
 import com.retro.engine.ecs.components.SphereCollider;
 import com.retro.engine.ecs.components.Transform;
@@ -471,12 +470,8 @@ public class PhysicsSystem {
 
     /** Reads the triangles of a Mesh Collider, once per mesh and scale. A mesh that can't be read collides as a unit box. */
     private CollisionMesh loadCollisionMesh(PhysicsBody body) {
-        String path = body.meshCollider.meshPath;
-        if (path == null || path.isEmpty()) {
-            MeshFilter filter = body.entity.getComponent(MeshFilter.class);
-            path = filter != null ? filter.meshAssetPath : null;
-        }
-        if (path == null || path.isEmpty()) {
+        String path = body.meshCollider.resolveMeshPath(body.entity);
+        if (path == null) {
             System.err.println("[PhysicsSystem] Mesh Collider on '" + body.entity.name + "' has no mesh.");
             return null;
         }

@@ -1,15 +1,18 @@
 package com.retro.engine.navigation;
 
+import com.retro.engine.assets.AssetStreamer;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.SceneWorld;
 import com.retro.engine.ecs.components.BoxCollider;
 import com.retro.engine.ecs.components.CapsuleCollider;
 import com.retro.engine.ecs.components.CharacterControllerComponent;
+import com.retro.engine.ecs.components.MeshCollider;
 import com.retro.engine.ecs.components.NavMeshAgent;
 import com.retro.engine.ecs.components.RigidBodyComponent;
 import com.retro.engine.ecs.components.SphereCollider;
 import com.retro.engine.ecs.components.Transform;
 import com.retro.engine.ecs.components.VehicleControllerComponent;
+import com.retro.engine.physics.CollisionMesh;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -18,12 +21,16 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Editor-time NavMesh generation from the scene's static colliders (Box / Sphere / Capsule colliders on entities with no
- * RigidBody or a STATIC one; triggers, characters, vehicles and agents are skipped).
+ * Editor-time NavMesh generation from the scene's static colliders: Box, Sphere and Capsule colliders on entities with no
+ * RigidBody or a STATIC one, and every Mesh Collider, which never moves whatever its RigidBody says. Triggers, characters,
+ * vehicles and agents are skipped.
  *
  * <ol>
  *   <li>Rasterize: every grid column casts a vertical line through each collider (oriented boxes, spheres; capsules as
- *       boxes with non-walkable tops) and records the solid intervals plus the slope of each top face.</li>
+ *       boxes with non-walkable tops) and records the solid intervals plus the slope of each top face. Mesh triangles
+ *       are clipped to every column they touch instead, because a line through a cell's centre misses walls. Only
+ *       upward-facing triangles are walkable, and the space between a downward face and the next upward face above it
+ *       is solid, so a closed mesh has no floor inside it.</li>
  *   <li>Filter: a solid top is walkable when its slope is within {@code maxSlope} and the gap to the next solid above
  *       fits {@code agentHeight}. Neighbouring walkable cells connect when their heights differ by at most
  *       {@code stepHeight}.</li>
@@ -50,6 +57,9 @@ public final class NavMeshBaker {
     private static final int MAX_RECT_CELLS = 32;
     private static final int[] DX = {1, 0, -1, 0};
     private static final int[] DZ = {0, 1, 0, -1};
+    // A triangle whose normal has less height than this is a wall: neither a floor nor an underside
+    private static final float WALL_NORMAL_Y = 0.01f;
+    private static final int MAX_CLIPPED_VERTS = 8; // A triangle clipped by a cell's four sides has at most seven
 
     private NavMeshBaker() {}
 
@@ -61,14 +71,25 @@ public final class NavMeshBaker {
         float minX, maxX, minZ, maxZ, minY, maxY;
     }
 
+    /** A Mesh Collider's triangles in world space, nine floats each, with their normals' heights. */
+    private record WorldMesh(float[] triangles, float[] normalY, int count, float minX, float maxX, float minZ, float maxZ) {}
+
     public static Result bake(List<Entity> entities, SceneWorld world, Settings s) {
-        List<Shape> shapes = gatherShapes(entities, world);
-        if (shapes.isEmpty()) return new Result(null, "No static colliders found (Box/Sphere/Capsule without a dynamic RigidBody).");
+        List<Shape> shapes = new ArrayList<>();
+        List<WorldMesh> meshes = new ArrayList<>();
+        gatherShapes(entities, world, shapes, meshes);
+        if (shapes.isEmpty() && meshes.isEmpty()) {
+            return new Result(null, "No static colliders found (Box/Sphere/Capsule without a dynamic RigidBody, or a Mesh Collider).");
+        }
 
         float minX = Float.MAX_VALUE, minZ = Float.MAX_VALUE, maxX = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
         for (Shape sh : shapes) {
             minX = Math.min(minX, sh.minX); maxX = Math.max(maxX, sh.maxX);
             minZ = Math.min(minZ, sh.minZ); maxZ = Math.max(maxZ, sh.maxZ);
+        }
+        for (WorldMesh mesh : meshes) {
+            minX = Math.min(minX, mesh.minX); maxX = Math.max(maxX, mesh.maxX);
+            minZ = Math.min(minZ, mesh.minZ); maxZ = Math.max(maxZ, mesh.maxZ);
         }
         float cs = Math.max(0.02f, s.cellSize);
         int w = (int) Math.ceil((maxX - minX) / cs), h = (int) Math.ceil((maxZ - minZ) / cs);
@@ -82,6 +103,9 @@ public final class NavMeshBaker {
         final float ox = minX, oz = minZ;
         final int cols = w * h;
         float slopeCos = (float) Math.cos(Math.toRadians(Math.max(0.0f, Math.min(89.9f, s.maxSlope))));
+
+        Map<Integer, List<float[]>> meshSpans = new HashMap<>();
+        for (WorldMesh mesh : meshes) rasterizeMesh(mesh, ox, oz, cs, w, h, s.cellHeight, meshSpans);
 
         // --- 1/2. Rasterize columns and keep walkable span tops ---
         int[] nodeStart = new int[cols + 1];
@@ -100,6 +124,8 @@ public final class NavMeshBaker {
                     if (x < sh.minX || x > sh.maxX || z < sh.minZ || z > sh.maxZ) continue;
                     if (verticalInterval(sh, x, z, iv)) colSpans.add(new float[]{iv[0], iv[1], iv[2], iv[3]});
                 }
+                List<float[]> fromMeshes = meshSpans.get(c);
+                if (fromMeshes != null) colSpans.addAll(fromMeshes);
                 if (colSpans.isEmpty()) continue;
                 colSpans.sort((a, b) -> Float.compare(a[0], b[0]));
                 // Merge overlapping intervals; the top surface belongs to whichever interval reaches highest
@@ -291,7 +317,7 @@ public final class NavMeshBaker {
         NavMesh mesh = new NavMesh(cs, s.cellHeight, s.agentHeight, s.agentRadius, s.maxSlope, s.stepHeight,
                 polyCount, pMinX.trim(), pMinZ.trim(), pMaxX.trim(), pMaxZ.trim(), pY.trim(),
                 linkStart, linkPoly, lax, laz, lbx, lbz, ox, oz, w, h, colStart, colPolys.trim());
-        return new Result(mesh, "Baked " + polyCount + " polygons, " + links + " links from " + shapes.size()
+        return new Result(mesh, "Baked " + polyCount + " polygons, " + links + " links from " + (shapes.size() + meshes.size())
                 + " colliders (" + w + "x" + h + " grid).");
     }
 
@@ -299,14 +325,15 @@ public final class NavMeshBaker {
     // Geometry gathering
     // ------------------------------------------------------------------------------------------
 
-    private static List<Shape> gatherShapes(List<Entity> entities, SceneWorld world) {
-        List<Shape> shapes = new ArrayList<>();
-        if (entities == null) return shapes;
+    private static void gatherShapes(List<Entity> entities, SceneWorld world, List<Shape> shapes, List<WorldMesh> meshes) {
+        if (entities == null) return;
         for (int i = 0; i < entities.size(); i++) {
             Entity e = entities.get(i);
             if (e == null) continue;
             RigidBodyComponent rb = e.getComponent(RigidBodyComponent.class);
-            if (rb != null && rb.motionType != RigidBodyComponent.MotionType.STATIC) continue;
+            MeshCollider meshCollider = e.getComponent(MeshCollider.class);
+            boolean moves = rb != null && rb.motionType != RigidBodyComponent.MotionType.STATIC;
+            if (moves && meshCollider == null) continue;
             if (e.getComponent(CharacterControllerComponent.class) != null || e.getComponent(VehicleControllerComponent.class) != null
                     || e.getComponent(NavMeshAgent.class) != null) continue;
             float px, py, pz, rx, ry, rz, sx, sy, sz;
@@ -319,6 +346,15 @@ public final class NavMeshBaker {
                 if (t == null) continue;
                 px = t.posX; py = t.posY; pz = t.posZ; rx = t.rotX; ry = t.rotY; rz = t.rotZ;
                 sx = t.scaleX; sy = t.scaleY; sz = t.scaleZ;
+            }
+            if (meshCollider != null) {
+                WorldMesh mesh = readMesh(e, meshCollider, px, py, pz, rx, ry, rz, sx, sy, sz);
+                // Physics collides with the mesh alone when it loads, and otherwise with the entity's other colliders
+                if (mesh != null) {
+                    meshes.add(mesh);
+                    continue;
+                }
+                if (moves) continue;
             }
             BoxCollider box = e.getComponent(BoxCollider.class);
             if (box != null && !box.isTrigger) {
@@ -341,26 +377,123 @@ public final class NavMeshBaker {
                         Math.abs(cap.radius * sx), Math.abs(cap.height * sy) * 0.5f, Math.abs(cap.radius * sz), false));
             }
         }
-        return shapes;
+    }
+
+    /** Reads a Mesh Collider into world space, or returns null when physics couldn't read it either. */
+    private static WorldMesh readMesh(Entity e, MeshCollider collider, float px, float py, float pz, float rx, float ry, float rz,
+                                      float sx, float sy, float sz) {
+        String path = collider.resolveMeshPath(e);
+        CollisionMesh local = path != null ? CollisionMesh.fromMesh(AssetStreamer.readMeshNow(path), sx, sy, sz) : null;
+        if (local == null) {
+            System.err.println("[NavMeshBaker] Skipping the Mesh Collider on '" + e.name + "': no mesh could be read.");
+            return null;
+        }
+        float[] m = rotation(rx, ry, rz);
+        // A mirrored scale reverses the winding, so the local normals point inward
+        float facing = sx * sy * sz < 0 ? -1.0f : 1.0f;
+        float[] tris = new float[local.triangleCount * 9];
+        float[] normalY = new float[local.triangleCount];
+        float minX = Float.MAX_VALUE, minZ = Float.MAX_VALUE, maxX = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
+        for (int t = 0; t < local.triangleCount; t++) {
+            for (int v = t * 9; v < t * 9 + 9; v += 3) {
+                float lx = local.triangles[v], ly = local.triangles[v + 1], lz = local.triangles[v + 2];
+                float wx = px + m[0] * lx + m[1] * ly + m[2] * lz;
+                float wz = pz + m[6] * lx + m[7] * ly + m[8] * lz;
+                tris[v] = wx;
+                tris[v + 1] = py + m[3] * lx + m[4] * ly + m[5] * lz;
+                tris[v + 2] = wz;
+                minX = Math.min(minX, wx); maxX = Math.max(maxX, wx);
+                minZ = Math.min(minZ, wz); maxZ = Math.max(maxZ, wz);
+            }
+            int n = t * 3;
+            normalY[t] = facing * (m[3] * local.normals[n] + m[4] * local.normals[n + 1] + m[5] * local.normals[n + 2]);
+        }
+        return new WorldMesh(tris, normalY, local.triangleCount, minX, maxX, minZ, maxZ);
+    }
+
+    /** Adds a mesh's spans to each column it touches, as {yMin, yMax, topNormalY, walkable}. */
+    private static void rasterizeMesh(WorldMesh mesh, float ox, float oz, float cs, int w, int h, float cellHeight,
+                                      Map<Integer, List<float[]>> spans) {
+        Map<Integer, List<float[]>> own = new HashMap<>();
+        float[] a = new float[MAX_CLIPPED_VERTS * 3], b = new float[MAX_CLIPPED_VERTS * 3];
+        for (int t = 0; t < mesh.count; t++) {
+            int base = t * 9;
+            float[] v = mesh.triangles;
+            float loX = Math.min(v[base], Math.min(v[base + 3], v[base + 6])), hiX = Math.max(v[base], Math.max(v[base + 3], v[base + 6]));
+            float loZ = Math.min(v[base + 2], Math.min(v[base + 5], v[base + 8])), hiZ = Math.max(v[base + 2], Math.max(v[base + 5], v[base + 8]));
+            int firstX = Math.max(0, (int) Math.floor((loX - ox) / cs)), lastX = Math.min(w - 1, (int) Math.floor((hiX - ox) / cs));
+            int firstZ = Math.max(0, (int) Math.floor((loZ - oz) / cs)), lastZ = Math.min(h - 1, (int) Math.floor((hiZ - oz) / cs));
+            for (int cz = firstZ; cz <= lastZ; cz++) {
+                float z0 = oz + cz * cs;
+                for (int cx = firstX; cx <= lastX; cx++) {
+                    float x0 = ox + cx * cs;
+                    System.arraycopy(v, base, a, 0, 9);
+                    int n = clip(a, 3, b, 0, x0, true);
+                    n = clip(b, n, a, 0, x0 + cs, false);
+                    n = clip(a, n, b, 2, z0, true);
+                    n = clip(b, n, a, 2, z0 + cs, false);
+                    if (n < 3) continue;
+                    float y0 = Float.MAX_VALUE, y1 = -Float.MAX_VALUE;
+                    for (int i = 0; i < n; i++) {
+                        y0 = Math.min(y0, a[i * 3 + 1]);
+                        y1 = Math.max(y1, a[i * 3 + 1]);
+                    }
+                    own.computeIfAbsent(cz * w + cx, k -> new ArrayList<>()).add(new float[]{y0, y1, mesh.normalY[t]});
+                }
+            }
+        }
+        for (Map.Entry<Integer, List<float[]>> column : own.entrySet()) {
+            addColumn(column.getValue(), cellHeight, spans.computeIfAbsent(column.getKey(), k -> new ArrayList<>()));
+        }
     }
 
     /**
-     * World rotation matching the renderer's model matrix (MetalUniformStream): R = Rz(-z) * Ry(-y) * Rx(-x), applied
-     * to column vectors.
+     * Turns one mesh's triangles in a column, as {yMin, yMax, signed normalY}, into spans. Going up the column, a downward
+     * face followed by an upward one is the inside of something solid. Facing pairs closer than {@code tolerance} are a
+     * double-sided sheet or a thin slab, so they need no fill.
      */
+    private static void addColumn(List<float[]> faces, float tolerance, List<float[]> out) {
+        faces.sort((p, q) -> Float.compare(p[0], q[0]));
+        float[] below = null, lastUp = null;
+        for (float[] face : faces) {
+            float ny = face[2];
+            boolean up = ny >= WALL_NORMAL_Y;
+            out.add(new float[]{face[0], face[1], Math.abs(ny), up ? 1 : 0});
+            if (up) {
+                if (below != null && face[0] > below[1] + tolerance) out.add(new float[]{below[0], face[0], 0, 0});
+                below = null;
+                lastUp = face;
+            } else if (ny <= -WALL_NORMAL_Y && (lastUp == null || face[0] > lastUp[1] + tolerance)) {
+                below = face;
+            }
+        }
+    }
+
+    /** Sutherland-Hodgman against one axis-aligned plane. Returns the new vertex count. */
+    private static int clip(float[] in, int count, float[] out, int axis, float bound, boolean keepAbove) {
+        int kept = 0;
+        for (int i = 0; i < count; i++) {
+            int p = i * 3, q = ((i + 1) % count) * 3;
+            float dp = keepAbove ? in[p + axis] - bound : bound - in[p + axis];
+            float dq = keepAbove ? in[q + axis] - bound : bound - in[q + axis];
+            if (dp >= 0) {
+                System.arraycopy(in, p, out, kept * 3, 3);
+                kept++;
+            }
+            if ((dp > 0 && dq < 0) || (dp < 0 && dq > 0)) {
+                float f = dp / (dp - dq);
+                for (int k = 0; k < 3; k++) out[kept * 3 + k] = in[p + k] + (in[q + k] - in[p + k]) * f;
+                kept++;
+            }
+        }
+        return kept;
+    }
+
     private static Shape makeBox(float px, float py, float pz, float rxDeg, float ryDeg, float rzDeg,
                                  float offX, float offY, float offZ, float hx, float hy, float hz, boolean walkableTop) {
         Shape sh = new Shape();
         sh.walkableTop = walkableTop;
-        double ax = Math.toRadians(rxDeg), ay = Math.toRadians(ryDeg), az = Math.toRadians(rzDeg);
-        float cx = (float) Math.cos(ax), sx = (float) Math.sin(ax);
-        float cy = (float) Math.cos(ay), sy = (float) Math.sin(ay);
-        float cz = (float) Math.cos(az), sz = (float) Math.sin(az);
-        float[] X = {1, 0, 0, 0, cx, sx, 0, -sx, cx};
-        float[] Y = {cy, 0, -sy, 0, 1, 0, sy, 0, cy};
-        float[] Z = {cz, sz, 0, -sz, cz, 0, 0, 0, 1};
-        float[] YX = mul3(Y, X);
-        float[] m = mul3(Z, YX);
+        float[] m = rotation(rxDeg, ryDeg, rzDeg);
         System.arraycopy(m, 0, sh.m, 0, 9);
         sh.hx = hx; sh.hy = hy; sh.hz = hz;
         // Collider offset is in local (rotated) space
@@ -374,6 +507,21 @@ public final class NavMeshBaker {
         sh.minY = sh.cy - ey; sh.maxY = sh.cy + ey;
         sh.minZ = sh.cz - ez; sh.maxZ = sh.cz + ez;
         return sh;
+    }
+
+    /**
+     * World rotation matching the renderer's model matrix (MetalUniformStream): R = Rz(-z) * Ry(-y) * Rx(-x), applied
+     * to column vectors.
+     */
+    private static float[] rotation(float rxDeg, float ryDeg, float rzDeg) {
+        double ax = Math.toRadians(rxDeg), ay = Math.toRadians(ryDeg), az = Math.toRadians(rzDeg);
+        float cx = (float) Math.cos(ax), sx = (float) Math.sin(ax);
+        float cy = (float) Math.cos(ay), sy = (float) Math.sin(ay);
+        float cz = (float) Math.cos(az), sz = (float) Math.sin(az);
+        float[] X = {1, 0, 0, 0, cx, sx, 0, -sx, cx};
+        float[] Y = {cy, 0, -sy, 0, 1, 0, sy, 0, cy};
+        float[] Z = {cz, sz, 0, -sz, cz, 0, 0, 0, 1};
+        return mul3(Z, mul3(Y, X));
     }
 
     private static float[] mul3(float[] a, float[] b) {

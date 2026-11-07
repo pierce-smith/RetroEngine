@@ -5,7 +5,7 @@ import com.retro.engine.assets.MeshBufferData;
 import java.util.Arrays;
 
 /** Triangles of a static collider in the body's scaled local space, with a BVH over them. Immutable once built. */
-final class CollisionMesh {
+public final class CollisionMesh {
 
     private static final int LEAF_TRIANGLES = 4;
     private static final float MIN_RAY_COSINE = 0.1f;
@@ -21,9 +21,9 @@ final class CollisionMesh {
         }
     }
 
-    final float[] triangles;  // Nine floats each
-    final float[] normals;    // Three floats each
-    final int triangleCount;
+    public final float[] triangles;  // Nine floats each
+    public final float[] normals;    // Three floats each
+    public final int triangleCount;
     final float minX, minY, minZ, maxX, maxY, maxZ;
 
     private final int[] order;
@@ -50,7 +50,7 @@ final class CollisionMesh {
     }
 
     /** Builds a collider from a render mesh, or returns null when it has no usable triangles. */
-    static CollisionMesh fromMesh(MeshBufferData data, float scaleX, float scaleY, float scaleZ) {
+    public static CollisionMesh fromMesh(MeshBufferData data, float scaleX, float scaleY, float scaleZ) {
         if (data == null || data.vertices == null || data.vertexCount < 3) return null;
         int stride = data.vertices.length / data.vertexCount;
         boolean indexed = data.indices != null && data.indexCount >= 3;

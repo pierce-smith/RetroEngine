@@ -1,6 +1,7 @@
 package com.retro.engine.ecs.components;
 
 import com.retro.engine.ecs.Component;
+import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
 
@@ -20,6 +21,14 @@ public class MeshCollider extends Component {
     public String collidesWith = "";
 
     public MeshCollider() {}
+
+    /** The mesh this collider reads: its own, or the Mesh Filter's on {@code owner}. Null when it has neither. */
+    public String resolveMeshPath(Entity owner) {
+        if (meshPath != null && !meshPath.isEmpty()) return meshPath;
+        MeshFilter filter = owner.getComponent(MeshFilter.class);
+        String path = filter != null ? filter.meshAssetPath : null;
+        return path == null || path.isEmpty() ? null : path;
+    }
 
     @Override
     public String getComponentName() {

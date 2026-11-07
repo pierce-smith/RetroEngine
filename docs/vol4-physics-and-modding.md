@@ -69,7 +69,8 @@ and no sleeping, so a settled body still costs solver time. A rough cost is 3 µ
 **Mesh colliders** are for level geometry. Their triangles load when Play starts, from the same cooked package the
 renderer uses, and their scale is read once. They never move, even with a `RigidBody`. Characters, spheres and capsules
 get exact contacts. A box checks corners only, so two edges crossing with no corner inside either shape make no contact.
-Navmesh baking doesn't read mesh colliders yet, and the editor doesn't draw them.
+Navmesh baking reads them (§1.5), and the editor doesn't draw them yet. Keep triangles wound outward: only upward-facing
+triangles are walkable, and the space between a downward face and the next upward face above it bakes as solid.
 
 **Collision layers.** `collisionLayer` is 0 to 31. `collidesWith` lists layers, such as `0,3`, and empty means all of
 them. Both bodies have to agree, so either side can opt out. Triggers, character ground probes and vehicle wheels follow
@@ -131,10 +132,13 @@ The `navigation` package gives AI characters baked pathfinding. Like the solver,
 main thread, and its per-frame work doesn't allocate.
 
 **Baking (`NavMeshBaker`, editor only).** The input is the scene's **static colliders**: box, sphere and capsule
-colliders on entities with no `RigidBody` or a `STATIC` one. Triggers, characters, vehicles and agents are skipped.
+colliders on entities with no `RigidBody` or a `STATIC` one, and every mesh collider, which never moves whatever its
+`RigidBody` says. Triggers, characters, vehicles and agents are skipped.
 
 1. **Rasterize.** Every grid column casts a vertical line through each collider (oriented boxes and spheres;
-   capsules as boxes with non-walkable tops) and records the solid intervals and the slope of each top face.
+   capsules as boxes with non-walkable tops) and records the solid intervals and the slope of each top face. Mesh
+   triangles are clipped to every column they touch instead, so a wall with no thickness still blocks. Only
+   upward-facing triangles are walkable, and a closed mesh is solid inside.
 2. **Filter.** A solid top is walkable if its slope is within `maxSlope` and the gap to the next solid above fits
    `agentHeight`. Neighboring walkable cells connect if their heights differ by at most `stepHeight`.
 3. **Erode.** Cells closer than `agentRadius` to an unwalkable edge or drop-off are removed.
