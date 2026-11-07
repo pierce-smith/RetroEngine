@@ -69,16 +69,19 @@ and no sleeping, so a settled body still costs solver time. A rough cost is 3 µ
 **Mesh colliders** are for level geometry. Their triangles load when Play starts, from the same cooked package the
 renderer uses, and their scale is read once. Physics never pushes them, even with a `DYNAMIC` `RigidBody`, but they follow
 their Transform. Give one a `KINEMATIC` `RigidBody` to make a lift or platform. Characters, spheres and capsules
-get exact contacts. A box checks corners only, so two edges crossing with no corner inside either shape make no contact.
+get exact contacts, and so do boxes, including edges crossing with no corner inside either shape.
 Navmesh baking reads them (§1.5), and the editor doesn't draw them yet. Keep triangles wound outward: only upward-facing
-triangles are walkable, and the space between a downward face and the next upward face above it bakes as solid.
+triangles are walkable, and the space between a downward face and the next upward face above it bakes as solid. A mesh
+that can't be read becomes a unit cube in physics, with an error in the console, and stops a bake outright.
 
 **Moving platforms.** A grounded character moves and turns with whatever it stands on, as long as that is kinematic,
 dynamic or a vehicle. A `STATIC` collider moved by its Transform carries nothing. Walking, wall contacts and scripts that
-move the character all still apply, and a wall the platform passes pushes the character off it. Carrying stops the moment
-the character leaves the ground, so a jump doesn't keep the platform's speed. Move platforms from a spline or before
-physics runs, because a script that moves one in `onUpdate` lands a frame late. Bodies have no sweep, so a wall moving
-faster than about 24 m/s against a character can pass through it. NavMesh agents can't path on a moving platform.
+move the character all still apply, and a wall the platform passes pushes the character off it. A character that leaves
+the ground keeps its speed until it lands, so a jump comes down in the same spot on the platform. Platforms can move from
+a spline or a script, including `onUpdate`. Kinematic bodies and vehicles sweep characters out of their path, so a fast
+wall can't pass through one. A mover faster than 50 m/s counts as a teleport and pushes nothing. Only movement is swept,
+not rotation, and a character pinned against something solid stays there while the mover passes through it. NavMesh
+agents can't path on a moving platform.
 
 **Collision layers.** `collisionLayer` is 0 to 31. `collidesWith` lists layers, such as `0,3`, and empty means all of
 them. Both bodies have to agree, so either side can opt out. Triggers, character ground probes and vehicle wheels follow
@@ -141,7 +144,7 @@ main thread, and its per-frame work doesn't allocate.
 
 **Baking (`NavMeshBaker`, editor only).** The input is the scene's **static colliders**: box, sphere and capsule
 colliders on entities with no `RigidBody` or a `STATIC` one, and mesh colliders unless they are `KINEMATIC`. Triggers,
-characters, vehicles and agents are skipped.
+characters, vehicles and agents are skipped, and so are the colliders of a `NavMeshGate` unless it has **Bake Colliders** on.
 
 1. **Rasterize.** Every grid column casts a vertical line through each collider (oriented boxes and spheres;
    capsules as boxes with non-walkable tops) and records the solid intervals and the slope of each top face. Mesh
@@ -165,6 +168,21 @@ in the constructor, so `findPath` never allocates. Start and end points snap to 
 `SNAP_EXTENT_XZ = 3` / `SNAP_EXTENT_Y = 4` units. Flags report whether the path is **partial** (destination
 unreachable, so it goes to the closest reachable point) or **truncated** (more corners than fit). One instance
 per mesh, simulation thread only.
+
+**Gates (`NavMeshGate`).** A box of navmesh that closes during play, such as a doorway or a bridge. The box is centred on
+the entity and turns and scales with it. The baker keeps the cells inside it in their own polygons, so closing it blocks
+that area and nothing around it. Call `setOpen(false)` from a script. Paths won't enter a closed gate, though an agent
+already inside can walk out of it. Agents with a path re-plan on the next tick, so they take another route if there is
+one. If not, they go as close as they can, wait, and carry on when the gate opens.
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `sizeX` / `sizeY` / `sizeZ` | 2 / 3 / 0.5 | The box. It has to reach the walkable surface |
+| `startOpen` | on | State when Play starts |
+| `bakeColliders` | off | Off for a door, so a shut door doesn't wall off its doorway. On for something agents walk on, such as a bridge deck, baked in the position where it can be crossed |
+
+Moving a gate at runtime doesn't move what it blocks, so bake again after moving one in the editor. Gates are matched to
+the mesh by entity id, so a gate on an entity spawned during play has no effect.
 
 **Agents (`NavMeshAgent` + `NavMeshSystem`).**
 

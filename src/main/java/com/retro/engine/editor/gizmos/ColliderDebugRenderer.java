@@ -62,17 +62,22 @@ public class ColliderDebugRenderer {
 
             com.retro.engine.ecs.components.Decal decal = entity.getComponent(com.retro.engine.ecs.components.Decal.class);
             if (decal != null && isSelected) {
-                renderDecalBox(buffer, tc, decal, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+                renderBox(buffer, tc, decal.width, decal.depth, decal.height, 0.95f, 0.35f, 0.75f, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+            }
+
+            com.retro.engine.ecs.components.NavMeshGate gate = entity.getComponent(com.retro.engine.ecs.components.NavMeshGate.class);
+            if (gate != null) {
+                renderBox(buffer, tc, gate.sizeX, gate.sizeY, gate.sizeZ, 0.35f, 0.75f, 0.95f, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
             }
         }
     }
 
-    /** The projection box, in the entity's rotation, so a decal placed in the editor shows what it will reach. */
-    private static void renderDecalBox(UIGeometryBatch.Buffer buffer, Transform tc, com.retro.engine.ecs.components.Decal decal,
-                                       ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
+    /** A box in the entity's rotation, such as how far a decal reaches or what a NavMesh gate covers. */
+    private static void renderBox(UIGeometryBatch.Buffer buffer, Transform tc, float sizeX, float sizeY, float sizeZ, float red, float green, float blue,
+                                  ViewportCamera cameraController, float camPanX, float camPanY, float camZoom, float camPitch, float camYaw) {
         double[] rotation = new double[9];
         com.retro.engine.ecs.HierarchySystem.rotationMatrix(tc.rotX, tc.rotY, tc.rotZ, rotation);
-        float hx = decal.width * tc.scaleX * 0.5f, hy = decal.depth * tc.scaleY * 0.5f, hz = decal.height * tc.scaleZ * 0.5f;
+        float hx = sizeX * tc.scaleX * 0.5f, hy = sizeY * tc.scaleY * 0.5f, hz = sizeZ * tc.scaleZ * 0.5f;
 
         float[][] corners = new float[8][3];
         for (int i = 0; i < 8; i++) {
@@ -85,7 +90,7 @@ public class ColliderDebugRenderer {
         for (int[] edge : edges) {
             draw3DLine(buffer, corners[edge[0]][0], corners[edge[0]][1], corners[edge[0]][2],
                                 corners[edge[1]][0], corners[edge[1]][1], corners[edge[1]][2],
-                                0.0025f, 0.95f, 0.35f, 0.75f, 0.95f, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
+                                0.0025f, red, green, blue, 0.95f, cameraController, camPanX, camPanY, camZoom, camPitch, camYaw);
         }
     }
 

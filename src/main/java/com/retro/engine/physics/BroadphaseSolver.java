@@ -491,7 +491,7 @@ public class BroadphaseSolver {
             outHit.entity = null;
             return;
         }
-        cast(excludeEntity, rayOriginX, rayOriginY, rayOriginZ, rayDirX / dirLen, rayDirY / dirLen, rayDirZ / dirLen,
+        cast(excludeEntity, null, rayOriginX, rayOriginY, rayOriginZ, rayDirX / dirLen, rayDirY / dirLen, rayDirZ / dirLen,
                 maxDistance, 0.0f, false, layerMask, outHit);
     }
 
@@ -500,7 +500,7 @@ public class BroadphaseSolver {
      * {@code immovableOnly} skips dynamic bodies. Only layers in {@code layerMask} count. Triggers aren't solid, so rays pass through them, including every
      * character's ground probe.
      */
-    void cast(Entity excludeEntity, float ox, float oy, float oz, float dx, float dy, float dz, float maxDistance,
+    void cast(Entity excludeEntity, Entity alsoExclude, float ox, float oy, float oz, float dx, float dy, float dz, float maxDistance,
               float inflate, boolean immovableOnly, int layerMask, RaycastHit outHit) {
         outHit.hit = false;
         outHit.distance = 0.0f;
@@ -529,7 +529,7 @@ public class BroadphaseSolver {
             }
 
             PhysicsSystem.PhysicsBody body = node.body;
-            if (body == null || body.isTrigger() || body.entity == excludeEntity) continue;
+            if (body == null || body.isTrigger() || body.entity == excludeEntity || body.entity == alsoExclude) continue;
             if (immovableOnly && body.invMass > 0.0f) continue;
             if ((body.layerBit & layerMask) == 0) continue;
             float t = shapeRaycast.cast(body, ox, oy, oz, dx, dy, dz, reach, inflate);

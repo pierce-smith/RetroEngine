@@ -39,6 +39,8 @@ public class NavMeshAgent extends Component {
     public boolean pathPending;
     public boolean hasPath;
     public boolean pathPartial;
+    /** True when the agent stopped short of an unreachable destination, so a gate opening sends it on its way. */
+    public boolean awaitingRoute;
     /** True while the current corner list ends before the destination (corner capacity was exceeded). */
     public boolean pathTruncated;
     public final float[] corners = new float[MAX_CORNERS * 3];
@@ -53,11 +55,13 @@ public class NavMeshAgent extends Component {
     public void setDestination(float x, float y, float z) {
         destX = x; destY = y; destZ = z;
         pathPending = true;
+        awaitingRoute = false;
     }
 
     /** Drops the current path; the agent decelerates to a stop. */
     public void stop() {
         pathPending = false;
+        awaitingRoute = false;
         clearPath();
     }
 

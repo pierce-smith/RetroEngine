@@ -50,7 +50,7 @@ public final class ComponentSchema {
             CapsuleCollider.class, com.retro.engine.ecs.components.MeshCollider.class, CharacterControllerComponent.class, VehicleControllerComponent.class,
             AnimatorComponent.class, UICanvasComponent.class, UIPanel.class, UIText.class, UIImage.class,
             UIProgressBar.class, ParticleSystem.class, AudioReverbZone.class,
-            com.retro.engine.ecs.components.NavMeshAgent.class,
+            com.retro.engine.ecs.components.NavMeshAgent.class, com.retro.engine.ecs.components.NavMeshGate.class,
             com.retro.engine.ecs.components.SplineComponent.class, com.retro.engine.ecs.components.SplineFollower.class,
             com.retro.engine.ecs.components.BoneSocket.class,
             com.retro.engine.ecs.components.Decal.class

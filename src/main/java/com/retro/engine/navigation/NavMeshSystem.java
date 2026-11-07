@@ -3,10 +3,13 @@ package com.retro.engine.navigation;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.components.CharacterControllerComponent;
 import com.retro.engine.ecs.components.NavMeshAgent;
+import com.retro.engine.ecs.components.NavMeshGate;
 import com.retro.engine.ecs.components.Transform;
 
 import java.io.File;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Owns the active scene's {@link NavMesh} and ticks every {@link NavMeshAgent}: pending path requests are resolved
@@ -22,6 +25,7 @@ public final class NavMeshSystem {
     private NavMesh mesh;
     private NavMeshQuery query;
     private final float[] snap = new float[3];
+    private final Map<String, Integer> gateIndex = new HashMap<>();
 
     public NavMesh getMesh() { return mesh; }
 
@@ -29,6 +33,10 @@ public final class NavMeshSystem {
     public void setMesh(NavMesh mesh) {
         this.mesh = mesh;
         this.query = (mesh != null && mesh.polyCount > 0) ? new NavMeshQuery(mesh) : null;
+        gateIndex.clear();
+        if (query != null) {
+            for (int i = 0; i < mesh.gateIds.length; i++) gateIndex.put(mesh.gateIds[i], i);
+        }
     }
 
     /** Loads the {@code .navmesh} that sits next to the given scene file (clears the mesh when there is none). */
@@ -39,18 +47,36 @@ public final class NavMeshSystem {
         if (loaded != null) System.out.println("[NavMesh] Loaded " + loaded.polyCount + " polygons from " + path);
     }
 
-    /** Resets every agent's runtime state (play start / stop). */
+    /** Resets every agent's and gate's runtime state (play start / stop). */
     public void resetAgents(List<Entity> entities) {
         if (entities == null) return;
         for (int i = 0; i < entities.size(); i++) {
             Entity e = entities.get(i);
             NavMeshAgent agent = (e != null) ? e.getComponent(NavMeshAgent.class) : null;
             if (agent != null) agent.resetRuntime();
+            NavMeshGate gate = (e != null) ? e.getComponent(NavMeshGate.class) : null;
+            if (gate != null) gate.resetRuntime();
         }
+    }
+
+    /** Copies each gate's state into the pathfinder. Returns true when one changed, because every route is then stale. */
+    private boolean syncGates(List<Entity> entities) {
+        if (gateIndex.isEmpty()) return false;
+        boolean changed = false;
+        for (int i = 0; i < entities.size(); i++) {
+            Entity e = entities.get(i);
+            NavMeshGate gate = (e != null) ? e.getComponent(NavMeshGate.class) : null;
+            Integer index = gate != null ? gateIndex.get(e.id) : null;
+            if (index == null || query.isGateOpen(index) == gate.isOpen()) continue;
+            query.setGateOpen(index, gate.isOpen());
+            changed = true;
+        }
+        return changed;
     }
 
     public void update(float dt, List<Entity> entities) {
         if (entities == null || dt <= 0.0f) return;
+        boolean gatesChanged = syncGates(entities);
         for (int i = 0; i < entities.size(); i++) {
             Entity e = entities.get(i);
             if (e == null) continue;
@@ -58,6 +84,10 @@ public final class NavMeshSystem {
             if (agent == null) continue;
             Transform t = e.getTransform();
             if (t == null) continue;
+            if (gatesChanged && (agent.hasPath || agent.awaitingRoute)) {
+                agent.pathPending = true;
+                agent.awaitingRoute = false;
+            }
             updateAgent(agent, t, e.getComponent(CharacterControllerComponent.class), dt);
         }
     }
@@ -93,6 +123,7 @@ public final class NavMeshSystem {
             if (last && a.pathTruncated && toLen <= CORNER_REACHED) {
                 plan(a, px, footY, pz); // Corner list ran out before the destination: continue from here
             } else if (last && !a.pathTruncated && remaining <= Math.max(a.stoppingDistance, ARRIVE_EPSILON)) {
+                a.awaitingRoute = a.pathPartial; // Stopped as close as it could get
                 a.clearPath(); // Arrived
             } else if (toLen > 1e-5f) {
                 float target = a.speed;

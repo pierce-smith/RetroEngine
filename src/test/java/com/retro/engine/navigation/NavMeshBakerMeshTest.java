@@ -181,6 +181,38 @@ class NavMeshBakerMeshTest {
     }
 
     @Test
+    void missingMeshStopsTheBakeAndNamesIt() throws IOException {
+        Entity broken = at("Broken Wall", 0, 0, 0);
+        MeshCollider collider = new MeshCollider();
+        collider.meshPath = dir.resolve("missing.obj").toString();
+        broken.addComponent(collider);
+        NavMeshBaker.Result result = NavMeshBaker.bake(List.of(entity(new Obj().floor(-10, -10, 10, 10, 0)), broken), null, new NavMeshBaker.Settings());
+        assertNull(result.mesh(), "a good floor doesn't excuse a broken collider");
+        assertTrue(result.message().contains("Broken Wall") && result.message().contains("missing.obj"), result.message());
+    }
+
+    @Test
+    void missingMeshFilterMeshStopsTheBakeToo() {
+        Entity broken = at("Broken Wall", 0, 0, 0);
+        broken.addComponent(new MeshCollider());
+        com.retro.engine.ecs.components.MeshFilter filter = new com.retro.engine.ecs.components.MeshFilter();
+        filter.meshAssetPath = dir.resolve("gone.glb").toString();
+        broken.addComponent(filter);
+        assertNull(NavMeshBaker.bake(List.of(broken), null, new NavMeshBaker.Settings()).mesh());
+    }
+
+    @Test
+    void corruptMeshStopsTheBake() throws IOException {
+        Path file = dir.resolve("corrupt.obj");
+        Files.writeString(file, "this is not a mesh");
+        Entity broken = at("Corrupt", 0, 0, 0);
+        MeshCollider collider = new MeshCollider();
+        collider.meshPath = file.toString();
+        broken.addComponent(collider);
+        assertNull(NavMeshBaker.bake(List.of(broken), null, new NavMeshBaker.Settings()).mesh());
+    }
+
+    @Test
     void kinematicMeshIsLeftOutBecauseItMoves() throws IOException {
         Entity lift = entity(new Obj().floor(-10, -10, 10, 10, 0));
         RigidBodyComponent body = new RigidBodyComponent();

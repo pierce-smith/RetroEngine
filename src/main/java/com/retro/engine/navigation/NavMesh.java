@@ -13,12 +13,12 @@ import java.io.IOException;
  * Baked navigation mesh: axis-aligned walkable rectangles (convex polygons, each at a single height) linked by shared
  * edge portals, plus a column grid for O(1) point location. Produced by {@link NavMeshBaker}, persisted as
  * {@code .navmesh} next to the scene, and queried by {@link NavMeshQuery}. Immutable after construction, so every
- * query on it is read-only and allocation-free.
+ * query on it is read-only and allocation-free. Whether a gate is open lives in the query, not here.
  */
 public final class NavMesh {
 
     private static final int MAGIC = 0x524E4156; // "RNAV"
-    private static final int VERSION = 1;
+    private static final int VERSION = 2; // Version 2 (gates). Version 1 files still load, with no gates
 
     // Bake settings the mesh was generated with (informational, shown in the baker panel)
     public final float cellSize, cellHeight, agentHeight, agentRadius, maxSlope, stepHeight;
@@ -36,10 +36,14 @@ public final class NavMesh {
     public final int gridW, gridH;
     public final int[] colStart, colPolys;
 
+    // Gates: each poly's index into gateIds, or -1. An id is the id of the entity that holds the NavMeshGate
+    public final int[] polyGate;
+    public final String[] gateIds;
+
     NavMesh(float cellSize, float cellHeight, float agentHeight, float agentRadius, float maxSlope, float stepHeight,
             int polyCount, float[] polyMinX, float[] polyMinZ, float[] polyMaxX, float[] polyMaxZ, float[] polyY,
             int[] linkStart, int[] linkPoly, float[] linkAx, float[] linkAz, float[] linkBx, float[] linkBz,
-            float originX, float originZ, int gridW, int gridH, int[] colStart, int[] colPolys) {
+            float originX, float originZ, int gridW, int gridH, int[] colStart, int[] colPolys, int[] polyGate, String[] gateIds) {
         this.cellSize = cellSize; this.cellHeight = cellHeight; this.agentHeight = agentHeight;
         this.agentRadius = agentRadius; this.maxSlope = maxSlope; this.stepHeight = stepHeight;
         this.polyCount = polyCount;
@@ -48,6 +52,7 @@ public final class NavMesh {
         this.linkAx = linkAx; this.linkAz = linkAz; this.linkBx = linkBx; this.linkBz = linkBz;
         this.originX = originX; this.originZ = originZ; this.gridW = gridW; this.gridH = gridH;
         this.colStart = colStart; this.colPolys = colPolys;
+        this.polyGate = polyGate; this.gateIds = gateIds;
     }
 
     public int getLinkCount() { return linkPoly.length; }
@@ -148,6 +153,9 @@ public final class NavMesh {
             writeInts(out, colStart, cols + 1);
             out.writeInt(colPolys.length);
             writeInts(out, colPolys, colPolys.length);
+            writeInts(out, polyGate, polyCount);
+            out.writeInt(gateIds.length);
+            for (String id : gateIds) out.writeUTF(id);
         }
     }
 
@@ -157,7 +165,7 @@ public final class NavMesh {
         try (DataInputStream in = new DataInputStream(new BufferedInputStream(new FileInputStream(file)))) {
             if (in.readInt() != MAGIC) return null;
             int version = in.readInt();
-            if (version != VERSION) return null;
+            if (version < 1 || version > VERSION) return null;
             float cs = in.readFloat(), ch = in.readFloat(), ah = in.readFloat();
             float ar = in.readFloat(), ms = in.readFloat(), sh = in.readFloat();
             int pc = in.readInt();
@@ -171,7 +179,16 @@ public final class NavMesh {
             int gw = in.readInt(), gh = in.readInt();
             int[] cst = readInts(in, gw * gh + 1);
             int[] cp = readInts(in, in.readInt());
-            return new NavMesh(cs, ch, ah, ar, ms, sh, pc, minX, minZ, maxX, maxZ, py, ls, lp, ax, az, bx, bz, ox, oz, gw, gh, cst, cp);
+            int[] gates = new int[pc];
+            String[] ids = {};
+            if (version >= 2) {
+                gates = readInts(in, pc);
+                ids = new String[in.readInt()];
+                for (int i = 0; i < ids.length; i++) ids[i] = in.readUTF();
+            } else {
+                java.util.Arrays.fill(gates, -1);
+            }
+            return new NavMesh(cs, ch, ah, ar, ms, sh, pc, minX, minZ, maxX, maxZ, py, ls, lp, ax, az, bx, bz, ox, oz, gw, gh, cst, cp, gates, ids);
         } catch (IOException | RuntimeException e) {
             System.err.println("[NavMesh] Failed to load '" + file + "': " + e);
             return null;

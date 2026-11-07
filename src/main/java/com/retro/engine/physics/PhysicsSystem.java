@@ -45,7 +45,7 @@ public class PhysicsSystem {
     private static final float CONTACT_MARGIN = 0.02f;
     private static final float MAX_SPECULATIVE_MARGIN = 0.18f;
     private static final float MAX_ANGULAR_SPEED = 60.0f; // rad/s, which keeps the quaternion step accurate
-    private static final float MAX_KINEMATIC_SPEED = 50.0f; // m/s, so a teleported platform doesn't launch what it touches
+    static final float MAX_KINEMATIC_SPEED = 50.0f; // m/s, so a teleported platform doesn't launch what it touches
     private static final float REST_ANGULAR_SPEED_SQ = 1e-6f;
     private static final float DEFAULT_FRICTION = 0.5f; // Colliders with no RigidBody
     private static final float WARM_START_RANGE_SQ = 0.0225f;
@@ -88,6 +88,11 @@ public class PhysicsSystem {
         // The moving surface a character stands on, where it stood in that surface's frame, and that same spot in the world
         PhysicsBody ground;
         float anchorX, anchorY, anchorZ, anchorWorldX, anchorWorldY, anchorWorldZ, anchorYaw;
+        float carriedX, carriedY, carriedZ;  // How far the ground has moved a character this frame
+        float carryVx, carryVy, carryVz;     // The ground's speed under a character, measured over the last frame
+        float airVx, airVz;                  // Speed kept from the ground while in the air
+        float sweptX, sweptY, sweptZ;        // Where a moving body last checked for characters in its path
+        boolean swept;
         int layerBit = 1;                 // This body's collision layer, as one set bit
         int collisionMask = -1;           // Layers it touches
         float ox, oy, oz;                 // Collider offset from the pivot, scaled, in the body's frame
@@ -168,6 +173,11 @@ public class PhysicsSystem {
         /** True when a character standing here moves with it. */
         boolean carriesRiders() {
             return !isStatic() && characterController == null;
+        }
+
+        /** True for something that moves by itself and can't be pushed, so it drives through characters. */
+        boolean mowsCharacters() {
+            return !isStatic() && !isDynamic() && characterController == null && !isTrigger();
         }
 
         /** True when any collider is a trigger: it reports overlaps but is not solid. */
@@ -375,6 +385,7 @@ public class PhysicsSystem {
     }
 
     private final Map<String, PhysicsBody> bodyMap = new HashMap<>();
+    private float lastFrameDelta;
     private final List<PhysicsBody> activeBodies = new ArrayList<>();
 
     // Domain Solvers
@@ -595,6 +606,9 @@ public class PhysicsSystem {
             }
             refreshBody(body);
         }
+        characterSolver.measureCarry(activeBodies, lastFrameDelta);
+        lastFrameDelta = deltaTime;
+        characterSolver.sweepMovers(activeBodies, deltaTime, this);
         characterSolver.carryRiders(activeBodies, this);
 
         characterSolver.beginFrame(sceneEntities);
@@ -618,6 +632,29 @@ public class PhysicsSystem {
             PhysicsBody body = activeBodies.get(i);
             if (body.isSimulated() && (physicsRan || body.ground != null)) body.syncToTransform();
         }
+    }
+
+    /** Scripts run after physics, so a platform moved in onUpdate brings its riders along here, before the frame draws. */
+    public void carryAfterScripts() {
+        for (int i = 0, n = activeBodies.size(); i < n; i++) {
+            PhysicsBody body = activeBodies.get(i);
+            if (body.ground == null || body.ground.treeNodeId == -1) continue;
+            body.ground.syncFromTransform();
+            refreshBody(body.ground);
+            body.syncFromTransform();
+        }
+        characterSolver.carryRiders(activeBodies, this);
+        for (int i = 0, n = activeBodies.size(); i < n; i++) {
+            PhysicsBody body = activeBodies.get(i);
+            if (body.ground != null) body.syncToTransform();
+        }
+    }
+
+    /** How far a character can travel from where it is before something solid stops it, ignoring {@code ignore}. */
+    float clearDistance(PhysicsBody character, PhysicsBody ignore, float dx, float dy, float dz, float distance) {
+        broadphaseSolver.cast(character.entity, ignore != null ? ignore.entity : null, character.cx, character.cy, character.cz,
+                dx, dy, dz, distance, character.innerRadius(), true, character.collisionMask, sweepHit);
+        return sweepHit.hit ? sweepHit.distance : distance;
     }
 
     public void recordCollision(PhysicsBody a, PhysicsBody b) {
@@ -662,6 +699,7 @@ public class PhysicsSystem {
 
         // 4. Delegate to Vehicle Suspension Solver
         vehicleSolver.updateVehicles(activeBodies, dt, this, sharedRaycastHit);
+        characterSolver.sweepMovers(activeBodies, dt, this);
 
         // 5. Scripts, characters and vehicles may all have moved bodies, so bring shapes and solver state up to date
         for (int i = 0, n = activeBodies.size(); i < n; i++) {
@@ -749,7 +787,7 @@ public class PhysicsSystem {
             body.pwx = 0.0f; body.pwy = 0.0f; body.pwz = 0.0f;
         } else if (body.characterController != null) {
             CharacterControllerComponent cc = body.characterController;
-            body.svx = cc.velocityX; body.svy = cc.velocityY; body.svz = cc.velocityZ;
+            body.svx = cc.velocityX + body.airVx; body.svy = cc.velocityY; body.svz = cc.velocityZ + body.airVz;
         } else if (body.vehicleController != null) {
             float yaw = (float) Math.toRadians(body.ry);
             float speed = body.vehicleController.currentSpeed;
@@ -891,7 +929,7 @@ public class PhysicsSystem {
 
     private float sweepFraction(PhysicsBody body, float mx, float my, float mz, float distance, float inner) {
         float inv = 1.0f / distance;
-        broadphaseSolver.cast(body.entity, body.cx, body.cy, body.cz, mx * inv, my * inv, mz * inv, distance, inner, true, body.collisionMask, sweepHit);
+        broadphaseSolver.cast(body.entity, null, body.cx, body.cy, body.cz, mx * inv, my * inv, mz * inv, distance, inner, true, body.collisionMask, sweepHit);
         return sweepHit.hit ? Math.max(0.0f, sweepHit.distance - SWEEP_SKIN) * inv : 1.0f;
     }
 

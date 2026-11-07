@@ -24,6 +24,9 @@ public class MeshBufferData {
     /** Draws albedo with no scene lighting; set by the importer from the source material and kept through cooking. */
     public boolean unlit;
 
+    /** True for the stand-in cube the importer returns when it can't read a mesh, so tools can refuse to build on it. */
+    public boolean placeholder;
+
     public MeshBufferData(float[] vertices, int vertexCount) {
         this(vertices, vertexCount, null, 0);
     }

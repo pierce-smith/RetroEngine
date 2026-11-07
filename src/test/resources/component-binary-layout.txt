@@ -215,6 +215,11 @@ NavMeshAgent 2 acceleration FLOAT since=1 prefabSince=1
 NavMeshAgent 3 stoppingDistance FLOAT since=1 prefabSince=1
 NavMeshAgent 4 autoBraking BOOLEAN since=1 prefabSince=1
 NavMeshAgent 5 baseOffset FLOAT since=1 prefabSince=1
+NavMeshGate 0 sizeX FLOAT since=1 prefabSince=1
+NavMeshGate 1 sizeY FLOAT since=1 prefabSince=1
+NavMeshGate 2 sizeZ FLOAT since=1 prefabSince=1
+NavMeshGate 3 startOpen BOOLEAN since=1 prefabSince=1
+NavMeshGate 4 bakeColliders BOOLEAN since=1 prefabSince=1
 SplineComponent 0 curveType ENUM since=1 prefabSince=1
 SplineComponent 1 loop BOOLEAN since=1 prefabSince=1
 SplineComponent 2 resolution INT since=1 prefabSince=1

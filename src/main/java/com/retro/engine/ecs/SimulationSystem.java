@@ -134,6 +134,7 @@ public class SimulationSystem {
 
             // 2. Execute gameplay script frame ticks
             ScriptEngine.updateScripts(activeEntities, deltaTime, sceneWorld);
+            physicsWorld.carryAfterScripts();
 
             // 3. Sync 3D audio source positions, bus mix, ducking and reverb zones to OpenAL
             updateSpatialAudio(deltaTime, activeEntities, sceneWorld);

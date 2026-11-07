@@ -153,6 +153,7 @@ SimulationSystem.update
   0b. SplineSystem.update                    // advance Spline Followers (Volume 4 §1.6)
   1.  PhysicsSystem.step                     // fixed 60 Hz, at most 6 steps (Volume 4 §1.1)
   2.  ScriptEngine.updateScripts             // onFrameworkUpdate + onUpdate per script
+  2b. PhysicsSystem.carryAfterScripts        // riders follow a platform a script just moved (Volume 4 §1.2)
   3.  spatial audio                          // source positions, bus mix, ducking, reverb zones (§4)
   4.  particle simulation                    // after scripts, so this frame's play()/stop()/emit() apply now
   Input.endFrame()                           // clear this frame's "pressed" edges
@@ -312,7 +313,7 @@ changing the writer. Once the writer moves on, you can't make one any more.
 | Game UI     | `UICanvasComponent`, `UIPanel`, `UIText`, `UIImage`, `UIProgressBar` |
 | Effects     | `ParticleSystem` (Volume 3 §2.4), `Decal` (Volume 3 §2.4a) |
 | Audio       | `AudioReverbZone` (§4) |
-| Navigation  | `NavMeshAgent` (Volume 4 §1.5) |
+| Navigation  | `NavMeshAgent`, `NavMeshGate` (Volume 4 §1.5) |
 | Paths       | `SplineComponent`, `SplineFollower` (Volume 4 §1.6) |
 
 (`UIElement` is the shared base for the UI widgets, not a registered type.) Mods add more at runtime. See

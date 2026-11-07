@@ -183,7 +183,9 @@ The baker lives in its own dock tab, next to the Inspector by default:
 Values step with the **–** / **+** buttons. **BAKE** rasterizes the scene's static colliders (Volume 4 §1.5),
 installs the mesh for Play, and writes `<Scene>.navmesh` next to the scene file. That file is reloaded whenever the
 scene is opened. An unsaved scene still gets the in-memory mesh, but the console asks you to save and bake again
-to write the file. **CLEAR** removes the mesh and deletes its file.
+to write the file. **CLEAR** removes the mesh and deletes its file. A `NavMeshGate` draws as a blue box, and the bake
+result warns about any gate that covers no walkable ground. Bake again after moving a gate. A mesh collider whose mesh
+can't be read stops the bake and names the entity, and the previous mesh stays in place.
 
 The panel reflows with its tile (§1.2). In the default right column the settings stack in one column. In a wider
 tile, such as the bottom strip, they flow into two or three columns, with BAKE / CLEAR and the mesh info beside

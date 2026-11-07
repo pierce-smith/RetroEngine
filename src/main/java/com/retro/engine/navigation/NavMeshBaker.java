@@ -1,6 +1,7 @@
 package com.retro.engine.navigation;
 
 import com.retro.engine.assets.AssetStreamer;
+import com.retro.engine.assets.MeshBufferData;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.SceneWorld;
 import com.retro.engine.ecs.components.BoxCollider;
@@ -8,6 +9,7 @@ import com.retro.engine.ecs.components.CapsuleCollider;
 import com.retro.engine.ecs.components.CharacterControllerComponent;
 import com.retro.engine.ecs.components.MeshCollider;
 import com.retro.engine.ecs.components.NavMeshAgent;
+import com.retro.engine.ecs.components.NavMeshGate;
 import com.retro.engine.ecs.components.RigidBodyComponent;
 import com.retro.engine.ecs.components.SphereCollider;
 import com.retro.engine.ecs.components.Transform;
@@ -23,7 +25,8 @@ import java.util.Map;
 /**
  * Editor-time NavMesh generation from the scene's static colliders: Box, Sphere and Capsule colliders on entities with no
  * RigidBody or a STATIC one, and Mesh Colliders unless they are KINEMATIC. Physics can't push a Mesh Collider, so a DYNAMIC
- * one still counts. Triggers, characters, vehicles and agents are skipped.
+ * one still counts. Triggers, characters, vehicles and agents are skipped, and so are the colliders of a NavMeshGate
+ * unless it asks for them.
  *
  * <ol>
  *   <li>Rasterize: every grid column casts a vertical line through each collider (oriented boxes, spheres; capsules as
@@ -35,7 +38,8 @@ import java.util.Map;
  *       fits {@code agentHeight}. Neighbouring walkable cells connect when their heights differ by at most
  *       {@code stepHeight}.</li>
  *   <li>Erode: cells closer than {@code agentRadius} to an unwalkable edge or drop-off are removed.</li>
- *   <li>Polygonize: cells are greedily merged into flat rectangles, and shared edges become portals.</li>
+ *   <li>Polygonize: cells are greedily merged into flat rectangles, and shared edges become portals. Cells inside a
+ *       NavMeshGate only merge with each other, so the gate can be closed without blocking what is around it.</li>
  * </ol>
  * Allocates freely: it runs once from the editor, never during a frame tick.
  */
@@ -71,13 +75,21 @@ public final class NavMeshBaker {
         float minX, maxX, minZ, maxZ, minY, maxY;
     }
 
+    /** A NavMeshGate's box in world space. */
+    private record Gate(String id, String name, float x, float y, float z, float[] rotation, float hx, float hy, float hz) {}
+
     /** A Mesh Collider's triangles in world space, nine floats each, with their normals' heights. */
     private record WorldMesh(float[] triangles, float[] normalY, int count, float minX, float maxX, float minZ, float maxZ) {}
 
     public static Result bake(List<Entity> entities, SceneWorld world, Settings s) {
         List<Shape> shapes = new ArrayList<>();
         List<WorldMesh> meshes = new ArrayList<>();
-        gatherShapes(entities, world, shapes, meshes);
+        List<Gate> gates = new ArrayList<>();
+        List<String> unreadable = new ArrayList<>();
+        gatherShapes(entities, world, shapes, meshes, gates, unreadable);
+        if (!unreadable.isEmpty()) {
+            return new Result(null, "Bake stopped, nothing changed. Can't read the Mesh Collider mesh on " + String.join(", ", unreadable) + ".");
+        }
         if (shapes.isEmpty() && meshes.isEmpty()) {
             return new Result(null, "No static colliders found (Box/Sphere/Capsule without a dynamic RigidBody, or a Mesh Collider).");
         }
@@ -212,22 +224,26 @@ public final class NavMeshBaker {
             }
         }
 
+        int[] nodeGate = assignGates(gates, nodeCount, nodeCol, nodeY, w, ox, oz, cs, s.cellHeight);
+
         // --- 4. Greedy rectangle merge ---
         float mergeTol = Math.max(s.cellHeight, 0.02f);
         int[] polyOf = new int[nodeCount];
         Arrays.fill(polyOf, -1);
         FloatList pMinX = new FloatList(), pMinZ = new FloatList(), pMaxX = new FloatList(), pMaxZ = new FloatList(), pY = new FloatList();
+        IntList pGate = new IntList();
         int[] rowScratch = new int[MAX_RECT_CELLS], nextRow = new int[MAX_RECT_CELLS];
         for (int n = 0; n < nodeCount; n++) {
             if (!valid[n] || polyOf[n] >= 0) continue;
             int poly = pY.size;
             float y0 = nodeY.data[n];
+            int gate = nodeGate[n];
             // Width along +x
             int rw = 1;
             rowScratch[0] = n;
             while (rw < MAX_RECT_CELLS) {
                 int m = nbr[rowScratch[rw - 1] * 4];
-                if (m < 0 || polyOf[m] >= 0 || Math.abs(nodeY.data[m] - y0) > mergeTol) break;
+                if (m < 0 || polyOf[m] >= 0 || nodeGate[m] != gate || Math.abs(nodeY.data[m] - y0) > mergeTol) break;
                 rowScratch[rw++] = m;
             }
             for (int i = 0; i < rw; i++) polyOf[rowScratch[i]] = poly;
@@ -239,7 +255,7 @@ public final class NavMeshBaker {
                 boolean ok = true;
                 for (int i = 0; i < rw && ok; i++) {
                     int m = nbr[rowScratch[i] * 4 + 1];
-                    if (m < 0 || polyOf[m] >= 0 || Math.abs(nodeY.data[m] - y0) > mergeTol) ok = false;
+                    if (m < 0 || polyOf[m] >= 0 || nodeGate[m] != gate || Math.abs(nodeY.data[m] - y0) > mergeTol) ok = false;
                     else if (i > 0 && nbr[nextRow[i - 1] * 4] != m) ok = false;
                     else nextRow[i] = m;
                 }
@@ -255,6 +271,7 @@ public final class NavMeshBaker {
             pMinX.add(ox + cx * cs); pMaxX.add(ox + (cx + rw) * cs);
             pMinZ.add(oz + cz * cs); pMaxZ.add(oz + (cz + rh) * cs);
             pY.add((float) (ySum / (rw * rh)));
+            pGate.add(gate);
         }
         int polyCount = pY.size;
 
@@ -316,24 +333,62 @@ public final class NavMeshBaker {
 
         NavMesh mesh = new NavMesh(cs, s.cellHeight, s.agentHeight, s.agentRadius, s.maxSlope, s.stepHeight,
                 polyCount, pMinX.trim(), pMinZ.trim(), pMaxX.trim(), pMaxZ.trim(), pY.trim(),
-                linkStart, linkPoly, lax, laz, lbx, lbz, ox, oz, w, h, colStart, colPolys.trim());
+                linkStart, linkPoly, lax, laz, lbx, lbz, ox, oz, w, h, colStart, colPolys.trim(), pGate.trim(), gateIds(gates));
         return new Result(mesh, "Baked " + polyCount + " polygons, " + links + " links from " + (shapes.size() + meshes.size())
-                + " colliders (" + w + "x" + h + " grid).");
+                + " colliders (" + w + "x" + h + " grid)." + emptyGateWarning(gates, pGate));
+    }
+
+    /** Which gate each cell belongs to, or -1. A cell only has to touch a gate, so a thin one still claims a row of cells. */
+    private static int[] assignGates(List<Gate> gates, int nodeCount, IntList nodeCol, FloatList nodeY, int w,
+                                     float ox, float oz, float cs, float cellHeight) {
+        int[] nodeGate = new int[nodeCount];
+        Arrays.fill(nodeGate, -1);
+        for (int i = 0; i < gates.size(); i++) {
+            Gate gate = gates.get(i);
+            float[] m = gate.rotation;
+            for (int n = 0; n < nodeCount; n++) {
+                if (nodeGate[n] >= 0) continue;
+                int c = nodeCol.data[n];
+                float dx = ox + (c % w + 0.5f) * cs - gate.x, dy = nodeY.data[n] - gate.y, dz = oz + (c / w + 0.5f) * cs - gate.z;
+                float lx = m[0] * dx + m[3] * dy + m[6] * dz, ly = m[1] * dx + m[4] * dy + m[7] * dz, lz = m[2] * dx + m[5] * dy + m[8] * dz;
+                if (Math.abs(lx) <= gate.hx + cs * 0.5f && Math.abs(ly) <= gate.hy + cellHeight && Math.abs(lz) <= gate.hz + cs * 0.5f) nodeGate[n] = i;
+            }
+        }
+        return nodeGate;
+    }
+
+    private static String[] gateIds(List<Gate> gates) {
+        String[] ids = new String[gates.size()];
+        for (int i = 0; i < ids.length; i++) ids[i] = gates.get(i).id;
+        return ids;
+    }
+
+    /** A gate that covers no walkable ground does nothing when closed, which is easy to miss until a hunter walks through. */
+    private static String emptyGateWarning(List<Gate> gates, IntList polyGates) {
+        StringBuilder warning = new StringBuilder();
+        for (int i = 0; i < gates.size(); i++) {
+            boolean used = false;
+            for (int p = 0; p < polyGates.size && !used; p++) used = polyGates.data[p] == i;
+            if (!used) warning.append(" Gate '").append(gates.get(i).name).append("' covers no walkable ground.");
+        }
+        return warning.toString();
     }
 
     // ------------------------------------------------------------------------------------------
     // Geometry gathering
     // ------------------------------------------------------------------------------------------
 
-    private static void gatherShapes(List<Entity> entities, SceneWorld world, List<Shape> shapes, List<WorldMesh> meshes) {
+    private static void gatherShapes(List<Entity> entities, SceneWorld world, List<Shape> shapes, List<WorldMesh> meshes, List<Gate> gates,
+                                     List<String> unreadable) {
         if (entities == null) return;
         for (int i = 0; i < entities.size(); i++) {
             Entity e = entities.get(i);
             if (e == null) continue;
             RigidBodyComponent rb = e.getComponent(RigidBodyComponent.class);
             MeshCollider meshCollider = e.getComponent(MeshCollider.class);
+            NavMeshGate gate = e.getComponent(NavMeshGate.class);
             boolean moves = rb != null && rb.motionType != RigidBodyComponent.MotionType.STATIC;
-            if (moves && (meshCollider == null || rb.motionType == RigidBodyComponent.MotionType.KINEMATIC)) continue;
+            boolean pushable = moves && (meshCollider == null || rb.motionType == RigidBodyComponent.MotionType.KINEMATIC);
             if (e.getComponent(CharacterControllerComponent.class) != null || e.getComponent(VehicleControllerComponent.class) != null
                     || e.getComponent(NavMeshAgent.class) != null) continue;
             float px, py, pz, rx, ry, rz, sx, sy, sz;
@@ -347,14 +402,19 @@ public final class NavMeshBaker {
                 px = t.posX; py = t.posY; pz = t.posZ; rx = t.rotX; ry = t.rotY; rz = t.rotZ;
                 sx = t.scaleX; sy = t.scaleY; sz = t.scaleZ;
             }
+            if (gate != null) {
+                gates.add(new Gate(e.id, e.name, px, py, pz, rotation(rx, ry, rz), Math.abs(gate.sizeX * sx) * 0.5f,
+                        Math.abs(gate.sizeY * sy) * 0.5f, Math.abs(gate.sizeZ * sz) * 0.5f));
+            }
+            if (gate != null ? !gate.bakeColliders : pushable) continue;
             if (meshCollider != null) {
-                WorldMesh mesh = readMesh(e, meshCollider, px, py, pz, rx, ry, rz, sx, sy, sz);
+                WorldMesh mesh = readMesh(e, meshCollider, px, py, pz, rx, ry, rz, sx, sy, sz, unreadable);
                 // Physics collides with the mesh alone when it loads, and otherwise with the entity's other colliders
                 if (mesh != null) {
                     meshes.add(mesh);
                     continue;
                 }
-                if (moves) continue;
+                if (moves && gate == null) continue;
             }
             BoxCollider box = e.getComponent(BoxCollider.class);
             if (box != null && !box.isTrigger) {
@@ -379,13 +439,21 @@ public final class NavMeshBaker {
         }
     }
 
-    /** Reads a Mesh Collider into world space, or returns null when physics couldn't read it either. */
+    /**
+     * Reads a Mesh Collider into world space, or returns null when it has none to read. One that names a mesh that can't
+     * be read goes on {@code unreadable}: the importer's stand-in cube would bake without complaint, and be wrong.
+     */
     private static WorldMesh readMesh(Entity e, MeshCollider collider, float px, float py, float pz, float rx, float ry, float rz,
-                                      float sx, float sy, float sz) {
+                                      float sx, float sy, float sz, List<String> unreadable) {
         String path = collider.resolveMeshPath(e);
-        CollisionMesh local = path != null ? CollisionMesh.fromMesh(AssetStreamer.readMeshNow(path), sx, sy, sz) : null;
+        if (path == null) {
+            System.err.println("[NavMeshBaker] The Mesh Collider on '" + e.name + "' has no mesh.");
+            return null;
+        }
+        MeshBufferData data = AssetStreamer.readMeshNow(path);
+        CollisionMesh local = data != null && !data.placeholder ? CollisionMesh.fromMesh(data, sx, sy, sz) : null;
         if (local == null) {
-            System.err.println("[NavMeshBaker] Skipping the Mesh Collider on '" + e.name + "': no mesh could be read.");
+            unreadable.add("'" + e.name + "' (" + path + ")");
             return null;
         }
         float[] m = rotation(rx, ry, rz);

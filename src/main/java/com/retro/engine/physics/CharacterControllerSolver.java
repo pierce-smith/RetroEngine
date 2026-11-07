@@ -32,6 +32,10 @@ import static org.lwjgl.glfw.GLFW.*;
 public class CharacterControllerSolver {
 
     private static final float GROUND_SKIN = 0.05f;
+    // A move shorter than this share of a character's radius can't cross it, so ordinary contacts are enough
+    private static final float SWEEP_FRACTION = 0.5f;
+    // Sweeps use a slightly smaller radius, because a ray that starts inside a shape misses it
+    private static final float SWEEP_RADIUS_SCALE = 0.9f;
 
     // Right Stick orbit rates at full deflection (degrees / second) and pitch range (positive looks down)
     private static final float ORBIT_YAW_SPEED = 180.0f;
@@ -201,15 +205,26 @@ public class CharacterControllerSolver {
                 cc.velocityY = 0.0f;
                 body.py = sharedRaycastHit.pointY + halfHeight - body.oy;
                 PhysicsSystem.PhysicsBody under = physicsSystem.getBody(sharedRaycastHit.entity);
-                body.ground = under != null && under.carriesRiders() ? under : null;
+                PhysicsSystem.PhysicsBody carrier = under != null && under.carriesRiders() ? under : null;
+                if (carrier != body.ground) {
+                    body.ground = carrier;
+                    if (carrier != null) anchor(body); // Whatever it did before this moment isn't the character's ride
+                }
+                body.airVx = 0.0f;
+                body.airVz = 0.0f;
             } else {
                 cc.isGrounded = false;
-                body.ground = null;
+                if (body.ground != null) { // Leaves at the ground's speed, so a jump comes down in the same spot on it
+                    body.airVx = body.carryVx;
+                    body.airVz = body.carryVz;
+                    cc.velocityY += body.carryVy;
+                    body.ground = null;
+                }
                 body.py += cc.velocityY * dt;
             }
 
-            body.px += cc.velocityX * dt;
-            body.pz += cc.velocityZ * dt;
+            body.px += (cc.velocityX + body.airVx) * dt;
+            body.pz += (cc.velocityZ + body.airVz) * dt;
 
             cc.velocityX *= Math.max(0.0f, 1.0f - 10.0f * dt);
             cc.velocityZ *= Math.max(0.0f, 1.0f - 10.0f * dt);
@@ -238,30 +253,107 @@ public class CharacterControllerSolver {
             float turn = ground.ry - body.anchorYaw;
             turn -= 360.0f * Math.round(turn / 360.0f);
             if (x == body.anchorWorldX && y == body.anchorWorldY && z == body.anchorWorldZ && turn == 0.0f) continue;
-            body.px += x - body.anchorWorldX;
-            body.py += y - body.anchorWorldY;
-            body.pz += z - body.anchorWorldZ;
+            float mx = x - body.anchorWorldX, my = y - body.anchorWorldY, mz = z - body.anchorWorldZ;
+            float distance = (float) Math.sqrt(mx * mx + my * my + mz * mz);
+            if (distance > body.innerRadius() * SWEEP_FRACTION) { // Fast enough to skip over a wall on the way
+                float share = physicsSystem.clearDistance(body, ground, mx / distance, my / distance, mz / distance, distance) / distance;
+                mx *= share; my *= share; mz *= share;
+            }
+            body.px += mx; body.py += my; body.pz += mz;
+            body.carriedX += mx; body.carriedY += my; body.carriedZ += mz;
             body.ry += turn;
+            CameraRig rig = rigs.get(body.characterController);
+            if (rig != null && rig.orbit() != null && rig.orbit().onCharacter) {
+                rig.orbit().yaw = wrapDegrees(rig.orbit().yaw + turn); // Looking sets the body's yaw from this
+            }
             body.anchorWorldX = x; body.anchorWorldY = y; body.anchorWorldZ = z;
             body.anchorYaw = ground.ry;
             physicsSystem.refreshBody(body);
         }
     }
 
+    /** Turns what each character's ground did to it over the last frame into a speed it can leave the ground with. */
+    void measureCarry(List<PhysicsSystem.PhysicsBody> activeBodies, float frameDelta) {
+        float inv = frameDelta > 0.0f ? 1.0f / frameDelta : 0.0f;
+        for (int i = 0, n = activeBodies.size(); i < n; i++) {
+            PhysicsSystem.PhysicsBody body = activeBodies.get(i);
+            if (body.characterController == null) continue;
+            body.carryVx = clampCarry(body.carriedX * inv);
+            body.carryVy = clampCarry(body.carriedY * inv);
+            body.carryVz = clampCarry(body.carriedZ * inv);
+            body.carriedX = 0.0f; body.carriedY = 0.0f; body.carriedZ = 0.0f;
+        }
+    }
+
+    private static float clampCarry(float v) {
+        return Math.max(-PhysicsSystem.MAX_KINEMATIC_SPEED, Math.min(PhysicsSystem.MAX_KINEMATIC_SPEED, v));
+    }
+
+    /**
+     * Pushes characters ahead of anything fast that would otherwise cross them between contact checks. It casts each
+     * character back along the mover's path in the mover's frame, and moves it to where they first touched. Faster than
+     * MAX_KINEMATIC_SPEED counts as a teleport, which pushes nothing.
+     */
+    void sweepMovers(List<PhysicsSystem.PhysicsBody> activeBodies, float dt, PhysicsSystem physicsSystem) {
+        for (int i = 0, n = activeBodies.size(); i < n; i++) {
+            PhysicsSystem.PhysicsBody mover = activeBodies.get(i);
+            if (!mover.mowsCharacters()) continue;
+            float dx = mover.px - mover.sweptX, dy = mover.py - mover.sweptY, dz = mover.pz - mover.sweptZ;
+            boolean first = !mover.swept;
+            mover.sweptX = mover.px; mover.sweptY = mover.py; mover.sweptZ = mover.pz;
+            mover.swept = true;
+            float distance = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+            if (first || distance < 1e-5f || distance > PhysicsSystem.MAX_KINEMATIC_SPEED * dt) continue;
+            for (int j = 0; j < n; j++) {
+                PhysicsSystem.PhysicsBody character = activeBodies.get(j);
+                if (character.characterController != null && character.ground != mover
+                        && distance > character.innerRadius() * SWEEP_FRACTION) {
+                    pushAhead(mover, character, dx, dy, dz, distance, physicsSystem);
+                }
+            }
+        }
+    }
+
+    private void pushAhead(PhysicsSystem.PhysicsBody mover, PhysicsSystem.PhysicsBody character, float dx, float dy, float dz,
+                           float distance, PhysicsSystem physicsSystem) {
+        if ((mover.collisionMask & character.layerBit) == 0 || (character.collisionMask & mover.layerBit) == 0) return;
+        // The bounds the mover swept through, against the character
+        if (Math.min(mover.minX, mover.minX - dx) > character.maxX || Math.max(mover.maxX, mover.maxX - dx) < character.minX
+                || Math.min(mover.minY, mover.minY - dy) > character.maxY || Math.max(mover.maxY, mover.maxY - dy) < character.minY
+                || Math.min(mover.minZ, mover.minZ - dz) > character.maxZ || Math.max(mover.maxZ, mover.maxZ - dz) < character.minZ) return;
+
+        float ux = dx / distance, uy = dy / distance, uz = dz / distance;
+        float radius = character.innerRadius() * SWEEP_RADIUS_SCALE;
+        float nearest = -1.0f;
+        for (int end = -1; end <= 1; end++) { // Feet, middle and head of a capsule
+            float t = moverRay.cast(mover, character.cx + dx, character.cy + dy + end * character.segmentHalf, character.cz + dz,
+                    -ux, -uy, -uz, distance, radius);
+            if (t >= 0.0f && (nearest < 0.0f || t < nearest)) nearest = t;
+        }
+        if (nearest < 0.0f) return;
+        float push = physicsSystem.clearDistance(character, mover, ux, uy, uz, distance - nearest);
+        character.px += ux * push; character.py += uy * push; character.pz += uz * push;
+        physicsSystem.refreshBody(character);
+        character.syncToTransform();
+    }
+
     /** Records where each rider now stands on its ground. Runs after contacts, so it keeps what they did to the character. */
     void anchorRiders(List<PhysicsSystem.PhysicsBody> activeBodies) {
         for (int i = 0, n = activeBodies.size(); i < n; i++) {
             PhysicsSystem.PhysicsBody body = activeBodies.get(i);
-            PhysicsSystem.PhysicsBody ground = body.ground;
-            if (ground == null) continue;
-            float[] r = ground.r;
-            float dx = body.px - ground.px, dy = body.py - ground.py, dz = body.pz - ground.pz;
-            body.anchorX = r[0] * dx + r[3] * dy + r[6] * dz;
-            body.anchorY = r[1] * dx + r[4] * dy + r[7] * dz;
-            body.anchorZ = r[2] * dx + r[5] * dy + r[8] * dz;
-            body.anchorWorldX = body.px; body.anchorWorldY = body.py; body.anchorWorldZ = body.pz;
-            body.anchorYaw = ground.ry;
+            if (body.ground != null) anchor(body);
         }
+    }
+
+    private static void anchor(PhysicsSystem.PhysicsBody body) {
+        PhysicsSystem.PhysicsBody ground = body.ground;
+        float[] r = ground.r;
+        float dx = body.px - ground.px, dy = body.py - ground.py, dz = body.pz - ground.pz;
+        body.anchorX = r[0] * dx + r[3] * dy + r[6] * dz;
+        body.anchorY = r[1] * dx + r[4] * dy + r[7] * dz;
+        body.anchorZ = r[2] * dx + r[5] * dy + r[8] * dz;
+        body.anchorWorldX = body.px; body.anchorWorldY = body.py; body.anchorWorldZ = body.pz;
+        body.anchorYaw = ground.ry;
     }
 
     private static float walkableNormalY(CharacterControllerComponent cc) {
@@ -330,6 +422,7 @@ public class CharacterControllerSolver {
     private static final float STEP_PROBE_INSET = 0.1f;
     private static final float SLOPE_TOLERANCE = 0.001f;
     private final RaycastHit stepProbe = new RaycastHit();
+    private final ShapeRaycast moverRay = new ShapeRaycast();
 
     /**
      * Side contact between a grounded character and an obstacle whose top is no more than the controller's stepOffset
@@ -375,6 +468,11 @@ public class CharacterControllerSolver {
             cc.velocityX -= into * nx;
             cc.velocityY -= into * ny;
             cc.velocityZ -= into * nz;
+        }
+        float air = body.airVx * nx + body.airVz * nz;
+        if (air < 0.0f) {
+            body.airVx -= air * nx;
+            body.airVz -= air * nz;
         }
     }
 

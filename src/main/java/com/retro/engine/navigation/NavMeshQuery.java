@@ -31,6 +31,7 @@ public final class NavMeshQuery {
     private final float[] plx, plz, ply, prx, prz, pry;
 
     private final float[] snapScratch = new float[3];
+    private final boolean[] gateClosed;
 
     /** True when the last {@link #findPath} could not reach the goal and returned a path to the closest reachable poly. */
     public boolean lastPathPartial;
@@ -49,15 +50,21 @@ public final class NavMeshQuery {
         corridor = new int[n];
         plx = new float[n + 1]; plz = new float[n + 1]; ply = new float[n + 1];
         prx = new float[n + 1]; prz = new float[n + 1]; pry = new float[n + 1];
+        gateClosed = new boolean[mesh.gateIds.length];
     }
 
     public NavMesh getMesh() { return mesh; }
+
+    public boolean isGateOpen(int gate) { return !gateClosed[gate]; }
+
+    public void setGateOpen(int gate, boolean open) { gateClosed[gate] = !open; }
 
     /**
      * Finds a smoothed path from start to end and writes its corners (x, y, z triples, start excluded, end included)
      * into {@code outCorners}. Returns the corner count, or -1 when start or end cannot be placed on the mesh.
      * When more than {@code maxCorners} corners are needed the path is truncated (the caller should re-plan from the
-     * last corner); {@link #lastPathPartial} is set when the goal was unreachable.
+     * last corner); {@link #lastPathPartial} is set when the goal was unreachable. Closed gates can't be entered, but a
+     * path that starts inside one can still walk out of it.
      */
     public int findPath(float sx, float sy, float sz, float ex, float ey, float ez, float[] outCorners, int maxCorners) {
         lastPathPartial = false;
@@ -99,6 +106,7 @@ public final class NavMeshQuery {
             searchId = 1;
         }
         heapSize = 0;
+        int startGate = mesh.polyGate[startPoly];
         touch(startPoly);
         g[startPoly] = 0.0f;
         nodeX[startPoly] = sx; nodeY[startPoly] = sy; nodeZ[startPoly] = sz;
@@ -121,6 +129,8 @@ public final class NavMeshQuery {
 
             for (int l = mesh.linkStart[cur], le = mesh.linkStart[cur + 1]; l < le; l++) {
                 int nb = mesh.linkPoly[l];
+                int gate = mesh.polyGate[nb];
+                if (gate >= 0 && gate != startGate && gateClosed[gate]) continue;
                 touch(nb);
                 if (state[nb] == CLOSED) continue;
                 // Node position: portal midpoint (goal point for the end poly)

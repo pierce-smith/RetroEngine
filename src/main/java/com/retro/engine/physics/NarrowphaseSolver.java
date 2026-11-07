@@ -28,6 +28,8 @@ final class NarrowphaseSolver {
     private final float[] boxPoint = new float[7];
     private final float[] triPoint = new float[3];
     private final float[] tri = new float[9];
+    private final float[] triRel = new float[9]; // The triangle relative to the box's centre
+    private float bestGap, bestNx, bestNy, bestNz;
     private final CollisionMesh.Hits meshHits = new CollisionMesh.Hits();
 
     /** Fills {@code m} with contacts between its two bodies. Returns true when there is at least one. */
@@ -460,10 +462,12 @@ final class NarrowphaseSolver {
 
     /**
      * Box corners against the triangle's face, and triangle corners against the box. That covers a box on a floor and
-     * a spike into a box. Two edges crossing with no corner inside either shape produce no contact.
+     * a spike into a box. When neither finds anything, {@link #crossBoxTriangle} covers edges crossing with no corner
+     * inside either shape.
      */
     private void collideBoxTriangle(PhysicsBody box, float fx, float fy, float fz, float margin, ContactManifold m, boolean meshIsA) {
         float[] r = box.r;
+        int found = m.count;
         float side = (box.cx - tri[0]) * fx + (box.cy - tri[1]) * fy + (box.cz - tri[2]) * fz;
         if (side < 0.0f) { fx = -fx; fy = -fy; fz = -fz; }
         float sign = meshIsA ? 1.0f : -1.0f;
@@ -488,6 +492,124 @@ final class NarrowphaseSolver {
             // boxPoint's normal faces the triangle corner, and contacts here run from the mesh to the box
             m.add(tri[v * 3], tri[v * 3 + 1], tri[v * 3 + 2], -boxPoint[3] * sign, -boxPoint[4] * sign, -boxPoint[5] * sign, sep);
         }
+        if (m.count == found && m.count < ContactManifold.MAX_POINTS) crossBoxTriangle(box, fx, fy, fz, margin, m, sign);
+    }
+
+    /**
+     * Separating axes between a box and the current triangle: the triangle's normal, the box's three axes, and the nine
+     * edge pairs. If none separates them, the axis with the least overlap gives the normal, and the contacts are where
+     * the triangle's edges enter the box, or where the box's edges pass through the triangle.
+     */
+    private void crossBoxTriangle(PhysicsBody box, float fx, float fy, float fz, float margin, ContactManifold m, float sign) {
+        for (int i = 0; i < 9; i += 3) {
+            triRel[i] = tri[i] - box.cx;
+            triRel[i + 1] = tri[i + 1] - box.cy;
+            triRel[i + 2] = tri[i + 2] - box.cz;
+        }
+        float[] r = box.r;
+        bestGap = -Float.MAX_VALUE;
+        if (!overlapsOn(box, fx, fy, fz, 0.0f, margin)) return;
+        for (int k = 0; k < 3; k++) {
+            if (!overlapsOn(box, r[k], r[3 + k], r[6 + k], 0.0f, margin)) return;
+        }
+        for (int e = 0; e < 3; e++) {
+            int a = e * 3, b = (e + 1) % 3 * 3;
+            float ex = triRel[b] - triRel[a], ey = triRel[b + 1] - triRel[a + 1], ez = triRel[b + 2] - triRel[a + 2];
+            for (int k = 0; k < 3; k++) {
+                float ux = r[k], uy = r[3 + k], uz = r[6 + k];
+                // Faces come first, and an edge pair has to beat them clearly, as in box against box
+                if (!overlapsOn(box, ey * uz - ez * uy, ez * ux - ex * uz, ex * uy - ey * ux, AXIS_BIAS, margin)) return;
+            }
+        }
+        float nx = bestNx, ny = bestNy, nz = bestNz;
+        float reach = boxReach(box, nx, ny, nz);
+        int found = m.count;
+        for (int e = 0; e < 3; e++) {
+            clipTriangleEdge(box, e * 3, (e + 1) % 3 * 3, nx, ny, nz, reach, margin, m, sign);
+        }
+        if (m.count == found) boxEdgesThroughTriangle(box, fx, fy, fz, nx, ny, nz, reach, margin, m, sign);
+    }
+
+    /** False when the axis separates the shapes. Otherwise keeps it if it has the least overlap so far. */
+    private boolean overlapsOn(PhysicsBody box, float x, float y, float z, float bias, float margin) {
+        float len = (float) Math.sqrt(x * x + y * y + z * z);
+        if (len < EPSILON) return true; // Parallel edges: their cross product isn't an axis
+        x /= len; y /= len; z /= len;
+        float reach = boxReach(box, x, y, z);
+        float p0 = triRel[0] * x + triRel[1] * y + triRel[2] * z;
+        float p1 = triRel[3] * x + triRel[4] * y + triRel[5] * z;
+        float p2 = triRel[6] * x + triRel[7] * y + triRel[8] * z;
+        float above = Math.min(p0, Math.min(p1, p2)) - reach, below = -Math.max(p0, Math.max(p1, p2)) - reach;
+        float gap = Math.max(above, below);
+        if (gap > margin) return false;
+        if (gap > bestGap + bias) {
+            bestGap = gap;
+            float toBox = above >= below ? -1.0f : 1.0f; // The normal runs from the mesh to the box
+            bestNx = x * toBox; bestNy = y * toBox; bestNz = z * toBox;
+        }
+        return true;
+    }
+
+    /** How far the box reaches from its centre along a unit axis. */
+    private static float boxReach(PhysicsBody box, float x, float y, float z) {
+        float[] r = box.r;
+        return Math.abs(r[0] * x + r[3] * y + r[6] * z) * box.hx + Math.abs(r[1] * x + r[4] * y + r[7] * z) * box.hy
+                + Math.abs(r[2] * x + r[5] * y + r[8] * z) * box.hz;
+    }
+
+    /** Contacts where one triangle edge enters and leaves the box, grown by the margin. */
+    private void clipTriangleEdge(PhysicsBody box, int a, int b, float nx, float ny, float nz, float reach, float margin,
+                                  ContactManifold m, float sign) {
+        float[] r = box.r;
+        float ax = triRel[a], ay = triRel[a + 1], az = triRel[a + 2];
+        float dx = triRel[b] - ax, dy = triRel[b + 1] - ay, dz = triRel[b + 2] - az;
+        float enter = 0.0f, exit = 1.0f;
+        for (int k = 0; k < 3; k++) {
+            float half = (k == 0 ? box.hx : k == 1 ? box.hy : box.hz) + margin;
+            float o = ax * r[k] + ay * r[3 + k] + az * r[6 + k];
+            float d = dx * r[k] + dy * r[3 + k] + dz * r[6 + k];
+            if (Math.abs(d) < EPSILON) {
+                if (Math.abs(o) > half) return;
+                continue;
+            }
+            float t1 = (-half - o) / d, t2 = (half - o) / d;
+            enter = Math.max(enter, Math.min(t1, t2));
+            exit = Math.min(exit, Math.max(t1, t2));
+            if (enter > exit) return;
+        }
+        addCrossPoint(box, ax + dx * enter, ay + dy * enter, az + dz * enter, nx, ny, nz, reach, margin, m, sign);
+        if (exit - enter > 1e-4f) addCrossPoint(box, ax + dx * exit, ay + dy * exit, az + dz * exit, nx, ny, nz, reach, margin, m, sign);
+    }
+
+    /** Contacts for a box edge resting on a triangle too small for any corner to reach, where no triangle edge enters the box. */
+    private void boxEdgesThroughTriangle(PhysicsBody box, float fx, float fy, float fz, float nx, float ny, float nz, float reach,
+                                         float margin, ContactManifold m, float sign) {
+        float[] r = box.r;
+        float plane = triRel[0] * fx + triRel[1] * fy + triRel[2] * fz;
+        for (int c = 0; c < 8; c++) {
+            float lx = (c & 1) != 0 ? box.hx : -box.hx, ly = (c & 2) != 0 ? box.hy : -box.hy, lz = (c & 4) != 0 ? box.hz : -box.hz;
+            float x0 = r[0] * lx + r[1] * ly + r[2] * lz, y0 = r[3] * lx + r[4] * ly + r[5] * lz, z0 = r[6] * lx + r[7] * ly + r[8] * lz;
+            float d0 = x0 * fx + y0 * fy + z0 * fz - plane;
+            for (int k = 0; k < 3; k++) {
+                if ((c & (1 << k)) != 0) continue; // Each edge once, from its negative end
+                float span = 2.0f * (k == 0 ? box.hx : k == 1 ? box.hy : box.hz);
+                float ex = r[k] * span, ey = r[3 + k] * span, ez = r[6 + k] * span;
+                float d1 = d0 + ex * fx + ey * fy + ez * fz;
+                if ((d0 > 0.0f) == (d1 > 0.0f)) continue;
+                float t = d0 / (d0 - d1);
+                float x = x0 + ex * t, y = y0 + ey * t, z = z0 + ez * t;
+                closestOnTriangle(x + box.cx, y + box.cy, z + box.cz, triPoint);
+                float ox = triPoint[0] - box.cx - x, oy = triPoint[1] - box.cy - y, oz = triPoint[2] - box.cz - z;
+                if (ox * ox + oy * oy + oz * oz <= 1e-8f) addCrossPoint(box, x, y, z, nx, ny, nz, reach, margin, m, sign);
+            }
+        }
+    }
+
+    /** Adds a point given relative to the box, measured against the face of the box's hull that the normal leaves from. */
+    private static void addCrossPoint(PhysicsBody box, float x, float y, float z, float nx, float ny, float nz, float reach, float margin,
+                                      ContactManifold m, float sign) {
+        float sep = -reach - (x * nx + y * ny + z * nz);
+        if (sep <= margin) m.add(x + box.cx, y + box.cy, z + box.cz, nx * sign, ny * sign, nz * sign, sep);
     }
 
     /** Closest point on the current triangle to (x, y, z), by Voronoi region. */

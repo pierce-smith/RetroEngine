@@ -407,6 +407,12 @@ stopNavigation();                          // decelerate to a stop
 the destination only when the target has actually moved. The First Person Example's `ChaserScript` re-paths when
 the player has moved more than `repathDistance`, instead of every frame.
 
+Close a `NavMeshGate` when a door shuts or a bridge lifts, and agents route around it or wait there:
+
+```java
+door.getComponent(NavMeshGate.class).setOpen(false);
+```
+
 #### Splines (`SplineFollower`, Volume 4 §1.6)
 
 | Method | Behavior |

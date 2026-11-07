@@ -168,17 +168,69 @@ class CharacterCarryTest {
         assertEquals(6.6f, hero.getTransform().posX, 0.1f);
     }
 
+    private static void jump(Entity hero, float speed) {
+        CharacterControllerComponent cc = hero.getComponent(CharacterControllerComponent.class);
+        cc.velocityY = speed;
+        cc.isGrounded = false;
+    }
+
     @Test
-    void jumpingLeavesTheDeckBehind() {
+    void jumpComesDownInTheSameSpotOnTheDeck() {
         Entity deck = deck(), hero = hero(0, 1.0f, 0);
         List<Entity> scene = scene(deck, hero);
         PhysicsSystem physics = physics(scene);
         step(physics, scene, 30);
-        CharacterControllerComponent cc = hero.getComponent(CharacterControllerComponent.class);
-        cc.velocityY = 5.0f;
-        cc.isGrounded = false;
-        drive(physics, scene, deck, 2, 0, 0, 20);
-        assertEquals(0.0f, hero.getTransform().posX, 0.05f);
+        drive(physics, scene, deck, 6, 0, 0, 30);
+        jump(hero, 5.0f);
+        drive(physics, scene, deck, 6, 0, 0, 10);
+        assertFalse(hero.getComponent(CharacterControllerComponent.class).isGrounded);
+        drive(physics, scene, deck, 6, 0, 0, 80);
+        assertTrue(hero.getComponent(CharacterControllerComponent.class).isGrounded);
+        assertEquals(deck.getTransform().posX, hero.getTransform().posX, 0.15f);
+    }
+
+    @Test
+    void jumpOffARisingLiftGoesHigher() throws IOException {
+        Entity deck = meshDeck(), hero = hero(3, 1.0f, 0);
+        List<Entity> scene = scene(deck, hero);
+        PhysicsSystem physics = physics(scene);
+        step(physics, scene, 30);
+        drive(physics, scene, deck, 0, 6, 0, 30);
+        jump(hero, 5.0f);
+        drive(physics, scene, deck, 0, 6, 0, 1);
+        assertEquals(11.0f, hero.getComponent(CharacterControllerComponent.class).velocityY, 0.5f);
+    }
+
+    @Test
+    void wallStopsTheSpeedKeptFromTheDeck() {
+        Entity deck = deck(), hero = hero(0, 1.0f, 0);
+        Entity wall = box(5, 3.0f, 0, 2, 4, 40, STATIC);
+        List<Entity> scene = scene(deck, hero, wall);
+        PhysicsSystem physics = physics(scene);
+        step(physics, scene, 30);
+        drive(physics, scene, deck, 6, 0, 0, 20);
+        jump(hero, 6.0f);
+        drive(physics, scene, deck, 6, 0, 0, 45);
+        assertEquals(3.6f, hero.getTransform().posX, 0.1f);
+        assertEquals(0.0f, physics.getBody(hero).airVx, 0.01f);
+    }
+
+    @Test
+    void landingOnStillGroundEndsTheKeptSpeed() {
+        Entity deck = deck(), floor = box(0, -3.5f, 0, 200, 1, 200, STATIC), hero = hero(0, 1.0f, 0);
+        List<Entity> scene = new java.util.ArrayList<>(scene(deck, floor, hero));
+        PhysicsSystem physics = physics(scene);
+        step(physics, scene, 30);
+        drive(physics, scene, deck, 6, 0, 0, 30);
+        jump(hero, 2.0f);
+        physics.step(FRAME, scene);
+        physics.removeRuntimeEntity(deck);
+        scene.remove(deck);
+        step(physics, scene, 90);
+        float landed = hero.getTransform().posX;
+        assertTrue(landed > 1.0f, "x=" + landed);
+        step(physics, scene, 30);
+        assertEquals(landed, hero.getTransform().posX, 0.001f);
     }
 
     @Test
@@ -245,6 +297,139 @@ class CharacterCarryTest {
         PhysicsMath.eulerToMatrix(b.rotX, b.rotY, b.rotZ, r);
         assertEquals(b.posX + r[0] * 2.0f, h.posX, 0.25f);
         assertEquals(b.posZ + r[6] * 2.0f, h.posZ, 0.25f);
+    }
+
+    private Entity thinWall(float x, RigidBodyComponent.MotionType type) throws IOException {
+        Path file = dir.resolve("wall" + System.nanoTime() + ".obj");
+        Files.writeString(file, "v 0 0 -10\nv 0 4 -10\nv 0 4 10\nv 0 0 10\nf 1 2 3\nf 1 3 4\n");
+        Entity e = at("wall", x, 0, 0);
+        MeshCollider collider = new MeshCollider();
+        collider.meshPath = file.toString();
+        e.addComponent(collider);
+        RigidBodyComponent body = new RigidBodyComponent();
+        body.motionType = type;
+        e.addComponent(body);
+        return e;
+    }
+
+    private void wallHits(Entity wall, float speed, float frame) {
+        Entity floor = box(0, -0.5f, 0, 300, 1, 300, STATIC), hero = hero(0, 1.0f, 0);
+        List<Entity> scene = scene(floor, wall, hero);
+        PhysicsSystem physics = physics(scene);
+        step(physics, scene, 20);
+        float travelled = 0.0f;
+        while (travelled < 20.0f) {
+            wall.getTransform().posX += speed * frame;
+            travelled += speed * frame;
+            physics.step(frame, scene);
+        }
+        assertTrue(hero.getTransform().posX > wall.getTransform().posX, "at " + speed + " m/s the wall passed the hero: wall "
+                + wall.getTransform().posX + ", hero " + hero.getTransform().posX);
+    }
+
+    @Test
+    void fastThinWallPushesInsteadOfPassingThrough() throws IOException {
+        for (float speed : new float[] {25, 30, 40, 49}) {
+            wallHits(thinWall(-5, KINEMATIC), speed, FRAME);
+        }
+    }
+
+    @Test
+    void fastThinWallStillPushesAtLowFrameRates() throws IOException {
+        wallHits(thinWall(-5, KINEMATIC), 20, 1.0f / 30.0f);
+    }
+
+    @Test
+    void fastBoxPushesInsteadOfPassingThrough() {
+        wallHits(box(-5, 2, 0, 0.2f, 4, 20, KINEMATIC), 40, FRAME);
+    }
+
+    @Test
+    void fastVehiclePushesInsteadOfPassingThrough() {
+        Entity floor = box(0, -0.5f, 0, 300, 1, 300, STATIC), hero = hero(0, 1.0f, 0);
+        Entity car = box(0, 0.5f, -10, 3, 1, 0.3f, STATIC);
+        car.removeComponent(RigidBodyComponent.class);
+        VehicleControllerComponent vehicle = new VehicleControllerComponent();
+        car.addComponent(vehicle);
+        List<Entity> scene = scene(floor, car, hero);
+        PhysicsSystem physics = physics(scene);
+        step(physics, scene, 20);
+        for (int i = 0; i < 60; i++) {
+            vehicle.currentSpeed = 40.0f;
+            physics.step(FRAME, scene);
+        }
+        assertTrue(car.getTransform().posZ > 15.0f, "z=" + car.getTransform().posZ);
+        assertTrue(hero.getTransform().posZ > car.getTransform().posZ, "car " + car.getTransform().posZ + ", hero " + hero.getTransform().posZ);
+    }
+
+    @Test
+    void pushedCharacterStopsAtWhatIsBehindIt() throws IOException {
+        Entity floor = box(0, -0.5f, 0, 300, 1, 300, STATIC), hero = hero(0, 1.0f, 0);
+        Entity mover = thinWall(-5, KINEMATIC), stop = thinWall(3, STATIC);
+        List<Entity> scene = scene(floor, mover, stop, hero);
+        PhysicsSystem physics = physics(scene);
+        step(physics, scene, 20);
+        for (int i = 0; i < 60; i++) {
+            mover.getTransform().posX += 30.0f * FRAME;
+            physics.step(FRAME, scene);
+        }
+        assertTrue(hero.getTransform().posX < 3.0f, "x=" + hero.getTransform().posX);
+    }
+
+    @Test
+    void teleportPushesNothing() throws IOException {
+        Entity floor = box(0, -0.5f, 0, 300, 1, 300, STATIC), hero = hero(0, 1.0f, 0);
+        Entity wall = thinWall(-5, KINEMATIC);
+        List<Entity> scene = scene(floor, wall, hero);
+        PhysicsSystem physics = physics(scene);
+        step(physics, scene, 20);
+        wall.getTransform().posX = 100.0f;
+        step(physics, scene, 5);
+        assertEquals(0.0f, hero.getTransform().posX, 0.01f);
+    }
+
+    @Test
+    void fastRiderStopsAtAThinWall() throws IOException {
+        Entity deck = deck(), hero = hero(0, 1.0f, 0), wall = thinWall(8, STATIC);
+        wall.getTransform().posY = 0.2f;
+        List<Entity> scene = scene(deck, hero, wall);
+        PhysicsSystem physics = physics(scene);
+        step(physics, scene, 20);
+        drive(physics, scene, deck, 35, 0, 0, 30);
+        assertTrue(hero.getTransform().posX < 8.0f, "x=" + hero.getTransform().posX);
+    }
+
+    @Test
+    void platformMovedInOnUpdateBringsItsRiderTheSameFrame() {
+        Entity deck = deck(), hero = hero(3, 1.0f, 0);
+        List<Entity> scene = scene(deck, hero);
+        PhysicsSystem physics = physics(scene);
+        step(physics, scene, 30);
+        for (int i = 0; i < 60; i++) {
+            physics.step(FRAME, scene);
+            deck.getTransform().posX += 2.0f * FRAME; // As onUpdate would, after physics
+            physics.carryAfterScripts();
+            assertEquals(3.0f + deck.getTransform().posX, hero.getTransform().posX, 0.001f, "frame " + i);
+        }
+    }
+
+    @Test
+    void lookingAfterATurnDoesNotSnapBack() throws ReflectiveOperationException {
+        Entity deck = deck(), hero = hero(3, 1.0f, 0);
+        hero.addComponent(new com.retro.engine.ecs.components.Camera());
+        List<Entity> scene = scene(deck, hero);
+        PhysicsSystem physics = physics(scene);
+        step(physics, scene, 30);
+        drive(physics, scene, deck, 0, 0, 45, 120);
+        float turned = hero.getTransform().rotY;
+        assertEquals(90.0f, turned, 0.5f);
+        java.lang.reflect.Field solverField = PhysicsSystem.class.getDeclaredField("characterSolver");
+        solverField.setAccessible(true);
+        java.lang.reflect.Field look = CharacterControllerSolver.class.getDeclaredField("pendingLookYaw");
+        look.setAccessible(true);
+        look.setFloat(solverField.get(physics), 10.0f);
+        physics.step(FRAME, scene);
+        assertEquals(turned + 10.0f, hero.getTransform().rotY, 0.5f);
     }
 
     @Test

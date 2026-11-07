@@ -617,6 +617,8 @@ public class MeshImporter {
              1f, 1f,-1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  1f,0f,  1f,0f,  0f,0f,-1f, 0f,1f,0f,  1f,0f,
              1f, 1f, 1f,  1f,0f,0f,  0.8f,0.2f,0.9f,1f,  0f,0f,  0f,0f,  0f,0f,-1f, 0f,1f,0f,  1f,0f
         };
-        return new MeshBufferData(cubeVerts, cubeVerts.length / FLOATS_PER_VERTEX);
+        MeshBufferData cube = new MeshBufferData(cubeVerts, cubeVerts.length / FLOATS_PER_VERTEX);
+        cube.placeholder = true;
+        return cube;
     }
 }

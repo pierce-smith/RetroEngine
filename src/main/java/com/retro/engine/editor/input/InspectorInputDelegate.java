@@ -830,6 +830,7 @@ public class InspectorInputDelegate {
         }
         addComponentItem(items, entities, "+ Character Controller", CharacterControllerComponent.class, CharacterControllerComponent::new);
         addComponentItem(items, entities, "+ NavMesh Agent", com.retro.engine.ecs.components.NavMeshAgent.class, com.retro.engine.ecs.components.NavMeshAgent::new);
+        addComponentItem(items, entities, "+ NavMesh Gate", com.retro.engine.ecs.components.NavMeshGate.class, com.retro.engine.ecs.components.NavMeshGate::new);
         addComponentItem(items, entities, "+ Spline", com.retro.engine.ecs.components.SplineComponent.class, com.retro.engine.ecs.components.SplineComponent::new);
         addComponentItem(items, entities, "+ Spline Follower", com.retro.engine.ecs.components.SplineFollower.class, com.retro.engine.ecs.components.SplineFollower::new);
         addComponentItem(items, entities, "+ Vehicle Controller", VehicleControllerComponent.class, VehicleControllerComponent::new);
