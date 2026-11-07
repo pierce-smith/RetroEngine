@@ -193,8 +193,11 @@ public class OverlaySystem {
 
         long timeSinceOrbit = System.currentTimeMillis() - lastOrbitTime;
         boolean recentlyOrbiting = (timeSinceOrbit < 150L);
+        // Flying with the keys moves the camera without moving the cursor, and that hold isn't a click either
+        boolean cameraMoved = Math.abs(currentCamPanX - pressCamPanX) > 0.01f || Math.abs(currentCamPanY - pressCamPanY) > 0.01f
+                || Math.abs(currentCamZoom - pressCamZoom) > 0.01f;
 
-        if (rightClickDragDistance < 8.0 && !recentlyOrbiting && manager != null) {
+        if (rightClickDragDistance < 8.0 && !recentlyOrbiting && !cameraMoved && manager != null) {
             buildAndShowContextMenuAt(rightClickPressNdcX, rightClickPressNdcY, manager);
         }
     }

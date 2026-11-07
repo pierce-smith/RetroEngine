@@ -3,19 +3,20 @@ package com.retro.engine.editor;
 import com.retro.engine.core.GamepadManager;
 
 /**
- * ViewportCamera provides Unity-style camera navigation in the 3D Viewport:
+ * ViewportCamera is a free-flying camera for the 3D Viewport, with no limit on where it can go:
  * - Camera WASDQE flight navigation executes ONLY when Right Mouse Button (RMB) or Middle Mouse Button (MMB) is held.
- * - W / S: Move Forward / Backward (Zoom / Depth Flight)
+ * - W / S: Fly Forward / Backward along the view direction
  * - A / D: Strafe Left / Right
  * - Q / E: Elevation Down / Up
- * - Orbit / Rotate (Yaw & Pitch): Right Mouse Drag OR Alt + Left Mouse Drag
- * - Pan (X / Y): Middle Mouse Drag OR Shift + Right Mouse Drag
- * - Zoom (In / Out): Mouse Scroll Wheel
+ * - Look (Yaw & Pitch, in place): Right Mouse Drag
+ * - Orbit the selected entity: Shift + Right Mouse Drag OR Alt + Left Mouse Drag
+ * - Pan (X / Y): Middle Mouse Drag, or Shift + Right Mouse Drag with nothing selected
+ * - Dolly (In / Out): Mouse Scroll Wheel
  * - Frame Selected: 'F' Key
  * - Reset to Startup View: Shift + 'F'
  * Gamepad (no button hold required):
  * - Left Stick: Strafe (X) / Forward-Backward flight (Y), same axes as WASD
- * - Right Stick: Orbit (Yaw & Pitch)
+ * - Right Stick: Look (Yaw & Pitch, in place)
  * - Right / Left Trigger: Analog Zoom In / Out
  * - Right / Left Bumper: Elevation Up / Down
  */
@@ -38,6 +39,8 @@ public class ViewportCamera {
     public static final float EDITOR_FOV = 50.0f, EDITOR_NEAR = 0.1f, EDITOR_FAR = 500.0f;
     private float fov = EDITOR_FOV, near = EDITOR_NEAR, far = EDITOR_FAR;
     private float sceneAspect = 712.0f / 488.0f;
+
+    private final float[] rotateScratch = new float[3];
 
     // Play mode: the bound camera entity's world-to-view matrix (inverse of its world transform) and eye, used
     // verbatim instead of the orbit parameters, which cannot represent roll or arbitrary entity rotations
@@ -77,8 +80,6 @@ public class ViewportCamera {
             // Q / E: Elevation DOWN / UP
             if (isQDown) panY -= speed;
             if (isEDown) panY += speed;
-
-            clamp();
         }
     }
 
@@ -90,9 +91,8 @@ public class ViewportCamera {
         panX -= pad.getAxis(GamepadManager.AXIS_LEFT_X) * speed;
         zoom -= pad.getAxis(GamepadManager.AXIS_LEFT_Y) * speed * 4.0f;
 
-        // Right Stick: orbit; pushing up pitches up, matching an upward mouse drag
-        yaw += pad.getAxis(GamepadManager.AXIS_RIGHT_X) * 120.0f * deltaTime;
-        pitch -= pad.getAxis(GamepadManager.AXIS_RIGHT_Y) * 90.0f * deltaTime;
+        // Right Stick: look; pushing up looks up, matching an upward mouse drag
+        look(-pad.getAxis(GamepadManager.AXIS_RIGHT_X) * 120.0f * deltaTime, -pad.getAxis(GamepadManager.AXIS_RIGHT_Y) * 90.0f * deltaTime);
 
         // Triggers: analog zoom in (RT) / out (LT)
         zoom += (pad.getTrigger(GamepadManager.AXIS_RIGHT_TRIGGER) - pad.getTrigger(GamepadManager.AXIS_LEFT_TRIGGER)) * speed * 4.0f;
@@ -100,8 +100,6 @@ public class ViewportCamera {
         // Bumpers: elevation like Q/E
         if (pad.isButtonPressed(GamepadManager.BUTTON_RIGHT_BUMPER)) panY += speed;
         if (pad.isButtonPressed(GamepadManager.BUTTON_LEFT_BUMPER)) panY -= speed;
-
-        clamp();
     }
 
     public void onMouseButton(int button, int action, double x, double y) {
@@ -125,43 +123,69 @@ public class ViewportCamera {
         isDraggingRmb = false;
     }
 
-    public void onCursorPos(double x, double y, boolean isShiftDown, boolean isAltDown) {
+    /**
+     * Applies a cursor move to any active drag. {@code orbitPivot} is the world position of the selected entity, or
+     * null with nothing selected: orbiting needs a pivot, so without one Shift + RMB pans and Alt + LMB does nothing.
+     */
+    public void onCursorPos(double x, double y, boolean isShiftDown, boolean isAltDown, float[] orbitPivot) {
         if (playLocked) return;
         double dx = x - lastMouseX;
         double dy = y - lastMouseY;
         lastMouseX = x;
         lastMouseY = y;
 
-        // Orbit / Rotate (RMB Drag OR Alt + LMB Drag)
-        if (isDraggingRmb && !isShiftDown) {
-            yaw += (float) dx * 0.35f;
-            pitch -= (float) dy * 0.35f;
-        } else if (isDraggingLmb && isAltDown) {
-            yaw += (float) dx * 0.35f;
-            pitch -= (float) dy * 0.35f;
-        }
-        // Pan X/Y (MMB Drag OR Shift + RMB Drag)
-        else if (isDraggingMmb || (isDraggingRmb && isShiftDown)) {
+        boolean orbitDrag = (isDraggingRmb && isShiftDown) || (isDraggingLmb && isAltDown);
+        if (orbitDrag && orbitPivot != null) {
+            // The scene follows the cursor around the pivot, so yaw runs opposite to look
+            rotateAbout(orbitPivot[0], orbitPivot[1], orbitPivot[2], (float) dx * 0.35f, (float) -dy * 0.35f);
+        } else if (isDraggingRmb && !isShiftDown) {
+            look((float) -dx * 0.35f, (float) -dy * 0.35f);
+        } else if (isDraggingMmb || isDraggingRmb) {
             focusActive = false;
             panX += (float) dx * 0.008f;
             panY -= (float) dy * 0.008f;
         }
+    }
 
-        clamp();
+    /** Turns the view in place: positive yaw turns left, positive pitch looks up. */
+    private void look(float deltaYaw, float deltaPitch) {
+        if (deltaYaw == 0.0f && deltaPitch == 0.0f) return;
+        computeEyePosition(rotateScratch);
+        rotateAbout(rotateScratch[0], rotateScratch[1], rotateScratch[2], deltaYaw, deltaPitch);
+    }
+
+    /** Changes yaw/pitch while the world point (px, py, pz) keeps its view-space position: t' = R * P + t - R' * P. */
+    private void rotateAbout(float px, float py, float pz, float deltaYaw, float deltaPitch) {
+        rotateIntoView(px, py, pz, rotateScratch);
+        float viewX = rotateScratch[0] + panX, viewY = rotateScratch[1] + panY, viewZ = rotateScratch[2] + zoom;
+        yaw += deltaYaw;
+        pitch = Math.max(-89.0f, Math.min(89.0f, pitch + deltaPitch));
+        rotateIntoView(px, py, pz, rotateScratch);
+        panX = viewX - rotateScratch[0];
+        panY = viewY - rotateScratch[1];
+        zoom = viewZ - rotateScratch[2];
+    }
+
+    /** Applies the view rotation R(yaw, pitch) to a world-space vector. */
+    private void rotateIntoView(float x, float y, float z, float[] out) {
+        float radYaw = (float) Math.toRadians(yaw), radPitch = (float) Math.toRadians(pitch);
+        float cy = (float) Math.cos(radYaw), sy = (float) Math.sin(radYaw);
+        float cp = (float) Math.cos(radPitch), sp = (float) Math.sin(radPitch);
+        out[0] = cy * x - sy * z;
+        out[1] = sy * sp * x + cp * y + cy * sp * z;
+        out[2] = sy * cp * x - sp * y + cy * cp * z;
     }
 
     public void onScroll(double yoffset) {
         if (playLocked) return;
         focusActive = false;
         zoom += (float) yoffset * 0.75f;
-        clamp();
     }
 
     public void onScroll(double xoffset, double yoffset) {
         if (playLocked) return;
         focusActive = false;
         zoom += (float) yoffset * 0.75f;
-        clamp();
     }
 
     public void reset() {
@@ -207,8 +231,6 @@ public class ViewportCamera {
         float targetPanX = -(cy * focusX - sy * focusZ);
         float targetPanY = -(sy * sp * focusX + cp * focusY + cy * sp * focusZ);
         float targetZoom = -focusDistance - (sy * cp * focusX - sp * focusY + cy * cp * focusZ);
-        // Same depth range clamp() enforces, so the next scroll doesn't jump
-        targetZoom = Math.max(-150.0f, Math.min(-0.8f, targetZoom));
 
         float t = 1.0f - (float) Math.exp(-FOCUS_SPEED * deltaTime);
         panX += (targetPanX - panX) * t;
@@ -278,13 +300,6 @@ public class ViewportCamera {
         panX = savedPanX; panY = savedPanY; zoom = savedZoom; pitch = savedPitch; yaw = savedYaw;
         fov = EDITOR_FOV; near = EDITOR_NEAR; far = EDITOR_FAR;
         isDraggingRmb = isDraggingMmb = isDraggingLmb = false;
-    }
-
-    private void clamp() {
-        if (zoom > -0.8f) zoom = -0.8f;
-        if (zoom < -150.0f) zoom = -150.0f;
-        if (pitch > 89.0f) pitch = 89.0f;
-        if (pitch < -89.0f) pitch = -89.0f;
     }
 
     public float getPanX() { return panX; }

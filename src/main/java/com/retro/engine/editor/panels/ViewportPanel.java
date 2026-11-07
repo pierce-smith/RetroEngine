@@ -169,6 +169,14 @@ public class ViewportPanel {
         return true;
     }
 
+    /** World position of the selected entity for the viewport camera to orbit, or null with nothing selected. */
+    public static float[] orbitPivot(EditorWorkspace workspace) {
+        Entity selected = (workspace != null) ? workspace.getSelectedEntity() : null;
+        if (selected == null) return null;
+        WorldTransform wt = workspace.getSceneManager().getComputedWorldTransform(selected);
+        return (wt != null) ? new float[] { wt.px(), wt.py(), wt.pz() } : null;
+    }
+
     public static float getCameraPreviewAspect() {
         return cameraPreviewAspect;
     }

@@ -210,23 +210,25 @@ binary `.rscene` once the project's `AssetDatabase` is bound.
 
 ### 2.1 Camera Controls (`ViewportCamera`)
 
-Flight is **gated on a held mouse button**, the same model Unreal and Unity users already know:
+The viewport is a **free-flying camera** with no limit on how far it can travel. Flight is **gated on a held mouse
+button**, the same model Unreal and Unity users already know:
 
 | Input                                  | Action |
 |----------------------------------------|--------|
 | **RMB / MMB held** + <kbd>W</kbd>/<kbd>S</kbd> | Fly forward / backward |
 | **RMB / MMB held** + <kbd>A</kbd>/<kbd>D</kbd> | Strafe left / right |
 | **RMB / MMB held** + <kbd>Q</kbd>/<kbd>E</kbd> | Descend / ascend |
-| RMB drag, or <kbd>Alt</kbd> + LMB drag | Orbit (yaw / pitch) |
-| MMB drag, or <kbd>Shift</kbd> + RMB drag | Pan |
-| Scroll wheel                           | Zoom |
+| RMB drag                               | Look around in place (yaw / pitch) |
+| <kbd>Shift</kbd> + RMB drag, or <kbd>Alt</kbd> + LMB drag | Orbit the selected entity |
+| MMB drag, or <kbd>Shift</kbd> + RMB drag with nothing selected | Pan |
+| Scroll wheel                           | Dolly in / out |
 | <kbd>F</kbd> / <kbd>Shift</kbd>+<kbd>F</kbd> | Frame selected / reset to startup view |
 
 Flight speed scales with `deltaTime` (`3.5 units/s` strafe, 4× that for depth), so it feels the same at any frame
 rate. Editor projection defaults are **50° FOV, 0.1 near, 500 far**. Frame Selected glides instead of snapping, and
 any manual input cancels the glide.
 
-**Gamepad** works with no button hold: left stick flies, right stick orbits, triggers zoom, bumpers change
+**Gamepad** works with no button hold: left stick flies, right stick looks, triggers dolly, bumpers change
 elevation, R3 resets. Input only applies while the editor window has focus, because joysticks report even when
 you're in another app.
 

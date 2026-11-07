@@ -229,7 +229,8 @@ public class EngineContext {
                 if (!handledByGizmo && selectionController.isCursorInViewport(x, y)) {
                     boolean isShiftDown = window.isKeyDown(GLFW.GLFW_KEY_LEFT_SHIFT) || window.isKeyDown(GLFW.GLFW_KEY_RIGHT_SHIFT);
                     boolean isAltDown = window.isKeyDown(GLFW.GLFW_KEY_LEFT_ALT) || window.isKeyDown(GLFW.GLFW_KEY_RIGHT_ALT);
-                    cameraController.onCursorPos(x, y, isShiftDown, isAltDown);
+                    float[] orbitPivot = (isShiftDown || isAltDown) ? ViewportPanel.orbitPivot(editorManager) : null;
+                    cameraController.onCursorPos(x, y, isShiftDown, isAltDown, orbitPivot);
                 }
             });
 
