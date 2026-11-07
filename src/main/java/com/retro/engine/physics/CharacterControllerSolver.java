@@ -200,8 +200,11 @@ public class CharacterControllerSolver {
                 cc.isGrounded = true;
                 cc.velocityY = 0.0f;
                 body.py = sharedRaycastHit.pointY + halfHeight - body.oy;
+                PhysicsSystem.PhysicsBody under = physicsSystem.getBody(sharedRaycastHit.entity);
+                body.ground = under != null && under.carriesRiders() ? under : null;
             } else {
                 cc.isGrounded = false;
+                body.ground = null;
                 body.py += cc.velocityY * dt;
             }
 
@@ -212,6 +215,52 @@ public class CharacterControllerSolver {
             cc.velocityZ *= Math.max(0.0f, 1.0f - 10.0f * dt);
 
             physicsSystem.refreshBody(body);
+        }
+    }
+
+    /**
+     * Moves each character by what its ground did since the character was anchored, turning it with the ground too. Only
+     * that difference is applied, so walking, wall contacts and scripts that move the character all still count.
+     */
+    void carryRiders(List<PhysicsSystem.PhysicsBody> activeBodies, PhysicsSystem physicsSystem) {
+        for (int i = 0, n = activeBodies.size(); i < n; i++) {
+            PhysicsSystem.PhysicsBody body = activeBodies.get(i);
+            PhysicsSystem.PhysicsBody ground = body.ground;
+            if (ground == null) continue;
+            if (ground.treeNodeId == -1) { // Removed from the world
+                body.ground = null;
+                continue;
+            }
+            float[] r = ground.r;
+            float x = ground.px + r[0] * body.anchorX + r[1] * body.anchorY + r[2] * body.anchorZ;
+            float y = ground.py + r[3] * body.anchorX + r[4] * body.anchorY + r[5] * body.anchorZ;
+            float z = ground.pz + r[6] * body.anchorX + r[7] * body.anchorY + r[8] * body.anchorZ;
+            float turn = ground.ry - body.anchorYaw;
+            turn -= 360.0f * Math.round(turn / 360.0f);
+            if (x == body.anchorWorldX && y == body.anchorWorldY && z == body.anchorWorldZ && turn == 0.0f) continue;
+            body.px += x - body.anchorWorldX;
+            body.py += y - body.anchorWorldY;
+            body.pz += z - body.anchorWorldZ;
+            body.ry += turn;
+            body.anchorWorldX = x; body.anchorWorldY = y; body.anchorWorldZ = z;
+            body.anchorYaw = ground.ry;
+            physicsSystem.refreshBody(body);
+        }
+    }
+
+    /** Records where each rider now stands on its ground. Runs after contacts, so it keeps what they did to the character. */
+    void anchorRiders(List<PhysicsSystem.PhysicsBody> activeBodies) {
+        for (int i = 0, n = activeBodies.size(); i < n; i++) {
+            PhysicsSystem.PhysicsBody body = activeBodies.get(i);
+            PhysicsSystem.PhysicsBody ground = body.ground;
+            if (ground == null) continue;
+            float[] r = ground.r;
+            float dx = body.px - ground.px, dy = body.py - ground.py, dz = body.pz - ground.pz;
+            body.anchorX = r[0] * dx + r[3] * dy + r[6] * dz;
+            body.anchorY = r[1] * dx + r[4] * dy + r[7] * dz;
+            body.anchorZ = r[2] * dx + r[5] * dy + r[8] * dz;
+            body.anchorWorldX = body.px; body.anchorWorldY = body.py; body.anchorWorldZ = body.pz;
+            body.anchorYaw = ground.ry;
         }
     }
 

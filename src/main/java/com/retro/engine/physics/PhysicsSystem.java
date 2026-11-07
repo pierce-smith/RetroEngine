@@ -85,6 +85,9 @@ public class PhysicsSystem {
         float hx, hy, hz;
         float radius, segmentHalf;
         CollisionMesh mesh;
+        // The moving surface a character stands on, where it stood in that surface's frame, and that same spot in the world
+        PhysicsBody ground;
+        float anchorX, anchorY, anchorZ, anchorWorldX, anchorWorldY, anchorWorldZ, anchorYaw;
         int layerBit = 1;                 // This body's collision layer, as one set bit
         int collisionMask = -1;           // Layers it touches
         float ox, oy, oz;                 // Collider offset from the pivot, scaled, in the body's frame
@@ -157,9 +160,14 @@ public class PhysicsSystem {
 
         /** True for a collider that never moves itself: no RigidBody or controller, or a STATIC body. */
         boolean isStatic() {
-            if (mesh != null) return true;
+            if (mesh != null) return rigidBody == null || rigidBody.motionType != RigidBodyComponent.MotionType.KINEMATIC;
             if (characterController != null || vehicleController != null) return false;
             return rigidBody == null || rigidBody.motionType == RigidBodyComponent.MotionType.STATIC;
+        }
+
+        /** True when a character standing here moves with it. */
+        boolean carriesRiders() {
+            return !isStatic() && characterController == null;
         }
 
         /** True when any collider is a trigger: it reports overlaps but is not solid. */
@@ -587,6 +595,7 @@ public class PhysicsSystem {
             }
             refreshBody(body);
         }
+        characterSolver.carryRiders(activeBodies, this);
 
         characterSolver.beginFrame(sceneEntities);
         accumulator += Math.min(deltaTime, 0.1f);
@@ -604,11 +613,10 @@ public class PhysicsSystem {
             accumulator = 0.0f;
         }
 
-        if (physicsRan) {
-            for (int i = 0, n = activeBodies.size(); i < n; i++) {
-                PhysicsBody body = activeBodies.get(i);
-                if (body.isSimulated()) body.syncToTransform();
-            }
+        // A rider moves with its ground every frame, including frames too short for a physics step
+        for (int i = 0, n = activeBodies.size(); i < n; i++) {
+            PhysicsBody body = activeBodies.get(i);
+            if (body.isSimulated() && (physicsRan || body.ground != null)) body.syncToTransform();
         }
     }
 
@@ -668,7 +676,9 @@ public class PhysicsSystem {
         // 7. Solve them, then move every dynamic body
         contactSolver.solve(manifolds, manifoldCount, dt);
         integrateBodies(dt);
+        characterSolver.carryRiders(activeBodies, this); // Vehicles and dynamic bodies have moved by now
         characterSolver.resolveContacts(manifolds, manifoldCount, this);
+        characterSolver.anchorRiders(activeBodies);
         recordTouchingPairs();
 
         // 8. Dispatch Collision Lifecycle Events

@@ -6,8 +6,9 @@ import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
 
 /**
- * Static triangle collider for level geometry. It never moves under physics, whatever RigidBody the entity has, and its
- * scale is read once when Play starts. Leave the mesh empty to use the entity's own Mesh Filter.
+ * Triangle collider for level geometry. Physics never pushes it, whatever RigidBody the entity has, but it follows its
+ * Transform: give it a KINEMATIC RigidBody to make a lift or platform that carries what stands on it. Its scale is read
+ * once when Play starts. Leave the mesh empty to use the entity's own Mesh Filter.
  */
 public class MeshCollider extends Component {
 

@@ -22,8 +22,8 @@ import java.util.Map;
 
 /**
  * Editor-time NavMesh generation from the scene's static colliders: Box, Sphere and Capsule colliders on entities with no
- * RigidBody or a STATIC one, and every Mesh Collider, which never moves whatever its RigidBody says. Triggers, characters,
- * vehicles and agents are skipped.
+ * RigidBody or a STATIC one, and Mesh Colliders unless they are KINEMATIC. Physics can't push a Mesh Collider, so a DYNAMIC
+ * one still counts. Triggers, characters, vehicles and agents are skipped.
  *
  * <ol>
  *   <li>Rasterize: every grid column casts a vertical line through each collider (oriented boxes, spheres; capsules as
@@ -333,7 +333,7 @@ public final class NavMeshBaker {
             RigidBodyComponent rb = e.getComponent(RigidBodyComponent.class);
             MeshCollider meshCollider = e.getComponent(MeshCollider.class);
             boolean moves = rb != null && rb.motionType != RigidBodyComponent.MotionType.STATIC;
-            if (moves && meshCollider == null) continue;
+            if (moves && (meshCollider == null || rb.motionType == RigidBodyComponent.MotionType.KINEMATIC)) continue;
             if (e.getComponent(CharacterControllerComponent.class) != null || e.getComponent(VehicleControllerComponent.class) != null
                     || e.getComponent(NavMeshAgent.class) != null) continue;
             float px, py, pz, rx, ry, rz, sx, sy, sz;

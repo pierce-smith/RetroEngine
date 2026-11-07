@@ -181,6 +181,15 @@ class NavMeshBakerMeshTest {
     }
 
     @Test
+    void kinematicMeshIsLeftOutBecauseItMoves() throws IOException {
+        Entity lift = entity(new Obj().floor(-10, -10, 10, 10, 0));
+        RigidBodyComponent body = new RigidBodyComponent();
+        body.motionType = RigidBodyComponent.MotionType.KINEMATIC;
+        lift.addComponent(body);
+        assertNull(bake(lift));
+    }
+
+    @Test
     void colliderWithNoMeshFallsBackToTheEntitysBox() {
         Entity e = at("broken", 0, 0, 0);
         e.addComponent(new MeshCollider());

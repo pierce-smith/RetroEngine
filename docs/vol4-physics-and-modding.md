@@ -43,7 +43,7 @@ not in `onUpdate`.
 |---------------------------------|------------|
 | `RigidBodyComponent`            | `motionType` (`STATIC` / `KINEMATIC` / `DYNAMIC`), `mass`, `useGravity`, `linearDrag`, `angularDrag`, `friction`, `restitution` |
 | `BoxCollider` / `SphereCollider` / `CapsuleCollider` | Shape dimensions, offset, `isTrigger`, `collisionLayer`, `collidesWith` |
-| `MeshCollider`                  | `meshPath` (empty uses the entity's Mesh Filter), `collisionLayer`, `collidesWith`. Static only |
+| `MeshCollider`                  | `meshPath` (empty uses the entity's Mesh Filter), `collisionLayer`, `collidesWith`. Physics never pushes it. It moves only with its Transform |
 | `CharacterControllerComponent`  | `moveSpeed`, `sprintSpeedMultiplier`, `jumpForce`, `stepOffset`, `slopeLimit`, `gravityMultiplier`, `isGrounded`, `inputEnabled` |
 | `VehicleControllerComponent`    | 4-wheel raycast suspension: `engineTorque`, `maxSpeed`, `steeringAngle`, `brakeForce`, `suspensionStiffness` / `Damping` / `RestLength`, `wheelRadius`, `wheelTrackWidth`, `wheelBase` |
 
@@ -67,10 +67,18 @@ a collider with no `RigidBody` counts as 0.5). Impacts under 1 m/s don't bounce,
 and no sleeping, so a settled body still costs solver time. A rough cost is 3 µs per box per step.
 
 **Mesh colliders** are for level geometry. Their triangles load when Play starts, from the same cooked package the
-renderer uses, and their scale is read once. They never move, even with a `RigidBody`. Characters, spheres and capsules
+renderer uses, and their scale is read once. Physics never pushes them, even with a `DYNAMIC` `RigidBody`, but they follow
+their Transform. Give one a `KINEMATIC` `RigidBody` to make a lift or platform. Characters, spheres and capsules
 get exact contacts. A box checks corners only, so two edges crossing with no corner inside either shape make no contact.
 Navmesh baking reads them (§1.5), and the editor doesn't draw them yet. Keep triangles wound outward: only upward-facing
 triangles are walkable, and the space between a downward face and the next upward face above it bakes as solid.
+
+**Moving platforms.** A grounded character moves and turns with whatever it stands on, as long as that is kinematic,
+dynamic or a vehicle. A `STATIC` collider moved by its Transform carries nothing. Walking, wall contacts and scripts that
+move the character all still apply, and a wall the platform passes pushes the character off it. Carrying stops the moment
+the character leaves the ground, so a jump doesn't keep the platform's speed. Move platforms from a spline or before
+physics runs, because a script that moves one in `onUpdate` lands a frame late. Bodies have no sweep, so a wall moving
+faster than about 24 m/s against a character can pass through it. NavMesh agents can't path on a moving platform.
 
 **Collision layers.** `collisionLayer` is 0 to 31. `collidesWith` lists layers, such as `0,3`, and empty means all of
 them. Both bodies have to agree, so either side can opt out. Triggers, character ground probes and vehicle wheels follow
@@ -132,8 +140,8 @@ The `navigation` package gives AI characters baked pathfinding. Like the solver,
 main thread, and its per-frame work doesn't allocate.
 
 **Baking (`NavMeshBaker`, editor only).** The input is the scene's **static colliders**: box, sphere and capsule
-colliders on entities with no `RigidBody` or a `STATIC` one, and every mesh collider, which never moves whatever its
-`RigidBody` says. Triggers, characters, vehicles and agents are skipped.
+colliders on entities with no `RigidBody` or a `STATIC` one, and mesh colliders unless they are `KINEMATIC`. Triggers,
+characters, vehicles and agents are skipped.
 
 1. **Rasterize.** Every grid column casts a vertical line through each collider (oriented boxes and spheres;
    capsules as boxes with non-walkable tops) and records the solid intervals and the slope of each top face. Mesh
