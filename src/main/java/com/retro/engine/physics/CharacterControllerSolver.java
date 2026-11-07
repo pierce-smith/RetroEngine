@@ -188,6 +188,12 @@ public class CharacterControllerSolver {
             // Probe from the collider's centre: the ray must start outside the floor, and the collider's real half
             // height (box or capsule, scaled) is the distance from centre to feet
             float halfHeight = body.hy;
+            boolean wasGrounded = cc.isGrounded;
+            if (cc.velocityX * cc.velocityX + cc.velocityZ * cc.velocityZ > MOVING_SPEED_SQUARED) {
+                float speed = (float) Math.sqrt(cc.velocityX * cc.velocityX + cc.velocityZ * cc.velocityZ);
+                body.headingX = cc.velocityX / speed;
+                body.headingZ = cc.velocityZ / speed;
+            }
             cc.velocityY += PhysicsSystem.GRAVITY * cc.gravityMultiplier * dt;
             float fallDistance = Math.max(0.0f, -cc.velocityY * dt);
             // Grounded bodies also look stepOffset below the feet so they stick to the ground walking down steps
@@ -195,6 +201,10 @@ public class CharacterControllerSolver {
 
             physicsSystem.raycastExcludingInPlace(body.entity, body.px + body.ox, body.py + body.oy, body.pz + body.oz,
                     0.0f, -1.0f, 0.0f, reach, sharedRaycastHit, body.collisionMask);
+            // Narrow treads can put the centre over ground out of reach while the rim stands on a step
+            if (!sharedRaycastHit.hit && wasGrounded && cc.velocityY <= 0.0f && treadAhead(body, cc, null, physicsSystem) != Float.NEGATIVE_INFINITY) {
+                copyHit(stepProbe, sharedRaycastHit);
+            }
 
             // A surface steeper than slopeLimit doesn't hold the character up: it falls, and contacts slide it down
             if (sharedRaycastHit.hit && cc.velocityY <= 0.0f && sharedRaycastHit.normalY >= walkableNormalY(cc)) {
@@ -203,7 +213,8 @@ public class CharacterControllerSolver {
                 }
                 cc.isGrounded = true;
                 cc.velocityY = 0.0f;
-                body.py = sharedRaycastHit.pointY + halfHeight - body.oy;
+                float groundY = wasGrounded ? Math.max(sharedRaycastHit.pointY, treadAhead(body, cc, sharedRaycastHit, physicsSystem)) : sharedRaycastHit.pointY;
+                body.py = groundY + halfHeight - body.oy;
                 PhysicsSystem.PhysicsBody under = physicsSystem.getBody(sharedRaycastHit.entity);
                 PhysicsSystem.PhysicsBody carrier = under != null && under.carriesRiders() ? under : null;
                 if (carrier != body.ground) {
@@ -421,6 +432,10 @@ public class CharacterControllerSolver {
     private static final float STEP_TOLERANCE = 0.02f;
     private static final float STEP_PROBE_INSET = 0.1f;
     private static final float SLOPE_TOLERANCE = 0.001f;
+    private static final float MOVING_SPEED_SQUARED = 0.0001f;
+    private static final float TREAD_PROBE_RADIUS = 0.95f;    // of the collider's radius: just inside its front rim
+    private static final float TREAD_MIN_RISE = 0.02f;
+    private static final float TREAD_PARALLEL = 0.999f;       // normals this close are two levels of one flight
     private final RaycastHit stepProbe = new RaycastHit();
     private final ShapeRaycast moverRay = new ShapeRaycast();
 
@@ -433,6 +448,8 @@ public class CharacterControllerSolver {
                               float nx, float nz, PhysicsSystem physicsSystem) {
         CharacterControllerComponent cc = character.characterController;
         if (!cc.isGrounded || cc.velocityY > 0.0f) return false;
+        // The normal points back at the character, so this is a step it's leaving: walking down, the tread behind touches too
+        if (character.headingX * nx + character.headingZ * nz > 0.0f) return false;
         float top = obstacle.shape == PhysicsSystem.PhysicsBody.SHAPE_MESH
                 ? meshStepTop(character, contact, nx, nz, physicsSystem) : obstacle.maxY;
         float rise = top - character.minY;
@@ -440,6 +457,46 @@ public class CharacterControllerSolver {
         character.py += rise;
         character.pushY += rise;
         return true;
+    }
+
+    /**
+     * Height of a stair tread under the front rim of a grounded character, or -infinity when there isn't one. The ground
+     * probe starts at the collider's centre, so on treads narrower than the radius it still reports the step below when the
+     * front is already against the next riser, and the climb stalls. A tread is parallel to the ground under the centre and
+     * above its plane; a ramp ahead isn't parallel, and the far side of a slope lies on the same plane, so neither lifts
+     * the character. Looks the way it last moved, so it stays put when it stops and walking down is unaffected. With no
+     * {@code ground}, anything walkable from the feet up to stepOffset counts, which a rim past a ledge never finds.
+     */
+    private float treadAhead(PhysicsSystem.PhysicsBody character, CharacterControllerComponent cc, RaycastHit ground, PhysicsSystem physicsSystem) {
+        if (character.headingX == 0.0f && character.headingZ == 0.0f) return Float.NEGATIVE_INFINITY;
+        float reach = character.innerRadius() * TREAD_PROBE_RADIUS;
+        float dx = character.headingX * reach, dz = character.headingZ * reach;
+        float halfHeight = character.hy;
+        float centreY = character.py + character.oy;
+        physicsSystem.raycastExcludingInPlace(character.entity, character.px + character.ox + dx, centreY, character.pz + character.oz + dz,
+                0.0f, -1.0f, 0.0f, halfHeight + GROUND_SKIN + cc.stepOffset, stepProbe, character.collisionMask);
+        if (!stepProbe.hit || stepProbe.normalY < walkableNormalY(cc)) return Float.NEGATIVE_INFINITY;
+
+        float feet = centreY - halfHeight;
+        float highest = feet + cc.stepOffset + STEP_TOLERANCE;
+        if (ground == null) return stepProbe.pointY >= feet - GROUND_SKIN && stepProbe.pointY <= highest ? stepProbe.pointY : Float.NEGATIVE_INFINITY;
+
+        float parallel = stepProbe.normalX * ground.normalX + stepProbe.normalY * ground.normalY + stepProbe.normalZ * ground.normalZ;
+        float plane = ground.pointY - (ground.normalX * dx + ground.normalZ * dz) / ground.normalY;
+        boolean isTread = parallel >= TREAD_PARALLEL && stepProbe.pointY > plane + TREAD_MIN_RISE;
+        return isTread && stepProbe.pointY <= highest ? stepProbe.pointY : Float.NEGATIVE_INFINITY;
+    }
+
+    private static void copyHit(RaycastHit from, RaycastHit to) {
+        to.hit = from.hit;
+        to.entity = from.entity;
+        to.distance = from.distance;
+        to.pointX = from.pointX;
+        to.pointY = from.pointY;
+        to.pointZ = from.pointZ;
+        to.normalX = from.normalX;
+        to.normalY = from.normalY;
+        to.normalZ = from.normalZ;
     }
 
     /**

@@ -125,6 +125,25 @@ public class Skeleton {
         return world;
     }
 
+    private float[] bindJoints = new float[0];
+
+    /**
+     * Each bone's joint position in the bind pose, in mesh space (x, y, z per bone): the origin of the inverse of its
+     * offset matrix. Palette entries are boneWorld * offset, so one applied to this gives the joint in the current pose.
+     */
+    public float[] getBindJointPositions() {
+        int n = bones.size();
+        if (bindJoints.length != n * 3) {
+            float[] joints = new float[n * 3];
+            for (int i = 0; i < n; i++) {
+                float[] bind = invertAffine(bones.get(i).offsetMatrix);
+                if (bind != null) System.arraycopy(bind, 12, joints, i * 3, 3);
+            }
+            bindJoints = joints;
+        }
+        return bindJoints;
+    }
+
     // Parent-first evaluation order, rebuilt whenever a bone is added or re-parented (parentId is a public field)
     private int[] evalOrder = new int[0];
     private int[] evalParent = new int[0];

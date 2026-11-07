@@ -311,6 +311,7 @@ public class AnimationSystem {
 
         evaluateHierarchyAndPalette(animator, skeleton, jointCount);
         animator.bindPoseApplied = false;
+        animator.poseRevision++;
         animator.setDirty(true);
     }
 

@@ -230,6 +230,8 @@ public class EntityStateBackupManager {
             }
             case com.retro.engine.ecs.components.ParticleSystem p -> p.resetRuntime();
             case com.retro.engine.ecs.components.BoneSocket b -> b.resetRuntime();
+            case com.retro.engine.ecs.components.FootIK f -> f.resetRuntime();
+            case com.retro.engine.ecs.components.BoneAimConstraint a -> a.resetRuntime();
             case com.retro.engine.ecs.components.NavMeshGate g -> g.resetRuntime();
             default -> {}
         }

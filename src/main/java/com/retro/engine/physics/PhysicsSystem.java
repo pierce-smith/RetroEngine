@@ -89,6 +89,7 @@ public class PhysicsSystem {
         PhysicsBody ground;
         float anchorX, anchorY, anchorZ, anchorWorldX, anchorWorldY, anchorWorldZ, anchorYaw;
         float carriedX, carriedY, carriedZ;  // How far the ground has moved a character this frame
+        float headingX, headingZ;            // The way a character last moved, as a unit vector
         float carryVx, carryVy, carryVz;     // The ground's speed under a character, measured over the last frame
         float airVx, airVz;                  // Speed kept from the ground while in the air
         float sweptX, sweptY, sweptZ;        // Where a moving body last checked for characters in its path

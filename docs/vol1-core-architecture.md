@@ -160,6 +160,7 @@ SimulationSystem.update
 flushPendingDestroys()                       // deferred destroy() calls (Volume 6 §2.5)
 ScriptRuntime.endFrame                       // apply this frame's camera shake
 AnimationSystem.update per AnimatorComponent // runs in every play state, not just Play
+IKSystem.update                              // Play only: feet, aim and look adjust the finished pose
 BoneSocketSystem.update                      // Play only: entities on bones land on this frame's pose
 applyPendingSceneLoad()                      // loadScene() requests land here, after everything else
 ```
@@ -309,7 +310,7 @@ changing the writer. Once the writer moves on, you can't make one any more.
 | Core        | `Transform`, `MeshFilter`, `Material`, `Light`, `Camera`, `AudioSource`, `ScriptComponent` |
 | Physics     | `RigidBodyComponent`, `BoxCollider`, `SphereCollider`, `CapsuleCollider` |
 | Controllers | `CharacterControllerComponent`, `VehicleControllerComponent` |
-| Animation   | `AnimatorComponent`, `BoneSocket` |
+| Animation   | `AnimatorComponent`, `BoneSocket`, `FootIK`, `LookAtIK`, `AimIK` |
 | Game UI     | `UICanvasComponent`, `UIPanel`, `UIText`, `UIImage`, `UIProgressBar` |
 | Effects     | `ParticleSystem` (Volume 3 §2.4), `Decal` (Volume 3 §2.4a) |
 | Audio       | `AudioReverbZone` (§4) |
@@ -322,7 +323,15 @@ Volume 4.
 Several components carry **runtime-only state** next to their persisted fields: an agent's corner list and
 velocity, a follower's distance and resolved spline, a particle pool. That state is not annotated, so it is never
 saved. `resetRuntime()` clears it: `NavMeshSystem` and `SplineSystem` call it on their components when Play starts
-and stops, and the Play snapshot restore calls it on `ParticleSystem` and `BoneSocket`.
+and stops, and the Play snapshot restore calls it on `ParticleSystem`, `BoneSocket` and the IK components.
+
+`FootIK`, `AimIK` and `LookAtIK` adjust the finished pose after animation, so clips never change. They go on the
+entity with the `AnimatorComponent`, and they only touch a pose animation produced this frame: a stopped animator is
+left alone, so a script that takes over a skeleton gets exactly the frames it evaluates. `FootIK` needs the entity's
+origin at the soles. It probes under each ankle and toe, drops the pelvis so the lower leg reaches, and eases out the
+jump a Character Controller makes when it steps up a stair. `LookAtIK` and `AimIK` turn a comma-separated bone chain
+so one bone points at `targetEntity` or a `setTargetPoint` position. Their axis is the direction to point, as it lies
+in the bind pose. Past `maxAngle` they stop turning, and 40 degrees further on they ease back to the clip.
 
 `BoneSocket` holds its entity on a bone of a rigged entity: world = target world × bone model × offset. Set
 `targetEntity` (blank means the parent), `boneName` and the offset, which is in the bone's space. It runs after

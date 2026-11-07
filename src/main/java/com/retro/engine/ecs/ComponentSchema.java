@@ -53,6 +53,8 @@ public final class ComponentSchema {
             com.retro.engine.ecs.components.NavMeshAgent.class, com.retro.engine.ecs.components.NavMeshGate.class,
             com.retro.engine.ecs.components.SplineComponent.class, com.retro.engine.ecs.components.SplineFollower.class,
             com.retro.engine.ecs.components.BoneSocket.class,
+            com.retro.engine.ecs.components.FootIK.class, com.retro.engine.ecs.components.LookAtIK.class,
+            com.retro.engine.ecs.components.AimIK.class,
             com.retro.engine.ecs.components.Decal.class
     );
 

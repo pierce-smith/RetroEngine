@@ -112,6 +112,7 @@ public class SceneWorld {
     private final List<Entity> destroyScratch = new ArrayList<>();
 
     private final HierarchySystem graphEvaluator = new HierarchySystem();
+    private final IKSystem ik = new IKSystem();
     private final BoneSocketSystem boneSockets = new BoneSocketSystem();
     private final DecalSystem decals = new DecalSystem();
     private final SimulationSystem simulationEngine = new SimulationSystem();
@@ -444,7 +445,10 @@ public class SceneWorld {
                 }
             }
             // After animation, so an attached entity lands on this frame's pose and not the last one
-            if (simulating) boneSockets.update(sceneEntities, graphEvaluator);
+            if (simulating) {
+                ik.update(sceneEntities, graphEvaluator, getPhysicsWorld(), deltaTime);
+                boneSockets.update(sceneEntities, graphEvaluator);
+            }
         }
 
         applyPendingSceneLoad();

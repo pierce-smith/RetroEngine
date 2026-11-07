@@ -83,6 +83,11 @@ public class AnimatorComponent extends Component {
     // Runtime: true while the palette holds the skeleton's rest pose, so idle animators skip re-evaluation
     public boolean bindPoseApplied = false;
 
+    // Runtime: counts poses animation has produced, and the one IK last edited. IK edits the palette in place, so it must
+    // only ever see a fresh pose once
+    public int poseRevision = 0;
+    public int solvedPoseRevision = 0;
+
     // Editor pose edits: per-bone local transforms (column-major 4x4) replacing the skeleton's bind pose in the rest
     // pose (AnimationSystem.resetToBindPose). Kept per animator because duplicated entities share one Skeleton.
     public final float[][] editPoseLocal = new float[MAX_BONES][16];
