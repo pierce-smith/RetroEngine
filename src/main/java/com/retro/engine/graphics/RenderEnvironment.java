@@ -20,9 +20,13 @@ public final class RenderEnvironment {
     public static final float DEFAULT_AMBIENT_R = 0.35f, DEFAULT_AMBIENT_G = 0.35f, DEFAULT_AMBIENT_B = 0.38f;
     public static final float DEFAULT_AMBIENT_INTENSITY = 1.0f;
     public static final ShadingModel DEFAULT_SHADING_MODEL = ShadingModel.BLINN_PHONG;
+    public static final TextureFiltering DEFAULT_TEXTURE_FILTERING = TextureFiltering.NEAREST;
 
     /** Per-vertex (Gouraud) or per-pixel (Blinn-Phong) lighting for every lit draw. Never null. */
     public ShadingModel shadingModel = DEFAULT_SHADING_MODEL;
+
+    /** Filtering for scene material textures. Never null. */
+    public TextureFiltering textureFiltering = DEFAULT_TEXTURE_FILTERING;
 
     /** Downward-raycast ground shadow blobs under every draw (a fallback for scenes without shadow-mapped lighting). */
     public boolean shadowBlobsEnabled = DEFAULT_SHADOW_BLOBS;
@@ -78,6 +82,7 @@ public final class RenderEnvironment {
 
     public void setDefaults() {
         shadingModel = DEFAULT_SHADING_MODEL;
+        textureFiltering = DEFAULT_TEXTURE_FILTERING;
         shadowBlobsEnabled = DEFAULT_SHADOW_BLOBS;
         fogEnabled = DEFAULT_FOG_ENABLED;
         fogStart = DEFAULT_FOG_START;

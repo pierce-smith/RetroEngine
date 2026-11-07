@@ -2,6 +2,8 @@ package com.retro.engine.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import com.retro.engine.graphics.TextureFiltering;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -20,6 +22,14 @@ class ProjectSettingsHeapTest {
         settings.maxHeapMb = 4096;
         settings.write(dir);
         assertEquals(4096, ProjectSettings.read(dir).maxHeapMb);
+    }
+
+    @Test
+    void textureFilteringSurvivesASaveAndLoad() throws IOException {
+        ProjectSettings settings = new ProjectSettings("Game", "");
+        settings.textureFiltering = TextureFiltering.BILINEAR;
+        settings.write(dir);
+        assertEquals(TextureFiltering.BILINEAR, ProjectSettings.read(dir).textureFiltering);
     }
 
     @Test

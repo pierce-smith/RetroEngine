@@ -3,6 +3,7 @@ package com.retro.engine.core;
 import com.retro.engine.audio.AudioBus;
 import com.retro.engine.graphics.RenderEnvironment;
 import com.retro.engine.graphics.ShadingModel;
+import com.retro.engine.graphics.TextureFiltering;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -50,7 +51,7 @@ public final class ProjectSettings {
     public static final String FILE_NAME = "ProjectSettings.bin";
 
     static final int MAGIC = 0x5250524A; // 'RPRJ'
-    static final int VERSION = 5;
+    static final int VERSION = 6;
 
     // Editor UI ranges; values read from disk are clamped to these too
     public static final float FOG_DISTANCE_MAX = 2000.0f;
@@ -78,6 +79,7 @@ public final class ProjectSettings {
 
     /** Per-vertex (Gouraud) or per-pixel (Blinn-Phong) lighting for every lit entity. Never null after {@link #sanitize()}. */
     public ShadingModel shadingModel = RenderEnvironment.DEFAULT_SHADING_MODEL;
+    public TextureFiltering textureFiltering = RenderEnvironment.DEFAULT_TEXTURE_FILTERING;
 
     /** Dynamic downward-raycast ground shadow blobs under every draw. */
     public boolean shadowBlobsEnabled = RenderEnvironment.DEFAULT_SHADOW_BLOBS;
@@ -145,6 +147,7 @@ public final class ProjectSettings {
     /** Copies the render settings into {@code env}. Plain field copies: safe to call every frame. */
     public void applyTo(RenderEnvironment env) {
         env.shadingModel = (shadingModel != null) ? shadingModel : RenderEnvironment.DEFAULT_SHADING_MODEL;
+        env.textureFiltering = (textureFiltering != null) ? textureFiltering : RenderEnvironment.DEFAULT_TEXTURE_FILTERING;
         env.shadowBlobsEnabled = shadowBlobsEnabled;
         env.fogEnabled = fogEnabled;
         env.fogStart = fogStart;
@@ -158,6 +161,7 @@ public final class ProjectSettings {
     /** Copies only the render settings from {@code other}; identity and startup scene are left alone. */
     public void copyRenderSettingsFrom(ProjectSettings other) {
         shadingModel = other.shadingModel;
+        textureFiltering = other.textureFiltering;
         shadowBlobsEnabled = other.shadowBlobsEnabled;
         fogEnabled = other.fogEnabled;
         fogStart = other.fogStart;
@@ -199,6 +203,7 @@ public final class ProjectSettings {
     /** Clamps every render setting into its valid range (also repairs NaN from a corrupt file). */
     public void sanitize() {
         if (shadingModel == null) shadingModel = RenderEnvironment.DEFAULT_SHADING_MODEL;
+        if (textureFiltering == null) textureFiltering = RenderEnvironment.DEFAULT_TEXTURE_FILTERING;
         fogStart = clamp(fogStart, 0.0f, FOG_DISTANCE_MAX);
         fogEnd = clamp(fogEnd, fogStart + 0.01f, FOG_DISTANCE_MAX + 0.01f);
         fogDensity = clamp(fogDensity, 0.0f, 1.0f);
@@ -263,6 +268,8 @@ public final class ProjectSettings {
             dos.writeBoolean(reverbZonesEnabled);
 
             dos.writeInt(maxHeapMb);
+
+            dos.writeUTF((textureFiltering != null ? textureFiltering : RenderEnvironment.DEFAULT_TEXTURE_FILTERING).name());
         }
         Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }
@@ -311,6 +318,9 @@ public final class ProjectSettings {
             }
             if (version >= 5) {
                 s.maxHeapMb = dis.readInt();
+            }
+            if (version >= 6) {
+                s.textureFiltering = TextureFiltering.fromName(dis.readUTF(), RenderEnvironment.DEFAULT_TEXTURE_FILTERING);
             }
             s.sanitize();
             return s;

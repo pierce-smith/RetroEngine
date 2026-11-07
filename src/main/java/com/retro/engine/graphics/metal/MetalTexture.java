@@ -21,6 +21,7 @@ public class MetalTexture {
     // Scene material sampler: nearest filtering with Repeat addressing, matching VulkanGpuCache.createSetSamplers.
     // The UI sampler above keeps Metal's default ClampToEdge so font atlas glyphs never bleed across edges.
     private long materialSamplerStateHandle = 0L;
+    private long materialLinearSamplerStateHandle = 0L;
     private int hasActiveTexture = 0;
     // MTLTexture.gpuResourceID values (Metal 3), resolved once so argument buffer writes need no FFI call
     private long activeResourceId = 0L;
@@ -73,6 +74,10 @@ public class MetalTexture {
         invokePPPP(materialDesc, sel_registerName("setSAddressMode:"), MTL_SAMPLER_ADDRESS_REPEAT, objc_msgSend);
         invokePPPP(materialDesc, sel_registerName("setTAddressMode:"), MTL_SAMPLER_ADDRESS_REPEAT, objc_msgSend);
         materialSamplerStateHandle = invokePPPP(device, sel_registerName("newSamplerStateWithDescriptor:"), materialDesc, objc_msgSend);
+        // The same sampler for TextureFiltering.BILINEAR. A descriptor is copied on creation, so it can be reused
+        invokePPPP(materialDesc, sel_registerName("setMinFilter:"), 1L, objc_msgSend);                    // Linear
+        invokePPPP(materialDesc, sel_registerName("setMagFilter:"), 1L, objc_msgSend);
+        materialLinearSamplerStateHandle = invokePPPP(device, sel_registerName("newSamplerStateWithDescriptor:"), materialDesc, objc_msgSend);
         long selRelease = sel_registerName("release");
         invokePPP(samplerDesc, selRelease, objc_msgSend);
         invokePPP(materialDesc, selRelease, objc_msgSend);
@@ -122,5 +127,10 @@ public class MetalTexture {
     public long getSamplerStateHandle() { return samplerStateHandle; }
     /** Repeat-addressed linear sampler for lit scene materials (sampler(0) of the scene passes). */
     public long getMaterialSamplerStateHandle() { return materialSamplerStateHandle; }
+
+    /** The scene material sampler for the project's texture filtering. */
+    public long getMaterialSamplerStateHandle(com.retro.engine.graphics.TextureFiltering filtering) {
+        return filtering == com.retro.engine.graphics.TextureFiltering.BILINEAR ? materialLinearSamplerStateHandle : materialSamplerStateHandle;
+    }
     public int getHasActiveTexture() { return hasActiveTexture; }
 }

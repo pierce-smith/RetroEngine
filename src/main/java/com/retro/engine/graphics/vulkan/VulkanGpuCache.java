@@ -212,6 +212,8 @@ public class VulkanGpuCache {
 
     // Bindless descriptor state: a dedicated one-set pool that is never reset
     private long materialSampler = 0L;
+    private long materialLinearSampler = 0L;
+    private com.retro.engine.graphics.TextureFiltering boundFiltering = com.retro.engine.graphics.TextureFiltering.NEAREST;
     private long screenSampler = 0L;
     private long bindlessPool = 0L;
     private long bindlessSet = 0L;
@@ -700,11 +702,29 @@ public class VulkanGpuCache {
         return true;
     }
 
-    /** Scene textures stay blocky up close and snap between mips; screen-space reads keep linear filtering. */
+    /**
+     * Rewrites the set's material sampler when the project's filtering changes. Called while no frame is in flight
+     * (after the fence wait, before recording), which is what makes writing a non update-after-bind binding legal.
+     */
+    private void applyTextureFiltering(VkDevice vkDevice, com.retro.engine.graphics.TextureFiltering filtering) {
+        if (filtering == boundFiltering || bindlessSet == 0L) return;
+        boundFiltering = filtering;
+        try (MemoryStack stack = stackPush()) {
+            long sampler = filtering == com.retro.engine.graphics.TextureFiltering.BILINEAR ? materialLinearSampler : materialSampler;
+            VkDescriptorImageInfo.Buffer info = VkDescriptorImageInfo.calloc(1, stack).sampler(sampler);
+            VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(1, stack);
+            write.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET).dstSet(bindlessSet).dstBinding(BINDING_MATERIAL_SAMPLER)
+                    .descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_SAMPLER).pImageInfo(info);
+            vkUpdateDescriptorSets(vkDevice, write, null);
+        }
+    }
+
+    /** Scene textures stay blocky up close and snap between mips by default; screen-space reads keep linear filtering. */
     private boolean createSetSamplers(VulkanDevice device) {
         materialSampler = createRepeatSampler(device, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST);
+        materialLinearSampler = createRepeatSampler(device, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST);
         screenSampler = createRepeatSampler(device, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR);
-        return materialSampler != 0L && screenSampler != 0L;
+        return materialSampler != 0L && materialLinearSampler != 0L && screenSampler != 0L;
     }
 
     private long createRepeatSampler(VulkanDevice device, int filter, int mipmapMode) {
@@ -1070,6 +1090,7 @@ public class VulkanGpuCache {
         if (buf == null || device == null || device.getLogicalDevice() == null) return;
 
         VkDevice vkDevice = device.getLogicalDevice();
+        applyTextureFiltering(vkDevice, lights.environment().textureFiltering);
 
         try (MemoryStack stack = stackPush()) {
             PointerBuffer pData = stack.mallocPointer(1);
@@ -1182,6 +1203,10 @@ public class VulkanGpuCache {
         if (materialSampler != 0L) {
             vkDestroySampler(vkDevice, materialSampler, null);
             materialSampler = 0L;
+        }
+        if (materialLinearSampler != 0L) {
+            vkDestroySampler(vkDevice, materialLinearSampler, null);
+            materialLinearSampler = 0L;
         }
         if (screenSampler != 0L) {
             vkDestroySampler(vkDevice, screenSampler, null);

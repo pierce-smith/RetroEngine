@@ -100,6 +100,7 @@ public class MetalPassEncoder {
     private long particleVertexBuffer;
     private long boundFragmentTexture;
     private long boundFragmentSampler;
+    private com.retro.engine.graphics.TextureFiltering textureFiltering = RenderEnvironment.DEFAULT_TEXTURE_FILTERING;
     private final long[] boundVertexBuffers = new long[MAX_BUFFER_SLOTS];
     private final long[] boundVertexOffsets = new long[MAX_BUFFER_SLOTS];
     private final long[] boundFragmentBuffers = new long[MAX_BUFFER_SLOTS];
@@ -279,6 +280,7 @@ public class MetalPassEncoder {
         invokePPPP(colorAttachOff0, SEL_SET_STORE_ACTION, 1L, send);
         // Fog doubles as the draw distance: the background is the fog color, so culled space reads as fog
         RenderEnvironment env = lights.environment();
+        textureFiltering = env.textureFiltering;
         if (env.fogEnabled) {
             setClearColor(colorAttachOff0, env.fogR, env.fogG, env.fogB);
         }
@@ -844,7 +846,8 @@ public class MetalPassEncoder {
     private void bindArgumentTable(MetalTexture texture) {
         bindVertexBuffer(drawArgsBuffer, drawArgsOffset, 0);
         bindFragmentBuffer(drawArgsBuffer, drawArgsOffset, 0);
-        long materialSampler = texture.getMaterialSamplerStateHandle() != 0L ? texture.getMaterialSamplerStateHandle() : texture.getSamplerStateHandle();
+        long filtered = texture.getMaterialSamplerStateHandle(textureFiltering);
+        long materialSampler = filtered != 0L ? filtered : texture.getSamplerStateHandle();
         if (materialSampler != 0L) {
             bindFragmentSampler(materialSampler);
         }

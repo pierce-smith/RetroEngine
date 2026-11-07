@@ -8,6 +8,7 @@ import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.EditorWorkspace.ModalState;
 import com.retro.engine.editor.panels.EngineConsolePanel;
 import com.retro.engine.graphics.ShadingModel;
+import com.retro.engine.graphics.TextureFiltering;
 import com.retro.engine.ui.UIGeometryBatch;
 import com.retro.engine.ui.UISoundPlayer;
 import com.retro.engine.ui.UISoundPlayer.UISound;
@@ -41,10 +42,11 @@ public final class ProjectSettingsOverlay {
     // Row centers, top to bottom
     private static final float SECTION_SHADING_Y = 0.59f;
     private static final float SHADING_MODEL_Y = 0.52f;
-    private static final float SECTION_SHADOW_Y = 0.43f;
-    private static final float BLOBS_Y = 0.36f;
-    private static final float SECTION_FOG_Y = 0.27f;
-    private static final float FOG_ENABLED_Y = 0.20f;
+    private static final float BILINEAR_Y = 0.45f;
+    private static final float SECTION_SHADOW_Y = 0.385f;
+    private static final float BLOBS_Y = 0.325f;
+    private static final float SECTION_FOG_Y = 0.255f;
+    private static final float FOG_ENABLED_Y = 0.195f;
     private static final float FOG_START_Y = 0.11f;
     private static final float FOG_END_Y = 0.02f;
     private static final float FOG_DENSITY_Y = -0.07f;
@@ -174,6 +176,7 @@ public final class ProjectSettingsOverlay {
     private static void renderRenderTab(UIGeometryBatch.Buffer buffer, ProjectSettings s, float hoverX, float hoverY) {
         sectionHeader(buffer, "SHADING", SECTION_SHADING_Y);
         dropdownField(buffer, "GLOBAL SHADING MODEL", SHADING_MODEL_Y, s.getShadingModel(), hoverX, hoverY);
+        toggleRow(buffer, "BILINEAR TEXTURES", BILINEAR_Y, s.textureFiltering == TextureFiltering.BILINEAR, hoverX, hoverY);
 
         sectionHeader(buffer, "SHADOWS", SECTION_SHADOW_Y);
         toggleRow(buffer, "GROUND SHADOW BLOBS", BLOBS_Y, s.shadowBlobsEnabled, hoverX, hoverY);
@@ -422,6 +425,12 @@ public final class ProjectSettingsOverlay {
         } else if (tab == TAB_RENDER_ID && hitsToggle(ndcX, ndcY, BLOBS_Y)) {
             UISoundPlayer.play(UISound.TOGGLE);
             s.shadowBlobsEnabled = !s.shadowBlobsEnabled;
+            markDirty();
+            return;
+        }
+        if (tab == TAB_RENDER_ID && hitsToggle(ndcX, ndcY, BILINEAR_Y)) {
+            UISoundPlayer.play(UISound.TOGGLE);
+            s.textureFiltering = s.textureFiltering == TextureFiltering.BILINEAR ? TextureFiltering.NEAREST : TextureFiltering.BILINEAR;
             markDirty();
             return;
         }
