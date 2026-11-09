@@ -1,0 +1,12 @@
+U|Assets/Textures/Brick.png=aa1ccb77-45bb-407e-a002-a914b7d7b36b
+S|ambientColor=[0.21000001, 0.31, 0.41]
+S|ambientIntensity=0.27
+S|createdAtMillis=1700000000003
+S|fogColor=[0.25, 0.35000002, 0.45]
+S|fogDensity=0.31
+S|fogEnabled=false
+S|fogEnd=400.0
+S|fogStart=25.0
+S|projectName="Fixture beta1"
+S|shadowBlobsEnabled=false
+S|startupScene="Assets/Scenes/Main.rscene"

@@ -50,3 +50,6 @@ Thumbs.db
 *.rproj.tmp
 Cooked/
 /tools/
+
+# Format fixtures are files real builds wrote, legacy .bin layouts included; they must be checked in
+!src/test/resources/formats/**
