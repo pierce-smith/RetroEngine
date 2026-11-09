@@ -142,9 +142,7 @@ public class SimulationSystem {
             // 4. Advance particle systems after scripts, so this frame's play()/stop()/emit() calls take effect now
             updateParticles(deltaTime, activeEntities, sceneWorld);
         }
-        // Clear this frame's pressed edges (isKeyPressed / isMouseButtonPressed) after scripts have seen them, and
-        // every frame outside Play too, so editor clicks don't arrive as a burst of presses on the first Play frame
-        com.retro.engine.scripting.Input.endFrame();
+        // Input edges are cleared by SceneWorld.update, after onLateUpdate has seen them
     }
 
     /** Simulates every ParticleSystem at its entity's world pose (indexed loop, no allocation). */

@@ -158,6 +158,30 @@ public class ScriptEngine {
     }
 
     /**
+     * Calls onLateUpdate on every running, enabled script. SceneWorld runs this after physics, onUpdate, animation and
+     * IK, so a camera or attachment script sees this frame's final poses. Scripts that haven't had onEnable yet (added
+     * or switched on during this frame) start in the next updateScripts, not here.
+     */
+    public static void lateUpdateScripts(List<Entity> entities, float deltaTime) {
+        if (entities == null) return;
+        for (int i = 0; i < entities.size(); i++) {
+            Entity entity = entities.get(i);
+            if (entity == null) continue;
+            List<Component> comps = entity.getAllComponents();
+            for (int c = 0; c < comps.size(); c++) {
+                if (!(comps.get(c) instanceof ScriptComponent sc) || !sc.enabled || !sc.enableDispatched) continue;
+                EntityScript script = sc.activeScriptInstance;
+                if (script == null) continue;
+                try {
+                    script.onLateUpdate(deltaTime);
+                } catch (Throwable t) {
+                    disableFailedScript(entity, sc, "onLateUpdate", t);
+                }
+            }
+        }
+    }
+
+    /**
      * Turns off one script instance that threw, leaving every other script and the engine loop running. The error and
      * a trimmed stack trace go to System.err, which the editor console shows. The component's enabled flag is part
      * of the Play snapshot, so the script runs again after Stop.

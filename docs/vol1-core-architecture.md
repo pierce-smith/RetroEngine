@@ -376,14 +376,14 @@ Plus `onCollision{Enter,Stay,Exit}`, `onTrigger{Enter,Stay,Exit}`, `onMouse{Ente
 > | `onEnable` | Before `onStart`, and on the next tick after `ScriptComponent.enabled` turns back on |
 > | `onStart` | Right after `init()` and the Inspector overrides are applied |
 > | `onUpdate` | Every simulation frame (after the framework's `onFrameworkUpdate`) |
+> | `onLateUpdate` | Every simulation frame, after physics, every `onUpdate`, animation, IK and bone sockets, and before camera shake is applied and this frame's key/button presses clear. Use it for follow cameras and anything that must see final poses |
 > | `onPhysicsUpdate` | Every fixed 60 Hz physics step |
 > | `onCollision*` / `onTrigger*` | From the physics contact pass |
 > | `onDisable` | On the next tick after `enabled` turns off, and before `onDestroy`. A script that threw doesn't get it |
 > | `onDestroy` | On Stop, on deferred destroy, and on hot reload |
 >
-> `onLateUpdate`, `onMouse{Enter,Exit,Down,Up}` and `onDrawGizmos` are declared but
-> **never invoked**. You can override them without errors, but they won't run. Put late-frame logic at the end of
-> `onUpdate`, and draw debug shapes with `ScriptDebug` (Volume 6 §4.3).
+> `onMouse{Enter,Exit,Down,Up}` and `onDrawGizmos` are declared but **never invoked**. You can override them
+> without errors, but they won't run. Draw debug shapes with `ScriptDebug` (Volume 6 §4.3).
 
 `EntityScript` also has ready-made helpers that every script inherits:
 

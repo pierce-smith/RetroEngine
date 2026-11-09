@@ -429,7 +429,6 @@ public class SceneWorld {
         syncAnimationPlayState();
         if (simulating) {
             flushPendingDestroys();
-            ScriptRuntime.endFrame(sceneEntities);
             decals.update(deltaTime);
         }
         
@@ -450,6 +449,17 @@ public class SceneWorld {
                 boneSockets.update(sceneEntities, graphEvaluator);
             }
         }
+
+        if (simulating && sceneEntities != null) {
+            // Last script pass: sees this frame's physics, script, animation and IK results (follow cameras, attachments)
+            ScriptEngine.lateUpdateScripts(sceneEntities, deltaTime);
+            flushPendingDestroys();
+            // Shake goes on top of the camera pose late scripts just wrote; beginFrame removes it again next frame
+            ScriptRuntime.endFrame(sceneEntities);
+        }
+        // Clear this frame's pressed edges (isKeyPressed / isMouseButtonPressed) after every script pass has seen them,
+        // and every frame outside Play too, so editor clicks don't arrive as a burst of presses on the first Play frame
+        com.retro.engine.scripting.Input.endFrame();
 
         applyPendingSceneLoad();
     }

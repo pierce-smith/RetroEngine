@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 class FrameLimiterTest {
@@ -33,13 +34,23 @@ class FrameLimiterTest {
     }
 
     @Test
-    void capHoldsAnEmptyLoopToTheTargetRate() {
+    void capNeverRunsFasterThanTheTarget() {
+        assertTrue(elapsedMsForTenFramesAt100Fps() >= 95, "a 100 FPS cap let 10 frames finish early");
+    }
+
+    /** Wall-clock ceiling: an OS that oversleeps (shared CI runners do; macOS once took 276 ms) fails it, not the limiter. */
+    @Test
+    @Tag("perf")
+    void capHoldsAnEmptyLoopCloseToTheTargetRate() {
+        long elapsedMs = elapsedMsForTenFramesAt100Fps();
+        assertTrue(elapsedMs < 250, "10 frames at 100 FPS took " + elapsedMs + " ms");
+    }
+
+    private static long elapsedMsForTenFramesAt100Fps() {
         FrameLimiter limiter = FrameLimiter.create(false, 100, 60); // 10 ms
         limiter.waitForNextFrame();
         long start = System.nanoTime();
         for (int i = 0; i < 10; i++) limiter.waitForNextFrame();
-        long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
-        assertTrue(elapsedMs >= 95, "10 frames at 100 FPS took only " + elapsedMs + " ms");
-        assertTrue(elapsedMs < 250, "10 frames at 100 FPS took " + elapsedMs + " ms");
+        return (System.nanoTime() - start) / 1_000_000L;
     }
 }
