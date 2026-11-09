@@ -1,17 +1,21 @@
 package com.retro.engine.scripting;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.SceneWorld;
 
 /**
  * Static scene-flow facade for gameplay scripts. Bound to the running SceneWorld whenever a script is initialized;
  * all loads are deferred to the end of the current frame via {@link SceneWorld#requestSceneLoad(String)}.
  */
+@PublicApi
 public final class SceneManager {
 
     private static volatile SceneWorld world;
 
     private SceneManager() {}
 
+    @Internal
     public static void bind(SceneWorld sceneWorld) { if (sceneWorld != null) world = sceneWorld; }
 
     public static String getCurrentScenePath() {

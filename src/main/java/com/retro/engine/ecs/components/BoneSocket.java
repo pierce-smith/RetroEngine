@@ -1,6 +1,8 @@
 package com.retro.engine.ecs.components;
 
 import com.retro.engine.animation.Skeleton;
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
@@ -14,6 +16,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
  * <p>Sockets only run during Play, so an attached entity sits at its authored Transform in the editor and goes back
  * there on Stop.</p>
  */
+@PublicApi
 public class BoneSocket extends Component {
 
     /** Name of the rigged entity to follow. Blank follows this entity's parent. */
@@ -43,9 +46,13 @@ public class BoneSocket extends Component {
     public float offsetRotZ = 0.0f;
 
     // --- Runtime state (not persisted) ---
+    @Internal
     public transient Skeleton resolvedSkeleton;
+    @Internal
     public transient String resolvedBone;
+    @Internal
     public transient int boneIndex = -1;
+    @Internal
     public transient boolean warned;
 
     public BoneSocket() {}

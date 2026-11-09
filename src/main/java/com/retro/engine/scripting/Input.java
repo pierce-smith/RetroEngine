@@ -1,5 +1,7 @@
 package com.retro.engine.scripting;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.core.GamepadManager;
 import com.retro.engine.core.WindowHost;
 
@@ -9,7 +11,10 @@ import java.util.Arrays;
  * Static Input facade providing state queries for keyboard keys,
  * mouse buttons, and cursor coordinates during gameplay simulation, plus gamepad access and rumble.
  */
+@PublicApi
 public class Input {
+
+    private Input() {}
 
     private static WindowHost boundWindow = null;
     // Indexed by GLFW key / button code (GLFW_KEY_LAST = 348, GLFW_MOUSE_BUTTON_LAST = 7). Plain arrays rather than
@@ -31,15 +36,18 @@ public class Input {
     private static float mouseY = 0.0f;
     private static float scrollY = 0.0f;
 
+    @Internal
     public static void bindWindow(WindowHost window) {
         boundWindow = window;
     }
 
+    @Internal
     public static void unbindWindow() {
         boundWindow = null;
     }
 
     /** Editor hook: while true, keyboard queries report every key as up. */
+    @Internal
     public static void setKeyboardSuppressed(boolean suppressed) {
         keyboardSuppressed = suppressed;
     }
@@ -90,11 +98,13 @@ public class Input {
         return boundWindow != null && boundWindow.isCursorCaptured();
     }
 
+    @Internal
     public static boolean isCursorLockWanted() {
         return cursorLockWanted;
     }
 
     /** Captures or frees the cursor without changing whether gameplay wants it locked. */
+    @Internal
     public static void setCursorCaptured(boolean captured) {
         if (boundWindow != null) boundWindow.setCursorCaptured(captured);
     }
@@ -132,33 +142,39 @@ public class Input {
         return scrollY;
     }
 
+    @Internal
     public static void setKeyState(int keyCode, boolean down) {
         if (!inRange(keyCode, KEY_SLOTS)) return; // GLFW_KEY_UNKNOWN (-1) and out-of-range codes
         if (down && !activeKeys[keyCode]) pressedKeys[keyCode] = true;
         activeKeys[keyCode] = down;
     }
 
+    @Internal
     public static void setMouseButtonState(int button, boolean down) {
         if (!inRange(button, BUTTON_SLOTS)) return;
         if (down && !activeMouseButtons[button]) pressedMouseButtons[button] = true;
         activeMouseButtons[button] = down;
     }
 
+    @Internal
     public static void setMousePosition(float x, float y) {
         mouseX = x;
         mouseY = y;
     }
 
+    @Internal
     public static void setScroll(float yOffset) {
         scrollY = yOffset;
     }
 
+    @Internal
     public static void endFrame() {
         Arrays.fill(pressedKeys, false);
         Arrays.fill(pressedMouseButtons, false);
         scrollY = 0.0f;
     }
 
+    @Internal
     public static void clearState() {
         stopVibration();
         setCursorLocked(false);

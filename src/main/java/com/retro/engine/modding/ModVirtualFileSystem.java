@@ -1,5 +1,8 @@
 package com.retro.engine.modding;
 
+import com.retro.engine.api.Experimental;
+import com.retro.engine.api.PublicApi;
+
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -26,6 +29,7 @@ import java.util.Map;
  * <p>Immutable once built by {@link ModLoader}; lookups are plain file-existence checks with no caching, so assets
  * a mod adds while the game runs are seen on the next scene load.
  */
+@PublicApi
 public final class ModVirtualFileSystem {
 
     public static final String MOD_SCHEME = "mod://";
@@ -54,6 +58,7 @@ public final class ModVirtualFileSystem {
     }
 
     /** Mounted layers, highest priority first. */
+    @Experimental
     public List<Layer> layers() {
         return topDown;
     }

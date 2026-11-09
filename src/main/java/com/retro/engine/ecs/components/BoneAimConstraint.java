@@ -1,6 +1,8 @@
 package com.retro.engine.ecs.components;
 
 import com.retro.engine.animation.Skeleton;
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
@@ -13,6 +15,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
  * <p>Goes on the entity with the AnimatorComponent. {@code IKSystem} adjusts the finished pose each Play frame, after
  * foot IK and before bone sockets, so held items follow. A stopped animator is left alone.</p>
  */
+@PublicApi
 public abstract class BoneAimConstraint extends Component {
 
     /** Off eases back to the clip. */
@@ -55,13 +58,20 @@ public abstract class BoneAimConstraint extends Component {
     public float speed = 8.0f;
 
     // --- Runtime state (not persisted) ---
+    @Internal
     public transient Skeleton resolvedSkeleton;
+    @Internal
     public transient String resolvedChain, resolvedAimBone;
+    @Internal
     public transient int[] chainBones = new int[0];
+    @Internal
     public transient int aimBoneIndex = -1;
+    @Internal
     public transient boolean resolved, warned, warm;
     /** Where it's pointing now, as a world direction, eased toward the target. */
+    @Internal
     public final transient double[] direction = new double[3];
+    @Internal
     public transient float blend;
 
     private transient boolean hasTargetPoint;

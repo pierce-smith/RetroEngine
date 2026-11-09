@@ -363,7 +363,7 @@ public class HighwayGameScript extends SimpleEntityScript {
     /** The car's script may start after this one, so its instance is looked up lazily. */
     private void resolveCarScript() {
         ScriptComponent sc = (ScriptComponent) carEntity.getComponent(ScriptComponent.class);
-        carScript = sc != null ? sc.activeScriptInstance : null;
+        carScript = sc != null ? sc.getScript() : null;
         if (carScript == null) return;
         try {
             setSpeedM = carScript.getClass().getMethod("setForwardSpeed", new Class[]{float.class});

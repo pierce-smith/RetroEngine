@@ -60,8 +60,8 @@ public class VulkanDevice {
                     .sType$Default()
                     .pApplicationName(stack.UTF8("Retro Engine"))
                     .applicationVersion(VK10.VK_MAKE_VERSION(1, 0, 0))
-                    .pEngineName(stack.UTF8("Retro Engine Shell"))
-                    .engineVersion(VK10.VK_MAKE_VERSION(1, 0, 0))
+                    .pEngineName(stack.UTF8("RetroEngine"))
+                    .engineVersion(engineVkVersion())
                     .apiVersion(VK13.VK_API_VERSION_1_3);
 
             PointerBuffer glfwExtensions = GLFWVulkan.glfwGetRequiredInstanceExtensions();
@@ -402,4 +402,10 @@ public class VulkanDevice {
     public int getPresentQueueFamilyIndex() { return presentQueueFamilyIndex; }
     public Object getQueueLock() { return queueLock; }
     public boolean supportsSeparateDepthStencilLayouts() { return separateDepthStencilLayouts; }
+
+    /** Engine version for VkApplicationInfo, so driver and validation logs name the real build. */
+    private static int engineVkVersion() {
+        int[] v = com.retro.engine.core.EngineVersion.parts(com.retro.engine.core.EngineVersion.VERSION);
+        return VK10.VK_MAKE_VERSION(v[0], v[1], v[2]);
+    }
 }

@@ -1,5 +1,6 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.InspectorProperty;
@@ -13,6 +14,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
  * Persisted fields are written positionally by ComponentBinaryCodec: append new ones last, gated with since /
  * prefabSince and a format version bump.
  */
+@PublicApi
 public class AudioReverbZone extends Component {
 
     public enum Shape { BOX, SPHERE }

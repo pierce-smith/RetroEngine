@@ -1,5 +1,7 @@
 package com.retro.engine.scripting;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.audio.AudioBus;
 import com.retro.engine.audio.AudioEngine;
 import com.retro.engine.ecs.Component;
@@ -24,11 +26,13 @@ import com.retro.engine.physics.RaycastHit;
  * Provides virtual lifecycle hooks, spatial transform accessors,
  * component queries, physics raycasting, and logging utilities.
  */
+@PublicApi
 public abstract class EntityScript {
 
     protected Entity entity;
     protected SceneWorld sceneWorld;
 
+    @Internal
     public void init(Entity entity, SceneWorld sceneWorld) {
         this.entity = entity;
         this.sceneWorld = sceneWorld;
@@ -73,9 +77,11 @@ public abstract class EntityScript {
      * {@code SimpleEntityScript}) tick their timers and tweens here so subclasses need not call super.onUpdate.
      * Gameplay scripts should override onUpdate instead.
      */
+    @Internal
     public void onFrameworkUpdate(float deltaTime) {}
 
     /** Called by the ScriptEngine right after {@link #onDestroy()} so framework base classes can release resources. */
+    @Internal
     public void onFrameworkDestroy() {}
 
     // =========================================================================
@@ -432,6 +438,15 @@ public abstract class EntityScript {
             return;
         }
         sceneWorld.requestSceneLoad(scenePath);
+    }
+
+    /**
+     * Absolute path of the running project's Assets/ folder (in an exported game, the one inside Game_Data), or null
+     * when no project is loaded. For reading a script's own data files; assets that mods may override should be loaded
+     * through the engine by their Assets-relative path instead.
+     */
+    public String getAssetsRoot() {
+        return ScriptEngine.getProjectAssetsRoot();
     }
 
     // =========================================================================

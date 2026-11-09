@@ -1,5 +1,6 @@
 package com.retro.engine.scripting.framework;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Entity;
 
 /**
@@ -11,6 +12,7 @@ import com.retro.engine.ecs.Entity;
  * entity that raised it, {@code text} a free string (an item id, a door name...), {@code number} a free float
  * (an amount, a score delta...). Either may be unused (null / 0).</p>
  */
+@PublicApi
 public interface ScriptEventListener {
     void onScriptEvent(String eventName, Entity source, String text, float number);
 }

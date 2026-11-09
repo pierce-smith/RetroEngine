@@ -1,5 +1,7 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
@@ -12,6 +14,7 @@ import java.util.Map;
  * Component holding script class path, script asset metadata,
  * active EntityScript instance, and reflected property overrides.
  */
+@PublicApi
 public class ScriptComponent extends Component {
 
     @InspectorProperty(order = 0, label = "SCRIPT PATH", type = PropertyType.ASSET_PICKER, assetType = "SCRIPT")
@@ -27,10 +30,20 @@ public class ScriptComponent extends Component {
     @InspectorProperty(order = 3, label = "OVERRIDES", hidden = true, since = 2)
     public Map<String, String> propertyOverrides = new HashMap<>();
 
+    @Internal
     public transient EntityScript activeScriptInstance;
 
     /** The live instance has had onEnable and not yet onDisable. {@link #enabled} is a plain field, so ScriptEngine compares the two each tick. */
+    @Internal
     public transient boolean enableDispatched;
+
+    /**
+     * The running script instance, or null before the script starts (outside play, or when it failed to compile).
+     * Cast it to the script's class to call its methods.
+     */
+    public EntityScript getScript() {
+        return activeScriptInstance;
+    }
 
     public ScriptComponent() {
         this(null, null);

@@ -1,5 +1,7 @@
 package com.retro.engine.animation;
 
+import com.retro.engine.api.PublicApi;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.UnaryOperator;
@@ -10,6 +12,7 @@ import java.util.function.UnaryOperator;
  * graph never changes another's). Playback state (current / target state, state times, crossfade, live parameter values) lives on each
  * AnimatorComponent and is advanced by AnimationSystem.
  */
+@PublicApi
 public class AnimatorController {
 
     public String name = "DefaultController";

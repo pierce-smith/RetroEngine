@@ -1,5 +1,6 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
 
@@ -7,6 +8,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
  * Tinted vector shape filling the element rect: solid or rounded rectangles, circles, rings, and crosshairs.
  * THICKNESS is the stroke width of rings and crosshair arms; GAP is the empty radius at the crosshair center.
  */
+@PublicApi
 public class UIImage extends UIElement {
 
     public enum Shape { RECT, ROUNDED_RECT, CIRCLE, RING, CROSSHAIR }

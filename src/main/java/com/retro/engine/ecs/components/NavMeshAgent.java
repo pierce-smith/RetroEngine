@@ -1,5 +1,7 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
@@ -10,6 +12,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
  * handling gravity and ground snapping); otherwise it moves the Transform and keeps it on the mesh surface.
  * Agents are expected on root entities (their Transform is treated as world space).
  */
+@PublicApi
 public class NavMeshAgent extends Component {
 
     /** Corner capacity of one path; longer routes are re-planned from the last corner when it is reached. */
@@ -74,6 +77,7 @@ public class NavMeshAgent extends Component {
         remainingDistance = 0.0f;
     }
 
+    @Internal
     public void resetRuntime() {
         stop();
         velocityX = 0.0f;

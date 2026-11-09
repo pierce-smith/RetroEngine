@@ -1,5 +1,7 @@
 package com.retro.engine.scripting.framework;
 
+import com.retro.engine.api.PublicApi;
+
 /**
  * Lightweight finite state machine for entity behaviours (Idle / Patrol / Attack ...). States are
  * {@link ScriptState} instances created once by the owning script; switching states never allocates.
@@ -11,6 +13,7 @@ package com.retro.engine.scripting.framework;
  * onUpdate. A change requested while a transition is running is queued and applied right after it, so onExit and
  * onEnter calls always pair up. Changing to the current state does nothing unless {@link #restartState()} is used.</p>
  */
+@PublicApi
 public final class ScriptStateMachine {
 
     // Guards against two states that hand control back and forth from their onEnter forever

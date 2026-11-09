@@ -1,11 +1,16 @@
 package com.retro.engine.graphics;
 
+import com.retro.engine.api.Experimental;
+import com.retro.engine.api.PublicApi;
+
 /**
  * Project-wide filtering for scene material textures, chosen in Project Settings.
  *
  * <p>Nearest keeps every texel a hard square, the unfiltered look of PS1-class hardware. Bilinear blends neighbouring
  * texels, the soft look of PS2-class hardware. UI and screen-space reads have their own samplers and never change.
  */
+@Experimental
+@PublicApi
 public enum TextureFiltering {
 
     NEAREST,

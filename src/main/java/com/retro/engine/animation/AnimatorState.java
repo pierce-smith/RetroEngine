@@ -1,5 +1,7 @@
 package com.retro.engine.animation;
 
+import com.retro.engine.api.PublicApi;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -9,6 +11,7 @@ import java.util.function.UnaryOperator;
  * State in an AnimatorController representing an animation clip, playback parameters,
  * 2D graph layout coordinates, and outgoing transition rules.
  */
+@PublicApi
 public class AnimatorState {
 
     public String name;

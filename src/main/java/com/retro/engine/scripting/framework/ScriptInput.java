@@ -1,5 +1,6 @@
 package com.retro.engine.scripting.framework;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.core.GamepadManager;
 import com.retro.engine.scripting.Input;
 
@@ -23,6 +24,7 @@ import static org.lwjgl.glfw.GLFW.*;
  * <p>Queries are allocation-free (String keys hash once and cache their hash). Unknown names return false / 0 and log a
  * warning once per name. Pressed = went down this frame; Down = held.</p>
  */
+@PublicApi
 public final class ScriptInput {
 
     private static final int MAX_BINDINGS = 6;

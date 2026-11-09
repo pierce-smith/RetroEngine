@@ -1,5 +1,7 @@
 package com.retro.engine.animation;
 
+import com.retro.engine.api.PublicApi;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -8,6 +10,7 @@ import java.util.Map;
  * Transition rule connecting an AnimatorState to a destination AnimatorState.
  * Supports exit time thresholds, duration crossfading, and parameter conditions.
  */
+@PublicApi
 public class AnimatorTransition {
 
     public String destinationStateName;

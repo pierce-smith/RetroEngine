@@ -1,5 +1,8 @@
 package com.retro.engine.modding;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
+
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -20,7 +23,7 @@ import java.util.regex.Pattern;
  *   "name": "Example Mod",
  *   "version": "1.0.0",
  *   "author": "You",
- *   "target_engine": "1.0.0",         (targetEngine)  informational; a mismatch is logged, not fatal
+ *   "target_engine": "1.0.0",         (targetEngine)  a different major version is refused; minor/patch differences are logged
  *   "load_priority": 100,             (priority, loadOrder)  higher loads later and wins VFS / patch conflicts
  *   "dependencies": ["core_lib", {"mod_id": "hd_textures", "version": "1.2.0", "optional": true}],
  *   "entry_point": "com.example.examplemod.ModScript",   (entryPoint)   optional ModScript subclass
@@ -31,6 +34,7 @@ import java.util.regex.Pattern;
  * }
  * </pre>
  */
+@PublicApi
 public final class ModManifest {
 
     public static final String FILE_NAME = "mod.json";
@@ -91,6 +95,7 @@ public final class ModManifest {
         }
     }
 
+    @Internal
     public static ModManifest read(File modRoot) throws IOException {
         File file = new File(modRoot, FILE_NAME);
         String text = Files.readString(file.toPath(), StandardCharsets.UTF_8);
@@ -128,6 +133,7 @@ public final class ModManifest {
      * Compares dotted numeric versions ("1.10.0" > "1.9.2"); non-numeric suffixes such as "-beta" are ignored.
      * Returns negative, zero or positive like {@link Comparable#compareTo}.
      */
+    @Internal
     public static int compareVersions(String a, String b) {
         String[] pa = stripSuffix(a).split("\\."), pb = stripSuffix(b).split("\\.");
         for (int i = 0; i < Math.max(pa.length, pb.length); i++) {

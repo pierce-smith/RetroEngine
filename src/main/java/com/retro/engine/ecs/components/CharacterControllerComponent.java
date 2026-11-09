@@ -1,5 +1,6 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
@@ -7,6 +8,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
 /**
  * ECS component holding Vice City style 3D character controller movement & physics parameters.
  */
+@PublicApi
 public class CharacterControllerComponent extends Component {
 
     @InspectorProperty(order = 0, label = "MOVE SPEED", min = 0.1f, max = 50.0f, step = 0.5f)

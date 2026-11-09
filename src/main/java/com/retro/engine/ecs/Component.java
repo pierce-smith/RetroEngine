@@ -1,5 +1,8 @@
 package com.retro.engine.ecs;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
+
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -9,8 +12,10 @@ import java.lang.annotation.Target;
  * Universal base class for modular entity components in Retro Engine ECS.
  * Persisted and inspected state is declared with {@code @InspectorProperty} fields; see {@link ComponentSchema}.
  */
+@PublicApi
 public abstract class Component {
     /** Editor-only: Inspector card shows just its header bar (not persisted, not copied on duplicate). */
+    @Internal
     public boolean isInspectorCollapsed = false;
 
     public abstract String getComponentName();
@@ -22,6 +27,7 @@ public abstract class Component {
     public void onDeserialized(Entity owner) {}
 
     /** Historical type names accepted when loading scenes/prefabs written by older engine builds. */
+    @Internal
     @Retention(RetentionPolicy.RUNTIME)
     @Target(ElementType.TYPE)
     public @interface LegacyNames {

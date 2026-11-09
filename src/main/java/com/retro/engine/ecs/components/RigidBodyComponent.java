@@ -1,5 +1,6 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
@@ -7,6 +8,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
 /**
  * ECS component holding 3D rigid body dynamic parameters.
  */
+@PublicApi
 public class RigidBodyComponent extends Component {
 
     public enum MotionType { STATIC, KINEMATIC, DYNAMIC }

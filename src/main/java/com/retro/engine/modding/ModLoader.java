@@ -1,5 +1,6 @@
 package com.retro.engine.modding;
 
+import com.retro.engine.core.EngineVersion;
 import com.retro.engine.ecs.ComponentSchema;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.modding.events.EntitySpawnEvent;
@@ -250,9 +251,15 @@ public final class ModLoader {
                     System.err.println("[ModLoader] Skipping " + folder.getName() + ": mod_id '" + m.id + "' is already used by another mod.");
                     continue;
                 }
-                if (!m.targetEngine.isEmpty() && ModManifest.compareVersions(m.targetEngine, com.retro.engine.core.ProjectWorkspace.ENGINE_VERSION) != 0) {
+                if (!EngineVersion.isCompatible(m.targetEngine)) {
+                    System.err.println("[ModLoader] Skipping " + m + ": built for engine " + m.targetEngine + ", but this is "
+                            + EngineVersion.VERSION + ". Mods only load on the major version they target ("
+                            + EngineVersion.major(m.targetEngine) + ".x).");
+                    continue;
+                }
+                if (!m.targetEngine.isEmpty() && ModManifest.compareVersions(m.targetEngine, EngineVersion.VERSION) != 0) {
                     System.out.println("[ModLoader] " + m + " targets engine " + m.targetEngine + " (running "
-                            + com.retro.engine.core.ProjectWorkspace.ENGINE_VERSION + "); loading anyway.");
+                            + EngineVersion.VERSION + "); same major version, loading.");
                 }
                 out.add(m);
             } catch (IOException e) {

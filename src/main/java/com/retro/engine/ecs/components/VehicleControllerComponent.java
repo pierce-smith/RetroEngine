@@ -1,11 +1,13 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.InspectorProperty;
 
 /**
  * ECS component holding Vice City 4-wheel raycast suspension vehicle dynamics.
  */
+@PublicApi
 public class VehicleControllerComponent extends Component {
 
     @InspectorProperty(order = 0, label = "ENGINE TORQUE", min = 10.0f, max = 2000.0f, step = 10.0f)

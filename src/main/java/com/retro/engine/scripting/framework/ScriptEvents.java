@@ -1,5 +1,7 @@
 package com.retro.engine.scripting.framework;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.scripting.ScriptEngine;
 
@@ -12,6 +14,7 @@ import com.retro.engine.scripting.ScriptEngine;
  * All subscriptions are dropped when Play stops. {@code SimpleEntityScript.subscribeEvents} unsubscribes
  * automatically when its script is destroyed.</p>
  */
+@PublicApi
 public final class ScriptEvents {
 
     private static ScriptEventListener[] listeners = new ScriptEventListener[32];
@@ -76,6 +79,7 @@ public final class ScriptEvents {
     }
 
     /** Engine hook: drops every subscription (Play stopped). */
+    @Internal
     public static void clear() {
         for (int i = 0; i < count; i++) listeners[i] = null;
         count = 0;

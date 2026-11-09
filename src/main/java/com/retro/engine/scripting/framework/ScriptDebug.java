@@ -1,5 +1,7 @@
 package com.retro.engine.scripting.framework;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.physics.RaycastHit;
 
 /**
@@ -13,6 +15,7 @@ import com.retro.engine.physics.RaycastHit;
  *
  * <p>Colours are 0xRRGGBB ints; see the constants below.</p>
  */
+@PublicApi
 public final class ScriptDebug {
 
     public static final int RED = 0xFF4040;
@@ -163,11 +166,13 @@ public final class ScriptDebug {
     // Engine / renderer access
     // =========================================================================
 
+    @Internal
     public static int getLineCount() {
         return lineCount;
     }
 
     /** Copies line {@code index}'s endpoints into {@code out[0..5]} (x1 y1 z1 x2 y2 z2) and returns its colour. */
+    @Internal
     public static int getLine(int index, float[] out) {
         int o = index * 6;
         out[0] = coords[o]; out[1] = coords[o + 1]; out[2] = coords[o + 2];
@@ -179,6 +184,7 @@ public final class ScriptDebug {
      * Engine hook, called once per simulated frame before scripts run: drops lines whose time is up (one-frame lines
      * have already been rendered once) and ages the rest. Compacts in place; no allocation.
      */
+    @Internal
     public static void beginFrame(float deltaTime) {
         int write = 0;
         for (int read = 0; read < lineCount; read++) {

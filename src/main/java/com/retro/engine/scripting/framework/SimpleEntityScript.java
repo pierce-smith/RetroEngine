@@ -1,5 +1,6 @@
 package com.retro.engine.scripting.framework;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.audio.AudioBus;
 import com.retro.engine.audio.AudioMixerService;
 import com.retro.engine.ecs.Component;
@@ -37,6 +38,7 @@ import com.retro.engine.scripting.EntityScript;
  * <p>The accessors return concrete types. Schedule work with a {@link ScriptTask} (a lambda is fine) created once, not
  * per frame.</p>
  */
+@PublicApi
 public abstract class SimpleEntityScript extends EntityScript {
 
     /** Timers owned by this script; cancelled automatically when the script is destroyed. */
@@ -423,12 +425,7 @@ public abstract class SimpleEntityScript extends EntityScript {
 
     /** Overwrites the linear velocity of this entity's DYNAMIC rigidbody (m/s). Returns false without one. */
     public boolean setVelocity(float vx, float vy, float vz) {
-        PhysicsSystem.PhysicsBody body = dynamicBody();
-        if (body == null) return false;
-        body.vx = vx;
-        body.vy = vy;
-        body.vz = vz;
-        return true;
+        return sceneWorld != null && sceneWorld.setVelocity(entity, vx, vy, vz);
     }
 
     /** Linear velocity of this entity's physics body (zero without one). */

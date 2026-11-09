@@ -1,5 +1,7 @@
 package com.retro.engine.animation;
 
+import com.retro.engine.api.PublicApi;
+
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
@@ -8,6 +10,7 @@ import java.util.Map;
  * Represents a named skeletal animation sequence (e.g., "Idle", "Run", "Attack"),
  * mapping bone names to their respective keyframe tracks.
  */
+@PublicApi
 public class AnimationClip {
 
     public enum LoopMode {

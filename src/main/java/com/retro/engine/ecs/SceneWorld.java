@@ -1,6 +1,7 @@
 package com.retro.engine.ecs;
 
 import com.retro.engine.animation.AnimationSystem;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.assets.AssetType;
@@ -47,6 +48,7 @@ public class SceneWorld {
     }
 
 
+    @PublicApi
     public enum PlayState { EDITING, SIMULATING, PAUSED }
 
     /**
@@ -54,6 +56,7 @@ public class SceneWorld {
      * and updates it in place when the entity or a parent moves, so the per-frame hierarchy pass does not allocate:
      * read the values when you get it, and do not keep the object across frames.
      */
+    @PublicApi
     public static final class WorldTransform {
         private float px, py, pz, rx, ry, rz, sx, sy, sz;
 
@@ -133,6 +136,7 @@ public class SceneWorld {
         if (dataErrorListener != null) dataErrorListener.accept(message);
     }
 
+    @PublicApi
     public List<Entity> getSceneEntities() { return sceneEntitiesView; }
 
     public <T extends Component> ComponentPool<T> getComponentPool(Class<T> clazz) {
@@ -160,10 +164,12 @@ public class SceneWorld {
         entityManager.unregisterEntityHandle(entity);
     }
 
+    @PublicApi
     public boolean isValidHandle(EntityHandle handle) {
         return entityManager.isValidHandle(handle);
     }
 
+    @PublicApi
     public Entity getEntityByHandle(EntityHandle handle) {
         return entityManager.getEntityByHandle(handle);
     }
@@ -280,10 +286,12 @@ public class SceneWorld {
         selectEntity(entity);
     }
 
+    @PublicApi
     public String getActiveScenePath() { return activeScenePath; }
     public void setActiveScenePath(String path) { if (path != null) this.activeScenePath = path; }
 
     // --- DELEGATED SIMULATION STATE MACHINE ---
+    @PublicApi
     public PlayState getPlayState() {
         return switch (simulationEngine.getPlayState()) {
             case EDITING -> PlayState.EDITING;
@@ -523,6 +531,7 @@ public class SceneWorld {
      * path resolves through the mod VFS) without changing the selection. Fires {@code EntitySpawnEvent} (source
      * SCRIPT); returns null when a mod canceled it. A null or duplicate id gets a generated one.
      */
+    @PublicApi
     public Entity spawnEntity(String id, String name, String meshAssetPath) {
         String entityId = (id == null || id.isBlank() || findEntityById(id) != null)
                 ? "entity_" + java.util.UUID.randomUUID().toString().substring(0, 8) : id.trim();
@@ -544,6 +553,7 @@ public class SceneWorld {
      * script ran), so it is safe from any script callback. Their scripts get onDestroy and their physics bodies leave
      * the simulation. Stop restores them like any other play-mode change. Outside play the entity is deleted at once.
      */
+    @PublicApi
     public void requestEntityDestroy(Entity target) {
         if (target == null) return;
         if (simulationEngine.getPlayState() == PlayState.EDITING) {
@@ -554,6 +564,7 @@ public class SceneWorld {
     }
 
     /** True when {@code target} was queued with {@link #requestEntityDestroy(Entity)} and not yet removed. */
+    @PublicApi
     public boolean isPendingDestroy(Entity target) {
         return target != null && pendingDestroys.contains(target);
     }
@@ -589,17 +600,18 @@ public class SceneWorld {
         destroyScratch.clear();
     }
 
+    private String resolvePrefabRuntimePath(String path) {
+        String resolved = (lastAssetDatabase != null) ? lastAssetDatabase.resolveAsset(path) : ModLoader.resolveAssetPath(path);
+        return (resolved != null && new File(resolved).exists()) ? resolved : null;
+    }
+
     /**
      * Instantiates a prefab during play: resolves the path through the project VFS, adds the entities without changing
      * the editor selection or playing the editor spawn sound, and registers their physics bodies (simulated from the
      * next physics step). Scripts on the spawned entities start on the next script tick. Returns the root entity, or
      * null when the prefab could not be loaded. Reads the prefab from disk, so avoid calling it every frame.
      */
-    private String resolvePrefabRuntimePath(String path) {
-        String resolved = (lastAssetDatabase != null) ? lastAssetDatabase.resolveAsset(path) : ModLoader.resolveAssetPath(path);
-        return (resolved != null && new File(resolved).exists()) ? resolved : null;
-    }
-
+    @PublicApi
     public Entity instantiatePrefabRuntime(String prefabPath) {
         if (prefabPath == null || prefabPath.isBlank()) return null;
         String resolved = resolvePrefabRuntimePath(prefabPath);
@@ -635,6 +647,7 @@ public class SceneWorld {
     }
 
     /** First entity with exactly this name, or null. */
+    @PublicApi
     public Entity findEntityByName(String name) {
         if (name == null) return null;
         for (Entity e : sceneEntities) {
@@ -644,11 +657,13 @@ public class SceneWorld {
     }
 
     /** Physics raycast that ignores {@code exclude} (typically the caller's own entity). Allocates one RaycastHit. */
+    @PublicApi
     public com.retro.engine.physics.RaycastHit raycastExcluding(Entity exclude, float originX, float originY, float originZ,
                                                                float dirX, float dirY, float dirZ, float maxDistance) {
         return getPhysicsWorld().raycastExcluding(exclude, originX, originY, originZ, dirX, dirY, dirZ, maxDistance);
     }
 
+    @PublicApi
     public Entity findEntityById(String id) {
         if (id == null || id.isEmpty()) return null;
         for (Entity e : sceneEntities) {
@@ -658,6 +673,7 @@ public class SceneWorld {
     }
 
     // --- DELEGATED SCENE GRAPH MATRIX EVALUATION ---
+    @PublicApi
     public WorldTransform getComputedWorldTransform(Entity entity) {
         return graphEvaluator.getComputedWorldTransform(entity, sceneEntities);
     }
@@ -666,6 +682,7 @@ public class SceneWorld {
         return graphEvaluator.hasHierarchyCycle(startEntity, sceneEntities);
     }
 
+    @PublicApi
     public boolean setParent(Entity child, Entity parent) {
         boolean result = graphEvaluator.setParent(child, parent, sceneEntities);
         if (result) {
@@ -915,7 +932,88 @@ public class SceneWorld {
         selectEntity((Entity) null);
     }
 
+    // --- Script API: live entities, physics and poses ---
+
+    /**
+     * Call after adding or removing components on a live entity, such as one from {@link #spawnEntity}: updates the
+     * component pools and, during play, gives a newly added rigidbody, collider or controller a physics body (simulated
+     * from the next physics step). Safe to call more than once.
+     */
+    @PublicApi
+    public void refreshComponents(Entity entity) {
+        if (entity == null || !sceneEntities.contains(entity)) return;
+        syncEntityToPools(entity);
+        if (simulationEngine.getPlayState() != PlayState.EDITING) getPhysicsWorld().registerRuntimeEntity(entity);
+    }
+
+    /**
+     * Writes the entity's physics velocity (m/s, world space) into {@code out} and returns true, or returns false when
+     * it has no physics body (not a physics entity, or not playing).
+     */
+    @PublicApi
+    public boolean getVelocity(Entity entity, float[] out) {
+        PhysicsSystem.PhysicsBody body = getPhysicsWorld().getBody(entity);
+        if (body == null || out == null || out.length < 3) return false;
+        out[0] = body.vx; out[1] = body.vy; out[2] = body.vz;
+        return true;
+    }
+
+    /**
+     * Overwrites the linear velocity (m/s, world space) of the entity's DYNAMIC rigidbody. Returns false when it has
+     * none (no body yet, not playing, or a kinematic/static body, which physics doesn't move by velocity).
+     */
+    @PublicApi
+    public boolean setVelocity(Entity entity, float x, float y, float z) {
+        PhysicsSystem.PhysicsBody body = dynamicBody(entity);
+        if (body == null) return false;
+        body.vx = x; body.vy = y; body.vz = z;
+        return true;
+    }
+
+    /**
+     * Overwrites the angular velocity of the entity's DYNAMIC rigidbody, in degrees per second around world X, Y and
+     * Z. Returns false when it has none.
+     */
+    @PublicApi
+    public boolean setAngularVelocity(Entity entity, float x, float y, float z) {
+        PhysicsSystem.PhysicsBody body = dynamicBody(entity);
+        if (body == null) return false;
+        float toRad = (float) (Math.PI / 180.0);
+        body.avx = x * toRad; body.avy = y * toRad; body.avz = z * toRad;
+        return true;
+    }
+
+    private PhysicsSystem.PhysicsBody dynamicBody(Entity entity) {
+        PhysicsSystem.PhysicsBody body = getPhysicsWorld().getBody(entity);
+        if (body == null || body.rigidBody == null || body.rigidBody.motionType != com.retro.engine.ecs.components.RigidBodyComponent.MotionType.DYNAMIC) return null;
+        return body;
+    }
+
+    private final AnimationSystem poseSampler = new AnimationSystem();
+    { poseSampler.setPlayState(PlayState.SIMULATING); }
+
+    /**
+     * Poses the animator's current state (or its clip, without a controller) at {@code timeSeconds} right now, without advancing time, and leaves the
+     * animator stopped holding that pose: the engine neither advances it nor resets it to the bind pose. Use it to
+     * drive a rig frame by frame (synced cinematics, takedowns). Set {@code isPlaying = true} to hand it back.
+     */
+    @PublicApi
+    public void sampleAnimatorPose(AnimatorComponent animator, float timeSeconds) {
+        if (animator == null) return;
+        float speed = animator.playbackSpeed;
+        // A controller's states keep state time; a single clip without a controller keeps clip time
+        if (animator.controller != null) animator.currentTime = timeSeconds;
+        else animator.playbackTime = timeSeconds;
+        animator.playbackSpeed = 0.0f;
+        animator.isPlaying = true;
+        poseSampler.update(animator, 0.0f);
+        animator.isPlaying = false;
+        animator.playbackSpeed = speed;
+        animator.bindPoseApplied = true; // keeps the sampled pose while stopped
+    }
+
     /** First entity with a primary Camera, falling back to the first entity with any Camera (null if none). */
+    @PublicApi
     public static Entity findMainCamera(List<Entity> entities) {
         if (entities == null) return null;
         Entity fallback = null;

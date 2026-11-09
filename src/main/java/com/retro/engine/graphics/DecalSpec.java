@@ -1,5 +1,6 @@
 package com.retro.engine.graphics;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.physics.RaycastHit;
 
@@ -10,6 +11,7 @@ import com.retro.engine.physics.RaycastHit;
  * <p>The decal is a box centered on the position. Its depth axis is the surface normal, and every mesh surface inside
  * the box that faces the normal receives the image.</p>
  */
+@PublicApi
 public final class DecalSpec {
 
     /** Texture path, or one of the built-in {@link DecalTextures} images. Null draws a soft round spot in the tint color. */

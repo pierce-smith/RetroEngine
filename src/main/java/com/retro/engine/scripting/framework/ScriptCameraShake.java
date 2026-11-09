@@ -1,5 +1,7 @@
 package com.retro.engine.scripting.framework;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.SceneWorld;
 import com.retro.engine.ecs.components.Transform;
@@ -17,6 +19,7 @@ import java.util.List;
  * {@link #MAX_ANGLE} degrees. Strength fades out quadratically over the duration. A new shake replaces a weaker one
  * in progress; a weaker request during a strong shake is ignored.</p>
  */
+@PublicApi
 public final class ScriptCameraShake {
 
     public static final float MAX_OFFSET = 0.25f;
@@ -58,6 +61,7 @@ public final class ScriptCameraShake {
     }
 
     /** Engine hook: strip last frame's offset and advance the timer, before physics and scripts run. */
+    @Internal
     public static void beginFrame(float deltaTime) {
         removeOffset();
         if (remaining > 0.0f) {
@@ -67,6 +71,7 @@ public final class ScriptCameraShake {
     }
 
     /** Engine hook: apply this frame's offset to the Main Camera, after physics and scripts ran. */
+    @Internal
     public static void endFrame(List<Entity> entities) {
         if (remaining <= 0.0f || entities == null) return;
         Entity cam = SceneWorld.findMainCamera(entities);
@@ -89,6 +94,7 @@ public final class ScriptCameraShake {
     }
 
     /** Engine hook: remove any applied offset and cancel the shake (Play stopped / scene change). */
+    @Internal
     public static void reset() {
         removeOffset();
         remaining = 0.0f;

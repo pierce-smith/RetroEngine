@@ -1,5 +1,7 @@
 package com.retro.engine.modding;
 
+import com.retro.engine.api.PublicApi;
+
 /**
  * Explicit handler for {@link ModEventBus#subscribe}. The event arrives as {@code Object}; cast or pattern-match it:
  * <pre>
@@ -8,6 +10,7 @@ package com.retro.engine.modding;
  * });
  * </pre>
  */
+@PublicApi
 public interface ModEventListener {
     void onEvent(Object event) throws Exception;
 }

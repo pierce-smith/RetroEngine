@@ -1,11 +1,14 @@
 package com.retro.engine.audio;
 
+import com.retro.engine.api.PublicApi;
+
 /**
  * Mixer bus a sound is routed through. Every bus feeds MASTER, so a clip's final gain is
  * {@code clipVolume * bus * master} (BGM is additionally scaled by the ducking envelope).
  *
  * Names are persisted (AudioSource.bus, ProjectSettings ordinals), so only append new buses.
  */
+@PublicApi
 public enum AudioBus {
     MASTER, BGM, SFX, VOICE;
 

@@ -93,6 +93,7 @@ tasks.withType<Test>().configureEach {
     // -PtestRuntime=<java home> runs the headless template tests on that runtime, e.g. the jlinked game runtime
     providers.gradleProperty("testRuntime").orNull?.let { systemProperty("retro.test.runtime", it) }
     systemProperty("user.home", layout.buildDirectory.dir("test-home").get().asFile.absolutePath)
+    systemProperty("retro.test.engineVersion", project.version.toString())
     testLogging {
         events("failed", "skipped")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.SHORT
@@ -101,6 +102,17 @@ tasks.withType<Test>().configureEach {
 
 tasks.named<Test>("test") {
     useJUnitPlatform { excludeTags("perf") }
+    inputs.files("api/retroengine.api").withPropertyName("apiBaseline") // PublicApiTest
+}
+
+// Rewrites the public API baseline from the @PublicApi marks. Review the diff before committing it.
+tasks.register<JavaExec>("apiDump") {
+    group = "verification"
+    description = "Writes api/retroengine.api from the @PublicApi-marked classes (checked by PublicApiTest)."
+    dependsOn("testClasses")
+    mainClass.set("com.retro.engine.api.ApiSurface")
+    classpath = sourceSets["test"].runtimeClasspath
+    args(file("api/retroengine.api").absolutePath)
 }
 
 tasks.register<Test>("perfTest") {
@@ -259,6 +271,35 @@ tasks.named<ProcessResources>("processResources") {
 tasks.named("processResources") {
     dependsOn("compileShaders")
 }
+
+// The one version source: Gradle's `version` plus a build ID (short commit, "-dirty" with uncommitted changes),
+// read at runtime by com.retro.engine.core.EngineVersion. No timestamp, so an unchanged tree stays up to date.
+// -PbuildId=<id> overrides it. Git is optional: no git, or no .git folder, gives "unknown".
+val gitBuildId: Provider<String> = providers.exec {
+    commandLine("git", "describe", "--always", "--dirty", "--abbrev=10", "--exclude", "*")
+    isIgnoreExitValue = true
+}.standardOutput.asText
+val engineBuildId: Provider<String> = providers.gradleProperty("buildId").orElse(provider {
+    try { gitBuildId.get().trim() } catch (e: Exception) { "" } // git not installed
+}).map { it.trim().ifEmpty { "unknown" } }
+
+val generateEngineVersion = tasks.register("generateEngineVersion") {
+    group = "build"
+    description = "Writes engine-version.properties (engine version and build ID) onto the classpath."
+    val versionText = project.version.toString()
+    val buildId = engineBuildId.orElse("unknown")
+    val outDir = layout.buildDirectory.dir("generated/version")
+    inputs.property("version", versionText)
+    inputs.property("buildId", buildId)
+    outputs.dir(outDir)
+    doLast {
+        val file = outDir.get().file("com/retro/engine/engine-version.properties").asFile
+        file.parentFile.mkdirs()
+        file.writeText("version=$versionText\nbuild=${buildId.get()}\n")
+    }
+}
+
+sourceSets["main"].resources.srcDir(generateEngineVersion)
 
 tasks.register<JavaExec>("cookAssets") {
     group = "build"

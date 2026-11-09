@@ -1,5 +1,8 @@
 package com.retro.engine.graphics;
 
+import com.retro.engine.api.Experimental;
+import com.retro.engine.api.PublicApi;
+
 /**
  * Per-project global render environment the lit shaders read alongside {@link SceneLights}: the shading model, ambient
  * light, distance fog (which also sets the draw distance) and the ground shadow blob toggle. Owned by {@link SceneLights#environment()} so it crosses the RHI
@@ -9,6 +12,8 @@ package com.retro.engine.graphics;
  * <p>Defaults reproduce the engine's previous hard-coded look, so projects saved before these settings existed render
  * unchanged.
  */
+@Experimental
+@PublicApi
 public final class RenderEnvironment {
 
     public static final boolean DEFAULT_SHADOW_BLOBS = true;

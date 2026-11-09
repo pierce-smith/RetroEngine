@@ -47,6 +47,20 @@ say so in their Javadoc and in the tables below. Call them on events, not in `on
 
 ---
 
+### What Scripts Can Rely On
+
+Scripts can call any public engine class, but only the **public API** is a promise. That's every class or member
+marked `@PublicApi`: `EntityScript` and the framework in this volume, `Entity`, the components, `Input`,
+`SceneManager`, the animator types, `RaycastHit`, `GamepadManager`, the modding classes, and a marked subset of
+`SceneWorld`. Signatures marked `@PublicApi` keep compiling and working across 1.x. Members marked `@Internal`
+(engine plumbing such as `Input.setKeyState` or a component's GPU handle caches), and public classes with no mark
+(the renderer, `PhysicsSystem`, `AnimationSystem`, `ScriptEngine`), can change in any release. `@Experimental`
+API works, but may change in a minor release with a changelog note.
+
+The complete list is [`api/retroengine.api`](../api/retroengine.api). `PublicApiTest` checks it in CI and fails if a
+signature changes, or if an API signature mentions a type outside the API. After an intended change, run
+`./gradlew apiDump` and commit the updated file with the change.
+
 ## 1. The Script Compiler
 
 ### 1.1 How a Script Becomes a Class
@@ -122,7 +136,7 @@ Before the framework existed, scripts talked to each other through reflection. T
 
 ```java
 // BEFORE: brittle, allocating, and silently breaks when GameManager is renamed
-Object inst = sc.activeScriptInstance;
+Object inst = sc.getScript();
 inst.getClass().getMethod("addScore", new Class[] { int.class })
     .invoke(inst, new Object[] { Integer.valueOf(points) });       // boxing + Object[] on every pickup
 ```
@@ -324,6 +338,20 @@ raycastInPlace(20f, hit);          // from world position along forward, ignorin
 
 ### 2.5 Entity Lifecycle & Spawning
 
+#### Physics entities built at runtime
+
+An entity from `spawnEntity` starts with just a Transform. Add its components, then call
+`sceneWorld.refreshComponents(e)` so the physics world gives it a body. `setVelocity`, `getVelocity` and
+`setAngularVelocity` work on any entity that has a body:
+
+```java
+Entity gib = sceneWorld.spawnEntity(null, "Gib", "Meshes/Gib.obj");
+gib.addComponent(new BoxCollider());
+gib.addComponent(new RigidBodyComponent());
+sceneWorld.refreshComponents(gib);              // simulated from the next physics step
+sceneWorld.setVelocity(gib, 0.0f, 4.0f, 2.0f);  // m/s, world space
+```
+
 #### Deferred destruction
 
 ```java
@@ -457,6 +485,11 @@ setAnimationSpeed(0.5f);           // playback multiplier: 1 = authored, 0 = fro
 there's no animator or no such clip. For an animator on a **child** entity (FPS arms under the camera, for
 example), call `animator.crossFade(name, duration)` on that `AnimatorComponent` directly, as
 `PlayerCombatScript` does.
+
+To drive a rig frame by frame yourself (a synced takedown, a scrubbed cinematic), call
+`sceneWorld.sampleAnimatorPose(animator, seconds)`. It poses the current state at that time right away and leaves the
+animator stopped holding the pose, so the engine neither advances it nor snaps it to the bind pose. Set
+`animator.isPlaying = true` to hand it back.
 
 #### Player Control (cutscenes)
 

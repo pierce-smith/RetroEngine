@@ -1,11 +1,16 @@
 package com.retro.engine.graphics;
 
+import com.retro.engine.api.Experimental;
+import com.retro.engine.api.PublicApi;
+
 /**
  * Per-frame scene lighting the lit shaders evaluate together in a single forward pass: one Directional light, up to
  * {@link #MAX_POINT_LIGHTS} Point lights and up to {@link #MAX_SPOT_LIGHTS} Spot lights, plus the project-wide
  * {@link RenderEnvironment} (ambient, fog, shadow blobs). Every {@link Light} is preallocated, so snapshots and
  * backends fill and copy it without per-frame allocation.
  */
+@Experimental
+@PublicApi
 public final class SceneLights {
 
     public static final int DIRECTIONAL = 0;

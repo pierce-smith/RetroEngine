@@ -77,7 +77,7 @@ public class Main {
         FrameStatsOverlay.setVisible(frameStatsFlag);
         FrameStatsOverlay.setHotkeyEnabled(frameStatsFlag || !isRuntime);
 
-        Log.info("Main", "RetroEngine on Java " + Runtime.version() + " (" + System.getProperty("os.name") + " "
+        Log.info("Main", "RetroEngine " + com.retro.engine.core.EngineVersion.describe() + " on Java " + Runtime.version() + " (" + System.getProperty("os.name") + " "
                 + System.getProperty("os.arch") + ")");
 
         int exitCode = EXIT_OK;

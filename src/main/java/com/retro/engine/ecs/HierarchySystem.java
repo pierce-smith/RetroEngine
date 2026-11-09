@@ -1,5 +1,6 @@
 package com.retro.engine.ecs;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.SceneWorld.WorldTransform;
 import com.retro.engine.ecs.components.Transform;
 
@@ -279,6 +280,7 @@ public class HierarchySystem {
     }
 
     /** Euler degrees (x, y, z) for a row-major 3x3 from {@link #rotationMatrix}. At gimbal lock, roll folds into pitch. */
+    @PublicApi
     public static void matrixToEuler(double[] m, float[] out) {
         double sy = Math.max(-1.0, Math.min(1.0, m[6]));
         out[1] = (float) Math.toDegrees(Math.asin(sy));
@@ -316,6 +318,7 @@ public class HierarchySystem {
      * Row-major 3x3 of the renderers' model rotation (MetalUniformStream / VulkanPassEncoder): R = Rz(-z) * Ry(-y) * Rx(-x)
      * with standard right-handed axis matrices. Cameras use the same matrix (SceneRenderPipeline.computeCameraView).
      */
+    @PublicApi
     public static void rotationMatrix(float xDeg, float yDeg, float zDeg, double[] m) {
         double ax = Math.toRadians(xDeg), ay = Math.toRadians(yDeg), az = Math.toRadians(zDeg);
         double cx = Math.cos(ax), sx = Math.sin(ax), cy = Math.cos(ay), sy = Math.sin(ay), cz = Math.cos(az), sz = Math.sin(az);

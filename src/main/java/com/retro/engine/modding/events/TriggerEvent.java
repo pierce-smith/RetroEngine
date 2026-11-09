@@ -1,11 +1,13 @@
 package com.retro.engine.modding.events;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Entity;
 
 /**
  * Posted once per trigger-volume pair and phase each physics step, alongside the EntityScript
  * onTriggerEnter / onTriggerStay / onTriggerExit callbacks. Reused between posts: never store it.
  */
+@PublicApi
 public final class TriggerEvent extends ModEvent {
 
     public enum Phase { ENTER, STAY, EXIT }

@@ -1,5 +1,6 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
@@ -10,6 +11,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
  * can also assign a spline directly ({@code SimpleEntityScript.followSpline}). Followers are expected on root entities
  * (their Transform is treated as world space).
  */
+@PublicApi
 public class SplineFollower extends Component {
 
     public enum WrapMode { CLAMP, LOOP, PING_PONG }

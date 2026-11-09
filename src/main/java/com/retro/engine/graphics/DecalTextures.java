@@ -1,5 +1,7 @@
 package com.retro.engine.graphics;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.assets.PixelBufferData;
 
 import java.util.Random;
@@ -9,6 +11,7 @@ import java.util.Random;
  * Pass these constants anywhere a decal takes a texture path. Each image keeps one color across its transparent areas,
  * so mipmaps don't pull a dark or light halo in from the background.
  */
+@PublicApi
 public final class DecalTextures {
 
     private static final String PREFIX = "builtin:decal/";
@@ -20,11 +23,13 @@ public final class DecalTextures {
 
     private DecalTextures() {}
 
+    @Internal
     public static boolean isBuiltin(String path) {
         return path != null && path.startsWith(PREFIX);
     }
 
     /** The pixels behind a built-in path, or null for any other path. */
+    @Internal
     public static PixelBufferData generate(String path) {
         if (BLOOD.equals(path)) return blood();
         if (BULLET_HOLE.equals(path)) return bulletHole();

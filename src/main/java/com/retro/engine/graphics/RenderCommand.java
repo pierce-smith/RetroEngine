@@ -1,10 +1,15 @@
 package com.retro.engine.graphics;
 
+import com.retro.engine.api.Experimental;
+import com.retro.engine.api.PublicApi;
+
 /**
  * One queued draw: opaque GPU handles from {@link IRenderBackend#registerMesh} / {@link IRenderBackend#registerTexture},
  * a world transform and flat material scalars. Pooled and reused by {@link RenderQueue}; backends read it and never
  * retain it past the frame. A 0L texture handle marks the channel absent.
  */
+@Experimental
+@PublicApi
 public final class RenderCommand {
 
     public long sortKey;

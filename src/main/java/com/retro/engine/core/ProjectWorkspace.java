@@ -36,7 +36,8 @@ import javax.imageio.ImageIO;
  */
 public final class ProjectWorkspace {
 
-    public static final String ENGINE_VERSION = "1.0.0";
+    /** The running engine's version, from Gradle via {@link EngineVersion}. */
+    public static final String ENGINE_VERSION = EngineVersion.VERSION;
     public static final String STARTER_SCENE = "Assets/Scenes/Main.rscene";
 
     private static final String STARTER_RESOURCE_ROOT = "/starter/";

@@ -1,5 +1,7 @@
 package com.retro.engine.scripting.framework;
 
+import com.retro.engine.api.PublicApi;
+
 /**
  * A unit of deferred work for {@link ScriptTaskQueue} and tween completion callbacks.
  *
@@ -12,6 +14,7 @@ package com.retro.engine.scripting.framework;
  * runAfter(3.0f, closeDoor);
  * </pre>
  */
+@PublicApi
 public interface ScriptTask {
     void run();
 }

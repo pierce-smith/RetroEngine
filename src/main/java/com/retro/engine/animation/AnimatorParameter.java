@@ -1,10 +1,13 @@
 package com.retro.engine.animation;
 
+import com.retro.engine.api.PublicApi;
+
 /**
  * Parameter used to drive state machine transitions. The AnimatorController holds the definition and default value;
  * each AnimatorComponent holds its own copy with the live value.
  * Supports FLOAT, INT, BOOL, and TRIGGER types.
  */
+@PublicApi
 public class AnimatorParameter {
 
     public enum ParameterType {

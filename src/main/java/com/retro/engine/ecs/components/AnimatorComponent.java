@@ -8,6 +8,8 @@ import com.retro.engine.animation.AnimatorParameter;
 import com.retro.engine.animation.AnimatorState;
 import com.retro.engine.animation.KeyframeTrack;
 import com.retro.engine.animation.Skeleton;
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.InspectorProperty;
@@ -37,6 +39,7 @@ import java.util.Map;
  * only the authored data is persisted ({@link #poseData}): editor pose edits and recorded keys by bone name, the record
  * time, assigned .ranim clips, and the entry state.
  */
+@PublicApi
 public class AnimatorComponent extends Component {
 
     public static final int MAX_BONES = 64;
@@ -81,6 +84,7 @@ public class AnimatorComponent extends Component {
     private boolean dirty = true;
 
     // Runtime: true while the palette holds the skeleton's rest pose, so idle animators skip re-evaluation
+    @Internal
     public boolean bindPoseApplied = false;
 
     // Runtime: counts poses animation has produced, and the one IK last edited. IK edits the palette in place, so it must
@@ -379,12 +383,14 @@ public class AnimatorComponent extends Component {
         return (bone != null) ? bone.localBindTransform : null;
     }
 
+    @Internal
     public void setEditPose(int boneIndex, float[] localTransform) {
         if (boneIndex < 0 || boneIndex >= MAX_BONES || localTransform == null || localTransform.length != 16) return;
         System.arraycopy(localTransform, 0, editPoseLocal[boneIndex], 0, 16);
         editPoseActive[boneIndex] = true;
     }
 
+    @Internal
     public void clearEditPose(int boneIndex) {
         if (boneIndex >= 0 && boneIndex < MAX_BONES) editPoseActive[boneIndex] = false;
     }
@@ -393,6 +399,7 @@ public class AnimatorComponent extends Component {
      * Copies another animator's authored data onto this one (duplicates and play-mode clones keep the authored pose).
      * The edit pose is copied; the recorded clip is shared ({@link #copyFrom} replaces it with a copy).
      */
+    @Internal
     public void copyEditPoseFrom(AnimatorComponent other) {
         if (other == null) return;
         for (int b = 0; b < MAX_BONES; b++) {
@@ -429,6 +436,7 @@ public class AnimatorComponent extends Component {
     }
 
     /** Entry state saved with the scene, applied once the rebuilt controller has its states (null when none). */
+    @Internal
     public String takeSavedEntryState() {
         String name = savedEntryState;
         savedEntryState = null;
@@ -449,6 +457,7 @@ public class AnimatorComponent extends Component {
      * Poses every keyed bone at {@code time} from {@link #recordedPose} (the record playhead moved), so new edits start
      * from the recorded motion at that time. Bones without a track keep their edit pose.
      */
+    @Internal
     public void applyRecordedPose(float time) {
         if (recordedPose == null || skeleton == null) return;
         float[] pos = new float[3], quat = new float[4], scale = new float[3], local = new float[16];
@@ -470,6 +479,7 @@ public class AnimatorComponent extends Component {
      * played the previous recording is removed; an exported copy assigned under its own state is kept. Returns the
      * new state (null without a controller).
      */
+    @Internal
     public AnimatorState newRecordedClip(String clipName) {
         String name = (clipName == null || clipName.isBlank()) ? RECORDED_CLIP_NAME : clipName.trim();
         AnimationClip previous = recordedPose;
@@ -491,6 +501,7 @@ public class AnimatorComponent extends Component {
      * Renames {@link #recordedPose} and the controller state playing it (binding one if it has none), keeping both
      * names equal and unique among the controller's states. Returns the name applied, or null without a recording.
      */
+    @Internal
     public String renameRecordedClip(String newName) {
         if (recordedPose == null || newName == null || newName.isBlank()) return null;
         String name = newName.trim();
@@ -515,6 +526,7 @@ public class AnimatorComponent extends Component {
     }
 
     /** The controller state playing {@link #recordedPose}, or null when it is not bound to one. */
+    @Internal
     public AnimatorState recordedState() {
         if (controller == null || recordedPose == null) return null;
         for (AnimatorState state : controller.getStates().values()) {
@@ -533,6 +545,7 @@ public class AnimatorComponent extends Component {
      * Writes {@link #recordedPose} to a .ranim clip at {@code filePath}, named after the file. Returns false when there
      * is nothing recorded or the file cannot be written.
      */
+    @Internal
     public boolean exportRecordedClip(String filePath) {
         if (recordedPose == null || recordedPose.getTracks().isEmpty() || filePath == null || filePath.isBlank()) return false;
         File file = new File(filePath);
@@ -608,6 +621,7 @@ public class AnimatorComponent extends Component {
      * Writes a position / rotation (quaternion x, y, z, w) / scale key for {@code bone} at {@link #recordTime} into
      * {@link #recordedPose}, replacing a key already at that time. Returns the bone's track.
      */
+    @Internal
     public KeyframeTrack recordKeyframe(Skeleton.BoneNode bone, float[] pos, float[] quat, float[] scale) {
         if (bone == null) return null;
         if (recordedPose == null) recordedPose = createRecordedClip(RECORDED_CLIP_NAME);
@@ -652,10 +666,12 @@ public class AnimatorComponent extends Component {
         return grown;
     }
 
+    @Internal
     public boolean isDirty() {
         return dirty;
     }
 
+    @Internal
     public void setDirty(boolean dirty) {
         this.dirty = dirty;
     }

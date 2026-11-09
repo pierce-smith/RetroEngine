@@ -1,5 +1,7 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.InspectorProperty;
@@ -22,6 +24,7 @@ import java.io.IOException;
  * component re-decodes lazily when the reference changes. Arc-length tables are re-baked only when the curve changes
  * (edit time); per-frame queries are allocation-free.</p>
  */
+@PublicApi
 public class SplineComponent extends Component {
 
     public enum CurveType { CATMULL_ROM, BEZIER }
@@ -65,6 +68,7 @@ public class SplineComponent extends Component {
     public float totalLength;
 
     /** Entity carrying this spline; bound by SplineSystem / the viewport gizmo (supplies the world offset). */
+    @Internal
     public transient Entity owner;
 
     public SplineComponent() {
@@ -81,9 +85,11 @@ public class SplineComponent extends Component {
     }
 
     /** Live knot count without syncing (for the evaluator's bake). */
+    @Internal
     public int getCountRaw() { return count; }
 
     /** Syncs the live knots with the persisted blob and the inspector's point count, then re-bakes if the curve changed. */
+    @Internal
     public void ensureUpToDate() {
         if (splineData != decodedFrom || !decodedOnce) {
             decodedOnce = true;
@@ -105,6 +111,7 @@ public class SplineComponent extends Component {
     }
 
     /** Marks live knots as edited (re-bakes on next query) without persisting yet; used during viewport drags. */
+    @Internal
     public void markEdited() { editVersion++; }
 
     /** Persists the live knots into a fresh {@link #splineData} array (edit time only; allocates). */

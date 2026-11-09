@@ -1,5 +1,6 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
@@ -9,6 +10,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
  * y up: the element's center sits at (anchor * canvas size + offset), so anchor (0.5, 0.5) centers it and (0, 1) pins
  * it to the top-left corner. Subclass properties continue the {@link InspectorProperty#order()} sequence at 12.
  */
+@PublicApi
 public abstract class UIElement extends Component {
 
     @InspectorProperty(order = 0, label = "VISIBLE", type = PropertyType.TOGGLE)

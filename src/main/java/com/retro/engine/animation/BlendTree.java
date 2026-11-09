@@ -1,5 +1,7 @@
 package com.retro.engine.animation;
 
+import com.retro.engine.api.PublicApi;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -11,6 +13,7 @@ import java.util.function.UnaryOperator;
  * FREEFORM_2D blends all motions by inverse-distance weighting over two float parameters.
  * Weights are written into a pre-allocated array so per-frame evaluation does not allocate.
  */
+@PublicApi
 public class BlendTree {
 
     public enum BlendType {

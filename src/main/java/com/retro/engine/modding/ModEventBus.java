@@ -1,5 +1,6 @@
 package com.retro.engine.modding;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.modding.events.ModEvent;
 
 import java.lang.reflect.InvocationTargetException;
@@ -23,6 +24,7 @@ import java.util.Map;
  * changes, and engine hot paths reuse one event instance per type. A handler that throws is logged with its mod id
  * and skipped; the remaining handlers and the engine keep running.
  */
+@PublicApi
 public final class ModEventBus {
 
     private static final Handler[] NONE = new Handler[0];

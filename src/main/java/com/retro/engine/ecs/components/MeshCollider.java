@@ -1,5 +1,6 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.InspectorProperty;
@@ -10,6 +11,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
  * Transform: give it a KINEMATIC RigidBody to make a lift or platform that carries what stands on it. Its scale is read
  * once when Play starts. Leave the mesh empty to use the entity's own Mesh Filter.
  */
+@PublicApi
 public class MeshCollider extends Component {
 
     @InspectorProperty(order = 0, label = "MESH", type = PropertyType.ASSET_PICKER, assetType = "MESH_3D", since = 10, prefabSince = 9)

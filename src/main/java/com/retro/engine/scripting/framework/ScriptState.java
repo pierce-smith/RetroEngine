@@ -1,5 +1,7 @@
 package com.retro.engine.scripting.framework;
 
+import com.retro.engine.api.PublicApi;
+
 /**
  * One state of a {@link ScriptStateMachine}. Override only the callbacks you need.
  *
@@ -17,6 +19,7 @@ package com.retro.engine.scripting.framework;
  * public void onUpdate(float dt) { fsm.update(dt); }
  * </pre>
  */
+@PublicApi
 public abstract class ScriptState {
 
     private final String name;

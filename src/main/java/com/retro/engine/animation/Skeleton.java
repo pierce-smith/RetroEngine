@@ -1,5 +1,7 @@
 package com.retro.engine.animation;
 
+import com.retro.engine.api.PublicApi;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -12,6 +14,7 @@ import java.util.Map;
  * A shared, read-only asset once built: duplicated entities reference the same Skeleton, so animation never writes
  * pose data here. Per-entity poses (edit pose, evaluated palette) live on each AnimatorComponent.
  */
+@PublicApi
 public class Skeleton {
 
     public static class BoneNode {

@@ -1,8 +1,11 @@
 package com.retro.engine.animation;
 
+import com.retro.engine.api.PublicApi;
+
 /**
  * Condition evaluated against an AnimatorParameter to trigger a state machine transition.
  */
+@PublicApi
 public class AnimatorCondition {
 
     public enum Comparison {

@@ -1,10 +1,13 @@
 package com.retro.engine.scripting.framework;
 
+import com.retro.engine.api.PublicApi;
+
 /**
  * Mutable 3-component float vector for gameplay scripts. Every operation writes into {@code this} (or an explicit
  * {@code out}) and returns it for chaining, so a script can keep a few Vector3 fields and do all of its per-frame math
  * without allocating. Create instances in field initializers or onStart, never inside onUpdate.
  */
+@PublicApi
 public final class Vector3 {
 
     public float x;

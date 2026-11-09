@@ -1,5 +1,7 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.HierarchySystem;
 import com.retro.engine.ecs.InspectorProperty;
@@ -15,6 +17,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
  * {@link #shapeAngle} of it from a disc of {@link #shapeRadius}, SPHERE sprays outward from a ball of that radius, BOX
  * spawns inside a cube of that half-extent moving along +Y.</p>
  */
+@PublicApi
 public class ParticleSystem extends Component {
 
     public enum EmitterShape { CONE, SPHERE, BOX }
@@ -88,9 +91,12 @@ public class ParticleSystem extends Component {
     // --- Runtime pool (never serialized) ---
     private transient int capacity;
     private transient int aliveCount;
+    @Internal
     public transient float[] posX, posY, posZ, velX, velY, velZ, age, life;
     /** Draw order scratch used by the renderer for back-to-front sorting of ALPHA systems. */
+    @Internal
     public transient int[] drawOrder;
+    @Internal
     public transient float[] drawDepth;
 
     private transient boolean playing;
@@ -133,6 +139,7 @@ public class ParticleSystem extends Component {
     public int getAliveCount() { return aliveCount; }
 
     /** Restores the pre-Play state (called when Play stops). */
+    @Internal
     public void resetRuntime() {
         clear();
         playing = false;
@@ -147,6 +154,7 @@ public class ParticleSystem extends Component {
      * Advances the system by {@code dt} seconds with the emitter at world position (ox, oy, oz) and world rotation
      * (rx, ry, rz) in degrees.
      */
+    @Internal
     public void simulate(float dt, float ox, float oy, float oz, float rxDeg, float ryDeg, float rzDeg) {
         ensurePool();
         if (!started) {
@@ -267,10 +275,12 @@ public class ParticleSystem extends Component {
     // Renderer texture cache
     // =========================================================================
 
+    @Internal
     public long getCachedTextureHandle(String path, int epoch) {
         return (gpuTextureHandle != 0L && epoch == gpuTextureEpoch && path.equals(gpuTextureKey)) ? gpuTextureHandle : 0L;
     }
 
+    @Internal
     public void cacheTextureHandle(String path, long handle, int epoch) {
         gpuTextureKey = path;
         gpuTextureHandle = handle;

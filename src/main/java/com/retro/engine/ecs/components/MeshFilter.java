@@ -1,5 +1,7 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.InspectorProperty;
@@ -10,6 +12,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
  * (RpClump / RpAtomic parity). Allows a single Entity container to hold multi-part sub-meshes
  * sharing unified parent transform nodes.
  */
+@PublicApi
 @Component.LegacyNames("MeshRendererComponent")
 public class MeshFilter extends Component {
 
@@ -30,10 +33,12 @@ public class MeshFilter extends Component {
     private transient int gpuHandleEpoch;
 
     /** Returns the cached GPU mesh handle if it was resolved for this path in this epoch, otherwise 0L. */
+    @Internal
     public long getCachedMeshHandle(String path, int epoch) {
         return (gpuMeshHandle != 0L && epoch == gpuHandleEpoch && path.equals(gpuMeshKey)) ? gpuMeshHandle : 0L;
     }
 
+    @Internal
     public void cacheMeshHandle(String path, long handle, int epoch) {
         this.gpuMeshKey = path;
         this.gpuMeshHandle = handle;
@@ -44,12 +49,14 @@ public class MeshFilter extends Component {
     private transient float[] drawnLocalBounds;
     private transient String drawnBoundsKey;
 
+    @Internal
     public void cacheDrawnBounds(String path, float[] localBounds) {
         this.drawnBoundsKey = path;
         this.drawnLocalBounds = localBounds;
     }
 
     /** Local {minX, minY, minZ, maxX, maxY, maxZ} of the drawn mesh, or null until the current mesh has rendered. */
+    @Internal
     public float[] getDrawnLocalBounds() {
         return (drawnLocalBounds != null && meshAssetPath != null && meshAssetPath.equals(drawnBoundsKey)) ? drawnLocalBounds : null;
     }

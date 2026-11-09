@@ -1,5 +1,8 @@
 package com.retro.engine.modding.events;
 
+import com.retro.engine.api.Experimental;
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.assets.AssetStreamer;
 import com.retro.engine.graphics.RenderCommand;
 import com.retro.engine.graphics.RenderEnvironment;
@@ -16,9 +19,15 @@ import com.retro.engine.graphics.SceneRenderPipeline;
  *
  * <p>Runs every frame: one reused instance, and handlers must not allocate if the game is to stay hitch-free.
  */
+@Experimental
+@PublicApi
 public final class RenderPassEvent extends ModEvent {
 
+    @Internal
+    public RenderPassEvent() {}
+
     /** This frame's draw list (unsorted while the event runs). Prefer {@link #drawMesh} over editing commands. */
+    @Internal
     public RenderQueue queue;
     /** This frame's lights; {@code lights.add(SceneLights.POINT)} claims a free slot or returns null when full. */
     public SceneLights lights;
@@ -31,6 +40,7 @@ public final class RenderPassEvent extends ModEvent {
     private AssetStreamer streamer;
 
     /** Engine use: binds the pipeline that services {@link #drawMesh} for this post. */
+    @Internal
     public void bind(SceneRenderPipeline pipeline, AssetStreamer streamer) {
         this.pipeline = pipeline;
         this.streamer = streamer;

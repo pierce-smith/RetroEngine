@@ -1,5 +1,6 @@
 package com.retro.engine.scripting.framework;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.components.Light;
 import com.retro.engine.ecs.components.Transform;
 import com.retro.engine.ecs.components.UIElement;
@@ -15,6 +16,7 @@ import com.retro.engine.ecs.components.UIElement;
  * <p>The start value is read from the target when the tween actually begins (after its delay). Rotation tweens take
  * the shortest way around on each axis. {@code SimpleEntityScript} owns one tweener and ticks it before onUpdate.</p>
  */
+@PublicApi
 public final class ScriptTweener {
 
     // ---------------------------------------------------------------- Easing curves

@@ -1,5 +1,7 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
@@ -7,6 +9,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
 /**
  * Encapsulates perspective 3D camera properties attached to an Entity.
  */
+@PublicApi
 public class Camera extends Component {
 
     @InspectorProperty(order = 0, label = "FOV", min = 10.0f, max = 170.0f, step = 5.0f)
@@ -52,14 +55,17 @@ public class Camera extends Component {
     public float contrast = 1.0f;
 
     /** Runtime canvas set by scripts; takes precedence over {@link #uiCanvas} and is never persisted. */
+    @Internal
     public transient UICanvasComponent activeCanvas;
 
     /**
      * Default screen-space canvas bound automatically when UI elements sit on or under this camera's entity with no
      * UICanvas above them, so HUD components render without extra setup. Created on first use; never persisted.
      */
+    @Internal
     public transient UICanvasComponent autoCanvas;
 
+    @Internal
     public UICanvasComponent getOrCreateAutoCanvas() {
         if (autoCanvas == null) autoCanvas = new UICanvasComponent();
         return autoCanvas;

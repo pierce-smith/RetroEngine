@@ -1,5 +1,6 @@
 package com.retro.engine.modding.events;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Entity;
 
 import java.util.List;
@@ -9,6 +10,7 @@ import java.util.List;
  * into the SceneWorld. {@link #entities} is the live, mutable list: subscribers may add, remove or edit entities
  * (keep parentId / child ids consistent, as SceneDeltaPatcher does).
  */
+@PublicApi
 public final class SceneLoadEvent extends ModEvent {
 
     /** Project-relative scene path, e.g. {@code Assets/Scenes/Main.rscene}. */

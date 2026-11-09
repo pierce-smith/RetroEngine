@@ -1,5 +1,6 @@
 package com.retro.engine.modding.events;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Entity;
 
 /**
@@ -9,6 +10,7 @@ import com.retro.engine.ecs.Entity;
  *
  * <p>One reused instance is posted for every contact of every step: never store it, and keep handlers cheap.
  */
+@PublicApi
 public final class CollisionEvent extends ModEvent {
 
     public Entity entityA;

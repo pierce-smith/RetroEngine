@@ -1,5 +1,7 @@
 package com.retro.engine.modding;
 
+import com.retro.engine.api.PublicApi;
+
 /**
  * Base class of a mod's {@code entry_point} (mod.json). ModLoader compiles the mod's {@code script_sources} with
  * {@link com.retro.engine.scripting.ScriptCompiler} and instantiates the entry point through its public no-arg constructor. Lifecycle, per mod set:
@@ -9,6 +11,7 @@ package com.retro.engine.modding;
  * <p>Subscribe with {@link SubscribeEvent} methods or a {@link ModEventListener} lambda. The helpers below are public
  * (not protected) so that classes nested in a mod, which may load in another class loader, can always reach them.
  */
+@PublicApi
 public abstract class ModScript {
 
     private ModContext context;

@@ -1,10 +1,13 @@
 package com.retro.engine.animation;
 
+import com.retro.engine.api.PublicApi;
+
 /**
  * Stores keyframe samples for translation, rotation (quaternion), and scale
  * for a specific bone node over time, with high-performance NLERP/SLERP interpolation
  * using flat 1D contiguous arrays for zero-allocation hot paths.
  */
+@PublicApi
 public class KeyframeTrack {
 
     public String boneName;

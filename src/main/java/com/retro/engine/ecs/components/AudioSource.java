@@ -1,5 +1,7 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.InspectorProperty;
@@ -22,6 +24,7 @@ import static org.lwjgl.openal.AL10.*;
  * Persisted fields are written positionally by ComponentBinaryCodec: append new ones last, gated with since /
  * prefabSince and a format version bump.
  */
+@PublicApi
 public class AudioSource extends Component {
     public enum PlaybackState { PLAYING, PAUSED, STOPPED }
 
@@ -76,11 +79,13 @@ public class AudioSource extends Component {
     }
 
     /** OpenAL buffer name for the current clip, or 0 when nothing is loaded. */
+    @Internal
     public int getBufferHandle() {
         return bufferHandle;
     }
 
     /** OpenAL source name, or 0 before the first play. */
+    @Internal
     public int getSourceHandle() {
         return sourceHandle;
     }
@@ -107,6 +112,7 @@ public class AudioSource extends Component {
         this.state = PlaybackState.STOPPED;
     }
 
+    @Internal
     public void dispose() {
         if (sourceHandle != 0 && AudioEngine.isAvailable()) {
             alSourceStop(sourceHandle);
@@ -146,6 +152,7 @@ public class AudioSource extends Component {
      * Per-tick sync: moves the source to the entity's world position, re-applies inspector/script edits
      * (volume, pitch, loop, distances) and moves state to STOPPED once a non-looping clip finishes.
      */
+    @Internal
     public void updateSpatial(float worldX, float worldY, float worldZ) {
         if (sourceHandle == 0) return;
         if (!Float.isFinite(worldX + worldY + worldZ)) return;

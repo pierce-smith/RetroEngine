@@ -1,5 +1,7 @@
 package com.retro.engine.ecs;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.components.Material;
 import com.retro.engine.ecs.components.MeshFilter;
 import com.retro.engine.ecs.components.Transform;
@@ -11,12 +13,15 @@ import java.util.List;
  * Standalone Entity domain class with 64-bit Generational Entity Handle support
  * and parent-child scene graph hierarchy capabilities.
  */
+@PublicApi
 public class Entity {
     public EntityHandle handle = EntityHandle.NULL;
     public String id;
     public String name;
+    @Internal
     public boolean selected = false;
     public String parentId = null;
+    @Internal
     public boolean expandedInHierarchy = true;
     private final List<String> childIds = new ArrayList<>();
     private final List<Component> components = new ArrayList<>();
@@ -32,6 +37,7 @@ public class Entity {
     }
 
     public EntityHandle getHandle() { return handle; }
+    @Internal
     public void setHandle(EntityHandle handle) { this.handle = (handle != null) ? handle : EntityHandle.NULL; }
 
     public void addComponent(Component component) {
@@ -124,12 +130,14 @@ public class Entity {
         return childIds;
     }
 
+    @Internal
     public void addChildId(String childId) {
         if (childId != null && !childId.equals(this.id) && !childIds.contains(childId)) {
             childIds.add(childId);
         }
     }
 
+    @Internal
     public void removeChildId(String childId) {
         if (childId != null) {
             childIds.remove(childId);

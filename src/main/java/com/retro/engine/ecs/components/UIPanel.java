@@ -1,9 +1,11 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
 
 /** Filled (optionally rounded and bordered) rectangle: HUD backplates, frames, and solid blocks. */
+@PublicApi
 public class UIPanel extends UIElement {
 
     @InspectorProperty(order = 12, label = "CORNER RADIUS", min = 0.0f, max = 500.0f, step = 1.0f)

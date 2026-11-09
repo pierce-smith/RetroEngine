@@ -1,9 +1,11 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
 
 /** Single-line SDF text (score counters, timers, labels), vertically centered in its rect. */
+@PublicApi
 public class UIText extends UIElement {
 
     public enum Alignment { LEFT, CENTER, RIGHT }

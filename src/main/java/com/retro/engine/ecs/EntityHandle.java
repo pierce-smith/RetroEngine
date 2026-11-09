@@ -1,10 +1,13 @@
 package com.retro.engine.ecs;
 
+import com.retro.engine.api.PublicApi;
+
 /**
  * 64-bit Generational Entity Handle (32-bit Index | 32-bit Generation).
  * Provides lifecycle-safe entity referencing without dangling pointers across
  * entity deletion, scene clearing, and play state simulation restoration.
  */
+@PublicApi
 public record EntityHandle(int index, int generation) {
     public static final EntityHandle NULL = new EntityHandle(-1, 0);
 

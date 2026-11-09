@@ -1,5 +1,6 @@
 package com.retro.engine.scripting.framework;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.components.AnimatorComponent;
@@ -24,6 +25,7 @@ import com.retro.engine.ecs.components.VehicleControllerComponent;
  * <p>The cache drops itself automatically when the entity's component count changes (a component was added or
  * removed). Call {@link #invalidate()} after swapping one component for another of the same count.</p>
  */
+@PublicApi
 public final class ComponentCache {
 
     private Entity entity;

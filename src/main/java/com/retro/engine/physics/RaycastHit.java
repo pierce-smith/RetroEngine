@@ -1,10 +1,12 @@
 package com.retro.engine.physics;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Entity;
 
 /**
  * Encapsulates the results of a 3D raycast spatial query into the physics world.
  */
+@PublicApi
 public class RaycastHit {
     public boolean hit = false;
     public Entity entity = null;

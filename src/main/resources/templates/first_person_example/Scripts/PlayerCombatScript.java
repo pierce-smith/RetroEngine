@@ -292,7 +292,7 @@ public class PlayerCombatScript extends SimpleEntityScript {
         }
         if (best == null) return;
         ScriptComponent sc = (ScriptComponent) best.getComponent(ScriptComponent.class);
-        Object inst = sc.activeScriptInstance;
+        Object inst = sc.getScript();
         if (inst == null) return;
         if (hitShake > 0.0f) shakeCamera(hitShake, 0.2f);
         if (hitSound != null && hitSound.length() > 0) playSpatialSound(hitSound, 1.0f);

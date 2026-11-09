@@ -1,5 +1,6 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
@@ -9,6 +10,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
  * laid out in this canvas's reference-pixel space. Screen-space overlays render through the primary Camera (attached
  * to the camera's entity or named by its UI CANVAS field); world-space billboards render wherever they are visible.
  */
+@PublicApi
 public class UICanvasComponent extends Component {
 
     public enum RenderMode { SCREEN_SPACE_OVERLAY, WORLD_SPACE_BILLBOARD }

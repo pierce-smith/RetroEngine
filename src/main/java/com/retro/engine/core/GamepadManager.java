@@ -1,5 +1,8 @@
 package com.retro.engine.core;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
+
 import org.lwjgl.glfw.GLFWGamepadState;
 
 import java.nio.IntBuffer;
@@ -20,6 +23,7 @@ import static org.lwjgl.sdl.SDLStdinc.SDL_free;
  * the active controller opened on the first vibration request, so games that never rumble never load it (and exports
  * may leave its natives out); a per-frame countdown stops each burst.
  */
+@PublicApi
 public class GamepadManager {
 
     // Face buttons (Xbox layout; PlayStation equivalents Cross / Circle / Square / Triangle)
@@ -81,6 +85,7 @@ public class GamepadManager {
     private float vibrationRemaining = 0.0f;
     private long lastUpdateNanos = 0L;
 
+    @Internal
     public GamepadManager() {
         clearInputs();
         loadBundledMappings();
@@ -158,6 +163,7 @@ public class GamepadManager {
     }
 
     /** Polls all joystick slots once; call once per frame after glfwPollEvents. */
+    @Internal
     public void update() {
         System.arraycopy(buttons, 0, prevButtons, 0, BUTTON_COUNT);
         if (state == null) return;
@@ -390,6 +396,7 @@ public class GamepadManager {
         return v > 0.0f ? Math.min(1.0f, v) : 0.0f; // NaN maps to 0
     }
 
+    @Internal
     public void destroy() {
         stopVibration();
         closeRumbleGamepad();

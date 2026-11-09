@@ -1,5 +1,6 @@
 package com.retro.engine.modding.events;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Entity;
 
 /**
@@ -8,6 +9,7 @@ import com.retro.engine.ecs.Entity;
  * a canceled entity (and its descendants) is removed before it becomes part of the scene.
  * The instance is reused between posts; do not store it.
  */
+@PublicApi
 public final class EntitySpawnEvent extends ModEvent {
 
     public enum Source { SCENE_LOAD, PREFAB, SCRIPT }

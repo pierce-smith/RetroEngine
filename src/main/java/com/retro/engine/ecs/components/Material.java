@@ -1,5 +1,7 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
@@ -9,6 +11,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
  * specular/roughness (R = specular mask, G = roughness multiplier), lightmap/AO (sampled with UV2) and emissive.
  * Exposes Blinn-Phong surface properties for RenderWare-style material rendering.
  */
+@PublicApi
 public class Material extends Component {
 
     // Channel indices for the per-channel path accessors and GPU handle cache
@@ -76,11 +79,13 @@ public class Material extends Component {
     }
 
     /** Returns the cached GPU texture handle if it was resolved for this channel's path in this epoch, otherwise 0L. */
+    @Internal
     public long getCachedChannelHandle(int channel, String path, int epoch) {
         long handle = gpuTextureHandles[channel];
         return (handle != 0L && epoch == gpuHandleEpochs[channel] && path.equals(gpuTextureKeys[channel])) ? handle : 0L;
     }
 
+    @Internal
     public void cacheChannelHandle(int channel, String path, long handle, int epoch) {
         gpuTextureKeys[channel] = path;
         gpuTextureHandles[channel] = handle;
@@ -88,10 +93,12 @@ public class Material extends Component {
     }
 
     /** Returns the cached albedo GPU texture handle if it was resolved for this path in this epoch, otherwise 0L. */
+    @Internal
     public long getCachedTextureHandle(String path, int epoch) {
         return getCachedChannelHandle(CHANNEL_ALBEDO, path, epoch);
     }
 
+    @Internal
     public void cacheTextureHandle(String path, long handle, int epoch) {
         cacheChannelHandle(CHANNEL_ALBEDO, path, handle, epoch);
     }

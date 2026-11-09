@@ -1,6 +1,8 @@
 package com.retro.engine.ecs.components;
 
 import com.retro.engine.animation.Skeleton;
+import com.retro.engine.api.Internal;
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
@@ -15,6 +17,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
  * Controller makes when it steps up a stair. A stopped animator is left alone, so a script that takes over a skeleton,
  * as a paired execution does, gets exactly the frames it asks for.</p>
  */
+@PublicApi
 public class FootIK extends Component {
 
     /** Off plays the clip untouched. It fades rather than snaps, so a script can flip this freely. */
@@ -53,16 +56,24 @@ public class FootIK extends Component {
     public float forwardYaw = 0.0f;
 
     // --- Runtime state (not persisted) ---
+    @Internal
     public transient Skeleton resolvedSkeleton;
+    @Internal
     public transient String resolvedLeft, resolvedRight, resolvedPelvis;
     /** Foot, knee and hip of the left leg, then of the right. */
+    @Internal
     public final transient int[] legBones = new int[6];
+    @Internal
     public transient int pelvisBone = -1;
+    @Internal
     public transient boolean resolved, warned, warm;
     /** Each foot's ground height relative to the origin, eased. */
+    @Internal
     public final transient float[] footOffset = new float[2];
     /** Each foot's ground normal, eased: left x, y, z then right x, y, z. */
+    @Internal
     public final transient double[] footNormal = {0.0, 1.0, 0.0, 0.0, 1.0, 0.0};
+    @Internal
     public transient float pelvisOffset, blend, lastRootY;
 
     public FootIK() {}

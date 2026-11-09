@@ -1,5 +1,6 @@
 package com.retro.engine.modding;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.ComponentSchema;
 
@@ -7,6 +8,7 @@ import java.io.File;
 import java.io.IOException;
 
 /** Per-mod view of the mod runtime handed to {@link ModScript#onInitialize}. */
+@PublicApi
 public final class ModContext {
 
     // Mod whose scripts are being initialized on the loading thread, for attributing bus registrations and logs

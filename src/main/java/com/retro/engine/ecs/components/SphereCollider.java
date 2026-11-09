@@ -1,5 +1,6 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
@@ -7,6 +8,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
 /**
  * ECS Sphere Collider shape definition.
  */
+@PublicApi
 public class SphereCollider extends Component {
 
     @InspectorProperty(order = 0, label = "RADIUS", min = 0.01f, max = 100.0f, step = 0.1f)

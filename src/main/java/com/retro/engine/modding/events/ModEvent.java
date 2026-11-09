@@ -1,9 +1,12 @@
 package com.retro.engine.modding.events;
 
+import com.retro.engine.api.PublicApi;
+
 /**
  * Base class of everything posted on {@link com.retro.engine.modding.ModEventBus}. Engine hot paths reuse one
  * instance per event type, so subscribers must not keep a reference to an event after their handler returns.
  */
+@PublicApi
 public abstract class ModEvent {
 
     private boolean cancelled;

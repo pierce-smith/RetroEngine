@@ -1,5 +1,6 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
@@ -13,6 +14,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
  * for a surface agents walk on, such as a bridge deck, and bake it in the position where it can be crossed. Bake again
  * after moving a gate or changing its size.
  */
+@PublicApi
 public class NavMeshGate extends Component {
 
     @InspectorProperty(order = 0, label = "SIZE X", min = 0.01f, max = 100.0f, step = 0.1f)

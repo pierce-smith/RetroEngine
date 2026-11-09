@@ -1,5 +1,6 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
@@ -7,6 +8,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
 /**
  * Defines a directional or point light source in 3D world space.
  */
+@PublicApi
 public class Light extends Component {
     public enum LightType { DIRECTIONAL, POINT, SPOT }
 

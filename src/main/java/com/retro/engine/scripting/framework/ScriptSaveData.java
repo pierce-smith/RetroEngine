@@ -1,5 +1,6 @@
 package com.retro.engine.scripting.framework;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.core.ProjectWorkspace;
 import com.retro.engine.editor.StandaloneExporter;
 import com.retro.engine.scripting.ScriptEngine;
@@ -22,6 +23,7 @@ import java.util.Properties;
  * but avoid writing save data every frame. Reads of booleans / numbers parse the stored text on each call, so cache
  * values you need per frame in a field.</p>
  */
+@PublicApi
 public final class ScriptSaveData {
 
     private static final Properties values = new Properties();

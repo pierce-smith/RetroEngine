@@ -1,5 +1,7 @@
 package com.retro.engine.scripting.framework;
 
+import com.retro.engine.api.PublicApi;
+
 /**
  * Allocation-free timer / task scheduler for gameplay scripts.
  *
@@ -14,6 +16,7 @@ package com.retro.engine.scripting.framework;
  * <p>Time is game time: {@link #update(float)} is driven by the script's frame delta, so timers freeze while the
  * simulation is paused. {@code SimpleEntityScript} owns one queue and ticks it automatically before onUpdate.</p>
  */
+@PublicApi
 public final class ScriptTaskQueue {
 
     public static final int INVALID_HANDLE = 0;

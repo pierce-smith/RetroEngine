@@ -1,5 +1,6 @@
 package com.retro.engine.ecs.components;
 
+import com.retro.engine.api.PublicApi;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.InspectorProperty;
 import com.retro.engine.ecs.InspectorProperty.PropertyType;
@@ -12,6 +13,7 @@ import com.retro.engine.ecs.InspectorProperty.PropertyType;
  * <p>Geometry is projected once when Play starts, then follows the meshes it landed on. In the editor it rebuilds
  * whenever the decal or a surface under it moves.</p>
  */
+@PublicApi
 public class Decal extends Component {
 
     public enum Style { BLOOD, BULLET_HOLE, SCORCH, SOFT, TEXTURE }

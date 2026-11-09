@@ -39,7 +39,7 @@ Mods/example_mod/
 |-----|---------|---------|
 | `mod_id` (required) | | `a-z 0-9 _ . -`, unique. Also the `mod://<mod_id>/` prefix. |
 | `name`, `version`, `author` | | Display only; `version` is compared by dependencies. |
-| `target_engine` | | Logged if it differs from the running engine. Not enforced. |
+| `target_engine` | | Engine version the mod was built for. A different major version (e.g. `2.0.0` on a 1.x engine) is refused; other differences are only logged. Leave it out to skip the check. |
 | `load_priority` | `0` | Higher loads later and wins conflicts. Aliases: `priority`, `loadOrder`. |
 | `dependencies` | `[]` | `"other_mod"` or `{"mod_id": "...", "version": "1.2.0", "optional": true}`. |
 | `entry_point` | | Fully qualified `ModScript` subclass. |
@@ -284,14 +284,20 @@ Players drop the `.rmod` into the game's `Game_Data/Mods/`.
 
 ## API reference
 
+The public API is every class or member marked `@PublicApi` (package `com.retro.engine.api`). The full list of
+signatures is [`api/retroengine.api`](../api/retroengine.api), and CI fails when it changes without that file being
+updated. Within 1.x, `@PublicApi` signatures keep working. `@Experimental` ones (currently `RenderPassEvent` and the
+render types it hands you) may change in a minor release, with a changelog note. Public engine classes that aren't
+marked, and members marked `@Internal`, can change in any release.
+
+
 | Class | Methods |
 |-------|---------|
 | `ModScript` | `onInitialize(ModContext)`, `onModInit()`, `onModEnable()`, `onModDisable()`, `onShutdown()`, `context()`, `logInfo/Warn/Error` |
 | `ModContext` | `registerComponent(Class)`, `registerEvents(Object)`, `eventBus()`, `vfs()`, `modFile(path)`, `modUri(path)`, `manifest()`, `logInfo/Warn/Error` |
 | `ModEventBus` | `register(Object)`, `subscribe(Class, ModEventListener)`, `unregister(Object)`, `post(Object)`, `hasSubscribers(Class)` |
-| `ComponentSchema` | `registerModComponent(Class, modId)` |
-| `AssetDatabase` | `mountModVFS(String modFolder)` mounts an extra mod folder and reloads the mod set. `resolveAsset(String path)` returns the final file for a path through `mod://`, the overlays, then vanilla. |
-| `SceneWorld` | `spawnEntity(id, name, meshPath)`, `findEntityByName(name)`, `findEntityById(id)`, `raycastExcluding(entity, origin..., dir..., maxDistance)` |
+| `ModVirtualFileSystem` | `resolveOverride(path)` returns the file a path resolves to through `mod://`, the overlays, then vanilla. `findInOverlays(path)`, `resolveModUri(uri)`, `baseAssetsDir()`. `layers()` is experimental |
+| `SceneWorld` | `spawnEntity(id, name, meshPath)`, `refreshComponents(entity)` after adding components, `instantiatePrefabRuntime(path)`, `requestEntityDestroy(entity)`, `findEntityByName/ById`, `getSceneEntities()`, `setParent(child, parent)`, `getComputedWorldTransform(entity)`, `raycastExcluding(...)`, `get/setVelocity`, `setAngularVelocity`, `sampleAnimatorPose(animator, time)`. The rest of `SceneWorld` is engine code |
 | `EntityScript` | `getTransform()`, `getComponent(Class)`, `raycast(...)`, `loadScene(path)`, `playSound(...)` (with `AudioBus` routing), lifecycle and collision/trigger callbacks. `onMouse*` and `onDrawGizmos` are declared but not dispatched yet |
 | `SimpleEntityScript` | Everything in `EntityScript`, plus cached getters, timers/tweens, `ScriptEvents`, and the system helpers: `setDestination` / `stopNavigation`, `followSpline` / `get/setSplineProgress`, `play` / `stop` / `emit` (particles), `crossFadeAnimation` / `playAnimation`, `setBusVolume` / `setBusMuted`, `setPlayerInputEnabled`. See Volume 6 |
 
