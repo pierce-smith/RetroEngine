@@ -37,7 +37,8 @@ class HeadlessRunTest {
 
     private Run runHeadless(String... args) throws Exception {
         List<String> command = new ArrayList<>(List.of(
-                Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                // retro.test.runtime (-PtestRuntime) swaps in another runtime, such as the jlinked one games ship with
+                Path.of(System.getProperty("retro.test.runtime", System.getProperty("java.home")), "bin", "java").toString(),
                 "--enable-native-access=ALL-UNNAMED",
                 "-Duser.home=" + dir.resolve("home"),
                 "-cp", System.getProperty("java.class.path"),

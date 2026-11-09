@@ -64,7 +64,7 @@ public final class ModEventBus {
                 throw new IllegalArgumentException("@SubscribeEvent method " + subscriber.getClass().getName() + "." + m.getName()
                         + " must be a public instance method taking exactly one event object");
             }
-            m.setAccessible(true); // Janino-compiled mod classes may be nested or package-private
+            m.setAccessible(true); // Compiled mod classes may be nested or package-private
             add(new Handler(params[0], ownerModId, subscriber, m, null));
             found++;
         }

@@ -6,7 +6,7 @@ import com.retro.engine.scripting.Input;
 
 /**
  * Interactive test script for RetroEngine verifying:
- * 1. Janino dynamic in-memory compilation (Phase 2)
+ * 1. In-memory script compilation (ScriptCompiler)
  * 2. WASD Movement & Spacebar Jump (Phase 1 Input & Transform APIs)
  * 3. 60 Hz Physics updates (Phase 3 onPhysicsUpdate)
  * 4. Collision and Trigger callbacks (Phase 3 onCollisionEnter & onTriggerEnter)

@@ -8,7 +8,6 @@ import com.retro.engine.modding.events.SceneLoadEvent;
 import com.retro.engine.scripting.EntityScript;
 import com.retro.engine.scripting.ScriptEngine;
 
-import org.codehaus.janino.SimpleCompiler;
 
 import java.io.File;
 import java.io.IOException;
@@ -38,7 +37,7 @@ import java.util.stream.Stream;
  *   <li>{@link #resolveLoadOrder}: topological sort over {@code dependencies}, ties broken by ascending
  *       {@code load_priority} then mod_id. Missing / too-old required dependencies and cycles disable the
  *       affected mods (and their dependents) with a console diagnostic.</li>
- *   <li>Janino build: each mod's {@code script_sources} compile in order on one class loader chain spanning every
+ *   <li>Script build (ScriptCompiler): each mod's {@code script_sources} compile in order on one class loader chain spanning every
  *       mod in load order, so a mod sees its dependencies' classes. EntityScripts compiled by ScriptEngine use the
  *       end of that chain as their parent, so they can reference mod components.</li>
  *   <li>VFS mount ({@link ModVirtualFileSystem}): each mod's {@code asset_overlays}, later mods on top.</li>
@@ -344,7 +343,7 @@ public final class ModLoader {
         List<ModManifest> order = resolveLoadOrder(discovered);
         Set<String> failed = new HashSet<>();
 
-        // Janino build along one class loader chain
+        // Compile along one class loader chain, so each mod sees the mods it loads after
         ClassLoader chain = EntityScript.class.getClassLoader();
         Map<String, Class<?>> entryClasses = new HashMap<>();
         List<ModManifest> compiled = new ArrayList<>();
@@ -421,12 +420,7 @@ public final class ModLoader {
     static ClassLoader compile(ModManifest m, String source, ClassLoader parent) throws Exception {
         File file = m.resolve(source);
         if (!file.isFile()) throw new IOException("script source not found: " + source);
-        SimpleCompiler compiler = new SimpleCompiler();
-        compiler.setParentClassLoader(parent);
-        try (Reader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
-            compiler.cook(file.getAbsolutePath(), reader);
-        }
-        return compiler.getClassLoader();
+        return com.retro.engine.scripting.ScriptCompiler.compile(file, parent);
     }
 
     private boolean initialize(ModManifest m, Class<?> entry) {

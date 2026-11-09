@@ -3,7 +3,7 @@ package com.retro.engine.scripting.framework;
 /**
  * One state of a {@link ScriptStateMachine}. Override only the callbacks you need.
  *
- * <p>Janino-friendly: declare states as (non-static) inner classes of your script, so they can read and write the
+ * <p>Declare states as (non-static) inner classes of your script, so they can read and write the
  * script's fields directly, and create each state once as a field:</p>
  *
  * <pre>

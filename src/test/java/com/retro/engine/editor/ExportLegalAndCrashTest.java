@@ -20,7 +20,7 @@ class ExportLegalAndCrashTest {
     void exportsCarryEveryNoticeAndTheFullLicense() throws IOException {
         StandaloneExporter.writeLegalNotices(dir);
         String text = Files.readString(new File(dir, StandaloneExporter.LEGAL_NOTICES_FILE).toPath());
-        for (String name : List.of("LWJGL", "GLFW", "SDL", "Assimp", "stb", "tinyfiledialogs", "Janino", "MoltenVK",
+        for (String name : List.of("LWJGL", "GLFW", "SDL", "Assimp", "stb", "tinyfiledialogs", "MoltenVK",
                 "SDL_GameControllerDB", "OpenAL Soft", "OpenJDK", "TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION",
                 "END OF TERMS AND CONDITIONS")) {
             assertTrue(text.contains(name), "missing: " + name);

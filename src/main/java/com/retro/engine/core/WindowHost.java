@@ -209,15 +209,19 @@ public class WindowHost {
     private static final String ICON_RESOURCE = "/icons/icon.png";
 
     /**
-     * Sets the window/taskbar icon from {@value #ICON_FILE} (next to the working directory), falling back to the
-     * bundled {@value #ICON_RESOURCE} resource. macOS has no per-window icon (the bundle icon is used), so it is skipped.
+     * Sets the window/taskbar icon from an exported game's Game_Data/icon.png, else {@value #ICON_FILE} (next to the
+     * working directory), else the bundled {@value #ICON_RESOURCE} resource. macOS has no per-window icon (the bundle icon is used), so it is skipped.
      */
     private void applyWindowIcon() {
         if (System.getProperty("os.name", "").toLowerCase().contains("mac")) return;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             IntBuffer w = stack.mallocInt(1), h = stack.mallocInt(1), channels = stack.mallocInt(1);
             java.nio.ByteBuffer pixels = null;
-            java.io.File file = new java.io.File(ICON_FILE);
+            // An exported game's own icon first (written by the exporter), then the project's, then the engine's
+            java.io.File file = null;
+            String gameData = System.getProperty(com.retro.engine.editor.StandaloneExporter.GAME_DATA_PROPERTY);
+            if (gameData != null) file = new java.io.File(gameData, com.retro.engine.editor.GameIcon.WINDOW_ICON_FILE);
+            if (file == null || !file.isFile()) file = new java.io.File(ICON_FILE);
             if (file.isFile()) {
                 pixels = org.lwjgl.stb.STBImage.stbi_load(file.getAbsolutePath(), w, h, channels, 4);
             }

@@ -9,7 +9,6 @@ import com.retro.engine.core.ProjectWorkspace;
 import com.retro.engine.ecs.serialization.SceneSerializer;
 import com.retro.engine.modding.ModLoader;
 
-import java.awt.image.BufferedImage;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
@@ -31,7 +30,6 @@ import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
-import javax.imageio.ImageIO;
 
 /**
  * Cooks the active project and packages it as a self-contained native build.
@@ -154,16 +152,34 @@ public final class StandaloneExporter {
         return "src/main/resources/icons/icon." + platform.iconExtension();
     }
 
-    /** {@link #defaultIconPath(Platform)} as a file, or null when it doesn't exist (keeps the built-in icon). */
+    /**
+     * The default icon for {@code platform}: {@link #defaultIconPath(Platform)} when running from the source tree, else
+     * the copy bundled in the engine jar (the packaged editor has no source tree). Null only if the build has neither.
+     */
     public static File defaultIconFile(Platform platform) {
         File f = new File(defaultIconPath(platform));
-        return f.isFile() ? f : null;
+        return f.isFile() ? f : GameIcon.bundledIcon(platform.iconExtension());
     }
 
     /** True when {@code icon}'s extension is the format {@code platform} expects (see {@link Platform#iconExtension()}). */
     public static boolean isValidIconFor(File icon, Platform platform) {
         return icon != null && platform != null
             && icon.getName().toLowerCase(Locale.ROOT).endsWith("." + platform.iconExtension());
+    }
+
+    /**
+     * Windows and Linux draw the window and taskbar icon from the running game, not the executable, so Game_Data gets
+     * a PNG of the game's own icon. macOS uses the bundle icon instead.
+     */
+    private void writeWindowIcon(File gameData) throws IOException {
+        if (req.platform == Platform.MACOS) return;
+        byte[] png = GameIcon.windowIconPng(req.iconFile);
+        if (png == null) {
+            System.err.println("[Exporter] Could not read an image from " + req.iconFile.getName()
+                + "; the game window will show the RetroEngine icon. Use a PNG-based .ico or a 24/32-bit one.");
+            return;
+        }
+        Files.write(new File(gameData, GameIcon.WINDOW_ICON_FILE).toPath(), png);
     }
 
     /** Copies the configured icon to {@code dest}; false when no icon was configured. */
@@ -312,6 +328,7 @@ public final class StandaloneExporter {
         try {
             // 1-2. Game data: raw Assets/, UUID registry, rewritten settings, cooked .rpack packages
             stageGameData(gameData);
+            writeWindowIcon(gameData);
 
             // 3. Engine classes + dependency jars filtered to the target OS natives
             progress.report(0.40f, "STAGING RUNTIME LIBRARIES");
@@ -521,9 +538,9 @@ public final class StandaloneExporter {
 
     /**
      * Modules the runtime needs (jdeps over the engine plus its jars), plus jdk.zipfs, a FileSystem provider jdeps
-     * cannot see. Janino compiles scripts in-process, so java.compiler is not required.
+     * cannot see, and jdk.compiler, the javac that ScriptCompiler runs to compile scripts and mods in the game.
      */
-    private static final String RUNTIME_MODULES = "java.base,java.desktop,java.logging,jdk.unsupported,jdk.zipfs";
+    private static final String RUNTIME_MODULES = "java.base,java.desktop,java.logging,jdk.unsupported,jdk.zipfs,jdk.compiler";
     private static final String JLINK_SLIM_FLAGS = "--strip-debug --no-header-files --no-man-pages";
 
     private File packageWithJpackage(File app) throws IOException, InterruptedException {
@@ -586,9 +603,8 @@ public final class StandaloneExporter {
         Files.writeString(new File(appDir, exe + ".desktop").toPath(),
             "[Desktop Entry]\nType=Application\nName=" + exe + "\nExec=" + exe + "\nIcon=" + exe + "\nCategories=Game;\n");
         if (!copyIcon(new File(appDir, exe + ".png"))) {
-            BufferedImage icon = new BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB);
-            for (int y = 0; y < 64; y++) for (int x = 0; x < 64; x++) icon.setRGB(x, y, 0xFF3B82F6);
-            ImageIO.write(icon, "png", new File(appDir, exe + ".png"));
+            byte[] png = GameIcon.windowIconPng(null); // AppImage requires an icon: fall back to the engine's
+            if (png != null) Files.write(new File(appDir, exe + ".png").toPath(), png);
         }
 
         String arch = System.getProperty("os.arch", "x86_64").replace("amd64", "x86_64").replace("aarch64", "arm64");
@@ -636,7 +652,10 @@ public final class StandaloneExporter {
                 writeExecutable(new File(contents, "MacOS/" + exe),
                     "#!/bin/sh\nCONTENTS=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"\nAPPDIR=\"$CONTENTS/app\"\n"
                         + "exec \"$CONTENTS/runtime/bin/java\" " + shellOptions("$APPDIR") + " -cp \"$APPDIR/*\" " + Main.class.getName() + " --runtime \"$@\"\n");
-                if (Platform.host() == Platform.MACOS) adHocSign(target);
+                if (Platform.host() == Platform.MACOS) {
+                    adHocSign(target);
+                    refreshFinderIcon(target);
+                }
             }
             case LINUX -> {
                 target = new File(req.exportDir, exe);
@@ -757,6 +776,26 @@ public final class StandaloneExporter {
         String icon = (icons != null && icons.length > 0) ? icons[0].getName() : null;
         Files.writeString(new File(contents, "Info.plist").toPath(), infoPlist(req.executableName, icon));
         adHocSign(app);
+        refreshFinderIcon(app);
+    }
+
+    private static final String LSREGISTER =
+        "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+
+    /**
+     * Re-exporting replaces the bundle at the same path, and Finder keeps the icon it cached for the old one. A new
+     * modification time plus a forced LaunchServices registration makes it read the new Info.plist and icon.
+     */
+    static void refreshFinderIcon(File app) {
+        if (Platform.host() != Platform.MACOS) return;
+        app.setLastModified(System.currentTimeMillis());
+        if (!new File(LSREGISTER).canExecute()) return;
+        try {
+            new ProcessBuilder(LSREGISTER, "-f", app.getAbsolutePath()).redirectErrorStream(true)
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD).start().waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+        }
     }
 
     /**

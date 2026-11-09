@@ -3,7 +3,7 @@ package com.retro.engine.scripting.framework;
 import com.retro.engine.ecs.Entity;
 
 /**
- * Receives events published through {@link ScriptEvents}. Scripts are compiled separately by Janino and cannot refer
+ * Receives events published through {@link ScriptEvents}. Scripts are compiled separately and cannot refer
  * to each other's classes, so events are the type-safe way for one script to notify another (an inventory, a HUD, a
  * game manager).
  *

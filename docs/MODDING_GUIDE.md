@@ -4,7 +4,7 @@ A mod is a folder (or a packaged `.rmod` file) with a `mod.json` manifest. A mod
 
 - override vanilla assets and shaders,
 - patch vanilla scenes without editing them,
-- run Java code, compiled in memory by Janino, that registers new ECS components and listens to engine events.
+- run Java code, compiled in memory by javac, that registers new ECS components and listens to engine events.
 
 Start from `StarterPack/example_mod/`, or create a new mod from the editor (see [Creation Kit mode](#creation-kit-mode)).
 
@@ -295,10 +295,11 @@ Players drop the `.rmod` into the game's `Game_Data/Mods/`.
 | `EntityScript` | `getTransform()`, `getComponent(Class)`, `raycast(...)`, `loadScene(path)`, `playSound(...)` (with `AudioBus` routing), lifecycle and collision/trigger callbacks. `onMouse*` and `onDrawGizmos` are declared but not dispatched yet |
 | `SimpleEntityScript` | Everything in `EntityScript`, plus cached getters, timers/tweens, `ScriptEvents`, and the system helpers: `setDestination` / `stopNavigation`, `followSpline` / `get/setSplineProgress`, `play` / `stop` / `emit` (particles), `crossFadeAnimation` / `playAnimation`, `setBusVolume` / `setBusMuted`, `setPlayerInputEnabled`. See Volume 6 |
 
-## Janino limitations
+## How mod code is compiled
 
-Mod and script sources are compiled by Janino, not javac:
+Mod and script sources are compiled in memory by javac (`ScriptCompiler`, Volume 6 §1), with the full Java language of
+the engine's runtime: lambdas, method references, `var`, records and generics all work.
 
-- Lambdas and method references are not supported. Use `@SubscribeEvent` methods or anonymous classes.
-- Generic type arguments are ignored, so cast generic results: `(WobbleComponent) getComponent(WobbleComponent.class)`.
-- Keep a mod's `script_sources` small and list files in dependency order.
+- Each `script_sources` file is compiled on its own, on top of the files before it, so list them in dependency order.
+- A mod's classes are visible to the mods loaded after it and to entity scripts.
+- Before Beta 5, mods were compiled with Janino. Mods written for it still compile, casts included.

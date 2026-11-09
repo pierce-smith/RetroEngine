@@ -23,7 +23,7 @@ import com.retro.engine.scripting.framework.SimpleEntityScript;
  * {@code ScriptEvents.publish("door_command", source, "<door entity name>", 1)} opens, 0 closes.
  * It publishes "door_opened", "door_closed" and "door_locked" with its entity name as the text.</p>
  *
- * <p>Janino-compatible: no lambdas, the timer task is created once in onStart, no generic collections.</p>
+ * <p>The timer task is created once in onStart and reused, so opening the door never allocates.</p>
  */
 public class DoorTriggerScript extends SimpleEntityScript implements ScriptEventListener {
 
@@ -58,7 +58,7 @@ public class DoorTriggerScript extends SimpleEntityScript implements ScriptEvent
         }
         if (requiredItemId != null && requiredItemId.length() > 0) {
             // Same key format PickupItemScript writes; built once here, not on every trigger.
-            // (Spelled out rather than calling PickupItemScript: Janino compiles each script on its own.)
+            // (Spelled out rather than calling PickupItemScript: each script compiles on its own, Volume 6 §1.3.)
             requiredItemKey = "inventory." + requiredItemId;
         }
         autoCloseTask = new ScriptTask() {
@@ -156,9 +156,7 @@ public class DoorTriggerScript extends SimpleEntityScript implements ScriptEvent
 
     Transform resolvePanel() {
         if (doorPanelName == null || doorPanelName.length() == 0 || sceneWorld == null) return transform();
-        java.util.List all = sceneWorld.getSceneEntities(); // Raw list: Janino erases generics
-        for (int i = 0; i < all.size(); i++) {
-            Entity e = (Entity) all.get(i);
+        for (Entity e : sceneWorld.getSceneEntities()) {
             if (e != null && doorPanelName.equals(e.name) && entity.id != null && entity.id.equalsIgnoreCase(e.parentId)) {
                 return e.getTransform();
             }

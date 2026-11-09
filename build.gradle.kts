@@ -37,9 +37,6 @@ dependencies {
     implementation("org.lwjgl:lwjgl-tinyfd")
     implementation("org.lwjgl:lwjgl-openal") // 3D positional audio (bundles OpenAL Soft)
 
-    // In-Memory Janino Scripting Compiler
-    implementation("org.codehaus.janino:janino:3.1.12")
-
     testImplementation(platform("org.junit:junit-bom:6.1.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
@@ -93,6 +90,8 @@ tasks.withType<Test>().configureEach {
     maxHeapSize = "512m"
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     systemProperty("java.awt.headless", "true")
+    // -PtestRuntime=<java home> runs the headless template tests on that runtime, e.g. the jlinked game runtime
+    providers.gradleProperty("testRuntime").orNull?.let { systemProperty("retro.test.runtime", it) }
     systemProperty("user.home", layout.buildDirectory.dir("test-home").get().asFile.absolutePath)
     testLogging {
         events("failed", "skipped")
@@ -311,9 +310,10 @@ val editorAppIcon: File? = providers.gradleProperty("appIcon").orNull?.trim()?.t
 val editorAppVersion = version.toString().substringBefore("-") // jpackage rejects "-SNAPSHOT"
 
 // Modules for the editor itself (jdeps: java.base,java.desktop,java.logging,jdk.unsupported, plus
-// jdk.zipfs which jdeps cannot see). java.desktop carries javax.sound (AudioSource / UISoundPlayer).
+// jdk.zipfs which jdeps cannot see). java.desktop carries javax.sound (AudioSource / UISoundPlayer). jdk.compiler is
+// javac, which compiles scripts and mods at runtime (ScriptCompiler).
 // Keep in sync with StandaloneExporter.RUNTIME_MODULES.
-val engineRuntimeModules = "java.base,java.desktop,java.logging,jdk.unsupported,jdk.zipfs"
+val engineRuntimeModules = "java.base,java.desktop,java.logging,jdk.unsupported,jdk.zipfs,jdk.compiler"
 
 val toolchainHome: Provider<File> = javaToolchains
     .launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) }
@@ -557,6 +557,14 @@ tasks.register("packageEditor") {
         println("[packageEditor] ${cmd.joinToString(" ")}")
         val code = ProcessBuilder(cmd).inheritIO().start().waitFor()
         if (code != 0) throw GradleException("jpackage failed (exit $code)")
+        if (hostOs.isMacOsX && type == "app-image") {
+            // The bundle was deleted and rebuilt at the same path, and Finder keeps the icon it cached for the old one
+            // (the Dock reads the bundle fresh). A new modification time plus a forced LaunchServices registration fixes it
+            val app = File(destDir, "$editorAppName.app")
+            app.setLastModified(System.currentTimeMillis())
+            val lsregister = File("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
+            if (lsregister.canExecute()) ProcessBuilder(lsregister.absolutePath, "-f", app.absolutePath).inheritIO().start().waitFor()
+        }
         if (hostOs.isMacOsX && signIdentity.isPresent && type == "dmg") {
             // jpackage signs the app inside the dmg but not the dmg itself
             destDir.listFiles { f -> f.name.startsWith(editorAppName) && f.name.endsWith(".dmg") }!!

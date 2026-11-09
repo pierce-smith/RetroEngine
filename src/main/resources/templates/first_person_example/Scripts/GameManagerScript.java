@@ -38,10 +38,8 @@ public class GameManagerScript extends SimpleEntityScript implements ScriptEvent
     public void onStart() {
         totalCollectibles = 0;
         if (sceneWorld != null) {
-            java.util.List entities = sceneWorld.getSceneEntities(); // raw: Janino erases generics
-            for (int i = 0; i < entities.size(); i++) {
-                Entity e = (Entity) entities.get(i);
-                ScriptComponent sc = (ScriptComponent) e.getComponent(ScriptComponent.class);
+            for (Entity e : sceneWorld.getSceneEntities()) {
+                ScriptComponent sc = e.getComponent(ScriptComponent.class);
                 if (sc != null && collectibleScriptName.equals(sc.scriptName)) totalCollectibles++;
             }
         }

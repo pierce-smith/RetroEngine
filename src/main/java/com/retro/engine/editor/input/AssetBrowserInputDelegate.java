@@ -494,8 +494,8 @@ public class AssetBrowserInputDelegate {
 
                 /**
                  * SimpleEntityScript gives you cached accessors (transform(), rigidbody(), audio()...), move(), lookAt(),
-                 * runAfter() timers, tweens, playSpatialSound() and shakeCamera(). Janino compiles scripts: no lambdas,
-                 * so create ScriptTask objects once (a field or onStart) and reuse them.
+                 * runAfter() timers, tweens, playSpatialSound() and shakeCamera(). Scripts are full modern Java. Create
+                 * ScriptTask objects (lambdas are fine) once, in a field or onStart, and reuse them.
                  */
                 public class %s extends SimpleEntityScript {
 

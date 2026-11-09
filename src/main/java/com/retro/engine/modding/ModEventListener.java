@@ -1,14 +1,10 @@
 package com.retro.engine.modding;
 
 /**
- * Explicit handler for {@link ModEventBus#subscribe}. Deliberately non-generic: mod scripts compile with Janino,
- * which supports neither lambdas nor generic bridge methods, so implement it as an anonymous class and cast:
+ * Explicit handler for {@link ModEventBus#subscribe}. The event arrives as {@code Object}; cast or pattern-match it:
  * <pre>
- * bus.subscribe(SceneLoadEvent.class, new ModEventListener() {
- *     public void onEvent(Object event) {
- *         SceneLoadEvent e = (SceneLoadEvent) event;
- *         ...
- *     }
+ * bus.subscribe(SceneLoadEvent.class, event -> {
+ *     if (event instanceof SceneLoadEvent e) { ... }
  * });
  * </pre>
  */

@@ -17,7 +17,7 @@ import com.retro.engine.ecs.components.Transform;
 import com.retro.engine.ecs.components.VehicleControllerComponent;
 
 /**
- * Lazily resolved, cached references to one entity's core components, with concrete return types (so Janino scripts
+ * Lazily resolved, cached references to one entity's core components, with concrete return types (so scripts
  * need no casts). Each getter looks the component up on first use and remembers it; a missing component is looked up
  * again on the next call, so components added later are found.
  *

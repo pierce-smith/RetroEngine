@@ -44,7 +44,7 @@ public class EnemyAIStateScript extends SimpleEntityScript {
     public String playerName = "Player";
     public boolean debugDraw = true;
 
-    // Shared state, package-private so the inner state classes can use it under Janino
+    // Shared state for the inner state classes
     final ScriptStateMachine fsm = new ScriptStateMachine();
     ScriptState idle, patrol, chase, attack;
     Entity player;

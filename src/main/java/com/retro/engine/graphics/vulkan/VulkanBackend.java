@@ -24,7 +24,7 @@ import static org.lwjgl.vulkan.VK10.*;
 import static org.lwjgl.vulkan.VK13.*;
 
 /**
- * Modular Vulkan 1.3 IRenderBackend implementation. Integrates Apple Silicon / MoltenVK
+ * Modular Vulkan 1.3 IRenderBackend implementation. Integrates MoltenVK on macOS and the native driver elsewhere
  * dynamic buffer alignment rules, zero-allocation frame loops, and orchestrates
  * the 4-Phase rendering pipeline with 3-slot ring buffers, a bindless multi-channel material table,
  * synchronization2 frame submission and asynchronous timeline-semaphore texture uploads.
@@ -132,7 +132,7 @@ public class VulkanBackend implements IRenderBackend {
         sceneColorSlot = gpuCache.registerRenderTargetView(targetPass.getOffscreenImageView());
         initPickReadback();
 
-        System.out.println("[VulkanBackend] Vulkan 1.3 Multi-Pass Architecture Active on Apple Silicon / MoltenVK.");
+        System.out.println("[VulkanBackend] Vulkan 1.3 multi-pass renderer active (" + deviceManager.getDriverName() + ").");
         return true;
     }
 
@@ -608,5 +608,5 @@ public class VulkanBackend implements IRenderBackend {
     @Override public void destroyTexture(long handle) { }
 
     @Override public GraphicsAPI getAPI() { return GraphicsAPI.VULKAN; }
-    @Override public String getDeviceName() { return "Modular Vulkan 1.3 Driver (MoltenVK / Apple Silicon)"; }
+    @Override public String getDeviceName() { return deviceManager.getDriverName(); }
 }

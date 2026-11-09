@@ -1,25 +1,25 @@
 package com.retro.engine.scripting;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.retro.engine.modding.ModScript;
 
-import org.codehaus.janino.SimpleCompiler;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.IOException;
-import java.io.StringReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.stream.Stream;
 
 /**
- * Every script we hand to users has to compile under Janino, the compiler that runs them. javac is not a substitute:
- * it accepts code Janino rejects, so these go through the same steps as ScriptEngine.
+ * Every script we hand to users has to compile through {@link ScriptCompiler}, the same path ScriptEngine and the mod
+ * loader use at runtime.
  */
 class ScriptCompileTest {
 
@@ -38,11 +38,8 @@ class ScriptCompileTest {
         }
     }
 
-    private static SimpleCompiler cook(Path source, ClassLoader parent) throws Exception {
-        SimpleCompiler compiler = new SimpleCompiler();
-        compiler.setParentClassLoader(parent);
-        compiler.cook(source.toString(), new StringReader(Files.readString(source)));
-        return compiler;
+    private static ClassLoader cook(Path source, ClassLoader parent) throws Exception {
+        return ScriptCompiler.compile(source.toFile(), parent);
     }
 
     /** ScriptEngine reads the package line to build this name; the test only needs the same result. */
@@ -64,8 +61,7 @@ class ScriptCompileTest {
     @ParameterizedTest
     @MethodSource("shippedScripts")
     void scriptCompilesAsAnEntityScript(Path source) throws Exception {
-        SimpleCompiler compiler = cook(source, getClass().getClassLoader());
-        Class<?> loaded = compiler.getClassLoader().loadClass(className(source));
+        Class<?> loaded = cook(source, getClass().getClassLoader()).loadClass(className(source));
         assertTrue(EntityScript.class.isAssignableFrom(loaded), source + " is not an EntityScript");
     }
 
@@ -73,12 +69,61 @@ class ScriptCompileTest {
     @Test
     void exampleModCompilesThroughItsClassLoaderChain() throws Exception {
         Path scripts = Path.of("ModSDK/StarterPack/example_mod/Scripts");
-        SimpleCompiler entry = cook(scripts.resolve("ModScript.java"), getClass().getClassLoader());
-        Class<?> entryClass = entry.getClassLoader().loadClass("com.example.examplemod.ModScript");
+        ClassLoader entry = cook(scripts.resolve("ModScript.java"), getClass().getClassLoader());
+        Class<?> entryClass = entry.loadClass("com.example.examplemod.ModScript");
         assertTrue(ModScript.class.isAssignableFrom(entryClass));
 
-        SimpleCompiler wobble = cook(scripts.resolve("WobbleScript.java"), entry.getClassLoader());
-        Class<?> wobbleClass = wobble.getClassLoader().loadClass("com.example.examplemod.WobbleScript");
+        ClassLoader wobble = cook(scripts.resolve("WobbleScript.java"), entry);
+        Class<?> wobbleClass = wobble.loadClass("com.example.examplemod.WobbleScript");
         assertTrue(EntityScript.class.isAssignableFrom(wobbleClass));
+    }
+
+    /** The reason for moving to javac: Janino rejected all of these. */
+    @Test
+    void modernJavaCompiles(@org.junit.jupiter.api.io.TempDir Path dir) throws Exception {
+        Path source = dir.resolve("ModernScript.java");
+        Files.writeString(source, """
+                import com.retro.engine.scripting.EntityScript;
+                import java.util.ArrayList;
+                import java.util.List;
+
+                public class ModernScript extends EntityScript {
+                    record Hit(String name, float damage) {}
+
+                    public static float total() {
+                        var hits = new ArrayList<Hit>();
+                        hits.add(new Hit("a", 2f));
+                        hits.add(new Hit("b", 3f));
+                        float sum = 0;
+                        for (Hit h : hits) sum += h.damage();
+                        Runnable r = () -> {};
+                        r.run();
+                        return sum + (float) hits.stream().mapToDouble(Hit::damage).sum();
+                    }
+                }
+                """);
+        Class<?> c = cook(source, getClass().getClassLoader()).loadClass("ModernScript");
+        assertEquals(10f, (float) c.getMethod("total").invoke(null));
+    }
+
+    /** Mod code compiled in memory must be visible to the next compile in the chain, which reads no class files. */
+    @Test
+    void laterCompileSeesClassesFromEarlierOne(@org.junit.jupiter.api.io.TempDir Path dir) throws Exception {
+        Path a = dir.resolve("Shared.java");
+        Files.writeString(a, "package mod.a; public class Shared { public static int value() { return 7; } }");
+        Path b = dir.resolve("UsesShared.java");
+        Files.writeString(b, "package mod.b; public class UsesShared { public static int get() { return mod.a.Shared.value() * 2; } }");
+        ClassLoader first = cook(a, getClass().getClassLoader());
+        ClassLoader second = cook(b, first);
+        assertEquals(14, second.loadClass("mod.b.UsesShared").getMethod("get").invoke(null));
+    }
+
+    @Test
+    void compileErrorNamesFileAndLine(@org.junit.jupiter.api.io.TempDir Path dir) throws Exception {
+        Path source = dir.resolve("Broken.java");
+        Files.writeString(source, "public class Broken {\n    int x = \"nope\";\n}\n");
+        ScriptCompiler.CompileException e = assertThrows(ScriptCompiler.CompileException.class,
+                () -> ScriptCompiler.compile(source.toFile(), getClass().getClassLoader()));
+        assertTrue(e.getMessage().startsWith("Broken.java:2: "), e.getMessage());
     }
 }

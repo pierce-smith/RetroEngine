@@ -20,7 +20,7 @@ public class BackendLoader {
         String targetClassName;
 
         if (forceVulkan) {
-            Log.info("HostBoot", "Driver Override Triggered: Selecting Vulkan backend (MoltenVK active on macOS)...");
+            Log.info("HostBoot", isMac(os) ? "--vulkan: selecting the Vulkan backend (MoltenVK)..." : "--vulkan: selecting the Vulkan backend...");
             targetClassName = VULKAN_CLASS;
         } else if (os.contains("mac") || os.contains("darwin")) {
             Log.info("HostBoot", "OS Detected: macOS. Selecting default Metal backend...");
@@ -67,7 +67,7 @@ public class BackendLoader {
 
         if (forceVulkan || (!os.contains("mac") && !os.contains("darwin"))) {
             if (forceVulkan) {
-                Log.info("HostBoot", "Driver Override Triggered: Selecting Vulkan backend (MoltenVK active on macOS)...");
+                Log.info("HostBoot", isMac(os) ? "--vulkan: selecting the Vulkan backend (MoltenVK)..." : "--vulkan: selecting the Vulkan backend...");
             } else {
                 Log.info("HostBoot", "OS Detected: Windows/Linux. Selecting Vulkan backend...");
             }
@@ -95,6 +95,10 @@ public class BackendLoader {
 
         Log.error("HostBoot", "Both Metal and Vulkan backends failed to initialize!");
         return false;
+    }
+
+    private static boolean isMac(String os) {
+        return os.contains("mac") || os.contains("darwin");
     }
 
     private boolean isVulkanForced(String[] cliArgs) {

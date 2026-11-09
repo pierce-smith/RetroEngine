@@ -175,7 +175,7 @@ alongside it. Choose the threshold with `-Dretro.log=debug|info|warn|error`. Old
 
 `./gradlew test` runs the JUnit suite in `src/test/` with no window or GPU, and CI runs it on macOS, Windows and Linux
 (`.github/workflows/ci.yml`). It covers physics, the simulation's allocation budget, `ComponentSchema`, scene
-saving and loading, `.rpatch`, the mod VFS, `.rmod` packages, and compiling every shipped script with Janino. It also
+saving and loading, `.rpatch`, the mod VFS, `.rmod` packages, and compiling every shipped script with the runtime script compiler. It also
 creates each project template and plays it for 300 frames in a separate process with `--headless --frames`
 (Volume 1 §1.4). It can't see anything that needs a GPU, a window or a person, so the manual checklist below is still the gate for merging
 into `main`.

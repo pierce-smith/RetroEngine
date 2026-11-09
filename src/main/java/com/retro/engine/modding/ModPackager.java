@@ -3,7 +3,6 @@ package com.retro.engine.modding;
 import com.retro.engine.assets.RpackCooker;
 import com.retro.engine.scripting.EntityScript;
 
-import org.codehaus.janino.SimpleCompiler;
 
 import java.io.File;
 import java.io.IOException;
@@ -123,10 +122,8 @@ public final class ModPackager {
         try (Stream<Path> walk = Files.walk(mod.root.toPath())) {
             for (Path p : (Iterable<Path>) walk.filter(f -> f.toString().endsWith(".java"))::iterator) {
                 if (sources.contains(p.toFile().getCanonicalFile().toPath()) || isHidden(mod.root.toPath(), p)) continue;
-                SimpleCompiler compiler = new SimpleCompiler();
-                compiler.setParentClassLoader(chain);
-                try (Reader r = Files.newBufferedReader(p, StandardCharsets.UTF_8)) {
-                    compiler.cook(p.toString(), r);
+                try {
+                    com.retro.engine.scripting.ScriptCompiler.compile(p.toFile(), chain);
                 } catch (Exception e) {
                     throw new IOException(mod.root.toPath().relativize(p) + ": " + e.getMessage());
                 }

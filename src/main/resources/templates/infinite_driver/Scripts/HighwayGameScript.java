@@ -97,10 +97,8 @@ public class HighwayGameScript extends SimpleEntityScript {
         carT = car.getTransform();
         carEntity = car;
 
-        java.util.List entities = sceneWorld.getSceneEntities(); // raw: Janino erases generics
-        for (int i = 0; i < entities.size(); i++) {
-            Entity e = (Entity) entities.get(i);
-            Transform t = (Transform) e.getComponent(Transform.class);
+        for (Entity e : sceneWorld.getSceneEntities()) {
+            Transform t = e.getComponent(Transform.class);
             if (t == null || e.name == null) continue;
             boolean root = e.parentId == null || e.parentId.length() == 0; // loaded scenes store roots as ""
             if (root && e.name.startsWith("RoadSeg") && segCount < MAX) segs[segCount++] = t;
@@ -112,8 +110,7 @@ public class HighwayGameScript extends SimpleEntityScript {
                 park(obsCount - 1);
             }
         }
-        for (int i = 0; i < entities.size(); i++) { // tree groups, for re-rolling scenery on recycle
-            Entity e = (Entity) entities.get(i);
+        for (Entity e : sceneWorld.getSceneEntities()) { // tree groups, for re-rolling scenery on recycle
             if (e.name == null || !(e.name.endsWith("TreeL") || e.name.endsWith("TreeR")) || treeCount >= trees.length) continue;
             Entity parent = (e.parentId != null && e.parentId.length() > 0) ? sceneWorld.findEntityById(e.parentId) : null;
             if (parent == null) continue;

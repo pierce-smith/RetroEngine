@@ -20,8 +20,7 @@ public class WobbleScript extends EntityScript {
     }
 
     public void onUpdate(float deltaTime) {
-        // Janino ignores generic type arguments, so cast generic return values explicitly
-        ModScript.WobbleComponent wobble = (ModScript.WobbleComponent) getComponent(ModScript.WobbleComponent.class);
+        ModScript.WobbleComponent wobble = getComponent(ModScript.WobbleComponent.class);
         Transform t = getTransform();
         if (wobble == null || t == null) return;
         time += deltaTime;

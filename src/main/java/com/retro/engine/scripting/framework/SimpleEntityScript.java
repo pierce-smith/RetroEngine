@@ -34,8 +34,8 @@ import com.retro.engine.scripting.EntityScript;
  * <p>Everything here that is meant for per-frame use is allocation-free. Methods that touch the disk or create
  * entities (spawnPrefab, setSaveData, saveGame) are flagged in their docs; call them on events, not every frame.</p>
  *
- * <p>Janino notes: the accessors return concrete types, so no casts are needed; schedule work with named or anonymous
- * {@link ScriptTask} classes created once (Janino has no lambdas).</p>
+ * <p>The accessors return concrete types. Schedule work with a {@link ScriptTask} (a lambda is fine) created once, not
+ * per frame.</p>
  */
 public abstract class SimpleEntityScript extends EntityScript {
 

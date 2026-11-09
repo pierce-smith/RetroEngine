@@ -6,7 +6,6 @@ import com.retro.engine.ecs.SceneWorld;
 import com.retro.engine.ecs.components.ScriptComponent;
 import com.retro.engine.physics.PhysicsSystem;
 
-import org.codehaus.janino.SimpleCompiler;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -24,7 +23,7 @@ import java.util.regex.Pattern;
 /**
  * Hardened ScriptEngine managing script instantiation, lifecycle ticks,
  * physics update dispatches, collision/trigger events, reflection lookups,
- * property overrides injection, ClassLoader caching, Janino in-memory compilation,
+ * property overrides injection, ClassLoader caching, in-memory javac compilation,
  * hot-loop exception suppression, and live hot reload of edited script sources.
  */
 public class ScriptEngine {
@@ -637,43 +636,24 @@ public class ScriptEngine {
     }
 
     private static Class<?> compileAndLoadJavaFile(File scriptFile, String className, String declaredPackage) {
-        System.out.println("[ScriptEngine] Dynamic in-memory Janino compilation triggered for script: " + scriptFile.getAbsolutePath());
-
+        System.out.println("[ScriptEngine] Compiling script: " + scriptFile.getAbsolutePath());
         try {
-            SimpleCompiler compiler = new SimpleCompiler();
-            // Explicit parent: the mod class loader chain while mods are loaded (so scripts can use mod components),
-            // else the engine's own loader. Never Janino's default (the thread context loader), which in a packaged
-            // app may not see engine classes.
-            ClassLoader parent = scriptParentLoader();
-            compiler.setParentClassLoader(parent);
-
-            Thread thread = Thread.currentThread();
-            ClassLoader previousContext = thread.getContextClassLoader();
-            thread.setContextClassLoader(parent);
-            try (FileReader reader = new FileReader(scriptFile)) {
-                compiler.cook(scriptFile.getAbsolutePath(), reader);
-            } finally {
-                thread.setContextClassLoader(previousContext);
+            // Parent: the mod class loader chain while mods are loaded (so scripts can use mod components), else the
+            // engine's own loader
+            ScriptCompiler.ScriptClassLoader cl = ScriptCompiler.compile(scriptFile, scriptParentLoader());
+            for (String c : candidateNames(declaredPackage, className)) {
+                if (!cl.classNames().contains(c)) continue;
+                Class<?> compiledClass = cl.loadClass(c);
+                System.out.println("[ScriptEngine] Compiled script: " + compiledClass.getName());
+                return compiledClass;
             }
-
-            ClassLoader cl = compiler.getClassLoader();
-            String[] candidates = candidateNames(declaredPackage, className);
-
-            for (String c : candidates) {
-                try {
-                    Class<?> compiledClass = cl.loadClass(c);
-                    // loadClass also reaches the parent, which may hold an engine class of the same name
-                    if (compiledClass.getClassLoader() == cl) {
-                        System.out.println("[ScriptEngine] Janino successfully compiled script in-memory: " + compiledClass.getName());
-                        return compiledClass;
-                    }
-                } catch (ClassNotFoundException ignored) {}
-            }
-        } catch (Throwable janinoError) {
-            System.err.println("[ScriptEngine] Janino in-memory compilation error in '" + scriptFile.getName() + "': " + janinoError.getMessage());
-            janinoError.printStackTrace();
+            System.err.println("[ScriptEngine] '" + scriptFile.getName() + "' compiled but defines no class named " + className + ".");
+        } catch (ScriptCompiler.CompileException e) {
+            System.err.println("[ScriptEngine] Compile error in '" + scriptFile.getName() + "':\n" + e.getMessage());
+        } catch (Throwable t) {
+            System.err.println("[ScriptEngine] Could not load script '" + scriptFile.getName() + "': " + t);
+            t.printStackTrace();
         }
-
         return null;
     }
 }

@@ -13,10 +13,9 @@ import com.retro.engine.ecs.components.ScriptComponent;
 import com.retro.engine.ecs.Entity;
 
 /**
- * Example mod entry point (mod.json "entry_point"). Compiled in memory by Janino when the game starts.
+ * Example mod entry point (mod.json "entry_point"). Compiled in memory by javac when the game starts.
  *
  * The class is named ModScript to match its file; it extends the engine's ModScript by its fully qualified name.
- * Janino has no lambdas or method references: use @SubscribeEvent methods or anonymous listener classes.
  */
 public class ModScript extends com.retro.engine.modding.ModScript {
 

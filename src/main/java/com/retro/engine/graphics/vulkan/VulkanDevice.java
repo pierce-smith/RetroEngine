@@ -46,7 +46,7 @@ public class VulkanDevice {
 
     public String getDriverName() {
         return (Platform.get() == Platform.MACOSX)
-                ? "Modular Vulkan 1.3 Driver (MoltenVK / Apple Silicon)"
+                ? "Modular Vulkan 1.3 Driver (MoltenVK)"
                 : "Modular Vulkan 1.3 Driver (Native Desktop GPU)";
     }
 

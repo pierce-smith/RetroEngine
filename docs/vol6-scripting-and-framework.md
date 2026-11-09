@@ -1,6 +1,6 @@
 # Volume 6: Scripting Engine & Logic Framework
 
-> **Janino in-memory compilation, zero-allocation callbacks, and the `SimpleEntityScript` DSL.**
+> **In-memory javac compilation, zero-allocation callbacks, and the `SimpleEntityScript` DSL.**
 > Volume 1 explained how a script gets compiled and ticked. This volume covers what you write *inside* one: the
 > framework that turns a bag of ECS components into gameplay, without giving up the engine's no-garbage rule.
 
@@ -20,17 +20,16 @@ opened `PhysicsSystem.java`.
 
 ### Friction in the Raw ECS API
 
-`EntityScript` gives you everything, but in its rawest form. Under Janino (§1.2) it also makes you spell out every
-type yourself:
+`EntityScript` gives you everything, but in its rawest form:
 
 ```java
 // Raw EntityScript: correct, but every line is bookkeeping
-Transform t = (Transform) entity.getComponent(Transform.class);          // cast required under Janino
+Transform t = (Transform) entity.getComponent(Transform.class);
 RigidBodyComponent rb = (RigidBodyComponent) entity.getComponent(RigidBodyComponent.class);
 if (t != null && rb != null) { ... }
 ```
 
-That's a component lookup and a cast on every call. Most new script authors end up doing it every frame, because
+That's a component lookup on every call. Most new script authors end up doing it every frame, because
 nothing tells them not to.
 
 `SimpleEntityScript` swaps that for **cached, concretely typed getters**: `transform()`, `rigidbody()`, `light()`.
@@ -48,21 +47,19 @@ say so in their Javadoc and in the tables below. Call them on events, not in `on
 
 ---
 
-## 1. The Janino Runtime & Compilation Constraints
+## 1. The Script Compiler
 
 ### 1.1 How a Script Becomes a Class
 
-RetroEngine compiles scripts with **Janino 3.1.12** (`org.codehaus.janino:janino`). Janino is a Java compiler
-written in Java that runs inside the engine process. It doesn't start `javac` and doesn't write `.class` files to
-disk.
+RetroEngine compiles scripts with **javac**, through the JDK's `javax.tools` API (the `jdk.compiler` module). The
+compiler runs inside the engine process: no `javac` process starts and no `.class` files are written to disk. The
+editor, exported games and the mod loader all use the same path, `ScriptCompiler`. Exported games bundle
+`jdk.compiler` in their runtime for this.
 
 ```java
-SimpleCompiler compiler = new SimpleCompiler();
-ClassLoader parent = scriptParentLoader();            // mod class-loader chain, else the engine's own loader
-compiler.setParentClassLoader(parent);
-thread.setContextClassLoader(parent);                 // Janino resolves some types through the context loader
-compiler.cook(scriptFile.getAbsolutePath(), reader);  // parse + compile to bytecode, in memory
-Class<?> c = compiler.getClassLoader().loadClass(name);
+ClassLoader parent = scriptParentLoader();                       // mod class-loader chain, else the engine's loader
+ScriptCompiler.ScriptClassLoader loader = ScriptCompiler.compile(scriptFile, parent);
+Class<?> c = loader.loadClass(name);
 ```
 
 `ScriptEngine.compileAndLoadJavaFile` runs this once per script source:
@@ -70,51 +67,44 @@ Class<?> c = compiler.getClassLoader().loadClass(name);
 1. **Locate** the source. The lookup order is: explicit `scriptAssetPath`, the raw name, `<project>/Assets/Scripts/`,
    anywhere under `<project>/Assets/`, then the working directory's `Assets/Scripts/`.
 2. **Read the `package`** declaration so the right fully qualified name can be loaded.
-3. **Cook** the source under an explicit parent class loader.
+3. **Compile** the source against the engine's class path, under an explicit parent class loader.
 4. **Cache** the class in `compiledClassCache`. A failed compile goes into `failedScriptCache`, so a broken script
    isn't recompiled and re-logged every frame. The component is disabled until Play stops.
 
-> **War story: the context class loader.** By default Janino resolves types through the thread's *context* class
-> loader. In `gradle run` that loader can see every engine class. In a packaged app it may not, and a script that
-> compiles in the editor can then fail to resolve `EntityScript` in the shipped game. The fix is the two explicit
-> lines above. The engine never relies on Janino's defaults.
+Compile errors are logged as `File.java:line: message`, one line per error.
 
-### 1.2 What Janino Doesn't Support
+> **How mod classes stay visible.** javac reads types from class files, but mod classes are compiled in memory and
+> only exist inside their class loader. `ScriptCompiler` walks the parent chain and gives javac the bytecode of every
+> class compiled earlier in it, so a script can use a mod's components exactly as it uses the engine's.
 
-Janino covers most of Java, but not all of it. These are the gaps that affect gameplay code:
+### 1.2 Language Level
 
-| Feature                       | Janino 3.1.12 | What to write instead |
-|-------------------------------|---------------|-----------------------|
-| Lambdas `() -> ...`           | ✗             | Anonymous class: `new ScriptTask() { public void run() { ... } }` |
-| Method references `this::foo` | ✗             | Anonymous class or named inner class |
-| Generic type inference        | ✗ (erased)    | Cast explicitly: `(BoxCollider) e.getComponent(BoxCollider.class)` |
-| For-each over `List<Entity>`  | ✗             | Index loop with a cast: `Entity e = (Entity) list.get(i);` |
-| Varargs call sugar            | Avoid         | Pass arrays explicitly, as the bundled scripts do: `new Class[] { int.class }` |
-| Anonymous & inner classes     | ✓             | The main tool for callbacks and FSM states (§3) |
-| Referencing another script's class | ✗ (isolated, §1.3) | `ScriptEvents` (§1.4) |
+Scripts get the full Java language of the engine's runtime (Java 25): lambdas, method references, `var`, records,
+generics with inference, for-each, switch expressions and pattern matching. Annotation processors don't run.
 
-> **War story: the javac false positive.** Janino reads generic signatures and then drops the type arguments.
-> `getComponent(X.class)` returns plain `Component`, and `for (Entity e : list)` won't compile. `javac` accepts
-> both, so a "does every template script compile?" check built on `javac` reported the Starter Game template scripts
-> as clean while Janino rejected them. (That template has since been replaced by **First Person Example** and
-> **Infinite Driver**, Volume 2 §1.9. The rule applies to their scripts just the same.) **Check scripts by cooking them with
-> `org.codehaus.janino.SimpleCompiler` against the real runtime classpath, never with `javac`.**
+```java
+var hits = new ArrayList<RaycastHit>();
+for (Entity e : sceneWorld.getSceneEntities()) { ... }
+runAfter(2f, () -> openDoor());                 // SimpleEntityScript
+```
 
-The framework is designed with these gaps in mind. Every `SimpleEntityScript` getter returns a concrete type, every
-callback is a single-method interface (`ScriptTask`, `ScriptEventListener`), and every state is a plain abstract
-class (`ScriptState`).
+Before Beta 5, scripts were compiled with Janino, which had none of these, so older scripts and some examples still
+use casts and index loops. Those still compile. Write new code however you like.
+
+The framework still gives every callback a single-method interface (`ScriptTask`, `ScriptEventListener`) and every
+state a plain abstract class (`ScriptState`), so lambdas and anonymous classes both work.
 
 ### 1.3 Class-Loader Isolation
 
-**Each script source gets its own `SimpleCompiler`, so each script class lives in its own class loader.**
+**Each script source is compiled on its own, so each script class lives in its own class loader.**
 
 ```
 Bootstrap / platform
   └── Engine class loader             EntityScript, SimpleEntityScript, ScriptEvents, Transform, …
         └── Mod class-loader chain    mod components & ModScripts (Volume 4), when --mods is active
-              ├── Janino loader A     PlayerCombatScript
-              ├── Janino loader B     GameManagerScript
-              └── Janino loader C     CollectibleScript
+              ├── script loader A     PlayerCombatScript
+              ├── script loader B     GameManagerScript
+              └── script loader C     CollectibleScript
 ```
 
 Here's what follows from that:
@@ -153,7 +143,7 @@ public class GameManagerScript extends SimpleEntityScript implements ScriptEvent
 }
 ```
 
-`ScriptEventListener` is an engine interface, so every Janino loader sees the same type. The payload is
+`ScriptEventListener` is an engine interface, so every script loader sees the same type. The payload is
 `(eventName, source, text, number)` as plain arguments, and there is **no event object to allocate**.
 
 | Behavior | Detail |
@@ -256,9 +246,7 @@ public class BobberScript extends EntityScript {
 
     public void onStart() {
         baseY = getPositionY();
-        java.util.List all = sceneWorld.getSceneEntities();
-        for (int i = 0; i < all.size(); i++) {                               // no for-each under Janino
-            Entity e = (Entity) all.get(i);
+        for (Entity e : sceneWorld.getSceneEntities()) {
             if (e.getComponent(CharacterControllerComponent.class) != null) { player = e; break; }
         }
     }
@@ -601,7 +589,7 @@ ScriptTweener.damp(current, target, 8f, dt);       // frame-rate-independent smo
 ### 3.4 `ScriptStateMachine`
 
 Enemy AI is where gameplay code usually turns into a mess of `if (state == 2 && !wasAttacking)`. The FSM gives each
-state its own class. Under Janino those are **non-static inner classes**, so they can read the script's fields
+state its own class. Those are **non-static inner classes**, so they can read the script's fields
 directly:
 
 ```java
@@ -644,8 +632,6 @@ request is queued and applied once the current transition finishes. `onExit` and
 pairs. Chains of transitions are capped at **16**. If two states keep handing control back and forth, the machine
 logs the problem and stops in the last state instead of hanging the frame.
 
-> The bundled example keeps shared fields **package-private** instead of `private`, so the inner state classes can
-> access them reliably under Janino. Do the same in your own FSM scripts.
 
 The full working example is in `scripting/framework/examples/EnemyAIStateScript.java`. It runs perception on a 5 Hz
 staggered timer instead of every frame, checks line of sight with a raycast, and
@@ -933,7 +919,6 @@ Related physics changes in this release:
 | Use `raycast(..., outHit)` / `raycastInPlace` | Use the convenience `raycast` that returns a new hit | One `RaycastHit` field per script, reused |
 | Write save data on events | Call `setSaveData` every frame | It formats strings and marks the file dirty |
 | Use `ScriptTweener.damp` for smoothing | Use `lerp(a, b, 0.1f)` per frame | The fixed-factor lerp behaves differently at 30 FPS and 144 FPS |
-| Check scripts by cooking them with Janino | Check scripts with `javac` | `javac` accepts generics that Janino erases (§1.2) |
 | Pool frequently spawned objects | Call `spawnPrefab` 60× a second | Spawning reads from disk and allocates entities |
 | Drive AI with `NavMeshAgent` + `setDestination` | Steer enemies with hand-written `move()` toward the player | The agent paths around obstacles, brakes, and feeds the `CharacterController` |
 | Re-send a destination only when the target moved | Call `setDestination` every frame | Each call re-plans with A\* on the next tick |

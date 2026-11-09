@@ -1,6 +1,6 @@
 # Volume 1: Core Architecture
 
-> **Engine loop, ECS kernel, and the Janino scripting runtime.**
+> **Engine loop, ECS kernel, and the in-memory Java scripting runtime.**
 > These three pieces carry everything else. If you only read one volume, read this one.
 
 ---
@@ -341,13 +341,14 @@ runs in Play, so the Transform you author in the editor is left alone.
 
 ---
 
-## 3. Janino Script Engine
+## 3. Script Engine
 
-### 3.1 Why Janino
+### 3.1 In-Memory Compilation
 
-Gameplay iteration dies when every tweak means "rebuild, relaunch, navigate back to the bug." Janino compiles plain
-Java source **in memory**, in milliseconds, with no `javac` process and no `.class` files on disk. You save a script
-in your editor of choice and the running game picks it up.
+Gameplay iteration dies when every tweak means "rebuild, relaunch, navigate back to the bug." RetroEngine compiles
+plain Java source **in memory** with javac, through the JDK's `javax.tools` API: no build step, no separate process
+and no `.class` files on disk. You save a script in your editor of choice and the running game picks it up. Scripts
+get the full Java 25 language (Volume 6 §1).
 
 ### 3.2 Writing a Script
 
