@@ -10,14 +10,17 @@
 entity GameManager | pos=0,0,0 | script=Scripts/HighwayGameScript.java
 entity Sun         | pos=0,30,0 | rot=55,35,0 | light
 
+# Engine: Aston Martin Rapide start-up, launch rev and held rev, all cut from one recording (Freesound #320096 by Paul368, CC0).
 # Player car (GGBot PSX Car 03). Model nose points +Z, so it is yawed 180 to face down the road (-Z).
-entity Car         | mesh=Meshes/Car3.obj | pos=0,0,0 | rot=0,180,0 | scale=0.7,0.7,0.7 | texture=Textures/car3_red.png | vehicle=1.35,2.5,0.32 | audio=Audio/Car2_Engine_Loop.ogg,loop,vol:0.6,bus:SFX | script=Scripts/CarDriverScript.java
-entity SFX_StartUp | pos=0,0.5,0 | parent=Car | audio=Audio/Car2_Engine_Start_Up.ogg,manual,vol:0.9,bus:SFX
+entity Car         | mesh=Meshes/Car3.obj | pos=0,0,0 | rot=0,180,0 | scale=0.7,0.7,0.7 | texture=Textures/car3_red.png | vehicle=1.35,2.5,0.32 | audio=Audio/Aston_Engine_Loop.wav,loop,vol:1.0,bus:SFX | script=Scripts/CarDriverScript.java
+entity SFX_StartUp | pos=0,0.5,0 | parent=Car | audio=Audio/Aston_Engine_Start_Up.wav,manual,vol:0.9,bus:SFX
 entity SFX_Horn    | pos=0,0.5,0 | parent=Car | audio=Audio/Car_Horn.ogg,manual,bus:SFX
-entity SFX_Boost   | pos=0,0.5,0 | parent=Car | audio=Audio/Car_Acceleration.ogg,manual,vol:0.8,bus:SFX
+entity SFX_Boost   | pos=0,0.5,0 | parent=Car | audio=Audio/Aston_Engine_Rev.wav,manual,vol:0.8,bus:SFX
 entity SFX_Crash   | pos=0,0.5,0 | parent=Car | audio=Audio/Car_Door_Close.ogg,manual,vol:1.6,bus:SFX,duck
 
 entity Main Camera | pos=0,3.4,8 | rot=12,0,0 | camera=65
+# Soundtrack: "Pure Raceway" by MintoDog (CC0, OpenGameArt). Rides on the camera, so it is always at the listener.
+entity Music       | parent=Main Camera | audio=Audio/Pure_Raceway.ogg,loop,vol:1.0,bus:BGM
 entity HUD TopBar     | parent=Main Camera | uipanel=0.5,0.92,520,96,0.05,0.05,0.08,0.6
 entity HUD Score      | parent=Main Camera | uitext=0.5,0.94,40
 entity HUD Best       | parent=Main Camera | uitext=0.5,0.895,20

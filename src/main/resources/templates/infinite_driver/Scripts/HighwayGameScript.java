@@ -42,7 +42,8 @@ public class HighwayGameScript extends SimpleEntityScript {
     public float autoRestartDelay = 0f;     // > 0 reloads the scene this many seconds after a crash
 
     // --- Audio mixer (buses: MASTER, BGM, SFX, VOICE; every bus feeds MASTER) ---
-    public String musicTrack = "";          // optional BGM, e.g. "Assets/Audio/drive_theme.ogg" (played on the BGM bus)
+    // The soundtrack is the scene's looping Music entity (BGM bus). musicTrack adds a one-shot BGM clip on top, e.g. an intro sting
+    public String musicTrack = "";          // optional, e.g. "Assets/Audio/intro_sting.ogg" (played once on the BGM bus)
     public String newBestStinger = "";      // optional jingle on a new best run (BGM bus)
     public float crashSfxBusVolume = 0.6f;  // SFX bus is pulled down while the crash screen is up
     public float masterStep = 0.1f;         // -/= keys nudge the MASTER bus by this much

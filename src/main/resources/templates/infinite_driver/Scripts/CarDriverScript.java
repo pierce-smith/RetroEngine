@@ -51,8 +51,10 @@ public class CarDriverScript extends SimpleEntityScript {
     public float speedFov = 16.0f;          // extra FOV at max speed
 
     // Audio
-    public float idlePitch = 0.75f;
-    public float topPitch = 1.6f;
+    // The loop is the engine held at ~1.7x its idle revs. 0.6 drops it to the recorded idle, the start speed lands
+    // near the held revs (~0.9), and top speed pitches it to ~2.5x idle. Start-up and loop are the same car.
+    public float idlePitch = 0.6f;
+    public float topPitch = 1.5f;
     public float referenceTopSpeed = 55.0f;
 
     private static final int KEY_A = 65, KEY_D = 68, KEY_H = 72, KEY_LEFT = 263, KEY_RIGHT = 262;
@@ -73,6 +75,7 @@ public class CarDriverScript extends SimpleEntityScript {
 
     private Entity cameraEntity;
     private AudioSource engine, sfxStartUp, sfxHorn, sfxBoost, sfxCrash;
+    private float engineVolume;
 
     @Override
     public void onStart() {
@@ -89,7 +92,10 @@ public class CarDriverScript extends SimpleEntityScript {
         cameraEntity = findEntity(cameraName);
         camX = getPositionX() * cameraFollow;
         if (sfxStartUp != null) sfxStartUp.play();
-        if (engine != null) engine.setPitch(idlePitch);
+        if (engine != null) {
+            engineVolume = engine.volume;
+            engine.setPitch(idlePitch);
+        }
     }
 
     @Override
@@ -213,7 +219,7 @@ public class CarDriverScript extends SimpleEntityScript {
         spinVel = (lateralVel >= 0.0f ? 1.0f : -1.0f) * (360.0f + Math.abs(lateralVel) * 40.0f);
         if (sfxCrash != null) sfxCrash.play();
         if (sfxHorn != null) sfxHorn.play();
-        if (engine != null) engine.setVolume(0.25f);
+        if (engine != null) engine.setVolume(engineVolume * 0.4f);
         vibrate(0.9f, 0.9f, 0.35f);
         shakeCamera(crashShake, 0.6f);
     }

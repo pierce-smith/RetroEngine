@@ -829,3 +829,5 @@ The project templates and editor include sample assets by these creators:
 - Kenney (https://kenney.nl): editor UI sounds
 - Drillimpact: rigged first-person arms
 - GGBotNet: car model
+- Paul368: Aston Martin Rapide engine, Infinite Driver engine sound (CC0, https://freesound.org/people/Paul368/sounds/320096/)
+- MintoDog: "Pure Raceway", Infinite Driver soundtrack (CC0, https://opengameart.org/content/pure-raceway)

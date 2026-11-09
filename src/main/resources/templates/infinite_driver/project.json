@@ -13,11 +13,12 @@
     "Textures/Barrier.png",
     "Textures/Crate.png",
     "Textures/Hazard.png",
-    "Audio/Car2_Engine_Loop.ogg",
-    "Audio/Car2_Engine_Start_Up.ogg",
+    "Audio/Aston_Engine_Loop.wav",
+    "Audio/Aston_Engine_Start_Up.wav",
     "Audio/Car_Horn.ogg",
-    "Audio/Car_Acceleration.ogg",
+    "Audio/Aston_Engine_Rev.wav",
     "Audio/Car_Door_Close.ogg",
+    "Audio/Pure_Raceway.ogg",
     "Scripts/CarDriverScript.java",
     "Scripts/HighwayGameScript.java"
   ]

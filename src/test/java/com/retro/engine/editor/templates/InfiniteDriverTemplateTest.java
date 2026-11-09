@@ -3,10 +3,15 @@ package com.retro.engine.editor.templates;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.retro.engine.audio.AudioBus;
+import com.retro.engine.audio.AudioEngine;
+import com.retro.engine.audio.AudioMixerService;
 import com.retro.engine.core.ProjectWorkspace;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.SceneWorld;
+import com.retro.engine.ecs.components.AudioSource;
 import com.retro.engine.ecs.components.Camera;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.scripting.Input;
@@ -60,5 +65,39 @@ class InfiniteDriverTemplateTest {
         // onLateUpdate sets fov = baseFov (62) + speedFov * speed, so 65 exactly means it never ran
         assertNotEquals(65.0f, lens.fov, 1e-4f);
         assertEquals(car.getTransform().posZ + 8.0f, camera.getTransform().posZ, 1.0f, "the camera sits cameraDistance behind the car");
+    }
+
+    @Test
+    void engineLoopKeepsPlayingAfterTheStartUpClip() {
+        AudioSource engine = car.getComponent(AudioSource.class);
+        assertNotNull(engine);
+        assertTrue(engine.loop && engine.playOnStart, "the engine note is a looping source that starts with Play");
+        world.play();
+        for (int i = 0; i < 300; i++) world.update(DT);
+        if (AudioEngine.isAvailable()) {
+            assertEquals(AudioSource.PlaybackState.PLAYING, engine.state, "the engine loop must still be running after 5 s");
+            assertTrue(engine.getSourceHandle() != 0);
+        }
+    }
+
+    @Test
+    void soundtrackLoopsOnTheBgmBusAndMTogglesIt() {
+        Entity music = world.findEntityByName("Music");
+        assertNotNull(music, "the template ships a soundtrack");
+        AudioSource track = music.getComponent(AudioSource.class);
+        assertTrue(track.loop && track.playOnStart);
+        assertEquals(AudioBus.BGM, track.bus, "on BGM, so the M key and the crash duck reach it");
+        assertTrue(new java.io.File(track.audioAssetPath).isFile(), "the clip is copied into the new project");
+
+        int failuresBefore = ScriptEngine.getFailureCount();
+        world.play();
+        for (int i = 0; i < 60; i++) world.update(DT);
+        assertEquals(failuresBefore, ScriptEngine.getFailureCount());
+        if (AudioEngine.isAvailable()) assertEquals(AudioSource.PlaybackState.PLAYING, track.state);
+
+        Input.setKeyState(77, true); // M
+        world.update(DT);
+        Input.setKeyState(77, false);
+        assertTrue(AudioMixerService.isBusMuted(AudioBus.BGM), "M mutes the soundtrack");
     }
 }
