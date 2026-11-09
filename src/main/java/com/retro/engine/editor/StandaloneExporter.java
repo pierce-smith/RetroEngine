@@ -40,9 +40,9 @@ import javax.imageio.ImageIO;
  * <pre>
  *   retro-engine.jar + dependency jars (LWJGL JNI + target-OS native jars only; SDL only with controller haptics)
  *   natives/                      MoltenVK (macOS)
- *   Game_Data/ProjectSettings.bin startup scene rewritten to the chosen scene
+ *   Game_Data/<Name>.rproj        settings (startup scene rewritten to the chosen scene) and the asset
+ *                                 directory, so scene asset references resolve unchanged
  *   Game_Data/Assets/             scenes (.rscene), scripts, materials, audio, raw sources
- *   Game_Data/.retro/             UUID registry, so scene asset references resolve unchanged
  *   Game_Data/Cooked/             .rpack packages produced by RpackCooker
  * </pre>
  *
@@ -193,7 +193,7 @@ public final class StandaloneExporter {
     }
 
     /**
-     * Writes Game_Data/ only (Assets/, .retro/ registry, ProjectSettings.bin, RpackCooker output) into
+     * Writes Game_Data/ only (Assets/, the .rproj project file, RpackCooker output) into
      * exportDir/Game_Data with no native packaging. Used by non-interactive/test exports.
      */
     public File exportGameDataOnly() throws IOException {
@@ -218,12 +218,14 @@ public final class StandaloneExporter {
         progress.report(0.25f, "COPYING ASSETS");
         copyTree(srcAssets.toPath(), new File(gameData, AssetDatabase.ASSETS_DIR).toPath(),
             rel -> isEditorOnlyAsset(rel) || isReplacedByCookedPackage(srcAssets, cookedDir, rel));
-        File internal = new File(req.projectDir, AssetDatabase.INTERNAL_DIR);
-        if (internal.isDirectory()) copyTree(internal.toPath(), new File(gameData, AssetDatabase.INTERNAL_DIR).toPath());
-
+        // The game's project file: the source project's settings (with the chosen startup scene) and asset directory
         ProjectSettings settings = ProjectWorkspace.readSettings(req.projectDir);
         settings.startupScene = req.startupScene.replace('\\', '/');
         ProjectWorkspace.writeSettings(gameData, settings);
+        byte[] assetDirectory = com.retro.engine.core.ProjectFile.readSection(req.projectDir, com.retro.engine.core.ProjectFile.ASSET_DIRECTORY);
+        if (assetDirectory != null) {
+            com.retro.engine.core.ProjectFile.writeSection(gameData, com.retro.engine.core.ProjectFile.ASSET_DIRECTORY, assetDirectory, settings.projectName);
+        }
 
         createModsFolder(gameData);
     }
@@ -849,7 +851,7 @@ public final class StandaloneExporter {
                 String name = p.getFileName().toString().toLowerCase(Locale.ROOT);
                 try {
                     if (name.endsWith(".java")) return HAPTICS_CALL.matcher(Files.readString(p)).find();
-                    if (name.endsWith(".rscene") || name.endsWith(".prefab") || name.endsWith(".prefab.bin")) {
+                    if (name.endsWith(".rscene") || name.endsWith(".rprefab") || name.endsWith(".prefab") || name.endsWith(".prefab.bin")) {
                         return indexOf(Files.readAllBytes(p), controllerTag) >= 0;
                     }
                 } catch (IOException | java.io.UncheckedIOException e) {

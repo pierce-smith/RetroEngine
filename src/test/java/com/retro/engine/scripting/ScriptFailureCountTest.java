@@ -29,7 +29,7 @@ class ScriptFailureCountTest {
     @Test
     void aMissingPrefabCounts() {
         int before = ScriptEngine.getFailureCount();
-        new SceneWorld().instantiatePrefabRuntime("Prefabs/Nope.prefab.bin");
+        new SceneWorld().instantiatePrefabRuntime("Prefabs/Nope.rprefab");
         assertEquals(before + 1, ScriptEngine.getFailureCount());
     }
 

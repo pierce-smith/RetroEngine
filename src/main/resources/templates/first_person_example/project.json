@@ -7,7 +7,7 @@
   "files": [
     "Meshes/arms_rig.glb",
     "Textures/arms_gloves_01.png",
-    "Prefabs/FPSController.prefab.bin",
+    "Prefabs/FPSController.rprefab",
     "Scripts/PlayerCombatScript.java",
     "Scripts/CollectibleScript.java",
     "Scripts/GameManagerScript.java",

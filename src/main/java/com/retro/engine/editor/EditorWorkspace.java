@@ -534,7 +534,7 @@ public class EditorWorkspace {
     public boolean hasActiveProject() { return assetDirectoryManager.hasActiveProject(); }
     public String getActiveProjectPath() { return assetDirectoryManager.getActiveProjectPath(); }
 
-    // Active project's ProjectSettings.bin contents; defaults while no project is bound. Read every frame by
+    // Active project's settings (from its .rproj); defaults while no project is bound. Read every frame by
     // SceneRenderPipeline (render environment) and edited in place by the Project Settings modal.
     private volatile ProjectSettings projectSettings = ProjectSettings.defaults();
 
@@ -662,7 +662,7 @@ public class EditorWorkspace {
         if (selected == null) return;
         String defaultDir = SceneWorld.projectSubDir(assetDirectoryManager, "Prefabs");
         runNativeDialogAsync(() -> NativeFileDialog.saveFileDialog("Save Entity Prefab Blueprint", defaultDir,
-                "Prefab Blueprint (*.prefab.bin)", "prefab.bin", "prefab"), path -> {
+                "Prefab (*.rprefab)", "rprefab"), path -> {
             if (path == null || path.isBlank()) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }
             UISoundPlayer.play(UISound.SPAWN);
             sceneManager.saveEntityAsPrefab(selected, path, assetDirectoryManager);

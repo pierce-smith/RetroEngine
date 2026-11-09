@@ -6,7 +6,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Component field metadata: drives InspectorPanel rendering/editing and binary .rscene/.prefab.bin serialization.
+ * Component field metadata: drives InspectorPanel rendering/editing and binary .rscene/.rprefab serialization.
  * Serialized fields are written in {@link #order()} sequence, so never reorder, insert or remove annotated fields
  * without bumping the format version and gating the change with {@link #since()} / {@link #prefabSince()}.
  */

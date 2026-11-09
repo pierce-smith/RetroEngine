@@ -18,7 +18,7 @@ import java.io.File;
 /**
  * "File > Project Settings..." modal with two tabs: RENDER (shading model, ground shadow blobs, distance fog, ambient
  * light) and AUDIO (Master / BGM / SFX / Voice bus volumes and mutes, BGM ducking, reverb zones). Edits apply live to the workspace's {@link ProjectSettings}, which
- * {@code SceneRenderPipeline} reads every frame; SAVE writes ProjectSettings.bin and CANCEL restores the values the
+ * {@code SceneRenderPipeline} reads every frame; SAVE writes the project file and CANCEL restores the values the
  * modal opened with. Rendering and hit-testing share the layout constants below.
  *
  * <p>Sliders drag on press; the value well to the right of a slider opens a prompt for an exact number. The shading

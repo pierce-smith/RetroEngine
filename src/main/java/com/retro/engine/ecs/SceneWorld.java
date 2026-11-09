@@ -585,10 +585,21 @@ public class SceneWorld {
      * next physics step). Scripts on the spawned entities start on the next script tick. Returns the root entity, or
      * null when the prefab could not be loaded. Reads the prefab from disk, so avoid calling it every frame.
      */
+    private String resolvePrefabRuntimePath(String path) {
+        String resolved = (lastAssetDatabase != null) ? lastAssetDatabase.resolveAsset(path) : ModLoader.resolveAssetPath(path);
+        return (resolved != null && new File(resolved).exists()) ? resolved : null;
+    }
+
     public Entity instantiatePrefabRuntime(String prefabPath) {
         if (prefabPath == null || prefabPath.isBlank()) return null;
-        String resolved = (lastAssetDatabase != null) ? lastAssetDatabase.resolveAsset(prefabPath) : ModLoader.resolveAssetPath(prefabPath);
-        if (resolved == null || !new File(resolved).exists()) resolved = prefabPath;
+        String resolved = resolvePrefabRuntimePath(prefabPath);
+        if (resolved == null) {
+            // Scripts written before the .rprefab rename name "X.prefab.bin"; mods and old exports may still ship it
+            String current = com.retro.engine.core.ProjectFile.toCurrentPrefabName(prefabPath);
+            String alternate = !current.equals(prefabPath) ? current : com.retro.engine.core.ProjectFile.toLegacyPrefabName(prefabPath);
+            if (!alternate.equals(prefabPath)) resolved = resolvePrefabRuntimePath(alternate);
+        }
+        if (resolved == null) resolved = prefabPath;
 
         Entity previousPrimary = selectedEntity;
         List<Entity> previousSelection = new ArrayList<>(selection);
@@ -763,6 +774,7 @@ public class SceneWorld {
     /** Writes {@code entity} (and its children) as a prefab blueprint and registers it in the asset browser. */
     public void saveEntityAsPrefab(Entity entity, String targetPath, AssetDatabase assetDb) {
         if (entity == null || targetPath == null || targetPath.isBlank()) return;
+        targetPath = PrefabSerializer.sanitizePrefabPath(targetPath); // the path the file is actually written to
         if (!PrefabSerializer.savePrefab(targetPath, entity, sceneEntities, assetDb)) {
             reportDataError("Could not save the prefab " + new File(targetPath).getName() + ". The file on disk has not changed. See the log for details.");
         }

@@ -20,6 +20,7 @@ import static org.lwjgl.system.JNI.*;
 import static org.lwjgl.system.libffi.LibFFI.FFI_DEFAULT_ABI;
 import static org.lwjgl.system.libffi.LibFFI.FFI_TYPE_STRUCT;
 import static org.lwjgl.system.libffi.LibFFI.ffi_type_double;
+import static org.lwjgl.system.libffi.LibFFI.ffi_type_float;
 import static org.lwjgl.system.libffi.LibFFI.ffi_type_pointer;
 import static org.lwjgl.system.libffi.LibFFI.ffi_type_void;
 import static org.lwjgl.system.libffi.LibFFI.nffi_call;
@@ -133,6 +134,12 @@ public class MetalPassEncoder {
     // setClearColor: through libffi. The CIF and its MTLClearColor struct type live for the process (like
     // APIUtil.apiCreateCIF's own CIFs, which are never freed); the per-encoder argument buffers are freed in dispose.
     private static final long SEL_SET_CLEAR_COLOR = sel_registerName("setClearColor:");
+    // setDepthBias:slopeScale:clamp: takes three floats, which the integer-only JNI msgSend helpers cannot pass
+    private static final long SEL_SET_DEPTH_BIAS = sel_registerName("setDepthBias:slopeScale:clamp:");
+    private static FFICIF depthBiasCif = null;
+    private LongBuffer depthBiasArgs = null;
+    private FloatBuffer depthBiasValues = null;
+    private PointerBuffer depthBiasArgPointers = null;
     private static FFICIF clearColorCif = null;
     private LongBuffer clearColorArgs = null;
     private DoubleBuffer clearColorValue = null;
@@ -398,6 +405,8 @@ public class MetalPassEncoder {
             bindPipeline(pipeline.getPipelineState3D());
             long shadowDepthState = pipeline.getDepthStencilStateShadow() != 0L ? pipeline.getDepthStencilStateShadow() : pipeline.getDepthStencilState3D();
             bindDepthStencil(shadowDepthState);
+            // Keeps blobs in front of the ground at every distance; reset after the loop (ShadowBlobDepth)
+            setDepthBias(com.retro.engine.graphics.ShadowBlobDepth.CONSTANT_BIAS, com.retro.engine.graphics.ShadowBlobDepth.SLOPE_BIAS, 0.0f);
 
             for (int i = 0; i < draws.count; i++) {
                 RenderCommand item = commands[draws.commandIndex[i]];
@@ -436,6 +445,7 @@ public class MetalPassEncoder {
 
                 shadowIndex++;
             }
+            setDepthBias(0.0f, 0.0f, 0.0f);
         }
 
         // 1D. Billboard particles: after all opaque and blob draws, depth-tested without depth writes
@@ -567,6 +577,29 @@ public class MetalPassEncoder {
         nffi_call(cif.address(), send, 0L, MemoryUtil.memAddress(clearColorArgPointers));
     }
 
+    private static synchronized FFICIF depthBiasCif() {
+        if (depthBiasCif == null) {
+            depthBiasCif = apiCreateCIF(FFI_DEFAULT_ABI, ffi_type_void, ffi_type_pointer, ffi_type_pointer,
+                    ffi_type_float, ffi_type_float, ffi_type_float);
+        }
+        return depthBiasCif;
+    }
+
+    /** [encoder setDepthBias:slopeScale:clamp:]. Metal's bias stays set on the encoder until changed again. */
+    private void setDepthBias(float constant, float slope, float clamp) {
+        FFICIF cif = depthBiasCif();
+        if (depthBiasArgs == null) {
+            depthBiasArgs = MemoryUtil.memAllocLong(2);
+            depthBiasValues = MemoryUtil.memAllocFloat(3);
+            depthBiasArgPointers = MemoryUtil.memAllocPointer(5);
+            long a = MemoryUtil.memAddress(depthBiasArgs), v = MemoryUtil.memAddress(depthBiasValues);
+            depthBiasArgPointers.put(0, a).put(1, a + 8L).put(2, v).put(3, v + 4L).put(4, v + 8L);
+        }
+        depthBiasArgs.put(0, encoder).put(1, SEL_SET_DEPTH_BIAS);
+        depthBiasValues.put(0, constant).put(1, slope).put(2, clamp);
+        nffi_call(cif.address(), send, 0L, MemoryUtil.memAddress(depthBiasArgPointers));
+    }
+
     /** objc_msgSend with 11 pointer-sized arguments (void return) through libffi. */
     private void msgSendPickCopy(long... args) {
         if (pickCopyCif == null) {
@@ -656,6 +689,14 @@ public class MetalPassEncoder {
         if (pickCopyRegion != null) {
             MemoryUtil.memFree(pickCopyRegion);
             pickCopyRegion = null;
+        }
+        if (depthBiasArgs != null) {
+            MemoryUtil.memFree(depthBiasArgs);
+            MemoryUtil.memFree(depthBiasValues);
+            MemoryUtil.memFree(depthBiasArgPointers);
+            depthBiasArgs = null;
+            depthBiasValues = null;
+            depthBiasArgPointers = null;
         }
         if (pickCopyArgs != null) {
             MemoryUtil.memFree(pickCopyArgs);

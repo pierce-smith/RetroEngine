@@ -8,8 +8,13 @@ import static org.lwjgl.system.JNI.invokePPP;
 import static org.lwjgl.system.macosx.ObjCRuntime.sel_registerName;
 
 /**
- * SRP Domain Manager: Manages a 3-slot CPU-to-GPU host-visible MTLBuffer ring buffer.
+ * A 3-slot ring of host-visible MTLBuffers for per-frame vertex streams (UI, grid, particles, pick overlay).
  * Automatically expands capacity when vertex counts exceed current buffer size.
+ *
+ * <p>Writes are two-step. {@link #stage} copies the caller's vertices into a CPU array; {@link #flush} copies them into
+ * the next GPU slot. The backend calls flush only after its frame-in-flight permit is acquired, so a slot is never
+ * rewritten while an earlier frame's GPU work can still read it. Writing at stage time raced the GPU whenever three
+ * frames were queued, which vsync usually prevented and an uncapped frame rate made constant (flashing UI).
  */
 public class MetalRingBuffer {
 
@@ -21,6 +26,12 @@ public class MetalRingBuffer {
     private int ringIndex = 0;
     private int vertexCount = 0;
 
+    // CPU copy waiting for flush(); grows to the largest frame and is then reused, so steady state allocates nothing
+    private float[] staged = new float[0];
+    private int stagedCount = 0;
+    private int stagedStride = 0;
+    private boolean pending = false;
+
     public long getCurrentBufferHandle() {
         return bufferRing[ringIndex];
     }
@@ -29,7 +40,35 @@ public class MetalRingBuffer {
         return vertexCount;
     }
 
-    public void updateBuffer(MetalDevice metalDevice, float[] vertices, int count, int strideFloats, MetalGpuCache cache) {
+    /**
+     * Records this frame's vertices for the next {@link #flush}. The data is copied, never retained.
+     * {@link #getVertexCount} reports the staged count straight away; the buffer handle changes at flush.
+     */
+    public void stage(float[] vertices, int count, int strideFloats) {
+        if (vertices == null || count <= 0 || strideFloats <= 0) {
+            stagedCount = 0;
+            vertexCount = 0;
+            pending = true;
+            return;
+        }
+        int floats = Math.min(count * strideFloats, vertices.length);
+        count = floats / strideFloats;
+        if (staged.length < floats) staged = new float[Math.max(floats, staged.length * 2)];
+        System.arraycopy(vertices, 0, staged, 0, count * strideFloats);
+        stagedCount = count;
+        stagedStride = strideFloats;
+        vertexCount = count;
+        pending = true;
+    }
+
+    /** Copies staged vertices into the next ring slot. Call only once the GPU has retired that slot's last frame. */
+    public void flush(MetalDevice metalDevice, MetalGpuCache cache) {
+        if (!pending) return;
+        pending = false;
+        updateBuffer(metalDevice, staged, stagedCount, stagedStride, cache);
+    }
+
+    private void updateBuffer(MetalDevice metalDevice, float[] vertices, int count, int strideFloats, MetalGpuCache cache) {
         if (vertices == null || count <= 0 || metalDevice == null) {
             this.vertexCount = 0;
             return;

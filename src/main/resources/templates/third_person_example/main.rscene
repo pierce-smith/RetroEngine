@@ -6,7 +6,7 @@
 entity Ground         | mesh=Meshes/Plane.obj | scale=8,1,8 | texture=Textures/Checker.png
 entity GroundCollider | pos=0,-0.1,0 | scale=8,1,8 | box=10,0.2,10 | body=static
 # Player root -> Main Camera, Hero. Keep the root unrotated: only the Hero child turns (see ThirdPersonScript)
-entity Player         | prefab=Prefabs/ThirdPersonController.prefab.bin | pos=0,0.95,8
+entity Player         | prefab=Prefabs/ThirdPersonController.rprefab | pos=0,0.95,8
 entity Sun            | pos=0,20,0 | rot=55,35,0 | light
 # Things to run around, and to back the camera into
 entity Wall           | mesh=Meshes/Cube.obj | pos=0,1.5,-12 | scale=16,3,1    | texture=Textures/Checker.png | box=1,1,1 | body=static

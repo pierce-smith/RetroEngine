@@ -33,6 +33,25 @@ class ProjectSettingsHeapTest {
     }
 
     @Test
+    void framePacingSurvivesASaveAndLoad() throws IOException {
+        ProjectSettings settings = new ProjectSettings("Game", "");
+        settings.vsync = false;
+        settings.frameRateCap = 144;
+        settings.write(dir);
+        ProjectSettings loaded = ProjectSettings.read(dir);
+        assertEquals(false, loaded.vsync);
+        assertEquals(144, loaded.frameRateCap);
+    }
+
+    @Test
+    void frameRateCapIsClampedButZeroMeansNone() {
+        assertEquals(0, ProjectSettings.sanitizeFrameRateCap(0));
+        assertEquals(0, ProjectSettings.sanitizeFrameRateCap(-5));
+        assertEquals(ProjectSettings.MIN_FRAME_RATE_CAP, ProjectSettings.sanitizeFrameRateCap(5));
+        assertEquals(ProjectSettings.MAX_FRAME_RATE_CAP, ProjectSettings.sanitizeFrameRateCap(100_000));
+    }
+
+    @Test
     void outOfRangeValuesAreClamped() {
         ProjectSettings settings = new ProjectSettings("Game", "");
         settings.maxHeapMb = 1;
@@ -45,7 +64,7 @@ class ProjectSettingsHeapTest {
 
     @Test
     void olderFilesGetTheDefault() throws IOException {
-        try (DataOutputStream out = new DataOutputStream(Files.newOutputStream(ProjectSettings.fileIn(dir).toPath()))) {
+        try (DataOutputStream out = new DataOutputStream(Files.newOutputStream(dir.toPath().resolve(ProjectFile.LEGACY_SETTINGS_FILE)))) {
             out.writeInt(ProjectSettings.MAGIC);
             out.writeInt(1);
             out.writeUTF("Old Game");
@@ -54,6 +73,9 @@ class ProjectSettingsHeapTest {
             out.writeLong(0L);
             out.writeUTF("");
         }
-        assertEquals(ProjectSettings.DEFAULT_MAX_HEAP_MB, ProjectSettings.read(dir).maxHeapMb);
+        ProjectSettings loaded = ProjectSettings.read(dir);
+        assertEquals(ProjectSettings.DEFAULT_MAX_HEAP_MB, loaded.maxHeapMb);
+        assertEquals(true, loaded.vsync);
+        assertEquals(0, loaded.frameRateCap);
     }
 }

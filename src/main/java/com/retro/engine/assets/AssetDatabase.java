@@ -34,8 +34,9 @@ import java.util.function.Predicate;
  * file or directory beneath it, and every browser operation (new folder, rename, delete, import) acts on
  * disk first, then re-syncs. Assets/ is the browser root; nothing outside it is ever registered or reachable.
  *
- * 128-bit UUIDs persist in {@code <project>/.retro/asset_registry.bin}, keyed by project-relative path, so
- * scene references survive restarts. Only {@link #openProject(String)} clears and re-scans the registry;
+ * 128-bit UUIDs persist in the asset directory section of the project file ({@code <project>/<Name>.rproj}, see
+ * {@link com.retro.engine.core.ProjectFile}), keyed by project-relative path, so scene references survive restarts.
+ * Exported games only read it: a signed or read-only install must never be written to. Only {@link #openProject(String)} clears and re-scans the registry;
  * scene loads never touch it. A background watcher picks up changes made outside the editor.
  *
  * The watcher also drives hot reload: edited .java scripts under Assets/ are invalidated in the ScriptEngine, and
@@ -48,8 +49,6 @@ public class AssetDatabase {
 
     public static final String ASSETS_DIR = "Assets";
     public static final String COOKED_DIR = "Cooked";
-    public static final String INTERNAL_DIR = ".retro";
-    public static final String MANIFEST_FILE = "asset_registry.bin";
 
     private static final int MANIFEST_MAGIC = 0x52524547; // 'RREG'
     private static final int MANIFEST_VERSION = 3;        // v3: disk-mirrored, every path project-relative
@@ -228,8 +227,8 @@ public class AssetDatabase {
     // --- PROJECT BINDING ---
 
     /**
-     * Binds the registry to a project root: clears all state, ensures Assets/ and .retro/ exist, seeds UUIDs
-     * from .retro/asset_registry.bin, mirrors Assets/ from disk, and starts the folder watcher.
+     * Binds the registry to a project root: clears all state, ensures Assets/ exists, seeds UUIDs from the project
+     * file's asset directory, mirrors Assets/ from disk, and starts the folder watcher.
      * This is the only entry point that clears the registry.
      */
     public boolean openProject(String projectRootPath) {
@@ -241,7 +240,6 @@ public class AssetDatabase {
         this.activeProjectPath = normalizePath(root.getAbsolutePath());
         com.retro.engine.assets.ProjectFileLocator.setProjectRoot(root);
         new File(root, ASSETS_DIR).mkdirs();
-        new File(root, INTERNAL_DIR).mkdirs();
 
         String savedFolder = loadManifestSeed();
         rescanProjectAssets();
@@ -682,20 +680,15 @@ public class AssetDatabase {
         }
     }
 
-    // --- MANIFEST (.retro/asset_registry.bin) ---
+    // --- ASSET DIRECTORY (the project file's ASSET_DIRECTORY section) ---
 
-    public File getManifestFile() {
-        return hasActiveProject() ? new File(activeProjectPath + "/" + INTERNAL_DIR, MANIFEST_FILE) : null;
-    }
-
-    /** Writes every UUID mapping (project-relative paths) and the browser folder to the manifest (atomic replace). */
+    /** Writes every UUID mapping (project-relative paths) and the browser folder into the project file. */
     public void saveManifest() {
         if (!hasActiveProject()) return;
-        File manifest = getManifestFile();
-        File tmp = new File(manifest.getParentFile(), MANIFEST_FILE + ".tmp");
-        manifest.getParentFile().mkdirs();
-
-        try (DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(tmp.toPath())))) {
+        // Exported games ship their asset directory read-only; writing would break a signed .app or fail in Program Files
+        if (com.retro.engine.core.EngineContext.isRuntimeProcess()) return;
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (DataOutputStream dos = new DataOutputStream(bytes)) {
             dos.writeInt(MANIFEST_MAGIC);
             dos.writeInt(MANIFEST_VERSION);
             dos.writeUTF(currentFolderPath != null ? currentFolderPath : "");
@@ -711,86 +704,85 @@ public class AssetDatabase {
                 dos.writeUTF(meta.parentFolderPath != null ? meta.parentFolderPath : "");
             }
         } catch (IOException e) {
-            System.err.println("[AssetDatabase] Failed to write asset manifest: " + e.getMessage());
+            System.err.println("[AssetDatabase] Failed to build the asset directory: " + e.getMessage());
             return;
         }
-
+        File root = new File(activeProjectPath);
         try {
-            Files.move(tmp.toPath(), manifest.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (IOException atomicUnsupported) {
-            try {
-                Files.move(tmp.toPath(), manifest.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            } catch (IOException e) {
-                System.err.println("[AssetDatabase] Failed to commit asset manifest: " + e.getMessage());
-            }
+            com.retro.engine.core.ProjectFile.writeSection(root, com.retro.engine.core.ProjectFile.ASSET_DIRECTORY,
+                    bytes.toByteArray(), root.getName());
+        } catch (IOException e) {
+            System.err.println("[AssetDatabase] Failed to save the asset directory: " + e.getMessage());
         }
     }
 
-    /** Loads manifest UUIDs into the scan seed; returns the saved browser folder. Older manifests' virtual folders simply never match disk. */
-    private String loadManifestSeed() {
-        manifestUuidSeed.clear();
-        cookedOnlyAssets.clear();
-        boolean runtime = com.retro.engine.core.EngineContext.isRuntimeProcess();
-        File manifest = getManifestFile();
-        if (manifest == null || !manifest.isFile()) return "";
-
-        try (DataInputStream dis = new DataInputStream(new BufferedInputStream(Files.newInputStream(manifest.toPath())))) {
-            if (dis.readInt() != MANIFEST_MAGIC) {
-                System.err.println("[AssetDatabase] Ignoring invalid asset manifest: " + manifest.getAbsolutePath());
-                return "";
-            }
+    /**
+     * Visits each entry of an asset directory payload as (uuid, stored path). A legacy "X.prefab.bin" path is also
+     * reported as "X.rprefab", so prefabs renamed by the .rproj migration keep their UUIDs.
+     */
+    private static String readAssetDirectory(byte[] payload, java.util.function.BiConsumer<String, String> entry) throws IOException {
+        try (DataInputStream dis = new DataInputStream(new java.io.ByteArrayInputStream(payload))) {
+            if (dis.readInt() != MANIFEST_MAGIC) throw new IOException("not an asset directory");
             int version = dis.readInt();
-            if (version > MANIFEST_VERSION) {
-                System.err.println("[AssetDatabase] Asset manifest version " + version + " is newer than supported; ignoring.");
-                return "";
-            }
+            if (version > MANIFEST_VERSION) throw new IOException("asset directory version " + version + " is newer than supported");
             String savedFolder = dis.readUTF();
             int count = dis.readInt();
             for (int i = 0; i < count; i++) {
                 String uuid = new UUID(dis.readLong(), dis.readLong()).toString();
                 dis.readUTF(); // name
-                String storedPath = normalizePath(dis.readUTF());
+                String storedPath = dis.readUTF();
                 dis.readUTF(); // type
                 dis.readUTF(); // parent
-                manifestUuidSeed.put(storedPath.toLowerCase(), uuid);
-                if (runtime) noteCookedOnlyAsset(storedPath, uuid);
+                entry.accept(uuid, storedPath);
+                String current = com.retro.engine.core.ProjectFile.toCurrentPrefabName(storedPath);
+                if (!current.equals(storedPath)) entry.accept(uuid, current);
             }
             return savedFolder;
+        }
+    }
+
+    /** Loads asset directory UUIDs into the scan seed; returns the saved browser folder. */
+    private String loadManifestSeed() {
+        manifestUuidSeed.clear();
+        cookedOnlyAssets.clear();
+        boolean runtime = com.retro.engine.core.EngineContext.isRuntimeProcess();
+        if (!hasActiveProject()) return "";
+        try {
+            byte[] payload = com.retro.engine.core.ProjectFile.readSection(new File(activeProjectPath), com.retro.engine.core.ProjectFile.ASSET_DIRECTORY);
+            if (payload == null) return "";
+            return readAssetDirectory(payload, (uuid, stored) -> {
+                String storedPath = normalizePath(stored);
+                manifestUuidSeed.put(storedPath.toLowerCase(), uuid);
+                if (runtime) noteCookedOnlyAsset(storedPath, uuid);
+            });
         } catch (IOException e) {
-            System.err.println("[AssetDatabase] Failed to read asset manifest: " + e.getMessage());
+            System.err.println("[AssetDatabase] Failed to read the asset directory: " + e.getMessage());
             return "";
         }
     }
 
     /**
-     * Looks up an asset's UUID in the manifest of the project that contains it, without binding a registry.
-     * Returns null when the file is not inside a project or has no manifest entry.
+     * Looks up an asset's UUID in the asset directory of the project that contains it, without binding a registry.
+     * Returns null when the file is not inside a project or has no entry.
      */
     public static String lookupManifestUuid(File assetFile) {
         if (assetFile == null) return null;
         File abs = assetFile.getAbsoluteFile();
         for (File dir = abs.getParentFile(); dir != null; dir = dir.getParentFile()) {
-            File manifest = new File(new File(dir, INTERNAL_DIR), MANIFEST_FILE);
-            if (!manifest.isFile()) continue;
+            if (!com.retro.engine.core.ProjectFile.isProjectDirectory(dir)) continue;
 
             String rootPrefix = dir.getAbsolutePath().replace('\\', '/') + "/";
             String target = abs.getAbsolutePath().replace('\\', '/');
             String relTarget = target.startsWith(rootPrefix) ? target.substring(rootPrefix.length()) : target;
-            try (DataInputStream dis = new DataInputStream(new BufferedInputStream(Files.newInputStream(manifest.toPath())))) {
-                if (dis.readInt() != MANIFEST_MAGIC) return null;
-                dis.readInt();
-                dis.readUTF();
-                int count = dis.readInt();
-                for (int i = 0; i < count; i++) {
-                    UUID u = new UUID(dis.readLong(), dis.readLong());
-                    dis.readUTF();
-                    String path = dis.readUTF();
-                    dis.readUTF();
-                    dis.readUTF();
-                    if (path.equalsIgnoreCase(relTarget) || path.equalsIgnoreCase(target)) return u.toString();
-                }
+            String[] found = new String[1];
+            try {
+                byte[] payload = com.retro.engine.core.ProjectFile.readSection(dir, com.retro.engine.core.ProjectFile.ASSET_DIRECTORY);
+                if (payload == null) return null;
+                readAssetDirectory(payload, (uuid, path) -> {
+                    if (found[0] == null && (path.equalsIgnoreCase(relTarget) || path.equalsIgnoreCase(target))) found[0] = uuid;
+                });
             } catch (IOException ignored) {}
-            return null;
+            return found[0];
         }
         return null;
     }
@@ -800,7 +792,8 @@ public class AssetDatabase {
     public static AssetType classifyFile(String fileName) {
         if (fileName == null) return AssetType.UNKNOWN;
         String lower = fileName.toLowerCase();
-        if (lower.endsWith(".prefab.bin") || lower.endsWith(".prefab")) return AssetType.PREFAB;
+        // .prefab.bin and .prefab are older names; mods and old exports can still carry them
+        if (lower.endsWith(".rprefab") || lower.endsWith(".prefab.bin") || lower.endsWith(".prefab")) return AssetType.PREFAB;
         int dot = lower.lastIndexOf('.');
         String ext = (dot == -1) ? "" : lower.substring(dot + 1);
         return switch (ext) {
@@ -860,7 +853,7 @@ public class AssetDatabase {
         return true;
     }
 
-    /** ".prefab.bin" style compound extensions are preserved as a unit. */
+    /** Compound extensions such as the legacy ".prefab.bin" are preserved as a unit. */
     private static String fullExtension(String name) {
         String lower = name.toLowerCase();
         if (lower.endsWith(".prefab.bin")) return name.substring(name.length() - ".prefab.bin".length());

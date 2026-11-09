@@ -120,6 +120,7 @@ public class VulkanBackend implements IRenderBackend {
         queryPhysicalDeviceLimits();
 
         if (!queueSubmitter.initialize(deviceManager)) return false;
+        swapchainManager.setVsync(windowInfo.vsync());
         if (!swapchainManager.createSwapchain(deviceManager, surfaceManager, width, height)) return false;
 
         targetPass.initFramebuffer(deviceManager, 712, 488);
@@ -336,6 +337,11 @@ public class VulkanBackend implements IRenderBackend {
      * there are no VkFramebuffer objects to rebuild; the composition pass reads the new extent and views every frame.
      * Returns false while the window has zero area, leaving the request pending.
      */
+    @Override
+    public void setVsync(boolean vsync) {
+        swapchainManager.setVsync(vsync);
+    }
+
     private boolean recreateSwapchain() {
         VkDevice device = deviceManager.getDevice();
         if (device == null) return false;

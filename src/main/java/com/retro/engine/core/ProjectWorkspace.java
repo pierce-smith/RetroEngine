@@ -22,20 +22,20 @@ import java.util.List;
 import javax.imageio.ImageIO;
 
 /**
- * Project directory layout, ProjectSettings.bin persistence, starter content, and the
- * open/create entry points used by the project launcher and the --project CLI flag.
+ * Project directory layout, settings persistence, starter content, and the open/create entry points used by the
+ * project launcher and the --project CLI flag.
  *
  * Layout:
  * <pre>
- *   &lt;Project&gt;/ProjectSettings.bin
+ *   &lt;Project&gt;/&lt;Name&gt;.rproj   settings + asset directory (see {@link ProjectFile})
  *   &lt;Project&gt;/Assets/
  *   &lt;Project&gt;/Cooked/
- *   &lt;Project&gt;/.retro/asset_registry.bin
  * </pre>
+ * Projects from before the .rproj (ProjectSettings.bin, .retro/asset_registry.bin, *.prefab.bin) are migrated
+ * the first time they're opened, by {@link ProjectFile#migrateLegacy}.
  */
 public final class ProjectWorkspace {
 
-    public static final String SETTINGS_FILE = ProjectSettings.FILE_NAME;
     public static final String ENGINE_VERSION = "1.0.0";
     public static final String STARTER_SCENE = "Assets/Scenes/Main.rscene";
 
@@ -54,7 +54,7 @@ public final class ProjectWorkspace {
     // --- Settings I/O ---
 
     public static boolean isProjectDirectory(File dir) {
-        return dir != null && new File(dir, SETTINGS_FILE).isFile();
+        return ProjectFile.isProjectDirectory(dir);
     }
 
     public static void writeSettings(File projectDir, ProjectSettings settings) throws IOException {
@@ -67,9 +67,9 @@ public final class ProjectWorkspace {
 
     // --- Create / Open ---
 
-    /** Creates Assets/, Cooked/, and .retro/ under projectDir and writes an initial ProjectSettings.bin. */
+    /** Creates Assets/ and Cooked/ under projectDir and writes an initial project file. */
     public static void initializeLayout(File projectDir, String projectName, String startupScene) throws IOException {
-        for (String sub : new String[] { AssetDatabase.ASSETS_DIR, AssetDatabase.COOKED_DIR, AssetDatabase.INTERNAL_DIR }) {
+        for (String sub : new String[] { AssetDatabase.ASSETS_DIR, AssetDatabase.COOKED_DIR }) {
             File d = new File(projectDir, sub);
             if (!d.isDirectory() && !d.mkdirs()) throw new IOException("Could not create " + d.getAbsolutePath());
         }
@@ -132,11 +132,12 @@ public final class ProjectWorkspace {
     }
 
     /**
-     * Opens an existing project: loads ProjectSettings.bin, binds the AssetDatabase (clear + manifest restore + scan),
-     * and loads the startup scene if one is configured.
+     * Opens an existing project: migrates a pre-.rproj project, loads its settings, binds the AssetDatabase
+     * (clear + asset directory restore + scan), and loads the startup scene if one is configured.
      */
     public static void openProject(EditorWorkspace workspace, File projectDir) throws IOException {
         File dir = projectDir.getAbsoluteFile();
+        ProjectFile.migrateLegacy(dir);
         ProjectSettings settings = readSettings(dir);
         settings.lastOpenedAtMillis = System.currentTimeMillis();
         writeSettings(dir, settings);
@@ -167,7 +168,10 @@ public final class ProjectWorkspace {
         openRuntimeProject(workspace, gameDataDir, null);
     }
 
-    /** As above, starting on {@code sceneOverride} (project-relative) when it isn't null. Nothing is written back. */
+    /**
+     * As above, starting on {@code sceneOverride} (project-relative) when it isn't null. Nothing is written back, so a
+     * game exported before the .rproj reads its old files in place and prefab paths fall back to the old names.
+     */
     public static void openRuntimeProject(EditorWorkspace workspace, File gameDataDir, String sceneOverride) throws IOException {
         File dir = gameDataDir.getAbsoluteFile();
         ProjectSettings settings = readSettings(dir);

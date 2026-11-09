@@ -334,19 +334,19 @@ class SceneFormatTest {
     /** This prefab was saved with ducksBgm on. Version 7 lost it (see ComponentSchema.Property.isPersistedIn). */
     @Test
     void frozenV7PrefabStillLoads() {
-        assertCratePrefab(FORMATS.resolve("prefab-v7.prefab.bin").toFile(), false);
+        assertCratePrefab(FORMATS.resolve("prefab-v7.rprefab").toFile(), false);
     }
 
     @Test
     void frozenV8PrefabStillLoads() {
-        assertCratePrefab(FORMATS.resolve("prefab-v8.prefab.bin").toFile(), true);
+        assertCratePrefab(FORMATS.resolve("prefab-v8.rprefab").toFile(), true);
     }
 
     @Test
     void prefabRoundTripsInTheCurrentFormat() {
         SceneWorld world = new SceneWorld();
-        List<Entity> made = PrefabSerializer.instantiatePrefab(FORMATS.resolve("prefab-v7.prefab.bin").toString(), world, null);
-        File saved = dir.resolve("crate.prefab.bin").toFile();
+        List<Entity> made = PrefabSerializer.instantiatePrefab(FORMATS.resolve("prefab-v7.rprefab").toString(), world, null);
+        File saved = dir.resolve("crate.rprefab").toFile();
         made.get(0).getComponent(AudioSource.class).ducksBgm = true;
         assertTrue(PrefabSerializer.savePrefab(saved.getPath(), made.get(0), made, null));
         assertCratePrefab(saved, true);
@@ -355,8 +355,8 @@ class SceneFormatTest {
     @Test
     void damagedPrefabLoadsNothing() throws IOException {
         SceneWorld world = new SceneWorld();
-        List<Entity> made = PrefabSerializer.instantiatePrefab(FORMATS.resolve("prefab-v7.prefab.bin").toString(), world, null);
-        File saved = dir.resolve("crate.prefab.bin").toFile();
+        List<Entity> made = PrefabSerializer.instantiatePrefab(FORMATS.resolve("prefab-v7.rprefab").toString(), world, null);
+        File saved = dir.resolve("crate.rprefab").toFile();
         assertTrue(PrefabSerializer.savePrefab(saved.getPath(), made.get(0), made, null));
         byte[] bytes = Files.readAllBytes(saved.toPath());
         bytes[bytes.length / 2] ^= 0x40;

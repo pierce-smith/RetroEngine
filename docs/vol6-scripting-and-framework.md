@@ -368,8 +368,8 @@ render
 #### Mid-play prefab instantiation
 
 ```java
-Entity coin = spawnPrefab("Prefabs/Coin.prefab.bin", x, y, z);   // returns the root, or null
-Entity fx   = spawnPrefab("Prefabs/Spark.prefab.bin");          // overload: spawn at the prefab's saved position
+Entity coin = spawnPrefab("Prefabs/Coin.rprefab", x, y, z);     // returns the root, or null
+Entity fx   = spawnPrefab("Prefabs/Spark.rprefab");           // overload: spawn at the prefab's saved position
 ```
 
 `SceneWorld.instantiatePrefabRuntime` was written for spawning during gameplay, not for the editor's "drag prefab

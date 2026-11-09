@@ -30,7 +30,7 @@ import static org.lwjgl.vulkan.VK13.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_
  * using Dynamic Rendering (VK_KHR_dynamic_rendering).
  * All 3D pipelines share one bindless set 0 layout (see VulkanGpuCache) and a 128-byte push constant block carrying
  * the model matrix, surface parameters and material/bone-palette slot indices.
- * Owns the VkPipelineCache and its disk serialization (.pipeline_cache.bin): the blob is validated against this
+ * Owns the VkPipelineCache and its disk serialization (~/.retroengine/cache/vulkan_pipeline.cache): the blob is validated against this
  * device's vendor/device ID and pipelineCacheUUID before reuse and written atomically so a crash never leaves a
  * truncated cache behind.
  */
@@ -50,7 +50,7 @@ public class VulkanPipeline {
     // Non-table resources in set 0 that count against the same per-stage limits (shadow map + headroom)
     private static final int RESERVED_STAGE_RESOURCES = 8;
 
-    private static final String PIPELINE_CACHE_FILE_NAME = ".pipeline_cache.bin";
+    private static final String PIPELINE_CACHE_FILE_NAME = "vulkan_pipeline.cache";
     private static final int PIPELINE_CACHE_HEADER_SIZE = 16 + VK_UUID_SIZE;
 
     private long pipelineCache = 0L;
@@ -221,18 +221,20 @@ public class VulkanPipeline {
     }
 
     // ---------------------------------------------------------------------------------
-    // VkPipelineCache disk serialization (.pipeline_cache.bin)
+    // VkPipelineCache disk serialization (~/.retroengine/cache/vulkan_pipeline.cache)
     // ---------------------------------------------------------------------------------
 
+    /**
+     * Always the per-user cache folder: the blob belongs to this machine's driver, not to a project or a checkout, and
+     * the working directory can be a repo, "/" (a Finder launch) or a read-only install. Null when it can't be created,
+     * which just means pipelines compile from scratch each run.
+     */
     private static Path pipelineCachePath() {
-        // Packaged apps start in "/" (macOS Finder) or a read-only install dir: fall back to a per-user cache folder
-        Path cwd = Path.of(System.getProperty("user.dir"));
-        if (!Boolean.getBoolean("retro.packaged") && Files.isWritable(cwd)) return cwd.resolve(PIPELINE_CACHE_FILE_NAME);
         Path dir = Path.of(System.getProperty("user.home"), ".retroengine", "cache");
         try {
             Files.createDirectories(dir);
         } catch (IOException e) {
-            return cwd.resolve(PIPELINE_CACHE_FILE_NAME);
+            return null;
         }
         return dir.resolve(PIPELINE_CACHE_FILE_NAME);
     }
@@ -242,7 +244,7 @@ public class VulkanPipeline {
         ByteBuffer initialData = null;
         try (MemoryStack stack = stackPush()) {
             Path path = pipelineCachePath();
-            if (Files.isRegularFile(path)) {
+            if (path != null && Files.isRegularFile(path)) {
                 try {
                     byte[] bytes = Files.readAllBytes(path);
                     if (isPipelineCacheCompatible(bytes, props)) {
@@ -312,6 +314,7 @@ public class VulkanPipeline {
             data.get(0, bytes);
 
             Path target = pipelineCachePath();
+            if (target == null) return;
             Path temp = target.resolveSibling(PIPELINE_CACHE_FILE_NAME + ".tmp");
             try {
                 Files.write(temp, bytes);
@@ -533,6 +536,13 @@ public class VulkanPipeline {
                     graphicsPipeline3D = pPipeline3D.get(0);
                     System.out.println("[VulkanPipeline] Created Standard 3D Scene Blinn-Phong VkPipeline [0x" + Long.toHexString(graphicsPipeline3D) + "].");
                 }
+                // Blobs lie on the ground, so they need a depth bias to stay in front of it at every distance (ShadowBlobDepth)
+                VkPipelineRasterizationStateCreateInfo rasterizerShadow = VkPipelineRasterizationStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO).polygonMode(VK_POLYGON_MODE_FILL).lineWidth(1.0f).cullMode(VK_CULL_MODE_NONE).frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE)
+                        .depthBiasEnable(true)
+                        .depthBiasConstantFactor(com.retro.engine.graphics.ShadowBlobDepth.CONSTANT_BIAS)
+                        .depthBiasSlopeFactor(com.retro.engine.graphics.ShadowBlobDepth.SLOPE_BIAS)
+                        .depthBiasClamp(0.0f);
+
                 // 2B. Dedicated Shadow Blob Pipeline (Depth-Writes OFF for Soft Radial Alpha Blending)
                 VkPipelineDepthStencilStateCreateInfo depthStencilShadow = VkPipelineDepthStencilStateCreateInfo.calloc(stack)
                         .sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO)
@@ -547,7 +557,7 @@ public class VulkanPipeline {
                         .pVertexInputState(vertexInputInfo3D)
                         .pInputAssemblyState(inputAssembly)
                         .pViewportState(viewportState)
-                        .pRasterizationState(rasterizer)
+                        .pRasterizationState(rasterizerShadow)
                         .pMultisampleState(multisampling)
                         .pDepthStencilState(depthStencilShadow)
                         .pColorBlendState(colorBlending3D)

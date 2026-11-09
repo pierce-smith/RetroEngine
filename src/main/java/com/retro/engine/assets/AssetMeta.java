@@ -4,7 +4,7 @@ import java.util.UUID;
 
 /**
  * Metadata record for a project asset, holding virtual folder organization
- * and a persistent 128-bit UUID stored in the project's centralized .retro/asset_registry.bin manifest.
+ * and a persistent 128-bit UUID stored in the asset directory section of the project's .rproj file.
  *
  * Fully compliant with Phase 2 UUID indirection standards.
  */

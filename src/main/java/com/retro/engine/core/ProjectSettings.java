@@ -5,22 +5,18 @@ import com.retro.engine.graphics.RenderEnvironment;
 import com.retro.engine.graphics.ShadingModel;
 import com.retro.engine.graphics.TextureFiltering;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.StandardCopyOption;
 
 /**
- * Per-project settings persisted as {@code <Project>/ProjectSettings.bin}: project identity, the startup scene, the
+ * Per-project settings, stored as the settings section of the project file ({@link ProjectFile}): project identity, the startup scene, the
  * audio mixer (bus volumes / mutes, BGM ducking, reverb zones) read by {@link com.retro.engine.audio.AudioMixerService},
  * and the global render environment (shading model, ground shadow blobs, distance fog, ambient light) that
  * {@link com.retro.engine.graphics.SceneRenderPipeline} hands to the lit shaders every frame.
  *
- * <p>Binary layout (big-endian, {@link DataOutputStream}):
+ * <p>Section layout (big-endian, {@link DataOutputStream}), unchanged from the pre-.rproj ProjectSettings.bin:
  * <pre>
  *   int    magic 'RPRJ'
  *   int    version
@@ -43,15 +39,18 @@ import java.nio.file.StandardCopyOption;
  *   bool   reverbZonesEnabled
  *   -- version 5 --
  *   int    maxHeapMb
+ *   -- version 6 --
+ *   UTF    textureFiltering
+ *   -- version 7 --
+ *   bool   vsync
+ *   int    frameRateCap (0 = no cap)
  * </pre>
  * Older files load the missing fields with the render defaults, which match the engine's previous look.
  */
 public final class ProjectSettings {
 
-    public static final String FILE_NAME = "ProjectSettings.bin";
-
     static final int MAGIC = 0x5250524A; // 'RPRJ'
-    static final int VERSION = 6;
+    static final int VERSION = 7;
 
     // Editor UI ranges; values read from disk are clamped to these too
     public static final float FOG_DISTANCE_MAX = 2000.0f;
@@ -63,6 +62,10 @@ public final class ProjectSettings {
     public static final int MIN_MAX_HEAP_MB = 512;
     public static final int MAX_MAX_HEAP_MB = 32768;
     public static final int DEFAULT_MAX_HEAP_MB = 2048;
+
+    /** Exported game frame cap: 0 means none, otherwise clamped to this range. */
+    public static final int MIN_FRAME_RATE_CAP = 30;
+    public static final int MAX_FRAME_RATE_CAP = 1000;
 
     public static final float DEFAULT_DUCK_LEVEL = 0.35f;
     public static final float DEFAULT_DUCK_ATTACK = 0.15f;
@@ -117,6 +120,12 @@ public final class ProjectSettings {
 
     /** The exported game's -Xmx in MB. It's fixed at launch, so a change only reaches the next export. */
     public int maxHeapMb = DEFAULT_MAX_HEAP_MB;
+
+    /** Ask the GPU to wait for the display's refresh. Drivers can override this, which the frame limiter covers. */
+    public boolean vsync = true;
+
+    /** Highest frame rate the game runs at, in FPS; 0 means no cap beyond vsync. */
+    public int frameRateCap = 0;
 
     public ProjectSettings(String projectName, String startupScene) {
         this.projectName = projectName;
@@ -194,6 +203,8 @@ public final class ProjectSettings {
     /** Copies only the exported game runtime settings from {@code other}. */
     public void copyRuntimeSettingsFrom(ProjectSettings other) {
         maxHeapMb = other.maxHeapMb;
+        vsync = other.vsync;
+        frameRateCap = other.frameRateCap;
     }
 
     public void resetRuntimeSettings() {
@@ -217,6 +228,13 @@ public final class ProjectSettings {
         duckAttack = clamp(duckAttack, 0.0f, DUCK_ATTACK_MAX);
         duckRelease = clamp(duckRelease, 0.0f, DUCK_RELEASE_MAX);
         maxHeapMb = Math.max(MIN_MAX_HEAP_MB, Math.min(MAX_MAX_HEAP_MB, maxHeapMb));
+        frameRateCap = sanitizeFrameRateCap(frameRateCap);
+    }
+
+    /** 0 (or below) stays "no cap"; anything else is clamped to the supported range. */
+    public static int sanitizeFrameRateCap(int fps) {
+        if (fps <= 0) return 0;
+        return Math.max(MIN_FRAME_RATE_CAP, Math.min(MAX_FRAME_RATE_CAP, fps));
     }
 
     private static float clamp(float v, float min, float max) {
@@ -228,15 +246,15 @@ public final class ProjectSettings {
     // Persistence
     // ------------------------------------------------------------------------------------------
 
-    public static File fileIn(File projectDir) {
-        return new File(projectDir, FILE_NAME);
+    /** Stores these settings as the project file's settings section (see {@link ProjectFile}), creating the file if needed. */
+    public void write(File projectDir) throws IOException {
+        ProjectFile.writeSection(projectDir, ProjectFile.SETTINGS, toPayload(projectDir), projectName);
     }
 
-    /** Writes {@code <projectDir>/ProjectSettings.bin} through a temp file, so a failed write never truncates it. */
-    public void write(File projectDir) throws IOException {
-        File file = fileIn(projectDir);
-        File tmp = new File(projectDir, FILE_NAME + ".tmp");
-        try (DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(tmp.toPath())))) {
+    /** The settings record: the layout documented on this class, which is also what ProjectSettings.bin held. */
+    byte[] toPayload(File projectDir) throws IOException {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (DataOutputStream dos = new DataOutputStream(bytes)) {
             dos.writeInt(MAGIC);
             dos.writeInt(VERSION);
             dos.writeUTF(projectName != null ? projectName : projectDir.getName());
@@ -270,16 +288,25 @@ public final class ProjectSettings {
             dos.writeInt(maxHeapMb);
 
             dos.writeUTF((textureFiltering != null ? textureFiltering : RenderEnvironment.DEFAULT_TEXTURE_FILTERING).name());
+
+            dos.writeBoolean(vsync);
+            dos.writeInt(frameRateCap);
         }
-        Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        return bytes.toByteArray();
     }
 
+    /** Reads the project's settings; an unmigrated project's ProjectSettings.bin is read in place, unchanged. */
     public static ProjectSettings read(File projectDir) throws IOException {
-        File file = fileIn(projectDir);
-        try (DataInputStream dis = new DataInputStream(new BufferedInputStream(Files.newInputStream(file.toPath())))) {
-            if (dis.readInt() != MAGIC) throw new IOException("Not a RetroEngine " + FILE_NAME + ": " + file);
+        byte[] payload = ProjectFile.readSection(projectDir, ProjectFile.SETTINGS);
+        if (payload == null) throw new IOException("No RetroEngine project file (" + ProjectFile.EXTENSION + ") in " + projectDir);
+        return readPayload(payload, projectDir.getName());
+    }
+
+    static ProjectSettings readPayload(byte[] payload, String source) throws IOException {
+        try (DataInputStream dis = new DataInputStream(new java.io.ByteArrayInputStream(payload))) {
+            if (dis.readInt() != MAGIC) throw new IOException("Not RetroEngine project settings: " + source);
             int version = dis.readInt();
-            if (version > VERSION) throw new IOException(FILE_NAME + " version " + version + " is newer than this editor supports");
+            if (version > VERSION) throw new IOException("Project settings version " + version + " in " + source + " is newer than this editor supports");
             ProjectSettings s = new ProjectSettings(dis.readUTF(), "");
             s.engineVersion = dis.readUTF();
             s.createdAtMillis = dis.readLong();
@@ -301,7 +328,7 @@ public final class ProjectSettings {
             }
             if (version >= 4) {
                 int buses = dis.readInt();
-                if (buses < 0 || buses > 64) throw new IOException(FILE_NAME + " has an invalid audio bus count: " + buses);
+                if (buses < 0 || buses > 64) throw new IOException("Project settings in " + source + " have an invalid audio bus count: " + buses);
                 for (int i = 0; i < buses; i++) {
                     float vol = dis.readFloat();
                     boolean muted = dis.readBoolean();
@@ -321,6 +348,10 @@ public final class ProjectSettings {
             }
             if (version >= 6) {
                 s.textureFiltering = TextureFiltering.fromName(dis.readUTF(), RenderEnvironment.DEFAULT_TEXTURE_FILTERING);
+            }
+            if (version >= 7) {
+                s.vsync = dis.readBoolean();
+                s.frameRateCap = dis.readInt();
             }
             s.sanitize();
             return s;

@@ -24,6 +24,7 @@ public class RuntimeLoop {
     private boolean headless = false;
     private long maxFrames = 0L;
     private long benchWarmupNs, benchCaptureNs;
+    private FrameLimiter frameLimiter;
 
     public RuntimeLoop() {}
 
@@ -54,6 +55,11 @@ public class RuntimeLoop {
     public void setBenchmark(float warmupSeconds, float captureSeconds) {
         benchWarmupNs = (long) (warmupSeconds * 1_000_000_000.0);
         benchCaptureNs = (long) (captureSeconds * 1_000_000_000.0);
+    }
+
+    /** Windowed only: paces frames on the CPU (frame cap, and the backstop for drivers that force vsync off). */
+    public void setFrameLimiter(FrameLimiter frameLimiter) {
+        this.frameLimiter = frameLimiter;
     }
 
     public boolean isRunning() {
@@ -151,6 +157,10 @@ public class RuntimeLoop {
                     timings.mark(FrameTimings.RENDER);
                     rhi.present();
                     timings.mark(FrameTimings.PRESENT);
+                }
+                if (frameLimiter != null) {
+                    frameLimiter.waitForNextFrame();
+                    timings.mark(FrameTimings.PACE);
                 }
             } else {
                 // Headless: pure simulation tick with no GPU context

@@ -106,7 +106,7 @@ class SceneSerializerTest {
         Entity entity = new Entity("e1", "Sample", null);
         if (type == Transform.class) entity.removeComponent(Transform.class);
         entity.addComponent(original);
-        Path prefab = dir.resolve("sample.prefab.bin");
+        Path prefab = dir.resolve("sample.rprefab");
         assertTrue(PrefabSerializer.savePrefab(prefab.toString(), entity, List.of(entity), null));
 
         Entity loaded = PrefabSerializer.instantiatePrefab(prefab.toString(), new SceneWorld(), null).get(0);

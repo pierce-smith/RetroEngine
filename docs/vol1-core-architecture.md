@@ -48,7 +48,7 @@ system properties, and the `RETRO_RHI=vulkan` / `RETRO_VULKAN=1` environment var
 
 Without `--project`, a runtime build looks for its game data in this order: the `-Dretro.gameData` system property set by
 the exported launcher, `./Game_Data/`, then the working directory itself. If none of them holds a
-`ProjectSettings.bin`, it starts with an empty scene.
+project file (`<Name>.rproj`), it starts with an empty scene.
 
 Two things happen before any engine code runs, and both came from production failures:
 
@@ -455,7 +455,7 @@ Two layers are multiplied for each bus:
 
 | Layer | Set by | Lifetime |
 |-------|--------|----------|
-| **Project mix** | *Project Settings → Audio* (Volume 2 §1.7), saved in `ProjectSettings.bin` | Persistent; copied into the mixer every frame |
+| **Project mix** | *Project Settings → Audio* (Volume 2 §1.7), saved in the project file (`<Name>.rproj`) | Persistent; copied into the mixer every frame |
 | **Runtime mix** | Scripts: `setBusVolume(bus, v)` (0..1) / `setBusMuted(bus, m)` | Reset to unity **when Play stops**, so a script can't leave the editor muted |
 
 **Ducking.** While any `VOICE` clip, or any clip flagged **DUCKS BGM** (`AudioSource.ducksBgm`,

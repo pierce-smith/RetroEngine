@@ -472,7 +472,7 @@ public abstract class SimpleEntityScript extends EntityScript {
     }
 
     /**
-     * Instantiates a prefab (e.g. "Prefabs/Coin.prefab.bin") and returns its root entity, or null when it could not be
+     * Instantiates a prefab (e.g. "Prefabs/Coin.rprefab") and returns its root entity, or null when it could not be
      * loaded. Reads the prefab from disk and creates entities: call it on events, not every frame.
      */
     public Entity spawnPrefab(String assetPath) {

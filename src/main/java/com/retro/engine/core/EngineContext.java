@@ -83,7 +83,7 @@ public class EngineContext {
         // An explicit --project must not fall through to another folder, or a typo would test the wrong game
         String cliProject = findCliValue(args, "--project");
         if (cliProject != null && !ProjectWorkspace.isProjectDirectory(new java.io.File(cliProject.trim()).getAbsoluteFile())) {
-            Log.error("EngineContext", "Not a RetroEngine project (missing " + ProjectWorkspace.SETTINGS_FILE + "): " + cliProject);
+            Log.error("EngineContext", "Not a RetroEngine project (no " + ProjectFile.EXTENSION + " file): " + cliProject);
             return false;
         }
 
@@ -296,12 +296,12 @@ public class EngineContext {
         return true;
     }
 
-    /** Opens an existing project directory (ProjectSettings.bin required) and binds the editor's AssetDatabase to it. */
+    /** Opens an existing project directory (a .rproj, or a pre-.rproj project to migrate) and binds the editor's AssetDatabase to it. */
     public boolean openProject(String projectPath) {
         if (editorManager == null || projectPath == null || projectPath.trim().isEmpty()) return false;
         java.io.File dir = new java.io.File(projectPath.trim()).getAbsoluteFile();
         if (!ProjectWorkspace.isProjectDirectory(dir)) {
-            Log.error("EngineContext", "Not a RetroEngine project (missing " + ProjectWorkspace.SETTINGS_FILE + "): " + dir);
+            Log.error("EngineContext", "Not a RetroEngine project (no " + ProjectFile.EXTENSION + " file): " + dir);
             return false;
         }
         try {

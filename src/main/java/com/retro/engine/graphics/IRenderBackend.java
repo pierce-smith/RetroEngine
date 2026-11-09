@@ -9,6 +9,12 @@ package com.retro.engine.graphics;
 public interface IRenderBackend {
     boolean initialize(ViewportSpec windowInfo);
 
+    /**
+     * Turns presentation sync with the display on or off. Backends that need to rebuild their swapchain do it before
+     * the next frame, so this is safe to call at any time. GPU drivers can override the request.
+     */
+    default void setVsync(boolean vsync) {}
+
     void setCameraTransform(float panX, float panY, float zoom, float pitch, float yaw);
     /**
      * Explicit scene camera: a column-major world-to-view matrix (same conventions as the view built from

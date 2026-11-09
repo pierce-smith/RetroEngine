@@ -21,9 +21,9 @@
 ```
 retro-engine.jar + dependency jars     LWJGL JNI + target-OS natives only
 natives/                               MoltenVK (macOS)
-Game_Data/ProjectSettings.bin          startup scene rewritten to your choice
+Game_Data/<Name>.rproj                 project file: settings (startup scene rewritten to your choice) and
+                                       the asset directory (UUIDs), so asset references resolve unchanged
 Game_Data/Assets/                      scenes, scripts, materials, audio
-Game_Data/.retro/                      UUID registry, so asset references resolve unchanged
 Game_Data/Cooked/                      .rpack packages from RpackCooker
 Game_Data/Mods/                        empty, with a README. Players drop mods here (Volume 4)
 THIRD_PARTY_NOTICES.txt                engine and dependency notices, plus the Apache license

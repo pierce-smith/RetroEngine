@@ -29,6 +29,9 @@ public class VulkanSwapchain {
     private int imageFormat = VK_FORMAT_UNDEFINED;
     private int imageColorSpace;
     private boolean needsRecreate = false;
+    /** Requested sync behaviour; the mode actually used depends on what the surface supports. */
+    private boolean vsync = true;
+    private int presentMode = -1;
 
     public boolean createSwapchain(VulkanDevice device, VulkanSurface surface, int width, int height) {
         return createSwapchain(device, surface != null ? surface.getSurfaceHandle() : 0L, width, height);
@@ -93,6 +96,14 @@ public class VulkanSwapchain {
                 imageCount = capabilities.maxImageCount();
             }
 
+            int chosenMode = choosePresentMode(vsync, supportedPresentModes(physicalDevice, surfaceHandle, stack));
+            if (chosenMode != presentMode) {
+                String note = vsync ? "vsync on"
+                        : chosenMode == KHRSurface.VK_PRESENT_MODE_FIFO_KHR ? "vsync off requested, but the surface supports only FIFO"
+                        : "vsync off";
+                System.out.println("[VulkanSwapchain] Present mode " + presentModeName(chosenMode) + " (" + note + ").");
+            }
+
             long oldSwapchain = swapchainHandle;
 
             VkSwapchainCreateInfoKHR createInfo = VkSwapchainCreateInfoKHR.calloc(stack)
@@ -106,7 +117,7 @@ public class VulkanSwapchain {
                     .imageSharingMode(VK_SHARING_MODE_EXCLUSIVE)
                     .preTransform(capabilities.currentTransform())
                     .compositeAlpha(KHRSurface.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
-                    .presentMode(KHRSurface.VK_PRESENT_MODE_FIFO_KHR)
+                    .presentMode(chosenMode)
                     .clipped(true)
                     .oldSwapchain(oldSwapchain);
 
@@ -125,6 +136,7 @@ public class VulkanSwapchain {
                 KHRSwapchain.vkDestroySwapchainKHR(vkDevice, oldSwapchain, null);
             }
             swapchainHandle = pSwapchain.get(0);
+            presentMode = chosenMode;
             this.width = extentW;
             this.height = extentH;
 
@@ -165,6 +177,58 @@ public class VulkanSwapchain {
             return true;
         }
     }
+
+    /**
+     * Picks the present mode for a vsync request. FIFO is the only mode the spec guarantees, so it is both the vsync
+     * mode and the last resort. Without vsync, MAILBOX is preferred (no tearing, lowest latency), then IMMEDIATE.
+     * A driver override can still force vsync on or off; RuntimeLoop's frame limiter covers the forced-off case.
+     */
+    static int choosePresentMode(boolean vsync, int[] supported) {
+        if (vsync || supported == null) return KHRSurface.VK_PRESENT_MODE_FIFO_KHR;
+        boolean immediate = false;
+        for (int mode : supported) {
+            if (mode == KHRSurface.VK_PRESENT_MODE_MAILBOX_KHR) return mode;
+            if (mode == KHRSurface.VK_PRESENT_MODE_IMMEDIATE_KHR) immediate = true;
+        }
+        return immediate ? KHRSurface.VK_PRESENT_MODE_IMMEDIATE_KHR : KHRSurface.VK_PRESENT_MODE_FIFO_KHR;
+    }
+
+    private static int[] supportedPresentModes(VkPhysicalDevice physicalDevice, long surfaceHandle, MemoryStack stack) {
+        IntBuffer pCount = stack.mallocInt(1);
+        if (KHRSurface.vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surfaceHandle, pCount, null) != VK_SUCCESS
+                || pCount.get(0) <= 0) {
+            return null;
+        }
+        IntBuffer pModes = stack.mallocInt(pCount.get(0));
+        if (KHRSurface.vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surfaceHandle, pCount, pModes) != VK_SUCCESS) {
+            return null;
+        }
+        int[] modes = new int[pCount.get(0)];
+        pModes.get(0, modes);
+        return modes;
+    }
+
+    static String presentModeName(int mode) {
+        return switch (mode) {
+            case KHRSurface.VK_PRESENT_MODE_FIFO_KHR -> "FIFO";
+            case KHRSurface.VK_PRESENT_MODE_MAILBOX_KHR -> "MAILBOX";
+            case KHRSurface.VK_PRESENT_MODE_IMMEDIATE_KHR -> "IMMEDIATE";
+            case KHRSurface.VK_PRESENT_MODE_FIFO_RELAXED_KHR -> "FIFO_RELAXED";
+            default -> "mode " + mode;
+        };
+    }
+
+    /** Requests vsync on or off. A change rebuilds the swapchain before the next acquire. */
+    public void setVsync(boolean vsync) {
+        if (this.vsync == vsync) return;
+        this.vsync = vsync;
+        if (swapchainHandle != 0L) needsRecreate = true;
+    }
+
+    public boolean isVsync() { return vsync; }
+
+    /** The VkPresentModeKHR in use, or -1 before the first swapchain exists. */
+    public int getPresentMode() { return presentMode; }
 
     private static int clamp(int v, int min, int max) {
         return Math.max(min, Math.min(max, v));

@@ -266,7 +266,7 @@ public final class ProjectLauncherOverlay {
             File dir = new File(picked).getAbsoluteFile();
             if (ProjectWorkspace.isProjectDirectory(dir)) return new OpenProjectPick(dir, false);
             boolean init = NativeFileDialog.confirm("Open Project",
-                "No ProjectSettings.bin was found in\n" + dir.getAbsolutePath() + "\n\nInitialize this folder as a RetroEngine project?", false);
+                "No RetroEngine project file (.rproj) was found in\n" + dir.getAbsolutePath() + "\n\nInitialize this folder as a RetroEngine project?", false);
             return init ? new OpenProjectPick(dir, true) : null;
         }, pick -> {
             if (pick == null) { UISoundPlayer.play(UISound.CLOSE_MODAL); return; }

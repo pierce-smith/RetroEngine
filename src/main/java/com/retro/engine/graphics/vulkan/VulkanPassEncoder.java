@@ -415,9 +415,9 @@ public class VulkanPassEncoder {
             // Every blob draws the same quad, so it is bound once for the pass
             vkCmdBindVertexBuffers(cmd, 0, stack.longs(groundQuadBuf), stack.longs(0L));
 
-            int shadowIndex = 0;
+            // No blob cap: each blob is a push-constant draw with no per-blob buffer slot. A cap picked the first N in
+            // draw order, which shifts as things move, so blobs past it popped in and out every frame.
             for (int i = 0; i < draws.count; i++) {
-                if (shadowIndex >= 64) break;
                 RenderCommand entity = commands[draws.commandIndex[i]];
                 float clearance = entity.py - entity.groundY;
                 if (clearance < -0.01f) continue;
@@ -433,8 +433,6 @@ public class VulkanPassEncoder {
                 writeBlobPush(meshPush, modelMatrixScratch, heightFade, cameraView);
                 vkCmdPushConstants(cmd, pipelineManager.getPipelineLayout3D(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, meshPush);
                 vkCmdDraw(cmd, 6, 1, 0, 0);
-
-                shadowIndex++;
             }
         }
     }

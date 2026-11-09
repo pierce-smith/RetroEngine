@@ -2,7 +2,9 @@ package com.retro.engine;
 
 import com.retro.engine.core.EngineContext;
 import com.retro.engine.core.EngineLoop;
+import com.retro.engine.core.FrameLimiter;
 import com.retro.engine.core.Log;
+import com.retro.engine.core.ProjectSettings;
 import com.retro.engine.core.RuntimeLoop;
 import com.retro.engine.editor.StandaloneExporter;
 import com.retro.engine.ui.FrameStatsOverlay;
@@ -125,8 +127,47 @@ public class Main {
                 return EXIT_STARTUP_FAILED;
             }
         }
+        if (!configureFramePacing(context, loop, args)) return EXIT_STARTUP_FAILED;
         loop.run(context, world);
         return EXIT_OK;
+    }
+
+    /**
+     * Applies the project's vsync and frame cap, which {@code --vsync on|off} and {@code --fps-cap N} override, so a
+     * tester can check both present paths on a machine without editing the project.
+     */
+    private static boolean configureFramePacing(EngineContext context, RuntimeLoop loop, String[] args) {
+        ProjectSettings settings = context.getEditorManager().getProjectSettings();
+        boolean vsync = settings == null || settings.vsync;
+        int cap = settings != null ? settings.frameRateCap : 0;
+
+        String vsyncArg = EngineContext.findCliValue(args, "--vsync");
+        if (vsyncArg != null) {
+            if ("on".equalsIgnoreCase(vsyncArg)) vsync = true;
+            else if ("off".equalsIgnoreCase(vsyncArg)) vsync = false;
+            else {
+                Log.error("Main", "--vsync takes on or off, got: " + vsyncArg);
+                return false;
+            }
+        }
+        String capArg = EngineContext.findCliValue(args, "--fps-cap");
+        if (capArg != null) {
+            try {
+                cap = ProjectSettings.sanitizeFrameRateCap(Integer.parseInt(capArg.trim()));
+            } catch (NumberFormatException e) {
+                Log.error("Main", "--fps-cap takes a number of frames per second (0 for no cap), got: " + capArg);
+                return false;
+            }
+        }
+
+        if (context.getRhi() != null) context.getRhi().setVsync(vsync);
+        int refreshHz = context.getDisplay() != null && context.getDisplay().isOpen()
+                ? context.getDisplay().getMetrics().refreshRate() : 0;
+        FrameLimiter limiter = FrameLimiter.create(vsync, cap, refreshHz);
+        loop.setFrameLimiter(limiter);
+        Log.info("Main", "Frame pacing: vsync " + (vsync ? "on" : "off") + ", "
+                + (cap > 0 ? "cap " + cap + " FPS" : vsync ? "backstop above " + (refreshHz > 0 ? refreshHz : 60) + " Hz" : "no cap"));
+        return true;
     }
 
     private static boolean hasFlag(String[] args, String flag) {

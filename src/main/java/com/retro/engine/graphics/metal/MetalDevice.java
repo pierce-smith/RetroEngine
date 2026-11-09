@@ -71,6 +71,7 @@ public class MetalDevice {
         invokePPPP(metalLayer, sel_registerName("setDevice:"), device, objc_msgSend);
         invokePPPP(metalLayer, sel_registerName("setOpaque:"), 1L, objc_msgSend);
         invokePPPP(metalLayer, sel_registerName("setPixelFormat:"), 80L, objc_msgSend); // MTLPixelFormatBGRA8Unorm
+        setDisplaySyncEnabled(windowInfo.vsync());
 
         long contentView = invokePPP(nsWindow, sel_registerName("contentView"), objc_msgSend);
         invokePPPP(contentView, sel_registerName("setLayer:"), metalLayer, objc_msgSend);
@@ -79,6 +80,13 @@ public class MetalDevice {
 
         System.out.println("[MetalDevice] Native MTLDevice successfully initialized.");
         return true;
+    }
+
+    /** CAMetalLayer.displaySyncEnabled (macOS): YES waits for vblank like Vulkan FIFO, NO presents immediately. */
+    public void setDisplaySyncEnabled(boolean enabled) {
+        if (metalLayer == 0L) return;
+        invokePPPP(metalLayer, sel_registerName("setDisplaySyncEnabled:"), enabled ? 1L : 0L, objc_msgSend);
+        System.out.println("[MetalDevice] Display sync " + (enabled ? "on." : "off."));
     }
 
     /**

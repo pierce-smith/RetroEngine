@@ -73,7 +73,7 @@ class RuntimeBodyTest {
         ball.addComponent(script("Launch", """
             public void onStart() { System.setProperty("launched", String.valueOf(setVelocity(5.0f, 0.0f, 0.0f))); }
             """));
-        Path prefab = assets.resolve("ball.prefab.bin");
+        Path prefab = assets.resolve("ball.rprefab");
         List<Entity> list = new ArrayList<>(List.of(ball));
         assertTrue(PrefabSerializer.savePrefab(prefab.toString(), ball, list, null));
         return prefab;

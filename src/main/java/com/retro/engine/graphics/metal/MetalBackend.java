@@ -112,6 +112,11 @@ public class MetalBackend implements IRenderBackend {
     private final MetalDrawBuffers drawBuffers = new MetalDrawBuffers();
 
     @Override
+    public void setVsync(boolean vsync) {
+        metalDevice.setDisplaySyncEnabled(vsync);
+    }
+
+    @Override
     public boolean initialize(ViewportSpec windowInfo) {
         if (!metalDevice.initialize(windowInfo)) {
             shutdown();
@@ -446,6 +451,7 @@ public class MetalBackend implements IRenderBackend {
 
         // Release deferred resources whose last referencing frame has signalled completion
         resourceCache.beginFrame(metalDevice);
+        resourceCache.flushStagedMeshes(metalDevice);
         harvestPickReadbacks();
 
         uniformStreamer.advanceFrameIndex();

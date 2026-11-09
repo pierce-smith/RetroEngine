@@ -151,7 +151,7 @@ also shows a dialog and leaves the existing file as it was.
 ### 1.7 Project Settings (*File → Project Settings…*)
 
 A modal with two tabs. Edits apply live to the workspace's `ProjectSettings`, which the renderer and the audio
-mixer read every frame. **SAVE** writes `ProjectSettings.bin`, **CANCEL** restores the values the modal opened with,
+mixer read every frame. **SAVE** writes the project file (`<Name>.rproj`), **CANCEL** restores the values the modal opened with,
 and **RESET DEFAULTS** resets the fields.
 
 | Tab    | Section | Controls |

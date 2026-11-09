@@ -208,7 +208,7 @@ public class SceneSerializer {
                         }
                     }
                     // Legacy per-scene directory blocks are parsed for format compatibility only; the project
-                    // manifest (.retro/asset_registry.bin) is the sole authority, so scene loads never mutate it.
+                    // asset directory (in the project file) is the sole authority, so scene loads never mutate it.
                 } catch (EOFException ignored) {}
             }
 

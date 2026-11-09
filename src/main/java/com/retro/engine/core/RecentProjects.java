@@ -19,7 +19,7 @@ public final class RecentProjects {
 
     public static final int MAX_ENTRIES = 8;
 
-    /** One launcher card: the project name from ProjectSettings.bin plus its folder ({@code ~}-abbreviated for display). */
+    /** One launcher card: the project name from its project file plus its folder ({@code ~}-abbreviated for display). */
     public record Entry(File folder, String projectName, String folderPath) {}
 
     private static final String HOME = System.getProperty("user.home", "");

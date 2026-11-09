@@ -44,8 +44,9 @@ bin/
 Thumbs.db
 
 ### Retro Engine Files ###
+# The engine writes no .bin files any more (projects are .rproj, prefabs .rprefab); this catches stray old ones
 *.bin
-!src/main/resources/templates/**/*.prefab.bin
-!src/test/resources/**/*.bin
+*.bak
+*.rproj.tmp
 Cooked/
 /tools/

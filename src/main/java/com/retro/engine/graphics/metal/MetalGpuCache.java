@@ -267,12 +267,23 @@ public class MetalGpuCache {
         textureRegistry.initDefaultTextureAndSampler(metalDevice);
     }
 
+    /**
+     * Writes every staged per-frame vertex stream into its ring. MetalBackend calls this after acquiring the frame's
+     * in-flight permit and before encoding, which is what makes reusing a ring slot safe.
+     */
+    public void flushStagedMeshes(MetalDevice metalDevice) {
+        gridRingBuffer.flush(metalDevice, this);
+        particleRingBuffer.flush(metalDevice, this);
+        uiRingBuffer.flush(metalDevice, this);
+        pickOverlayRingBuffer.flush(metalDevice, this);
+    }
+
     public void updateGridMesh(MetalDevice metalDevice, float[] vertices, int count) {
-        gridRingBuffer.updateBuffer(metalDevice, vertices, count, 9, this);
+        gridRingBuffer.stage(vertices, count, 9);
     }
 
     public void updateParticleMesh(MetalDevice metalDevice, float[] vertices, int count) {
-        particleRingBuffer.updateBuffer(metalDevice, vertices, count, com.retro.engine.graphics.ParticleDrawList.FLOATS_PER_VERTEX, this);
+        particleRingBuffer.stage(vertices, count, com.retro.engine.graphics.ParticleDrawList.FLOATS_PER_VERTEX);
     }
 
     public long getParticleVertexBuffer() { return particleRingBuffer.getCurrentBufferHandle(); }
@@ -280,11 +291,11 @@ public class MetalGpuCache {
     public int getParticleVertexCount() { return particleRingBuffer.getVertexCount(); }
 
     public void updateUiMesh(MetalDevice metalDevice, float[] vertices, int count) {
-        uiRingBuffer.updateBuffer(metalDevice, vertices, count, 8, this);
+        uiRingBuffer.stage(vertices, count, 8);
     }
 
     public void updatePickOverlay(MetalDevice metalDevice, float[] vertices, int count) {
-        pickOverlayRingBuffer.updateBuffer(metalDevice, vertices, count, IRenderBackend.PICK_OVERLAY_VERTEX_FLOATS, this);
+        pickOverlayRingBuffer.stage(vertices, count, IRenderBackend.PICK_OVERLAY_VERTEX_FLOATS);
     }
 
     /** Uploads a static VBO once (or returns the live handle for assetKey). Thread-safe. */

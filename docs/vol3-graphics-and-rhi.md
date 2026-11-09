@@ -65,7 +65,7 @@ The Vulkan backend is written for core 1.3, with no legacy fallbacks:
 - **3-slot ring buffers** (`VulkanRingBuffer`) for dynamic vertex data. They grow on demand.
 - **Device-local meshes.** Registered meshes upload through the staging ring (`VulkanUploadRing.uploadBuffer`) into
   device-local memory, so discrete GPUs read vertices from VRAM. Disposal waits for the upload to finish.
-- **Persistent `VkPipelineCache`** serialized to `.pipeline_cache.bin`, validated against vendor/device ID and
+- **Persistent `VkPipelineCache`** serialized to `~/.retroengine/cache/vulkan_pipeline.cache`, validated against vendor/device ID and
   `pipelineCacheUUID`, and written atomically so a crash can't leave a truncated cache.
 
 ### 1.4 Metal 3: Argument Buffers on Apple Silicon

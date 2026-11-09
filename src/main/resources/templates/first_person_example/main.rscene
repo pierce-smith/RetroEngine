@@ -11,7 +11,7 @@
 #       prefab=<file>  instantiates a prefab (with its children) as-is; pos/rot/scale/script/prop apply to its root,
 #                      and <Name> renames the root.
 entity Ground       | mesh=Meshes/Plane.obj | pos=0,0,0 | scale=3,1,3 | texture=Textures/Checker.png | box=10,0.2,10 | body=static
-entity Player       | prefab=Prefabs/FPSController.prefab.bin | pos=0,1.5,6 | script=Scripts/PlayerCombatScript.java
+entity Player       | prefab=Prefabs/FPSController.rprefab | pos=0,1.5,6 | script=Scripts/PlayerCombatScript.java
 entity GameManager  | pos=0,0,0 | script=Scripts/GameManagerScript.java
 entity Collectible1 | mesh=Meshes/Cube.obj | pos=4,1,0     | scale=0.4,0.4,0.4 | sphere=1.2,trigger | body=kinematic | script=Scripts/CollectibleScript.java
 entity Collectible2 | mesh=Meshes/Cube.obj | pos=-4,1,0    | scale=0.4,0.4,0.4 | sphere=1.2,trigger | body=kinematic | script=Scripts/CollectibleScript.java

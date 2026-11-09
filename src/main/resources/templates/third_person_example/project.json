@@ -9,7 +9,7 @@
     "Meshes/npc_thug.glb",
     "Textures/hero_character_diffuse.png",
     "Textures/npc_thug_diffuse.png",
-    "Prefabs/ThirdPersonController.prefab.bin",
+    "Prefabs/ThirdPersonController.rprefab",
     "Scripts/ThirdPersonScript.java",
     "Scripts/ThugPatrolScript.java"
   ]

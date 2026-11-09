@@ -19,8 +19,8 @@ import java.util.List;
 public final class ThirdPersonScene {
 
     /** Where a project created from the template holds the prefab. */
-    public static final String PREFAB = "Assets/Prefabs/ThirdPersonController.prefab.bin";
-    private static final String TEMPLATE_PREFAB = "src/main/resources/templates/third_person_example/Prefabs/ThirdPersonController.prefab.bin";
+    public static final String PREFAB = "Assets/Prefabs/ThirdPersonController.rprefab";
+    private static final String TEMPLATE_PREFAB = "src/main/resources/templates/third_person_example/Prefabs/ThirdPersonController.rprefab";
     private static final String HERO = "Assets/Meshes/hero_character.glb", HERO_TEXTURE = "Assets/Textures/hero_character_diffuse.png";
 
     private static final float CAPSULE_HEIGHT = 1.8f, CAPSULE_RADIUS = 0.35f;

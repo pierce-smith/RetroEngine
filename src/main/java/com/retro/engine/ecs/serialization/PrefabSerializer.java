@@ -12,7 +12,7 @@ import java.nio.file.Files;
 import java.util.*;
 
 /**
- * Binary Prefab Template Serializer (.prefab.bin) enforcing fast memory stream I/O,
+ * Binary Prefab Template Serializer (.rprefab; the older .prefab.bin name still loads) enforcing fast memory stream I/O,
  * UUID asset indirection, entity tree duplication, and clean ID remapping during instantiation.
  */
 public class PrefabSerializer {
@@ -23,18 +23,35 @@ public class PrefabSerializer {
 
     public record PrefabTemplate(List<Entity> entities, String rootEntityId) {}
 
+    public static final String EXTENSION = com.retro.engine.core.ProjectFile.PREFAB_EXTENSION;
+
+    /** Save path for a prefab: always ends in .rprefab, replacing a legacy .prefab.bin / .prefab or any other extension. */
     public static String sanitizePrefabPath(String filePath) {
-        if (filePath == null || filePath.trim().isEmpty()) return "Assets/Prefabs/Untitled.prefab.bin";
-        String targetPath = filePath.trim();
-        if (!targetPath.toLowerCase().endsWith(".prefab.bin") && !targetPath.toLowerCase().endsWith(".prefab")) {
-            int lastDot = targetPath.lastIndexOf('.');
-            if (lastDot != -1) {
-                targetPath = targetPath.substring(0, lastDot) + ".prefab.bin";
-            } else {
-                targetPath = targetPath + ".prefab.bin";
-            }
+        if (filePath == null || filePath.trim().isEmpty()) return "Assets/Prefabs/Untitled" + EXTENSION;
+        String targetPath = com.retro.engine.core.ProjectFile.toCurrentPrefabName(filePath.trim());
+        String lower = targetPath.toLowerCase();
+        if (lower.endsWith(EXTENSION)) return targetPath;
+        if (lower.endsWith(".prefab")) return targetPath.substring(0, targetPath.length() - ".prefab".length()) + EXTENSION;
+        int lastDot = targetPath.lastIndexOf('.');
+        int lastSlash = Math.max(targetPath.lastIndexOf('/'), targetPath.lastIndexOf('\\'));
+        return (lastDot > lastSlash ? targetPath.substring(0, lastDot) : targetPath) + EXTENSION;
+    }
+
+    /**
+     * The prefab file for a path, trying the other name when the given one is missing: a script or scene written
+     * before the rename says "X.prefab.bin" for what is now X.rprefab, and a mod or old export may still ship
+     * X.prefab.bin when asked for X.rprefab. Returns the original path's file when neither exists.
+     */
+    public static File resolvePrefabFile(String path) {
+        File file = new File(path);
+        if (file.exists()) return file;
+        String current = com.retro.engine.core.ProjectFile.toCurrentPrefabName(path);
+        String alternate = !current.equals(path) ? current : com.retro.engine.core.ProjectFile.toLegacyPrefabName(path);
+        if (!alternate.equals(path)) {
+            File alt = new File(alternate);
+            if (alt.exists()) return alt;
         }
-        return targetPath;
+        return file;
     }
 
     public static boolean savePrefab(String filePath, Entity rootEntity, List<Entity> sceneEntities, AssetDatabase assetDb) {
@@ -77,7 +94,7 @@ public class PrefabSerializer {
             byte[] finished = bytes.toByteArray();
             ComponentBinaryCodec.sealChecksum(finished);
             AtomicFile.write(file, finished);
-            System.out.println("[PrefabSerializer] Saved binary prefab blueprint (.prefab.bin): " + file.getAbsolutePath());
+            System.out.println("[PrefabSerializer] Saved prefab: " + file.getAbsolutePath());
             return true;
         } catch (IOException | RuntimeException e) {
             System.err.println("[PrefabSerializer] Could not save " + file.getAbsolutePath() + ": " + e);
@@ -88,9 +105,9 @@ public class PrefabSerializer {
 
     public static List<Entity> instantiatePrefab(String filePath, SceneWorld world, AssetDatabase assetDb) {
         if (filePath == null || world == null) return new ArrayList<>();
-        File file = new File(filePath);
-        if (!file.exists()) file = new File("Assets/" + filePath);
-        if (!file.exists()) file = new File("Assets/Prefabs/" + filePath);
+        File file = resolvePrefabFile(filePath);
+        if (!file.exists()) file = resolvePrefabFile("Assets/" + filePath);
+        if (!file.exists()) file = resolvePrefabFile("Assets/Prefabs/" + filePath);
         if (!file.exists()) return new ArrayList<>();
 
         try {
