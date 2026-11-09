@@ -80,6 +80,10 @@ public final class ProjectSettingsOverlay {
     private static final float SECTION_MEMORY_Y = 0.59f;
     private static final float MAX_HEAP_Y = 0.52f;
     private static final float MAX_HEAP_HINT_Y = 0.46f;
+    private static final float SECTION_PACING_Y = 0.37f;
+    private static final float VSYNC_Y = 0.30f;
+    private static final float FRAME_CAP_Y = 0.22f;
+    private static final float FRAME_CAP_HINT_Y = 0.16f;
 
     private static final float ACTION_Y0 = -0.60f, ACTION_Y1 = -0.52f;
     private static final float RESET_X0 = -0.52f, RESET_X1 = -0.24f;
@@ -97,11 +101,14 @@ public final class ProjectSettingsOverlay {
     private static final int BUS_FIRST = 10, BUS_LAST = 13; // BUS_FIRST + AudioBus ordinal (MASTER, BGM, SFX, VOICE)
     private static final int DUCK_LEVEL = 14, DUCK_ATTACK = 15, DUCK_RELEASE = 16;
     private static final int MAX_HEAP = 17;
+    private static final int FRAME_CAP = 18;
 
     // UI slider ranges (exact entry through the value prompt is clamped by ProjectSettings.sanitize instead)
     private static final float FOG_DISTANCE_SLIDER_MAX = 500.0f;
     private static final float MAX_HEAP_SLIDER_MAX = 8192.0f;
     private static final int MAX_HEAP_STEP_MB = 64;
+    // Dragging tops out here; typing a value reaches ProjectSettings.MAX_FRAME_RATE_CAP
+    private static final float FRAME_CAP_SLIDER_MAX = 240.0f;
 
     private static final ProjectSettings openedWith = ProjectSettings.defaults();
     private static boolean dirty = false;
@@ -154,7 +161,7 @@ public final class ProjectSettingsOverlay {
         centeredTextIn(buffer, "X", CLOSE_X0, CLOSE_X1, (CLOSE_Y0 + CLOSE_Y1) * 0.5f, 0.9f, EditorTheme.TEXT);
 
         if (tab == TAB_AUDIO_ID) renderAudioTab(buffer, s, hoverX, hoverY);
-        else if (tab == TAB_RUNTIME_ID) renderRuntimeTab(buffer, s);
+        else if (tab == TAB_RUNTIME_ID) renderRuntimeTab(buffer, s, hoverX, hoverY);
         else renderRenderTab(buffer, s, hoverX, hoverY);
 
         if (!status.isEmpty()) {
@@ -217,10 +224,16 @@ public final class ProjectSettingsOverlay {
         toggleRow(buffer, "REVERB ZONES", REVERB_ENABLED_Y, s.reverbZonesEnabled, hoverX, hoverY);
     }
 
-    private static void renderRuntimeTab(UIGeometryBatch.Buffer buffer, ProjectSettings s) {
+    private static void renderRuntimeTab(UIGeometryBatch.Buffer buffer, ProjectSettings s, float hoverX, float hoverY) {
         sectionHeader(buffer, "MEMORY", SECTION_MEMORY_Y);
         sliderRow(buffer, "MAX JAVA HEAP (MB)", MAX_HEAP_Y, MAX_HEAP, s, 0, true);
         UIGeometryBatch.addTruncatedText(buffer, "USED BY EXPORTED GAMES. EXPORT AGAIN TO APPLY A CHANGE.", LABEL_X, MAX_HEAP_HINT_Y, VALUE_X1, 0.75f,
+            EditorTheme.TEXT_MUTED, 1.0f);
+
+        sectionHeader(buffer, "FRAME PACING", SECTION_PACING_Y);
+        toggleRow(buffer, "VSYNC", VSYNC_Y, s.vsync, hoverX, hoverY);
+        sliderRow(buffer, "FRAME RATE CAP (FPS)", FRAME_CAP_Y, FRAME_CAP, s, 0, true);
+        UIGeometryBatch.addTruncatedText(buffer, "0 = NO CAP. APPLIES WHEN THE GAME RUNS, NOT IN THE EDITOR.", LABEL_X, FRAME_CAP_HINT_Y, VALUE_X1, 0.75f,
             EditorTheme.TEXT_MUTED, 1.0f);
     }
 
@@ -434,6 +447,12 @@ public final class ProjectSettingsOverlay {
             markDirty();
             return;
         }
+        if (tab == TAB_RUNTIME_ID && hitsToggle(ndcX, ndcY, VSYNC_Y)) {
+            UISoundPlayer.play(UISound.TOGGLE);
+            s.vsync = !s.vsync;
+            markDirty();
+            return;
+        }
         if (tab == TAB_RENDER_ID && hitsToggle(ndcX, ndcY, FOG_ENABLED_Y)) {
             UISoundPlayer.play(UISound.TOGGLE);
             s.fogEnabled = !s.fogEnabled;
@@ -538,7 +557,7 @@ public final class ProjectSettingsOverlay {
 
     private static void markDirty() {
         dirty = true;
-        if (!statusIsError) setStatus("CHANGES PREVIEW LIVE. SAVE WRITES PROJECTSETTINGS.BIN", false);
+        if (!statusIsError) setStatus("CHANGES PREVIEW LIVE. SAVE WRITES THE PROJECT FILE", false);
     }
 
     private static void setStatus(String message, boolean isError) {
@@ -562,6 +581,7 @@ public final class ProjectSettingsOverlay {
             case DUCK_ATTACK -> s.duckAttack;
             case DUCK_RELEASE -> s.duckRelease;
             case MAX_HEAP -> s.maxHeapMb;
+            case FRAME_CAP -> s.frameRateCap;
             default -> (slider >= BUS_FIRST && slider <= BUS_LAST) ? s.busVolume[slider - BUS_FIRST] : 0.0f;
         };
     }
@@ -582,6 +602,9 @@ public final class ProjectSettingsOverlay {
             case DUCK_ATTACK -> s.duckAttack = value;
             case DUCK_RELEASE -> s.duckRelease = value;
             case MAX_HEAP -> s.maxHeapMb = Math.round(value / MAX_HEAP_STEP_MB) * MAX_HEAP_STEP_MB;
+            // The bottom of the track is "no cap"; anything above snaps into the supported range
+            case FRAME_CAP -> s.frameRateCap = value < ProjectSettings.MIN_FRAME_RATE_CAP * 0.5f
+                    ? 0 : ProjectSettings.sanitizeFrameRateCap(Math.round(value));
             default -> {
                 if (slider >= BUS_FIRST && slider <= BUS_LAST) s.busVolume[slider - BUS_FIRST] = value;
             }
@@ -596,6 +619,7 @@ public final class ProjectSettingsOverlay {
             case DUCK_ATTACK -> ProjectSettings.DUCK_ATTACK_MAX;
             case DUCK_RELEASE -> ProjectSettings.DUCK_RELEASE_MAX;
             case MAX_HEAP -> MAX_HEAP_SLIDER_MAX;
+            case FRAME_CAP -> FRAME_CAP_SLIDER_MAX;
             default -> 1.0f;
         };
     }
@@ -614,6 +638,7 @@ public final class ProjectSettingsOverlay {
             case DUCK_ATTACK -> "Duck attack seconds (0-" + (int) ProjectSettings.DUCK_ATTACK_MAX + ")";
             case DUCK_RELEASE -> "Duck release seconds (0-" + (int) ProjectSettings.DUCK_RELEASE_MAX + ")";
             case MAX_HEAP -> "Max Java heap in MB (" + ProjectSettings.MIN_MAX_HEAP_MB + "-" + ProjectSettings.MAX_MAX_HEAP_MB + ")";
+            case FRAME_CAP -> "Frame rate cap in FPS (0 for none, or " + ProjectSettings.MIN_FRAME_RATE_CAP + "-" + ProjectSettings.MAX_FRAME_RATE_CAP + ")";
             case BUS_FIRST, BUS_FIRST + 1, BUS_FIRST + 2, BUS_FIRST + 3 -> BUS_LABELS[slider - BUS_FIRST] + " bus volume (0-1)";
             default -> "Value (0-1)";
         };
@@ -631,6 +656,7 @@ public final class ProjectSettingsOverlay {
             case DUCK_ATTACK -> DUCK_ATTACK_Y;
             case DUCK_RELEASE -> DUCK_RELEASE_Y;
             case MAX_HEAP -> MAX_HEAP_Y;
+            case FRAME_CAP -> FRAME_CAP_Y;
             default -> (slider >= BUS_FIRST && slider <= BUS_LAST) ? BUS_Y[slider - BUS_FIRST] : Float.NaN;
         };
     }
@@ -664,7 +690,7 @@ public final class ProjectSettingsOverlay {
 
     private static int sliderAt(float x, float y) {
         int first = tab == TAB_RUNTIME_ID ? MAX_HEAP : tab == TAB_AUDIO_ID ? BUS_FIRST : FOG_START;
-        int last = tab == TAB_RUNTIME_ID ? MAX_HEAP : tab == TAB_AUDIO_ID ? DUCK_RELEASE : AMBIENT_INTENSITY;
+        int last = tab == TAB_RUNTIME_ID ? FRAME_CAP : tab == TAB_AUDIO_ID ? DUCK_RELEASE : AMBIENT_INTENSITY;
         for (int slider = first; slider <= last; slider++) {
             float midY = rowY(slider);
             if (inRect(x, y, sliderX0(slider), midY - ROW_H * 0.5f, sliderX1(slider), midY + ROW_H * 0.5f)) return slider;
@@ -674,7 +700,7 @@ public final class ProjectSettingsOverlay {
 
     private static final int[] SCALAR_SLIDERS = { FOG_START, FOG_END, FOG_DENSITY, AMBIENT_INTENSITY };
     private static final int[] AUDIO_SCALAR_SLIDERS = { BUS_FIRST, BUS_FIRST + 1, BUS_FIRST + 2, BUS_FIRST + 3, DUCK_LEVEL, DUCK_ATTACK, DUCK_RELEASE };
-    private static final int[] RUNTIME_SCALAR_SLIDERS = { MAX_HEAP };
+    private static final int[] RUNTIME_SCALAR_SLIDERS = { MAX_HEAP, FRAME_CAP };
 
     /** Scalar slider whose value well (right of the track) is under the point, or NONE. */
     private static int valueWellAt(float x, float y) {
