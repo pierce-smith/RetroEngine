@@ -126,6 +126,9 @@ public class RuntimeLoop {
                 // 1. Poll Native Window & Hardware Input Events
                 if (window != null) {
                     window.pollEvents();
+                    // The game fills the window, so window points are game-view pixels
+                    com.retro.engine.scripting.Input.updatePointer(window.getCursorX(), window.getCursorY(),
+                            0.0f, 0.0f, window.getWidth(), window.getHeight(), true);
                 }
                 timings.mark(FrameTimings.POLL);
 

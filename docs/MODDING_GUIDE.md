@@ -298,7 +298,7 @@ marked, and members marked `@Internal`, can change in any release.
 | `ModEventBus` | `register(Object)`, `subscribe(Class, ModEventListener)`, `unregister(Object)`, `post(Object)`, `hasSubscribers(Class)` |
 | `ModVirtualFileSystem` | `resolveOverride(path)` returns the file a path resolves to through `mod://`, the overlays, then vanilla. `findInOverlays(path)`, `resolveModUri(uri)`, `baseAssetsDir()`. `layers()` is experimental |
 | `SceneWorld` | `spawnEntity(id, name, meshPath)`, `refreshComponents(entity)` after adding components, `instantiatePrefabRuntime(path)`, `requestEntityDestroy(entity)`, `findEntityByName/ById`, `getSceneEntities()`, `setParent(child, parent)`, `getComputedWorldTransform(entity)`, `raycastExcluding(...)`, `get/setVelocity`, `setAngularVelocity`, `sampleAnimatorPose(animator, time)`. The rest of `SceneWorld` is engine code |
-| `EntityScript` | `getTransform()`, `getComponent(Class)`, `raycast(...)`, `loadScene(path)`, `playSound(...)` (with `AudioBus` routing), lifecycle and collision/trigger callbacks. `onMouse*` and `onDrawGizmos` are declared but not dispatched yet |
+| `EntityScript` | `getTransform()`, `getComponent(Class)`, `raycast(...)`, `loadScene(path)`, `playSound(...)` (with `AudioBus` routing), lifecycle and collision/trigger callbacks. `onMouse{Enter,Exit,Down,Up}` fire for the solid collider under the cursor |
 | `SimpleEntityScript` | Everything in `EntityScript`, plus cached getters, timers/tweens, `ScriptEvents`, and the system helpers: `setDestination` / `stopNavigation`, `followSpline` / `get/setSplineProgress`, `play` / `stop` / `emit` (particles), `crossFadeAnimation` / `playAnimation`, `setBusVolume` / `setBusMuted`, `setPlayerInputEnabled`. See Volume 6 |
 
 ## How mod code is compiled

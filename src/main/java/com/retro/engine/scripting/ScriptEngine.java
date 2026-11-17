@@ -357,6 +357,34 @@ public class ScriptEngine {
         };
     }
 
+    enum Pointer { ENTER, EXIT, DOWN, UP }
+
+    /** Delivers an onMouse* hook to every enabled, running script on {@code entity}. A script that throws is disabled. */
+    static void dispatchPointer(Entity entity, Pointer event) {
+        if (entity == null) return;
+        List<Component> comps = entity.getAllComponents();
+        for (int c = 0; c < comps.size(); c++) {
+            if (!(comps.get(c) instanceof ScriptComponent sc) || !sc.enabled) continue;
+            EntityScript script = sc.activeScriptInstance;
+            if (script == null) continue;
+            try {
+                switch (event) {
+                    case ENTER -> script.onMouseEnter();
+                    case EXIT -> script.onMouseExit();
+                    case DOWN -> script.onMouseDown();
+                    case UP -> script.onMouseUp();
+                }
+            } catch (Throwable t) {
+                disableFailedScript(entity, sc, switch (event) {
+                    case ENTER -> "onMouseEnter";
+                    case EXIT -> "onMouseExit";
+                    case DOWN -> "onMouseDown";
+                    case UP -> "onMouseUp";
+                }, t);
+            }
+        }
+    }
+
     public static void destroyScripts(List<Entity> entities) {
         if (entities == null) return;
         for (int i = 0; i < entities.size(); i++) {

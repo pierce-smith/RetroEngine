@@ -34,6 +34,9 @@ public class Input {
 
     private static float mouseX = 0.0f;
     private static float mouseY = 0.0f;
+    private static boolean mouseInView = false;
+    private static float viewWidth = 0.0f;
+    private static float viewHeight = 0.0f;
     private static float scrollY = 0.0f;
 
     @Internal
@@ -130,12 +133,33 @@ public class Input {
         return inRange(button, BUTTON_SLOTS) && pressedMouseButtons[button];
     }
 
+    /**
+     * Cursor X in pixels from the left edge of the game view (the whole window in an exported game, the Scene tile in
+     * the editor). While the cursor is locked for mouse-look this is the centre of the view, so the onMouse hooks act
+     * on whatever is under the crosshair.
+     */
     public static float getMouseX() {
         return mouseX;
     }
 
+    /** Cursor Y in pixels from the top edge of the game view; the view's centre while the cursor is locked. */
     public static float getMouseY() {
         return mouseY;
+    }
+
+    /** True while the cursor is over the game view (always, while it is locked). The onMouse hooks need this. */
+    public static boolean isMouseInView() {
+        return mouseInView;
+    }
+
+    /** Width of the game view in the same pixels as {@link #getMouseX()}; 0 when there is no view (headless). */
+    public static float getViewWidth() {
+        return viewWidth;
+    }
+
+    /** Height of the game view in the same pixels as {@link #getMouseY()}; 0 when there is no view (headless). */
+    public static float getViewHeight() {
+        return viewHeight;
     }
 
     public static float getScrollY() {
@@ -156,10 +180,29 @@ public class Input {
         activeMouseButtons[button] = down;
     }
 
+    /**
+     * Frame loop hook, once per frame after polling events: the raw cursor position in window points and the game
+     * view's rectangle in the same units. {@code overView} is false when something else (an editor panel or popup)
+     * covers the cursor. With no view, the last position is kept and the mouse counts as outside.
+     */
     @Internal
-    public static void setMousePosition(float x, float y) {
-        mouseX = x;
-        mouseY = y;
+    public static void updatePointer(double cursorX, double cursorY, float viewLeft, float viewTop,
+                                     float viewW, float viewH, boolean overView) {
+        viewWidth = Math.max(0.0f, viewW);
+        viewHeight = Math.max(0.0f, viewH);
+        if (viewWidth < 1.0f || viewHeight < 1.0f) {
+            mouseInView = false;
+            return;
+        }
+        if (isCursorLocked()) {
+            mouseX = viewWidth * 0.5f;
+            mouseY = viewHeight * 0.5f;
+            mouseInView = true;
+            return;
+        }
+        mouseX = (float) cursorX - viewLeft;
+        mouseY = (float) cursorY - viewTop;
+        mouseInView = overView && mouseX >= 0.0f && mouseY >= 0.0f && mouseX < viewWidth && mouseY < viewHeight;
     }
 
     @Internal
@@ -186,6 +229,9 @@ public class Input {
         keyboardSuppressed = false;
         mouseX = 0.0f;
         mouseY = 0.0f;
+        mouseInView = false;
+        viewWidth = 0.0f;
+        viewHeight = 0.0f;
         scrollY = 0.0f;
     }
 }

@@ -366,25 +366,37 @@ The lifecycle matches what Unity and Minecraft modders already know:
 
 `onAwake → onEnable → onStart → onUpdate → onLateUpdate → onPhysicsUpdate (60 Hz) → onDisable → onDestroy`
 
-Plus `onCollision{Enter,Stay,Exit}`, `onTrigger{Enter,Stay,Exit}`, `onMouse{Enter,Exit,Down,Up}` and `onDrawGizmos`.
+Plus `onCollision{Enter,Stay,Exit}`, `onTrigger{Enter,Stay,Exit}` and `onMouse{Enter,Exit,Down,Up}`.
 
-> **Candid note: not every hook is dispatched yet.** `EntityScript` declares all of the callbacks above, but the
-> engine currently calls only these:
->
-> | Called by the engine | When |
-> |----------------------|------|
-> | `onAwake` | From `init()`, when the instance is created |
-> | `onEnable` | Before `onStart`, and on the next tick after `ScriptComponent.enabled` turns back on |
-> | `onStart` | Right after `init()` and the Inspector overrides are applied |
-> | `onUpdate` | Every simulation frame (after the framework's `onFrameworkUpdate`) |
-> | `onLateUpdate` | Every simulation frame, after physics, every `onUpdate`, animation, IK and bone sockets, and before camera shake is applied and this frame's key/button presses clear. Use it for follow cameras and anything that must see final poses |
-> | `onPhysicsUpdate` | Every fixed 60 Hz physics step |
-> | `onCollision*` / `onTrigger*` | From the physics contact pass |
-> | `onDisable` | On the next tick after `enabled` turns off, and before `onDestroy`. A script that threw doesn't get it |
-> | `onDestroy` | On Stop, on deferred destroy, and on hot reload |
->
-> `onMouse{Enter,Exit,Down,Up}` and `onDrawGizmos` are declared but **never invoked**. You can override them
-> without errors, but they won't run. Draw debug shapes with `ScriptDebug` (Volume 6 §4.3).
+When the engine calls each hook:
+
+| Hook | When |
+|------|------|
+| `onAwake` | From `init()`, when the instance is created |
+| `onEnable` | Before `onStart`, and on the next tick after `ScriptComponent.enabled` turns back on |
+| `onStart` | Right after `init()` and the Inspector overrides are applied |
+| `onMouse{Enter,Exit,Down,Up}` | Every simulation frame, after physics and before `onUpdate` (see below) |
+| `onUpdate` | Every simulation frame (after the framework's `onFrameworkUpdate`) |
+| `onLateUpdate` | Every simulation frame, after physics, every `onUpdate`, animation, IK and bone sockets, and before camera shake is applied and this frame's key/button presses clear. Use it for follow cameras and anything that must see final poses |
+| `onPhysicsUpdate` | Every fixed 60 Hz physics step |
+| `onCollision*` / `onTrigger*` | From the physics contact pass |
+| `onDisable` | On the next tick after `enabled` turns off, and before `onDestroy`. A script that threw doesn't get it |
+| `onDestroy` | On Stop, on deferred destroy, and on hot reload |
+
+**Mouse hooks.** Each frame, the engine casts a ray from the Main Camera through the cursor and finds the first
+solid collider. Triggers don't block the ray, the same as `raycast`. The hooks go to the scripts on that
+collider's entity, so the entity needs a collider:
+
+- `onMouseEnter` / `onMouseExit`: the cursor moved onto or off the entity. Leaving the game view counts as off.
+- `onMouseDown`: the left button was pressed over the entity.
+- `onMouseUp`: the left button was released after an `onMouseDown` here, wherever the cursor is by then. A click
+  is an `onMouseUp` that arrives while the entity is still hovered.
+
+While the cursor is locked for mouse-look, the ray goes through the centre of the view, so the same hooks work for
+"look at it and click" interaction. The cursor itself is `Input.getMouseX()/getMouseY()`, in pixels from the game
+view's top-left corner (the whole window in an exported game, the Scene tile in the editor).
+
+There is no `onDrawGizmos`: draw debug shapes from `onUpdate` with `ScriptDebug` (Volume 6 §4.3).
 
 `EntityScript` also has ready-made helpers that every script inherits:
 

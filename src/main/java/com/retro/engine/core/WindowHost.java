@@ -120,6 +120,8 @@ public class WindowHost {
     private boolean escapePressed = false;
     private boolean cursorCaptureFresh = false; // Next position sample only re-bases, so capturing never jumps the view
     private double lastCursorX, lastCursorY;
+    // Latest cursor position in window points, from every cursor callback (captured or not)
+    private double cursorX, cursorY;
     private double mouseDeltaX, mouseDeltaY;
 
     public WindowHost(int width, int height, String title) {
@@ -365,6 +367,8 @@ public class WindowHost {
 
         // Cursor Position Callback
         glfwSetCursorPosCallback(windowHandle, (window, xpos, ypos) -> {
+            cursorX = xpos;
+            cursorY = ypos;
             if (cursorCaptured) {
                 if (!cursorCaptureFresh) {
                     mouseDeltaX += xpos - lastCursorX;
@@ -460,6 +464,9 @@ public class WindowHost {
     public long getNativeHandle() { return windowHandle; }
     public long getWindowHandle() { return windowHandle; }
     public int getWidth() { return width; }
+    /** Cursor position in window points from the top-left corner, as of the last poll. */
+    public double getCursorX() { return cursorX; }
+    public double getCursorY() { return cursorY; }
     /** Backing pixels, which is what a sharp image has to match. {@link #getWidth()} is in points on HiDPI displays. */
     public int getFramebufferWidth() { return framebufferWidth; }
     public int getFramebufferHeight() { return framebufferHeight; }

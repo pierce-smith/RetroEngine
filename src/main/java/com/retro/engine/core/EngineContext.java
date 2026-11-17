@@ -374,6 +374,7 @@ public class EngineContext {
     public GamepadManager getGamepadManager() { return window != null ? window.getGamepadManager() : null; }
     public EditorWorkspace getEditorManager() { return editorManager; }
     public ViewportCamera getCameraController() { return cameraController; }
+    public EditorInputRouter getInputRouter() { return selectionController; }
     public HotkeyRouter getHotkeyHandler() { return hotkeyHandler; }
     public AssetStreamer getStreamingService() { return streamingService; }
     public SceneRenderPipeline getRenderSubmitter() { return renderSubmitter; }

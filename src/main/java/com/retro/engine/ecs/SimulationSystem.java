@@ -11,6 +11,7 @@ import com.retro.engine.ecs.components.Transform;
 import com.retro.engine.ecs.serialization.EntityStateBackupManager;
 import com.retro.engine.physics.PhysicsSystem;
 import com.retro.engine.scripting.Input;
+import com.retro.engine.scripting.PointerEvents;
 import com.retro.engine.scripting.ScriptEngine;
 
 import java.util.ArrayList;
@@ -64,6 +65,7 @@ public class SimulationSystem {
             // Start PLAY ON START audio before scripts so their onAwake/onStart can stop or retune it
             if (activeEntities != null) startAudioOnPlay(activeEntities, sceneWorld);
 
+            PointerEvents.reset();
             ScriptEngine.initializeScripts(activeEntities, sceneWorld);
             System.out.println("[SimulationSystem] Simulation started; scene snapshot taken, physics and scripts started.");
         } else if (playState == PlayState.PAUSED) {
@@ -97,6 +99,7 @@ public class SimulationSystem {
     public List<Entity> stop(List<Entity> activeEntities, boolean sceneTransition) {
         if (playState == PlayState.SIMULATING || playState == PlayState.PAUSED) {
             ScriptEngine.destroyScripts(activeEntities);
+            PointerEvents.reset();
             physicsWorld.cleanup();
             navigation.resetAgents(activeEntities);
             splines.reset(activeEntities);
@@ -132,7 +135,8 @@ public class SimulationSystem {
             // 1. Step 3D Physics Solver (RigidBodies, Character Controllers, Vehicles, Raycasts)
             physicsWorld.step(deltaTime, activeEntities);
 
-            // 2. Execute gameplay script frame ticks
+            // 2. Mouse hooks (against this frame's colliders), then gameplay script frame ticks
+            PointerEvents.update(activeEntities, sceneWorld);
             ScriptEngine.updateScripts(activeEntities, deltaTime, sceneWorld);
             physicsWorld.carryAfterScripts();
 

@@ -959,7 +959,7 @@ Related physics changes in this release:
 | Use `setPlayerInputEnabled(false)` for cutscenes | Disable or remove the player's controller | Physics keeps running, and Stop restores input |
 | Route audio to the right bus (`BGM`, `VOICE`, …) | Play music and dialogue on the default `SFX` bus | Bus volumes, mutes and ducking only work if sounds are routed |
 | Move follow cameras in `onLateUpdate` | Chase an animated bone or a physics body from `onUpdate` | `onLateUpdate` runs after animation and IK, so it sees this frame's final pose (Volume 1 §3.2) |
-| Draw debug shapes with `ScriptDebug` | Rely on `onMouse*`, `onDrawGizmos` | Declared but never dispatched (Volume 1 §3.2) |
+| Give clickable objects a solid collider for `onMouse*` | Expect a mesh or a trigger to receive mouse hooks | The hooks pick with a physics ray, which skips triggers and ignores meshes (Volume 1 §3.2) |
 
 ### 6.2 Scratch Objects vs. Allocation in Update Loops
 

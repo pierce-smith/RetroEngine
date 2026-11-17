@@ -3,10 +3,14 @@ package com.retro.engine.core;
 import com.retro.engine.assets.AssetStreamer;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.ViewportCamera;
+import com.retro.engine.editor.input.EditorInputRouter;
 import com.retro.engine.editor.input.HotkeyRouter;
+import com.retro.engine.editor.panels.DockPanel;
+import com.retro.engine.editor.panels.DockSpace;
 import com.retro.engine.editor.panels.ViewportPanel;
 import com.retro.engine.graphics.IRenderBackend;
 import com.retro.engine.graphics.SceneRenderPipeline;
+import com.retro.engine.scripting.Input;
 
 /**
  * The editor's frame loop: polls window events, flushes queued editor commands, runs hotkeys and the camera,
@@ -21,6 +25,27 @@ public class EngineLoop {
     private static final long TARGET_FRAME_TIME_NS = 16_666_667L; // 60 FPS
     private static final long SLEEP_THRESHOLD_NS = 2_000_000L;
     public static final float MAX_FRAME_DELTA = 0.1f;
+
+    /**
+     * Hands scripts the cursor relative to the Scene tile, which shows the game during Play. The tile's rectangle is
+     * last frame's layout, the same one the click being handled was aimed at.
+     */
+    private static void updateScriptPointer(WindowHost window, EditorWorkspace editorManager, EditorInputRouter router) {
+        if (editorManager == null) return;
+        DockSpace dock = editorManager.getDockSpace();
+        int winW = editorManager.getWindowWidth(), winH = editorManager.getWindowHeight();
+        if (dock == null || !dock.isSceneViewportVisible() || winW <= 0 || winH <= 0) {
+            Input.updatePointer(0.0, 0.0, 0.0f, 0.0f, 0.0f, 0.0f, false);
+            return;
+        }
+        float x0 = dock.getContentX0(DockPanel.SCENE), x1 = dock.getContentX1(DockPanel.SCENE);
+        float y0 = dock.getContentY0(DockPanel.SCENE), y1 = dock.getContentY1(DockPanel.SCENE);
+        double cx = window.getCursorX(), cy = window.getCursorY();
+        // NDC y points up, window y down: the tile's top edge is y1
+        Input.updatePointer(cx, cy, (x0 + 1.0f) * 0.5f * winW, (1.0f - y1) * 0.5f * winH,
+                (x1 - x0) * 0.5f * winW, (y1 - y0) * 0.5f * winH,
+                router != null && router.isCursorInViewport(cx, cy));
+    }
 
     public void run(EngineContext context) {
         if (context == null) return;
@@ -41,6 +66,7 @@ public class EngineLoop {
             FrameTimings.MAIN.begin();
 
             window.pollEvents();
+            updateScriptPointer(window, editorManager, context.getInputRouter());
 
             // 0. Double-Buffered Transactional Editor Command Flush at Frame Boundary
             if (editorManager != null && editorManager.getCommandHistory() != null) {

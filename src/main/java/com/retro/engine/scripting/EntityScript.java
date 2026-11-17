@@ -60,12 +60,25 @@ public abstract class EntityScript {
     public void onTriggerStay(Entity other) {}
     public void onTriggerExit(Entity other) {}
 
+    /*
+     * Mouse hooks. Each Play frame, before onUpdate, the engine casts a ray from the Main Camera through the cursor
+     * (the view's centre while the cursor is locked, so they work for a crosshair too) and finds the first solid
+     * collider. Triggers don't block the ray. The hooks go to the scripts on that collider's entity. Only the left
+     * button counts.
+     */
+
+    /** The cursor moved onto this entity's collider. */
     public void onMouseEnter() {}
+    /** The cursor moved off this entity's collider, or out of the game view. */
     public void onMouseExit() {}
+    /** The left button was pressed while the cursor was on this entity. */
     public void onMouseDown() {}
+    /**
+     * The left button was released after an onMouseDown here, wherever the cursor is now. A click is an onMouseUp
+     * that arrives while the entity is still hovered (between onMouseEnter and onMouseExit).
+     */
     public void onMouseUp() {}
 
-    public void onDrawGizmos() {}
     public void onDestroy() {}
 
     // =========================================================================
