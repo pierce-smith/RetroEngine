@@ -33,7 +33,7 @@ struct Uniforms {
     float4 dirLight;          // 128: directional light xyz = direction, w = intensity
     float4 numLights;         // 144: x = directional (1.0 = active), y = point count, z = spot count
     float4 dirLightColor;     // 160: rgb = directional light color
-    float4 ambientColor;      // 176: rgb = ambient color * intensity (ProjectSettings)
+    float4 ambientColor;      // 176: rgb = ambient color * intensity (ProjectSettings), w = color space (0 = Gamma, 1 = Linear)
     float4 fogColorDensity;   // 192: rgb = fogColor, w = opacity at fog end (1 = fog on, 0 = fog disabled)
     float4 matParams;         // 208: x = reflectStrength, y = shadowOpacity, z = shadowMapBias, w = decal opacity. y is decal growth on a decal draw
     uint materialMask;        // 224: bit 0 albedo, 1 normal, 2 specular, 3 lightmap, 4 emissive
@@ -302,6 +302,20 @@ vertex VertexOut vertexMain(uint vertexID [[vertex_id]],
 // Distance fog from ProjectSettings. Fog end is also the draw distance (entities beyond it are culled and the scene
 // clears to the fog color), so the ramp is fully opaque there; the exponent (1 = linear .. 5 = thick, from fog
 // density) eases it out so thick fog closes in well before the end.
+// Project color space (ColorSpace.java), identical to blinn_phong.frag. Authored colors are display (sRGB) values in both
+// modes. Linear decodes them, lights and fogs in linear light, and encodes the result back, so the scene target always
+// holds display values. Light, ambient and fog colors arrive already converted (MetalUniformStream); texture and vertex
+// colors are decoded here.
+static inline float3 srgbToLinear(float3 c) {
+    c = max(c, float3(0.0));
+    return mix(c / 12.92, pow((c + 0.055) / 1.055, float3(2.4)), step(float3(0.04045), c));
+}
+
+static inline float3 linearToSrgb(float3 c) {
+    c = max(c, float3(0.0));
+    return mix(c * 12.92, 1.055 * pow(c, float3(1.0 / 2.4)) - 0.055, step(float3(0.0031308), c));
+}
+
 static inline float fogAmount(constant Uniforms& uniforms, float viewDist) {
     float t = clamp((viewDist - uniforms.fogParams.x) / (uniforms.fogParams.y - uniforms.fogParams.x), 0.0, 1.0);
     float k = max(uniforms.fogParams.z, 1.0);
@@ -419,6 +433,8 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
     if (length(in.color.rgb) > 0.001) {
         baseColor.rgb *= in.color.rgb;
     }
+    bool linearSpace = uniforms.ambientColor.w > 0.5;
+    if (linearSpace) baseColor.rgb = srgbToLinear(baseColor.rgb);
 
     float3 V = normalize(uniforms.viewPos.xyz - in.worldPos);
 
@@ -514,16 +530,20 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
         float3 envSky = float3(0.85, 0.90, 1.0);
         float3 envGround = float3(0.15, 0.20, 0.30);
         float3 envColor = mix(envGround, envSky, clamp(R.y * 0.5 + 0.5, 0.0, 1.0));
+        if (linearSpace) envColor = srgbToLinear(envColor);
         float reflectStrength = clamp(uniforms.matParams.x, 0.0, 1.0);
         finalRGB = mix(finalRGB, envColor, reflectStrength * 0.4);
     }
 
     // Emissive is unlit and unshadowed, but still fogs with distance like everything else
     if ((mask & MAT_EMISSIVE) != 0u) {
-        finalRGB += args.emissive.sample(smp, in.uv).rgb * uniforms.surface.w;
+        float3 emissive = args.emissive.sample(smp, in.uv).rgb;
+        if (linearSpace) emissive = srgbToLinear(emissive);
+        finalRGB += emissive * uniforms.surface.w;
     }
 
     finalRGB = mix(finalRGB, uniforms.fogColorDensity.rgb, fogAmount(uniforms, in.viewDist));
+    if (linearSpace) finalRGB = linearToSrgb(finalRGB);
 
     return float4(finalRGB, decal ? decalCoverage : baseColor.a);
 }

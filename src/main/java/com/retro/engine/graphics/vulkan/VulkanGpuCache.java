@@ -1090,7 +1090,8 @@ public class VulkanGpuCache {
         if (buf == null || device == null || device.getLogicalDevice() == null) return;
 
         VkDevice vkDevice = device.getLogicalDevice();
-        applyTextureFiltering(vkDevice, lights.environment().textureFiltering);
+        RenderEnvironment env = lights.environment();
+        applyTextureFiltering(vkDevice, env.textureFiltering);
 
         try (MemoryStack stack = stackPush()) {
             PointerBuffer pData = stack.mallocPointer(1);
@@ -1102,7 +1103,7 @@ public class VulkanGpuCache {
                 SceneLights.Light dir = lights.directional();
                 floatBuf.put(0, dir.dirX); floatBuf.put(1, dir.dirY); floatBuf.put(2, dir.dirZ); floatBuf.put(3, 0.0f);
                 if (hasDir) {
-                    putLightColor(floatBuf, 4, dir);
+                    putLightColor(floatBuf, 4, dir, env);
                 } else {
                     floatBuf.put(4, 0.0f); floatBuf.put(5, 0.0f); floatBuf.put(6, 0.0f); floatBuf.put(7, 0.0f);
                 }
@@ -1112,7 +1113,7 @@ public class VulkanGpuCache {
                     SceneLights.Light point = lights.point(i);
                     int base = LIGHT_UBO_POINT_LIGHTS_FLOAT_INDEX + i * LIGHT_UBO_POINT_LIGHT_FLOATS;
                     floatBuf.put(base, point.posX); floatBuf.put(base + 1, point.posY); floatBuf.put(base + 2, point.posZ); floatBuf.put(base + 3, 0.0f);
-                    putLightColor(floatBuf, base + 4, point);
+                    putLightColor(floatBuf, base + 4, point, env);
                     floatBuf.put(base + 8, 1.0f); floatBuf.put(base + 9, 0.09f); floatBuf.put(base + 10, 0.032f); floatBuf.put(base + 11, 0.0f);
                 }
 
@@ -1122,7 +1123,7 @@ public class VulkanGpuCache {
                     int base = LIGHT_UBO_SPOT_LIGHTS_FLOAT_INDEX + i * LIGHT_UBO_SPOT_LIGHT_FLOATS;
                     floatBuf.put(base, spot.posX); floatBuf.put(base + 1, spot.posY); floatBuf.put(base + 2, spot.posZ); floatBuf.put(base + 3, 0.93f);
                     floatBuf.put(base + 4, spot.dirX); floatBuf.put(base + 5, spot.dirY); floatBuf.put(base + 6, spot.dirZ); floatBuf.put(base + 7, 0.82f);
-                    putLightColor(floatBuf, base + 8, spot);
+                    putLightColor(floatBuf, base + 8, spot, env);
                     floatBuf.put(base + 12, 1.0f); floatBuf.put(base + 13, 0.09f); floatBuf.put(base + 14, 0.032f); floatBuf.put(base + 15, 0.0f);
                 }
 
@@ -1143,15 +1144,16 @@ public class VulkanGpuCache {
                 int pos = LIGHT_UBO_PREVIEW_VIEW_POS_FLOAT_INDEX;
                 floatBuf.put(pos, previewX); floatBuf.put(pos + 1, previewY); floatBuf.put(pos + 2, previewZ); floatBuf.put(pos + 3, 0.0f);
 
-                // Project render environment: premultiplied ambient, fog color + opacity (0 = off), fog start / end / ramp exponent,
-                // and the shading model in the fog params' last float (LightBuffer.shadingModel: 0 = Blinn-Phong, 1 = Gouraud)
-                RenderEnvironment env = lights.environment();
+                // Project render environment: premultiplied ambient with the color space in its last float (LightBuffer.ambientColor.w:
+                // 0 = Gamma, 1 = Linear), fog color + opacity (0 = off), fog start / end / ramp exponent, and the shading model in
+                // the fog params' last float (LightBuffer.shadingModel: 0 = Blinn-Phong, 1 = Gouraud). Colors are converted for the
+                // color space here, so the shaders receive them ready to light with.
                 int amb = LIGHT_UBO_AMBIENT_FLOAT_INDEX;
                 float ambientScale = env.ambientIntensity;
-                floatBuf.put(amb, env.ambientR * ambientScale); floatBuf.put(amb + 1, env.ambientG * ambientScale);
-                floatBuf.put(amb + 2, env.ambientB * ambientScale); floatBuf.put(amb + 3, 1.0f);
+                floatBuf.put(amb, env.toShading(env.ambientR) * ambientScale); floatBuf.put(amb + 1, env.toShading(env.ambientG) * ambientScale);
+                floatBuf.put(amb + 2, env.toShading(env.ambientB) * ambientScale); floatBuf.put(amb + 3, env.colorSpaceShaderValue());
                 int fog = LIGHT_UBO_FOG_COLOR_FLOAT_INDEX;
-                floatBuf.put(fog, env.fogR); floatBuf.put(fog + 1, env.fogG); floatBuf.put(fog + 2, env.fogB);
+                floatBuf.put(fog, env.toShading(env.fogR)); floatBuf.put(fog + 1, env.toShading(env.fogG)); floatBuf.put(fog + 2, env.toShading(env.fogB));
                 floatBuf.put(fog + 3, env.fogOpacity());
                 int fogParams = LIGHT_UBO_FOG_PARAMS_FLOAT_INDEX;
                 floatBuf.put(fogParams, env.safeFogStart()); floatBuf.put(fogParams + 1, env.safeFogEnd());
@@ -1162,9 +1164,10 @@ public class VulkanGpuCache {
         }
     }
 
-    private static void putLightColor(FloatBuffer dst, int index, SceneLights.Light light) {
-        dst.put(index, light.r); dst.put(index + 1, light.g);
-        dst.put(index + 2, light.b); dst.put(index + 3, light.intensity);
+    /** Light color converted for the project color space; intensity is a plain multiplier and is never converted. */
+    private static void putLightColor(FloatBuffer dst, int index, SceneLights.Light light, RenderEnvironment env) {
+        dst.put(index, env.toShading(light.r)); dst.put(index + 1, env.toShading(light.g));
+        dst.put(index + 2, env.toShading(light.b)); dst.put(index + 3, light.intensity);
     }
 
     private static void putMatrixOrIdentity(FloatBuffer dst, int index, float[] matrix) {

@@ -43,7 +43,7 @@ layout(std140, set = 0, binding = 0) uniform LightBuffer {
     mat4 lightSpaceMatrix; // byte offset 2240: directional shadow map view-projection
     mat4 previewViewProj;  // byte offset 2304: selected Camera entity's view-projection (picture-in-picture pass)
     vec4 previewViewPos;   // byte offset 2368: xyz = that camera's world position
-    vec4 ambientColor;     // byte offset 2384: rgb = ProjectSettings ambient color * intensity
+    vec4 ambientColor;     // byte offset 2384: rgb = ProjectSettings ambient color * intensity, w = color space (0 = Gamma, 1 = Linear)
     vec4 fogColorDensity;  // byte offset 2400: rgb = fog color, w = opacity at fog end (1 = fog on, 0 = off)
     vec3 fogParams;        // byte offset 2416: x = fog start, y = fog end, z = ramp exponent
     float shadingModel;    // byte offset 2428: u_ShadingModel, ProjectSettings.getShadingModel() (0 = Blinn-Phong, 1 = Gouraud; 2432 bytes total)
@@ -65,6 +65,23 @@ layout(push_constant) uniform MeshPushConstants {
     ivec4 texIndices;  // bindless slots: x = albedo, y = normal, z = specular/roughness, w = lightmap/AO (-1 = channel absent)
     ivec4 texIndices2; // x = emissive slot, y = bone palette slot, z = camera view (0 = editor, 1 = camera preview), w = pick ID, or decal growth bits
 } u_PushConstants;
+
+// Project color space (ColorSpace.java). Authored colors are display (sRGB) values in both modes. Linear decodes them,
+// lights and fogs in linear light, and encodes the result back, so the scene target always holds display values.
+// Light, ambient and fog colors arrive already converted (VulkanGpuCache); texture and vertex colors are decoded here.
+bool linearColorSpace() {
+    return u_Lights.ambientColor.w > 0.5;
+}
+
+vec3 srgbToLinear(vec3 c) {
+    c = max(c, vec3(0.0));
+    return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c));
+}
+
+vec3 linearToSrgb(vec3 c) {
+    c = max(c, vec3(0.0));
+    return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
+}
 
 // Returns the fallback for absent channels; the branch is uniform across the draw, so implicit LOD stays valid
 vec4 sampleChannel(int slot, vec2 uv, vec4 fallback) {
@@ -185,6 +202,8 @@ void main() {
     if (length(vColor.rgb) > 0.001) {
         baseColor.rgb *= vColor.rgb;
     }
+    bool linearSpace = linearColorSpace();
+    if (linearSpace) baseColor.rgb = srgbToLinear(baseColor.rgb);
 
     vec3 eyePos = (u_PushConstants.texIndices2.z == 1) ? u_Lights.previewViewPos.xyz : u_Lights.viewPos.xyz;
     vec3 V = normalize(eyePos - vFragPos);
@@ -277,13 +296,17 @@ void main() {
         vec3 envSky = vec3(0.85, 0.90, 1.0);
         vec3 envGround = vec3(0.15, 0.20, 0.30);
         vec3 envColor = mix(envGround, envSky, clamp(R.y * 0.5 + 0.5, 0.0, 1.0));
+        if (linearSpace) envColor = srgbToLinear(envColor);
         finalRGB = mix(finalRGB, envColor, clamp(reflectStrength, 0.0, 1.0) * 0.4);
     }
 
     // Emissive is unlit and unshadowed, but still fogs with distance like everything else
-    finalRGB += sampleChannel(u_PushConstants.texIndices2.x, vTexCoord, vec4(0.0)).rgb * u_PushConstants.params.w;
+    vec3 emissive = sampleChannel(u_PushConstants.texIndices2.x, vTexCoord, vec4(0.0)).rgb;
+    if (linearSpace) emissive = srgbToLinear(emissive);
+    finalRGB += emissive * u_PushConstants.params.w;
 
     finalRGB = mix(finalRGB, u_Lights.fogColorDensity.rgb, fogAmount(vViewDist));
+    if (linearSpace) finalRGB = linearToSrgb(finalRGB);
 
     outFragColor = vec4(finalRGB, decal ? decalCoverage : baseColor.a);
 }

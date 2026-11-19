@@ -4,7 +4,7 @@ import com.retro.engine.api.Experimental;
 import com.retro.engine.api.PublicApi;
 
 /**
- * Per-project global render environment the lit shaders read alongside {@link SceneLights}: the shading model, ambient
+ * Per-project global render environment the lit shaders read alongside {@link SceneLights}: the shading model, color space, ambient
  * light, distance fog (which also sets the draw distance) and the ground shadow blob toggle. Owned by {@link SceneLights#environment()} so it crosses the RHI
  * boundary with the lights it shades, and filled from {@code ProjectSettings} each frame with plain field copies
  * (no allocation).
@@ -26,12 +26,17 @@ public final class RenderEnvironment {
     public static final float DEFAULT_AMBIENT_INTENSITY = 1.0f;
     public static final ShadingModel DEFAULT_SHADING_MODEL = ShadingModel.BLINN_PHONG;
     public static final TextureFiltering DEFAULT_TEXTURE_FILTERING = TextureFiltering.NEAREST;
+    /** The engine's original look. New projects choose {@link ColorSpace#LINEAR} instead (see {@code ProjectSettings}). */
+    public static final ColorSpace DEFAULT_COLOR_SPACE = ColorSpace.GAMMA;
 
     /** Per-vertex (Gouraud) or per-pixel (Blinn-Phong) lighting for every lit draw. Never null. */
     public ShadingModel shadingModel = DEFAULT_SHADING_MODEL;
 
     /** Filtering for scene material textures. Never null. */
     public TextureFiltering textureFiltering = DEFAULT_TEXTURE_FILTERING;
+
+    /** Where the lit shaders do their lighting and fog math. Never null. */
+    public ColorSpace colorSpace = DEFAULT_COLOR_SPACE;
 
     /** Downward-raycast ground shadow blobs under every draw (a fallback for scenes without shadow-mapped lighting). */
     public boolean shadowBlobsEnabled = DEFAULT_SHADOW_BLOBS;
@@ -49,6 +54,23 @@ public final class RenderEnvironment {
 
     public float ambientR = DEFAULT_AMBIENT_R, ambientG = DEFAULT_AMBIENT_G, ambientB = DEFAULT_AMBIENT_B;
     public float ambientIntensity = DEFAULT_AMBIENT_INTENSITY;
+
+    /** {@link ColorSpace#shaderValue()} of the current color space; a null value falls back to the default. */
+    public float colorSpaceShaderValue() {
+        return safeColorSpace().shaderValue();
+    }
+
+    /**
+     * A display-value color channel (light, fog or ambient color) converted for the lit shaders: unchanged in Gamma,
+     * decoded to linear light in Linear. Backends pass every authored color channel through this when packing uniforms.
+     */
+    public float toShading(float displayValue) {
+        return safeColorSpace().toShading(displayValue);
+    }
+
+    private ColorSpace safeColorSpace() {
+        return colorSpace != null ? colorSpace : DEFAULT_COLOR_SPACE;
+    }
 
     /** {@link ShadingModel#shaderValue()} of the current model; a null model falls back to the default. */
     public float shadingModelShaderValue() {
@@ -88,6 +110,7 @@ public final class RenderEnvironment {
     public void setDefaults() {
         shadingModel = DEFAULT_SHADING_MODEL;
         textureFiltering = DEFAULT_TEXTURE_FILTERING;
+        colorSpace = DEFAULT_COLOR_SPACE;
         shadowBlobsEnabled = DEFAULT_SHADOW_BLOBS;
         fogEnabled = DEFAULT_FOG_ENABLED;
         fogStart = DEFAULT_FOG_START;
@@ -100,6 +123,8 @@ public final class RenderEnvironment {
 
     public void copyFrom(RenderEnvironment other) {
         shadingModel = other.shadingModel;
+        textureFiltering = other.textureFiltering;
+        colorSpace = other.colorSpace;
         shadowBlobsEnabled = other.shadowBlobsEnabled;
         fogEnabled = other.fogEnabled;
         fogStart = other.fogStart;

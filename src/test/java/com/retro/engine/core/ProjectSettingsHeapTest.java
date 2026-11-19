@@ -2,6 +2,8 @@ package com.retro.engine.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import com.retro.engine.graphics.ColorSpace;
+import com.retro.engine.graphics.RenderEnvironment;
 import com.retro.engine.graphics.TextureFiltering;
 
 import org.junit.jupiter.api.Test;
@@ -30,6 +32,42 @@ class ProjectSettingsHeapTest {
         settings.textureFiltering = TextureFiltering.BILINEAR;
         settings.write(dir);
         assertEquals(TextureFiltering.BILINEAR, ProjectSettings.read(dir).textureFiltering);
+    }
+
+    @Test
+    void newProjectsLightInLinearAndTheChoiceSurvivesASaveAndLoad() throws IOException {
+        ProjectSettings settings = new ProjectSettings("Game", "");
+        assertEquals(ColorSpace.LINEAR, settings.colorSpace);
+        settings.write(dir);
+        assertEquals(ColorSpace.LINEAR, ProjectSettings.read(dir).colorSpace);
+
+        settings.colorSpace = ColorSpace.GAMMA;
+        settings.write(dir);
+        assertEquals(ColorSpace.GAMMA, ProjectSettings.read(dir).colorSpace);
+    }
+
+    @Test
+    void resettingRenderSettingsKeepsTheColorSpace() {
+        ProjectSettings settings = new ProjectSettings("Game", "");
+        settings.colorSpace = ColorSpace.GAMMA;
+        settings.fogStart = 3.0f;
+        settings.resetRenderSettings();
+        assertEquals(ColorSpace.GAMMA, settings.colorSpace);
+        assertEquals(RenderEnvironment.DEFAULT_FOG_START, settings.fogStart);
+    }
+
+    @Test
+    void colorSpaceAndFilteringReachTheRenderEnvironment() {
+        ProjectSettings settings = new ProjectSettings("Game", "");
+        settings.colorSpace = ColorSpace.LINEAR;
+        settings.textureFiltering = TextureFiltering.BILINEAR;
+        RenderEnvironment env = new RenderEnvironment();
+        settings.applyTo(env);
+        // Backends copy the environment into their own SceneLights, so copyFrom must carry both
+        RenderEnvironment backendCopy = new RenderEnvironment();
+        backendCopy.copyFrom(env);
+        assertEquals(ColorSpace.LINEAR, backendCopy.colorSpace);
+        assertEquals(TextureFiltering.BILINEAR, backendCopy.textureFiltering);
     }
 
     @Test
@@ -77,5 +115,18 @@ class ProjectSettingsHeapTest {
         assertEquals(ProjectSettings.DEFAULT_MAX_HEAP_MB, loaded.maxHeapMb);
         assertEquals(true, loaded.vsync);
         assertEquals(0, loaded.frameRateCap);
+        assertEquals(ColorSpace.GAMMA, loaded.colorSpace, "projects from before the setting keep the gamma look");
+    }
+
+    @Test
+    void aVersion7FileLoadsAsGamma() throws IOException {
+        ProjectSettings settings = new ProjectSettings("Game", "");
+        settings.write(dir);
+        byte[] current = ProjectSettings.read(dir).toPayload(dir);
+        // Version 8 only appends the color space, so dropping it and stamping 7 gives exactly what Beta 4 wrote
+        String linearName = ColorSpace.LINEAR.name();
+        byte[] v7 = java.util.Arrays.copyOf(current, current.length - (2 + linearName.length()));
+        java.nio.ByteBuffer.wrap(v7).putInt(4, 7);
+        assertEquals(ColorSpace.GAMMA, ProjectSettings.readPayload(v7, "v7").colorSpace);
     }
 }

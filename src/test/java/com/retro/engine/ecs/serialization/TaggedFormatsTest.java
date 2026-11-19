@@ -156,7 +156,9 @@ class TaggedFormatsTest {
         Path project = copyProject(fixture);
         Map<String, byte[]> before = snapshot(project);
 
-        assertMatches(fixture, false, dumpSettings(ProjectSettings.read(project.toFile())));
+        ProjectSettings settings = ProjectSettings.read(project.toFile());
+        assertMatches(fixture, false, dumpSettings(settings));
+        assertEquals(com.retro.engine.graphics.ColorSpace.GAMMA, settings.colorSpace, "a released project must keep its gamma look");
         assertEquals(expected(fixture).get("U|" + TEXTURE),
                 "=" + AssetDatabase.lookupManifestUuid(project.resolve(TEXTURE).toFile()), "texture UUID");
 

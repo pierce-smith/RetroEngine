@@ -228,6 +228,34 @@ public class MetalUniformStream {
         fb.put(matLightSpace);
     }
 
+    // Directional light, premultiplied ambient and fog colors converted for the color space ([dir rgb, ambient rgb, fog rgb]).
+    // Computed once per frame in writeLightBlock and reused by every draw slot, so Linear adds no per-draw pow() calls.
+    private final float[] shadingColors = new float[9];
+    private final float[] scratchColors = new float[9];
+    private RenderEnvironment cachedEnv;
+
+    private void cacheShadingColors(SceneLights lights) {
+        RenderEnvironment env = lights.environment();
+        SceneLights.Light dir = lights.directional();
+        shadingColors[0] = env.toShading(dir.r);
+        shadingColors[1] = env.toShading(dir.g);
+        shadingColors[2] = env.toShading(dir.b);
+        environmentColors(env, shadingColors);
+        cachedEnv = env;
+    }
+
+    /** Fills dst[3..8] with the premultiplied ambient and fog colors of env, converted for its color space. */
+    private static float[] environmentColors(RenderEnvironment env, float[] dst) {
+        float ambient = env.ambientIntensity;
+        dst[3] = env.toShading(env.ambientR) * ambient;
+        dst[4] = env.toShading(env.ambientG) * ambient;
+        dst[5] = env.toShading(env.ambientB) * ambient;
+        dst[6] = env.toShading(env.fogR);
+        dst[7] = env.toShading(env.fogG);
+        dst[8] = env.toShading(env.fogB);
+        return dst;
+    }
+
     /**
      * Writes the Point and Spot light arrays into the current frame's LocalLights block. Call once per frame, before the
      * lit draws that reference it through {@link #writeDrawLights}. Only the first pointCount / spotCount entries are
@@ -235,30 +263,34 @@ public class MetalUniformStream {
      */
     public void writeLightBlock(long pBufferContents, SceneLights lights) {
         long block = pBufferContents + getCurrentSlotOffset() + lightBlockFrameOffset;
+        RenderEnvironment env = lights.environment();
+        cacheShadingColors(lights);
         for (int i = 0; i < lights.pointCount(); i++) {
             SceneLights.Light point = lights.point(i);
             long addr = block + LIGHT_BLOCK_POINT_STRIDE * i;
             putFloat4(addr, point.posX, point.posY, point.posZ, 0.0f);
-            putFloat4(addr + 16L, point.r, point.g, point.b, point.intensity);
+            putFloat4(addr + 16L, env.toShading(point.r), env.toShading(point.g), env.toShading(point.b), point.intensity);
         }
         for (int i = 0; i < lights.spotCount(); i++) {
             SceneLights.Light spot = lights.spot(i);
             long addr = block + LIGHT_BLOCK_SPOTS_OFFSET + LIGHT_BLOCK_SPOT_STRIDE * i;
             putFloat4(addr, spot.posX, spot.posY, spot.posZ, 0.0f);
             putFloat4(addr + 16L, spot.dirX, spot.dirY, spot.dirZ, 0.0f);
-            putFloat4(addr + 32L, spot.r, spot.g, spot.b, spot.intensity);
+            putFloat4(addr + 32L, env.toShading(spot.r), env.toShading(spot.g), env.toShading(spot.b), spot.intensity);
         }
     }
 
     /**
      * Writes the project render environment (premultiplied ambient, fog color / opacity, fog start / end / curve) into
      * the lit uniform slot at baseAddr. Disabled fog is written as opacity 0, which the shader's mix turns into a no-op.
-     * The shading model rides in fogParams.w (0 = Blinn-Phong, 1 = Gouraud).
+     * The shading model rides in fogParams.w (0 = Blinn-Phong, 1 = Gouraud) and the color space in ambientColor.w
+     * (0 = Gamma, 1 = Linear). Colors are converted for the color space here, so the shader receives them ready to light with.
      */
     public void writeDrawEnvironment(long baseAddr, RenderEnvironment env) {
-        float ambient = env.ambientIntensity;
-        putFloat4(baseAddr + OFFSET_AMBIENT, env.ambientR * ambient, env.ambientG * ambient, env.ambientB * ambient, 1.0f);
-        putFloat4(baseAddr + OFFSET_FOG, env.fogR, env.fogG, env.fogB, env.fogOpacity());
+        // Draws encoded before this frame's writeLightBlock (or for another environment) convert on the spot
+        float[] c = (env == cachedEnv) ? shadingColors : environmentColors(env, scratchColors);
+        putFloat4(baseAddr + OFFSET_AMBIENT, c[3], c[4], c[5], env.colorSpaceShaderValue());
+        putFloat4(baseAddr + OFFSET_FOG, c[6], c[7], c[8], env.fogOpacity());
         putFloat4(baseAddr + OFFSET_FOG_PARAMS, env.safeFogStart(), env.safeFogEnd(), env.fogCurveExponent(), env.shadingModelShaderValue());
     }
 
@@ -273,7 +305,8 @@ public class MetalUniformStream {
         putFloat4(baseAddr + OFFSET_DIR_LIGHT, dir.dirX, dir.dirY, dir.dirZ, hasDir ? dir.intensity : 0.0f);
         putFloat4(baseAddr + OFFSET_NUM_LIGHTS, hasDir ? 1.0f : 0.0f, lights.pointCount(), lights.spotCount(), 0.0f);
         if (hasDir) {
-            putFloat4(baseAddr + OFFSET_DIR_LIGHT_COLOR, dir.r, dir.g, dir.b, dir.intensity);
+            if (lights.environment() != cachedEnv) cacheShadingColors(lights); // reached before writeLightBlock this frame
+            putFloat4(baseAddr + OFFSET_DIR_LIGHT_COLOR, shadingColors[0], shadingColors[1], shadingColors[2], dir.intensity);
         } else {
             putFloat4(baseAddr + OFFSET_DIR_LIGHT_COLOR, 0.0f, 0.0f, 0.0f, 0.0f);
         }

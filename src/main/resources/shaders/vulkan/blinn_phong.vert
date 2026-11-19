@@ -49,7 +49,7 @@ layout(std140, set = 0, binding = 0) uniform LightBuffer {
     mat4 lightSpaceMatrix; // byte offset 2240: directional shadow map view-projection
     mat4 previewViewProj;  // byte offset 2304: selected Camera entity's view-projection (picture-in-picture pass)
     vec4 previewViewPos;   // byte offset 2368: xyz = that camera's world position
-    vec4 ambientColor;     // byte offset 2384: rgb = ProjectSettings ambient color * intensity
+    vec4 ambientColor;     // byte offset 2384: rgb = ProjectSettings ambient color * intensity, w = color space (0 = Gamma, 1 = Linear)
     vec4 fogColorDensity;  // byte offset 2400: rgb = fog color, w = opacity at fog end (1 = fog on, 0 = off)
     vec3 fogParams;        // byte offset 2416: x = fog start, y = fog end, z = ramp exponent
     float shadingModel;    // byte offset 2428: u_ShadingModel, ProjectSettings.getShadingModel() (0 = Blinn-Phong, 1 = Gouraud; 2432 bytes total)

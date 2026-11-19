@@ -1,6 +1,7 @@
 package com.retro.engine.core;
 
 import com.retro.engine.audio.AudioBus;
+import com.retro.engine.graphics.ColorSpace;
 import com.retro.engine.graphics.RenderEnvironment;
 import com.retro.engine.graphics.ShadingModel;
 import com.retro.engine.graphics.TextureFiltering;
@@ -44,13 +45,16 @@ import java.io.IOException;
  *   -- version 7 --
  *   bool   vsync
  *   int    frameRateCap (0 = no cap)
+ *   -- version 8 --
+ *   UTF    colorSpace ({@link ColorSpace#name()})
  * </pre>
- * Older files load the missing fields with the render defaults, which match the engine's previous look.
+ * Older files load the missing fields with the render defaults, which match the engine's previous look. In particular
+ * a file older than version 8 loads as {@link ColorSpace#GAMMA}, while a new project starts {@link ColorSpace#LINEAR}.
  */
 public final class ProjectSettings {
 
     static final int MAGIC = 0x5250524A; // 'RPRJ'
-    static final int VERSION = 7;
+    static final int VERSION = 8;
 
     // Editor UI ranges; values read from disk are clamped to these too
     public static final float FOG_DISTANCE_MAX = 2000.0f;
@@ -66,6 +70,9 @@ public final class ProjectSettings {
     /** Exported game frame cap: 0 means none, otherwise clamped to this range. */
     public static final int MIN_FRAME_RATE_CAP = 30;
     public static final int MAX_FRAME_RATE_CAP = 1000;
+
+    /** Color space of a project created by this editor; projects saved before the setting existed load as Gamma. */
+    public static final ColorSpace NEW_PROJECT_COLOR_SPACE = ColorSpace.LINEAR;
 
     public static final float DEFAULT_DUCK_LEVEL = 0.35f;
     public static final float DEFAULT_DUCK_ATTACK = 0.15f;
@@ -83,6 +90,8 @@ public final class ProjectSettings {
     /** Per-vertex (Gouraud) or per-pixel (Blinn-Phong) lighting for every lit entity. Never null after {@link #sanitize()}. */
     public ShadingModel shadingModel = RenderEnvironment.DEFAULT_SHADING_MODEL;
     public TextureFiltering textureFiltering = RenderEnvironment.DEFAULT_TEXTURE_FILTERING;
+    /** Where lighting and fog are computed (see {@link ColorSpace}). Never null after {@link #sanitize()}. */
+    public ColorSpace colorSpace = NEW_PROJECT_COLOR_SPACE;
 
     /** Dynamic downward-raycast ground shadow blobs under every draw. */
     public boolean shadowBlobsEnabled = RenderEnvironment.DEFAULT_SHADOW_BLOBS;
@@ -94,10 +103,10 @@ public final class ProjectSettings {
     public float fogEnd = RenderEnvironment.DEFAULT_FOG_END;
     /** Fog thickness (0..1): 0 ramps linearly from start to end, 1 closes in to a near-solid wall well before the end. */
     public float fogDensity = RenderEnvironment.DEFAULT_FOG_DENSITY;
-    /** Linear RGB, 0..1. */
+    /** Display (sRGB) RGB, 0..1: the color seen on screen, in either {@link ColorSpace}. */
     public final float[] fogColor = { RenderEnvironment.DEFAULT_FOG_R, RenderEnvironment.DEFAULT_FOG_G, RenderEnvironment.DEFAULT_FOG_B };
 
-    /** Linear RGB, 0..1; multiplied by {@link #ambientIntensity}. */
+    /** Display (sRGB) RGB, 0..1, in either {@link ColorSpace}; multiplied by {@link #ambientIntensity}. */
     public final float[] ambientColor = { RenderEnvironment.DEFAULT_AMBIENT_R, RenderEnvironment.DEFAULT_AMBIENT_G, RenderEnvironment.DEFAULT_AMBIENT_B };
     public float ambientIntensity = RenderEnvironment.DEFAULT_AMBIENT_INTENSITY;
 
@@ -157,6 +166,7 @@ public final class ProjectSettings {
     public void applyTo(RenderEnvironment env) {
         env.shadingModel = (shadingModel != null) ? shadingModel : RenderEnvironment.DEFAULT_SHADING_MODEL;
         env.textureFiltering = (textureFiltering != null) ? textureFiltering : RenderEnvironment.DEFAULT_TEXTURE_FILTERING;
+        env.colorSpace = (colorSpace != null) ? colorSpace : RenderEnvironment.DEFAULT_COLOR_SPACE;
         env.shadowBlobsEnabled = shadowBlobsEnabled;
         env.fogEnabled = fogEnabled;
         env.fogStart = fogStart;
@@ -171,6 +181,7 @@ public final class ProjectSettings {
     public void copyRenderSettingsFrom(ProjectSettings other) {
         shadingModel = other.shadingModel;
         textureFiltering = other.textureFiltering;
+        colorSpace = other.colorSpace;
         shadowBlobsEnabled = other.shadowBlobsEnabled;
         fogEnabled = other.fogEnabled;
         fogStart = other.fogStart;
@@ -181,8 +192,14 @@ public final class ProjectSettings {
         ambientIntensity = other.ambientIntensity;
     }
 
+    /**
+     * Restores the render defaults except the color space: it is a project-wide choice that every light and fog value
+     * was tuned under, not a tuning knob, so resetting fog or ambient never changes it.
+     */
     public void resetRenderSettings() {
+        ColorSpace kept = colorSpace;
         copyRenderSettingsFrom(defaults());
+        colorSpace = kept;
     }
 
     /** Copies only the audio mixer settings from {@code other}. */
@@ -215,6 +232,7 @@ public final class ProjectSettings {
     public void sanitize() {
         if (shadingModel == null) shadingModel = RenderEnvironment.DEFAULT_SHADING_MODEL;
         if (textureFiltering == null) textureFiltering = RenderEnvironment.DEFAULT_TEXTURE_FILTERING;
+        if (colorSpace == null) colorSpace = RenderEnvironment.DEFAULT_COLOR_SPACE;
         fogStart = clamp(fogStart, 0.0f, FOG_DISTANCE_MAX);
         fogEnd = clamp(fogEnd, fogStart + 0.01f, FOG_DISTANCE_MAX + 0.01f);
         fogDensity = clamp(fogDensity, 0.0f, 1.0f);
@@ -291,6 +309,8 @@ public final class ProjectSettings {
 
             dos.writeBoolean(vsync);
             dos.writeInt(frameRateCap);
+
+            dos.writeUTF((colorSpace != null ? colorSpace : RenderEnvironment.DEFAULT_COLOR_SPACE).name());
         }
         return bytes.toByteArray();
     }
@@ -353,6 +373,10 @@ public final class ProjectSettings {
                 s.vsync = dis.readBoolean();
                 s.frameRateCap = dis.readInt();
             }
+            // Every project saved before the setting existed was lit in gamma space; keep its look
+            s.colorSpace = (version >= 8)
+                    ? ColorSpace.fromName(dis.readUTF(), RenderEnvironment.DEFAULT_COLOR_SPACE)
+                    : ColorSpace.GAMMA;
             s.sanitize();
             return s;
         }

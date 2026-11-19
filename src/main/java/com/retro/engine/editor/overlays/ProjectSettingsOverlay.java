@@ -7,6 +7,7 @@ import com.retro.engine.editor.EditorTheme;
 import com.retro.engine.editor.EditorWorkspace;
 import com.retro.engine.editor.EditorWorkspace.ModalState;
 import com.retro.engine.editor.panels.EngineConsolePanel;
+import com.retro.engine.graphics.ColorSpace;
 import com.retro.engine.graphics.ShadingModel;
 import com.retro.engine.graphics.TextureFiltering;
 import com.retro.engine.ui.UIGeometryBatch;
@@ -16,7 +17,7 @@ import com.retro.engine.ui.UISoundPlayer.UISound;
 import java.io.File;
 
 /**
- * "File > Project Settings..." modal with two tabs: RENDER (shading model, ground shadow blobs, distance fog, ambient
+ * "File > Project Settings..." modal with three tabs: RENDER (shading model, texture filtering, linear or gamma lighting, ground shadow blobs, distance fog, ambient
  * light) and AUDIO (Master / BGM / SFX / Voice bus volumes and mutes, BGM ducking, reverb zones). Edits apply live to the workspace's {@link ProjectSettings}, which
  * {@code SceneRenderPipeline} reads every frame; SAVE writes the project file and CANCEL restores the values the
  * modal opened with. Rendering and hit-testing share the layout constants below.
@@ -43,14 +44,15 @@ public final class ProjectSettingsOverlay {
     private static final float SECTION_SHADING_Y = 0.59f;
     private static final float SHADING_MODEL_Y = 0.52f;
     private static final float BILINEAR_Y = 0.45f;
-    private static final float SECTION_SHADOW_Y = 0.385f;
-    private static final float BLOBS_Y = 0.325f;
-    private static final float SECTION_FOG_Y = 0.255f;
-    private static final float FOG_ENABLED_Y = 0.195f;
-    private static final float FOG_START_Y = 0.11f;
-    private static final float FOG_END_Y = 0.02f;
-    private static final float FOG_DENSITY_Y = -0.07f;
-    private static final float FOG_COLOR_Y = -0.16f;
+    private static final float LINEAR_COLOR_Y = 0.38f;
+    private static final float SECTION_SHADOW_Y = 0.315f;
+    private static final float BLOBS_Y = 0.255f;
+    private static final float SECTION_FOG_Y = 0.19f;
+    private static final float FOG_ENABLED_Y = 0.13f;
+    private static final float FOG_START_Y = 0.055f;
+    private static final float FOG_END_Y = -0.02f;
+    private static final float FOG_DENSITY_Y = -0.095f;
+    private static final float FOG_COLOR_Y = -0.17f;
     private static final float SECTION_AMBIENT_Y = -0.25f;
     private static final float AMBIENT_COLOR_Y = -0.32f;
     private static final float AMBIENT_INTENSITY_Y = -0.41f;
@@ -184,6 +186,7 @@ public final class ProjectSettingsOverlay {
         sectionHeader(buffer, "SHADING", SECTION_SHADING_Y);
         dropdownField(buffer, "GLOBAL SHADING MODEL", SHADING_MODEL_Y, s.getShadingModel(), hoverX, hoverY);
         toggleRow(buffer, "BILINEAR TEXTURES", BILINEAR_Y, s.textureFiltering == TextureFiltering.BILINEAR, hoverX, hoverY);
+        toggleRow(buffer, "LINEAR LIGHTING", LINEAR_COLOR_Y, s.colorSpace == ColorSpace.LINEAR, hoverX, hoverY);
 
         sectionHeader(buffer, "SHADOWS", SECTION_SHADOW_Y);
         toggleRow(buffer, "GROUND SHADOW BLOBS", BLOBS_Y, s.shadowBlobsEnabled, hoverX, hoverY);
@@ -438,6 +441,12 @@ public final class ProjectSettingsOverlay {
         } else if (tab == TAB_RENDER_ID && hitsToggle(ndcX, ndcY, BLOBS_Y)) {
             UISoundPlayer.play(UISound.TOGGLE);
             s.shadowBlobsEnabled = !s.shadowBlobsEnabled;
+            markDirty();
+            return;
+        }
+        if (tab == TAB_RENDER_ID && hitsToggle(ndcX, ndcY, LINEAR_COLOR_Y)) {
+            UISoundPlayer.play(UISound.TOGGLE);
+            s.colorSpace = s.colorSpace == ColorSpace.LINEAR ? ColorSpace.GAMMA : ColorSpace.LINEAR;
             markDirty();
             return;
         }
