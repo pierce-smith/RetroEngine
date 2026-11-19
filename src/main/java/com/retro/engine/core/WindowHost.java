@@ -82,8 +82,10 @@ public class WindowHost {
     private long windowHandle = NULL;
     private int width;
     private int height;
-    private final String title;
+    private String title;
     private boolean isFullscreen = false;
+    // Fullscreen video mode chosen through setResolution; 0 = the monitor's current (desktop) mode
+    private int fullscreenWidth, fullscreenHeight;
 
     private int windowedX = 100;
     private int windowedY = 100;
@@ -476,11 +478,87 @@ public class WindowHost {
         return new ViewportSpec(windowHandle, width, height, true);
     }
 
+    public String getTitle() { return title; }
+
+    /** Renames the window (title bar, taskbar, app switcher). Null is treated as empty. */
+    public void setTitle(String newTitle) {
+        title = (newTitle != null) ? newTitle : "";
+        if (windowHandle != NULL) glfwSetWindowTitle(windowHandle, title);
+    }
+
+    public boolean isFullscreen() { return isFullscreen; }
+
+    /** Enters or leaves fullscreen on the primary monitor; a no-op when already in the requested mode. */
+    public void setFullscreen(boolean fullscreen) {
+        if (fullscreen != isFullscreen) toggleFullscreen();
+    }
+
+    /**
+     * Windowed: resizes the window to width x height screen points. Fullscreen: switches the primary monitor to the
+     * supported video mode closest to width x height, which later fullscreen entries keep using. Sizes below 1 are ignored.
+     */
+    public void setResolution(int w, int h) {
+        if (w < 1 || h < 1 || windowHandle == NULL) return;
+        if (isFullscreen) {
+            long monitor = glfwGetPrimaryMonitor();
+            GLFWVidMode mode = (monitor != NULL) ? closestVideoMode(monitor, w, h) : null;
+            if (mode == null) return;
+            fullscreenWidth = mode.width();
+            fullscreenHeight = mode.height();
+            glfwSetWindowMonitor(windowHandle, monitor, 0, 0, mode.width(), mode.height(), mode.refreshRate());
+            Log.info("GLFW", "Mode: Fullscreen (" + mode.width() + "x" + mode.height() + ")");
+        } else {
+            windowedWidth = w;
+            windowedHeight = h;
+            fullscreenWidth = 0;
+            fullscreenHeight = 0;
+            glfwSetWindowSize(windowHandle, w, h);
+        }
+    }
+
+    /** The primary monitor's supported fullscreen video modes as {width, height, refreshRate}, largest first; empty when unknown. */
+    public List<int[]> getDisplayModes() {
+        List<int[]> modes = new ArrayList<>();
+        long monitor = glfwGetPrimaryMonitor();
+        if (monitor == NULL) return modes;
+        GLFWVidMode.Buffer all = glfwGetVideoModes(monitor);
+        if (all == null) return modes;
+        for (int i = 0; i < all.limit(); i++) {
+            GLFWVidMode m = all.get(i);
+            int[] mode = { m.width(), m.height(), m.refreshRate() };
+            boolean duplicate = false;
+            for (int[] existing : modes) {
+                if (existing[0] == mode[0] && existing[1] == mode[1] && existing[2] == mode[2]) { duplicate = true; break; }
+            }
+            if (!duplicate) modes.add(mode);
+        }
+        modes.sort((a, b) -> a[0] != b[0] ? Integer.compare(b[0], a[0]) : a[1] != b[1] ? Integer.compare(b[1], a[1]) : Integer.compare(b[2], a[2]));
+        return modes;
+    }
+
+    /** The monitor's mode nearest w x h by area difference, preferring the highest refresh rate; null when none. */
+    private static GLFWVidMode closestVideoMode(long monitor, int w, int h) {
+        GLFWVidMode.Buffer all = glfwGetVideoModes(monitor);
+        if (all == null || all.limit() == 0) return glfwGetVideoMode(monitor);
+        GLFWVidMode best = null;
+        long bestScore = Long.MAX_VALUE;
+        for (int i = 0; i < all.limit(); i++) {
+            GLFWVidMode m = all.get(i);
+            long score = Math.abs((long) m.width() - w) + Math.abs((long) m.height() - h);
+            if (score < bestScore || (score == bestScore && best != null && m.refreshRate() > best.refreshRate())) {
+                best = m;
+                bestScore = score;
+            }
+        }
+        return best;
+    }
+
     public void toggleFullscreen() {
         long primaryMonitor = glfwGetPrimaryMonitor();
         if (primaryMonitor == NULL) return;
 
-        GLFWVidMode vidMode = glfwGetVideoMode(primaryMonitor);
+        GLFWVidMode vidMode = (fullscreenWidth > 0) ? closestVideoMode(primaryMonitor, fullscreenWidth, fullscreenHeight)
+                : glfwGetVideoMode(primaryMonitor);
         if (vidMode == null) return;
 
         if (!isFullscreen) {

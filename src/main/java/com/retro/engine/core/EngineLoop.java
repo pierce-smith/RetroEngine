@@ -47,10 +47,76 @@ public class EngineLoop {
                 router != null && router.isCursorInViewport(cx, cy));
     }
 
+    /**
+     * {@link com.retro.engine.scripting.Game}'s host during Play mode. Quit stops Play. The window and its pacing belong
+     * to the editor, so title and display requests are only remembered (and reported back), and logged once each.
+     */
+    static final class EditorGameHost implements com.retro.engine.scripting.Game.Host {
+        private final EditorWorkspace editor;
+        private String title = "";
+        private boolean fullscreen;
+        private Boolean vsync;
+        private Integer frameRateCap;
+        private boolean displayNoticeLogged;
+
+        EditorGameHost(EditorWorkspace editor) { this.editor = editor; }
+
+        private void displayNotice(String what) {
+            if (displayNoticeLogged) return;
+            displayNoticeLogged = true;
+            Log.info("Game", what + " applies in the exported game, not the editor; the value is remembered for this Play session.");
+        }
+
+        private ProjectSettings settings() { return editor != null ? editor.getProjectSettings() : null; }
+
+        @Override public boolean isEditor() { return true; }
+        @Override public String getTitle() {
+            if (!title.isEmpty()) return title;
+            ProjectSettings s = settings();
+            return s != null && s.projectName != null ? s.projectName : "";
+        }
+        @Override public void setTitle(String t) { title = t; displayNotice("Game.setTitle"); }
+        @Override public void quit() {
+            if (editor != null && editor.getPlayState() != com.retro.engine.ecs.SceneWorld.PlayState.EDITING) {
+                Log.info("Game", "Game.quit() called; stopping Play mode.");
+                editor.stop();
+            }
+        }
+        @Override public boolean isFullscreen() { return fullscreen; }
+        @Override public void setFullscreen(boolean f) { fullscreen = f; displayNotice("Game.setFullscreen"); }
+        @Override public int getWindowWidth() { return Math.round(Input.getViewWidth()); }
+        @Override public int getWindowHeight() { return Math.round(Input.getViewHeight()); }
+        @Override public void setResolution(int w, int h) { displayNotice("Game.setResolution"); }
+        @Override public java.util.List<com.retro.engine.scripting.Game.DisplayMode> getDisplayModes() { return java.util.List.of(); }
+        @Override public boolean isVsync() {
+            if (vsync != null) return vsync;
+            ProjectSettings s = settings();
+            return s == null || s.vsync;
+        }
+        @Override public void setVsync(boolean v) { vsync = v; displayNotice("Game.setVsync"); }
+        @Override public int getFrameRateCap() {
+            if (frameRateCap != null) return frameRateCap;
+            ProjectSettings s = settings();
+            return s != null ? s.frameRateCap : 0;
+        }
+        @Override public void setFrameRateCap(int fps) { frameRateCap = fps; displayNotice("Game.setFrameRateCap"); }
+
+        /** Forgets this Play session's requests, so the next Play starts from the project's values. */
+        void reset() {
+            title = "";
+            fullscreen = false;
+            vsync = null;
+            frameRateCap = null;
+        }
+    }
+
     public void run(EngineContext context) {
         if (context == null) return;
         WindowHost window = context.getWindow();
         EditorWorkspace editorManager = context.getEditorManager();
+        EditorGameHost gameHost = new EditorGameHost(editorManager);
+        com.retro.engine.scripting.Game.bind(gameHost);
+        boolean wasPlaying = false;
         ViewportCamera cameraController = context.getCameraController();
         HotkeyRouter hotkeyHandler = context.getHotkeyHandler();
         AssetStreamer streamingService = context.getStreamingService();
@@ -116,6 +182,12 @@ public class EngineLoop {
                     }
                 }
             }
+
+            // Window/display/quit requests scripts made during the update; leaving Play forgets them
+            com.retro.engine.scripting.Game.applyPending();
+            boolean playing = editorManager != null && editorManager.getPlayState() != com.retro.engine.ecs.SceneWorld.PlayState.EDITING;
+            if (wasPlaying && !playing) gameHost.reset();
+            wasPlaying = playing;
 
             FrameTimings.MAIN.mark(FrameTimings.UPDATE);
 

@@ -55,7 +55,8 @@ public final class ComponentSchema {
             com.retro.engine.ecs.components.BoneSocket.class,
             com.retro.engine.ecs.components.FootIK.class, com.retro.engine.ecs.components.LookAtIK.class,
             com.retro.engine.ecs.components.AimIK.class,
-            com.retro.engine.ecs.components.Decal.class
+            com.retro.engine.ecs.components.Decal.class,
+            com.retro.engine.ecs.components.UIButton.class
     );
 
     /** How the inspector presents and edits a property. */

@@ -746,11 +746,14 @@ public class SceneRenderPipeline {
         rhi.updateGridMesh(snapshot.gridVertices, snapshot.gridVertexCount);
         rhi.updateUiMesh(snapshot.uiVertices, snapshot.uiVertexCount);
         if (!uiFontResolved) resolveUiFont(rhi);
+        uiBackend = rhi;
 
         EngineConsolePanel.updateTelemetry(snapshot.totalDrawCalls, snapshot.totalActiveVertices);
     }
 
     private boolean uiFontResolved = false;
+    // Backend of the last submitted frame; the next UI build packs newly loaded project fonts into its atlas first
+    private IRenderBackend uiBackend;
 
     // Shader files modified on disk, reported by the asset watcher and applied at the next frame boundary
     private final ConcurrentLinkedQueue<String> pendingShaderReloads = new ConcurrentLinkedQueue<>();
@@ -809,6 +812,8 @@ public class SceneRenderPipeline {
                                  boolean standalone, float[] editorVerts, int editorVertexCount) {
         int windowW = standalone ? GameView.width() : editorManager.getWindowWidth();
         int windowH = standalone ? GameView.height() : editorManager.getWindowHeight();
+        // Between frames: the previous frame is fully encoded, and everything laid out below uses the repacked atlas
+        com.retro.engine.ui.FontLibrary.syncAtlas(uiBackend);
         UIGeometryBatch.Buffer game = gameUiRenderer.build(
                 editorManager.getSceneEntities(), editorManager.getSceneManager(),
                 snapshot.sceneMinX, snapshot.sceneMinY, snapshot.sceneMaxX, snapshot.sceneMaxY,
@@ -835,10 +840,15 @@ public class SceneRenderPipeline {
     private void resolveUiFont(IRenderBackend rhi) {
         uiFontResolved = true;
         UIFont font = UIFont.loadSystemFont();
-        if (font == null) return;
+        if (font == null) {
+            // Editor UI keeps the bitmap font, but game text can still use the bundled default
+            com.retro.engine.ui.FontLibrary.initBase(null, 0L, rhi);
+            return;
+        }
         long atlas = rhi.registerTexture("editor://ui_font_atlas", font.getAtlasPixels(), font.atlasWidth, font.atlasHeight);
         if (atlas != 0L && rhi.setUiFontAtlas(atlas)) {
             font.activate();
+            com.retro.engine.ui.FontLibrary.initBase(font, atlas, rhi);
         } else {
             if (atlas != 0L) rhi.unregisterTexture(atlas);
             System.err.println("[SceneRenderPipeline] WARNING: Backend could not bind the UI font atlas; using the default bitmap font.");

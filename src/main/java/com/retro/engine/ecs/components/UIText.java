@@ -20,6 +20,14 @@ public class UIText extends UIElement {
     @InspectorProperty(order = 14, label = "ALIGN", type = PropertyType.BUTTON_GROUP)
     public Alignment alignment = Alignment.CENTER;
 
+    /**
+     * Font file (.ttf / .otf) in the project; empty uses the engine's default game font, TeX Gyre Heros (a Helvetica
+     * design, the same on every OS). A script may also set a path relative to the project's Assets folder, e.g.
+     * {@code "Fonts/Title.ttf"}. A font loads on first use, so text can show in the default font for a frame or two.
+     */
+    @InspectorProperty(order = 15, label = "FONT", type = PropertyType.ASSET_PICKER, assetType = "font", since = 11, prefabSince = 10)
+    public String font = "";
+
     public UIText() {
         width = 320.0f;
         height = 48.0f;

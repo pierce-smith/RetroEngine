@@ -66,6 +66,7 @@ public class SimulationSystem {
             if (activeEntities != null) startAudioOnPlay(activeEntities, sceneWorld);
 
             PointerEvents.reset();
+            com.retro.engine.ui.UINavigation.reset();
             ScriptEngine.initializeScripts(activeEntities, sceneWorld);
             System.out.println("[SimulationSystem] Simulation started; scene snapshot taken, physics and scripts started.");
         } else if (playState == PlayState.PAUSED) {
@@ -100,6 +101,7 @@ public class SimulationSystem {
         if (playState == PlayState.SIMULATING || playState == PlayState.PAUSED) {
             ScriptEngine.destroyScripts(activeEntities);
             PointerEvents.reset();
+            com.retro.engine.ui.UINavigation.reset();
             physicsWorld.cleanup();
             navigation.resetAgents(activeEntities);
             splines.reset(activeEntities);
@@ -135,7 +137,9 @@ public class SimulationSystem {
             // 1. Step 3D Physics Solver (RigidBodies, Character Controllers, Vehicles, Raycasts)
             physicsWorld.step(deltaTime, activeEntities);
 
-            // 2. Mouse hooks (against this frame's colliders), then gameplay script frame ticks
+            // 2. UI buttons (they sit over the 3D view, so they go first and block the mouse hooks under them), mouse hooks
+            // against this frame's colliders, then gameplay script frame ticks
+            com.retro.engine.ui.UINavigation.update(activeEntities, deltaTime);
             PointerEvents.update(activeEntities, sceneWorld);
             ScriptEngine.updateScripts(activeEntities, deltaTime, sceneWorld);
             physicsWorld.carryAfterScripts();

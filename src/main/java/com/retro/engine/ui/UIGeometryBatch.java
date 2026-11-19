@@ -37,6 +37,11 @@ public class UIGeometryBatch {
         private float pixelAspect = 720.0f / 1280.0f;
         private float windowWidth = 1280.0f, windowHeight = 720.0f;
         private final StringBuilder truncScratch = new StringBuilder(128);
+        // Font for text emitted on this buffer; null uses the default UI font (UIFont.active())
+        private UIFont font;
+
+        /** Uses {@code font} for text until set back to null; the font's glyphs must be in the bound UI atlas. */
+        public void setFont(UIFont font) { this.font = font; }
 
         // Triangle assembly + Sutherland-Hodgman scratch (VERTEX_STRIDE floats per vertex, zero per-frame allocation)
         private final float[] tri = new float[3 * VERTEX_STRIDE];
@@ -412,6 +417,12 @@ public class UIGeometryBatch {
         addRoundedQuad(buffer, x1, y1, x2, y2, (y2 - y1) * 0.5f, rgb, a);
     }
 
+    /** The buffer's font override, else the default UI font (null while the bitmap fallback is in use). */
+    private static UIFont fontOf(Buffer buffer) {
+        UIFont f = buffer.font;
+        return f != null ? f : UIFont.active();
+    }
+
     // --- Text measurement & truncation ---
     /** Screen-space NDC-X width of one em unit at {@code size} (already including the panel text scale). */
     private static float emScreenWidth(Buffer buffer, float size) {
@@ -421,7 +432,7 @@ public class UIGeometryBatch {
     /** Width of {@code len} average (digit-width) glyphs at {@code size}, in the buffer's current drawing space. */
     public static float textWidth(Buffer buffer, int len, float size) {
         if (len <= 0) return 0.0f;
-        UIFont font = UIFont.active();
+        UIFont font = fontOf(buffer);
         float screenW = font != null
                 ? len * font.digitAdvance * emScreenWidth(buffer, size)
                 : len * size * BITMAP_ADVANCE_NDC * buffer.getTextScale();
@@ -436,7 +447,7 @@ public class UIGeometryBatch {
     /** Unmapped (screen-space) width of {@code text} at {@code size}, ignoring any panel mapping on {@code buffer}. */
     public static float screenTextWidth(Buffer buffer, CharSequence text, float size) {
         if (text == null) return 0.0f;
-        UIFont font = UIFont.active();
+        UIFont font = fontOf(buffer);
         return font != null
                 ? font.measure(text, 0, text.length()) * size * UIFont.EM_NDC_PER_SIZE * buffer.pixelAspect
                 : text.length() * size * BITMAP_ADVANCE_NDC;
@@ -444,7 +455,7 @@ public class UIGeometryBatch {
 
     public static float textWidth(Buffer buffer, CharSequence text, float size) {
         if (text == null) return 0.0f;
-        UIFont font = UIFont.active();
+        UIFont font = fontOf(buffer);
         if (font == null) return textWidth(buffer, text.length(), size);
         return buffer.screenToLocalWidth(font.measure(text, 0, text.length()) * emScreenWidth(buffer, size));
     }
@@ -459,7 +470,7 @@ public class UIGeometryBatch {
     /** Text clipped to [startX, maxX], ending in an ellipsis instead of a hard cut when it doesn't fit. */
     public static void addTruncatedText(Buffer buffer, CharSequence text, float startX, float startY, float maxX, float size, int rgb, float a) {
         if (text == null) return;
-        UIFont font = UIFont.active();
+        UIFont font = fontOf(buffer);
         if (font != null) {
             float em = buffer.screenToLocalWidth(emScreenWidth(buffer, size));
             float avail = em > 0.0f ? (maxX - startX) / em : Float.MAX_VALUE;
@@ -501,7 +512,7 @@ public class UIGeometryBatch {
                                      int maxLines, float size, int rgb, float a) {
         if (text == null || maxLines <= 0) return 0;
         int len = text.length();
-        UIFont font = UIFont.active();
+        UIFont font = fontOf(buffer);
         float em = font != null ? buffer.screenToLocalWidth(emScreenWidth(buffer, size)) : textWidth(buffer, 1, size);
         float avail = em > 0.0f ? (maxX - startX) / em : Float.MAX_VALUE; // in em (font) or glyph cells (bitmap)
         int start = 0, lines = 0;
@@ -679,7 +690,7 @@ public class UIGeometryBatch {
     }
 
     private static void emitText(Buffer buffer, CharSequence text, float startX, float startY, float maxX, float size, float r, float g, float b, float a) {
-        UIFont font = UIFont.active();
+        UIFont font = fontOf(buffer);
         if (font != null) {
             emitFontText(buffer, font, text, startX, startY, maxX, size, r, g, b, a);
             return;

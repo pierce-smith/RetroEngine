@@ -18,7 +18,7 @@ import java.util.List;
 public class SceneSerializer {
 
     public static final int BINARY_MAGIC = 0x52455452; // 'RETR' in ASCII
-    public static final int BINARY_VERSION = 10;        // Version 10 (collision layers, mesh collider)
+    public static final int BINARY_VERSION = 11;        // Version 11 (UIText font, UIButton)
 
     /** {@code error} is null on success. A failed load has no entities, which must never be mistaken for an empty scene. */
     public record SceneLoadData(List<Entity> entities, List<AssetMeta> assetDirectory, String error) {

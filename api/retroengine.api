@@ -811,6 +811,28 @@ public class com.retro.engine.ecs.components.Transform extends com.retro.engine.
   method public void setPosition(float,float,float)
   method public void setRotation(float,float,float)
   method public void setScale(float,float,float)
+public class com.retro.engine.ecs.components.UIButton extends com.retro.engine.ecs.components.UIElement
+  ctor public com.retro.engine.ecs.components.UIButton()
+  field public boolean focusFirst
+  field public boolean interactable
+  field public float borderThickness
+  field public float cornerRadius
+  field public float focusB
+  field public float focusG
+  field public float focusR
+  field public float fontSize
+  field public float labelB
+  field public float labelG
+  field public float labelR
+  field public java.lang.String font
+  field public java.lang.String label
+  method public boolean isFocused()
+  method public boolean isHovered()
+  method public boolean isPressed()
+  method public boolean wasClicked()
+  method public java.lang.String getComponentName()
+  method public void click()
+  method public void focus()
 public class com.retro.engine.ecs.components.UICanvasComponent extends com.retro.engine.ecs.Component
   ctor public com.retro.engine.ecs.components.UICanvasComponent()
   field public boolean enabled
@@ -883,6 +905,7 @@ public class com.retro.engine.ecs.components.UIText extends com.retro.engine.ecs
   ctor public com.retro.engine.ecs.components.UIText()
   field public com.retro.engine.ecs.components.UIText$Alignment alignment
   field public float fontSize
+  field public java.lang.String font
   field public java.lang.String text
   method public java.lang.String getComponentName()
 public static enum com.retro.engine.ecs.components.UIText$Alignment
@@ -1268,6 +1291,7 @@ public abstract class com.retro.engine.scripting.EntityScript
   method public void logInfo(java.lang.String)
   method public void logWarning(java.lang.String)
   method public void onAwake()
+  method public void onButtonClick(com.retro.engine.ecs.components.UIButton)
   method public void onCollisionEnter(com.retro.engine.ecs.Entity)
   method public void onCollisionExit(com.retro.engine.ecs.Entity)
   method public void onCollisionStay(com.retro.engine.ecs.Entity)
@@ -1294,6 +1318,29 @@ public abstract class com.retro.engine.scripting.EntityScript
   method public void stopVibration()
   method public void translate(float,float,float)
   method public void vibrate(float,float,float)
+public final class com.retro.engine.scripting.Game
+  method public static boolean isEditor()
+  method public static boolean isFullscreen()
+  method public static boolean isVsync()
+  method public static int getFrameRateCap()
+  method public static int getWindowHeight()
+  method public static int getWindowWidth()
+  method public static java.lang.String getTitle()
+  method public static java.util.List<com.retro.engine.scripting.Game$DisplayMode> getDisplayModes()
+  method public static void quit()
+  method public static void setFrameRateCap(int)
+  method public static void setFullscreen(boolean)
+  method public static void setResolution(int,int)
+  method public static void setTitle(java.lang.String)
+  method public static void setVsync(boolean)
+public static record com.retro.engine.scripting.Game$DisplayMode
+  ctor public com.retro.engine.scripting.Game$DisplayMode(int,int,int)
+  method public final boolean equals(java.lang.Object)
+  method public final int hashCode()
+  method public final java.lang.String toString()
+  method public int height()
+  method public int refreshRate()
+  method public int width()
 public class com.retro.engine.scripting.Input
   method public static boolean isCursorLocked()
   method public static boolean isKeyDown(int)

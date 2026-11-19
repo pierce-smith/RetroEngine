@@ -25,6 +25,11 @@ public class RuntimeLoop {
     private long maxFrames = 0L;
     private long benchWarmupNs, benchCaptureNs;
     private FrameLimiter frameLimiter;
+    // Current pacing, so scripts can change one half (Game.setVsync / setFrameRateCap) and keep the other
+    private IRenderBackend pacingRhi;
+    private boolean vsync = true;
+    private int frameRateCap = 0;
+    private int refreshHz = 0;
 
     public RuntimeLoop() {}
 
@@ -62,6 +67,63 @@ public class RuntimeLoop {
         this.frameLimiter = frameLimiter;
     }
 
+    /**
+     * Windowed only: asks the backend for vsync on or off and paces frames to {@code frameRateCap} (0 = none; with vsync
+     * off and no cap, a backstop just above {@code refreshHz}). Called at startup and again whenever a script changes either.
+     */
+    public void setFramePacing(IRenderBackend rhi, boolean vsync, int frameRateCap, int refreshHz) {
+        this.pacingRhi = rhi;
+        this.vsync = vsync;
+        this.frameRateCap = frameRateCap;
+        this.refreshHz = refreshHz;
+        if (rhi != null) rhi.setVsync(vsync);
+        setFrameLimiter(FrameLimiter.create(vsync, frameRateCap, refreshHz));
+    }
+
+    public boolean isVsync() { return vsync; }
+    public int getFrameRateCap() { return frameRateCap; }
+
+    /** {@link com.retro.engine.scripting.Game}'s host in exported games and headless runs. */
+    private final class GameHost implements com.retro.engine.scripting.Game.Host {
+        private final WindowHost window;
+        private String headlessTitle = "";
+
+        GameHost(WindowHost window) { this.window = window; }
+
+        @Override public boolean isEditor() { return false; }
+        @Override public String getTitle() { return window != null ? window.getTitle() : headlessTitle; }
+        @Override public void setTitle(String title) {
+            if (window != null) window.setTitle(title);
+            else headlessTitle = title;
+        }
+        @Override public void quit() {
+            Log.info("RuntimeLoop", "Game.quit() called; closing.");
+            quitRequested = true;
+            stop();
+        }
+        @Override public boolean isFullscreen() { return window != null && window.isFullscreen(); }
+        @Override public void setFullscreen(boolean fullscreen) { if (window != null) window.setFullscreen(fullscreen); }
+        @Override public int getWindowWidth() { return window != null ? window.getWidth() : 0; }
+        @Override public int getWindowHeight() { return window != null ? window.getHeight() : 0; }
+        @Override public void setResolution(int width, int height) { if (window != null) window.setResolution(width, height); }
+        @Override public java.util.List<com.retro.engine.scripting.Game.DisplayMode> getDisplayModes() {
+            if (window == null) return java.util.List.of();
+            java.util.List<com.retro.engine.scripting.Game.DisplayMode> modes = new java.util.ArrayList<>();
+            for (int[] m : window.getDisplayModes()) modes.add(new com.retro.engine.scripting.Game.DisplayMode(m[0], m[1], m[2]));
+            return java.util.List.copyOf(modes);
+        }
+        @Override public boolean isVsync() { return vsync; }
+        @Override public void setVsync(boolean on) {
+            if (headless) { vsync = on; return; }
+            setFramePacing(pacingRhi, on, frameRateCap, refreshHz);
+        }
+        @Override public int getFrameRateCap() { return frameRateCap; }
+        @Override public void setFrameRateCap(int fps) {
+            if (headless) { frameRateCap = fps; return; }
+            setFramePacing(pacingRhi, vsync, fps, refreshHz);
+        }
+    }
+
     public boolean isRunning() {
         return running;
     }
@@ -69,6 +131,9 @@ public class RuntimeLoop {
     public void stop() {
         this.running = false;
     }
+
+    // Set when a script called Game.quit(), so the scene is stopped (onDestroy runs) before the process exits
+    private boolean quitRequested = false;
 
     /**
      * Executes the standalone runtime game loop using EngineContext subsystem handles.
@@ -86,6 +151,7 @@ public class RuntimeLoop {
         ViewportCamera camera = context.getCameraController();
 
         this.running = true;
+        com.retro.engine.scripting.Game.bind(new GameHost(headless ? null : window));
 
         // Force SceneWorld into PlayState.SIMULATING for standalone runtime execution
         if (sceneWorld.getPlayState() != PlayState.SIMULATING) {
@@ -132,8 +198,10 @@ public class RuntimeLoop {
                 }
                 timings.mark(FrameTimings.POLL);
 
-                // 2. Continuous Scene World Simulation Tick
+                // 2. Continuous Scene World Simulation Tick, then the window/display/quit requests scripts made in it
                 sceneWorld.update(deltaTime);
+                com.retro.engine.scripting.Game.applyPending();
+                if (!running) break;
                 timings.mark(FrameTimings.UPDATE);
 
                 // 3. Fullscreen viewport at the WindowHost size, viewed through the scene's Main Camera
@@ -168,6 +236,8 @@ public class RuntimeLoop {
             } else {
                 // Headless: pure simulation tick with no GPU context
                 sceneWorld.update(limited ? TARGET_HEADLESS_TICK_TIME : deltaTime);
+                com.retro.engine.scripting.Game.applyPending();
+                if (!running) break;
                 if (limited) continue;
 
                 // Frame-pacing sleep for the headless thread
@@ -184,7 +254,9 @@ public class RuntimeLoop {
             }
         }
 
-        if (limited) sceneWorld.stop();
+        // A finished --frames run, or Game.quit(), stops the scene so every script's onDestroy runs
+        if (limited || quitRequested) sceneWorld.stop();
+        com.retro.engine.scripting.Game.bind(null);
         this.running = false;
         Log.info("RuntimeLoop", "Standalone Game Loop Terminated after " + frame + " frames.");
     }

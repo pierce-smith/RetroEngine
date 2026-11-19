@@ -359,6 +359,22 @@ public class ScriptEngine {
 
     enum Pointer { ENTER, EXIT, DOWN, UP }
 
+    /** Delivers onButtonClick to every enabled, running script on {@code entity}. A script that throws is disabled. */
+    public static void dispatchButtonClick(Entity entity, com.retro.engine.ecs.components.UIButton button) {
+        if (entity == null) return;
+        List<Component> comps = entity.getAllComponents();
+        for (int c = 0; c < comps.size(); c++) {
+            if (!(comps.get(c) instanceof ScriptComponent sc) || !sc.enabled) continue;
+            EntityScript script = sc.activeScriptInstance;
+            if (script == null) continue;
+            try {
+                script.onButtonClick(button);
+            } catch (Throwable t) {
+                disableFailedScript(entity, sc, "onButtonClick", t);
+            }
+        }
+    }
+
     /** Delivers an onMouse* hook to every enabled, running script on {@code entity}. A script that throws is disabled. */
     static void dispatchPointer(Entity entity, Pointer event) {
         if (entity == null) return;

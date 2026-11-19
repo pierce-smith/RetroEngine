@@ -12,7 +12,8 @@ import java.util.List;
  * Drives {@link EntityScript#onMouseEnter()}, {@code onMouseExit}, {@code onMouseDown} and {@code onMouseUp}. Once
  * per Play frame, after physics and before onUpdate, it casts a ray from the Main Camera through the cursor (the view's
  * centre while the cursor is locked) and finds the first solid collider. Triggers don't block the ray, the same as
- * {@link EntityScript#raycast}. The hooks go to the scripts on the collider's own entity.
+ * {@link EntityScript#raycast}. The hooks go to the scripts on the collider's own entity. A UI button under the cursor
+ * hides the world behind it.
  *
  * <ul>
  *   <li>Enter / Exit: the entity under the cursor changed. Leaving the view counts as pointing at nothing.</li>
@@ -75,6 +76,8 @@ public final class PointerEvents {
     /** Entity whose collider is under the cursor, or null. */
     private static Entity pick(List<Entity> entities, SceneWorld world) {
         if (world == null || !Input.isMouseInView()) return null;
+        // A UI button covers whatever is behind it, so the cursor is on the menu, not the world
+        if (com.retro.engine.ui.UINavigation.isPointerOverButton()) return null;
         float w = Input.getViewWidth(), h = Input.getViewHeight();
         Entity cameraEntity = SceneWorld.findMainCamera(entities);
         Camera camera = cameraEntity != null ? cameraEntity.getComponent(Camera.class) : null;

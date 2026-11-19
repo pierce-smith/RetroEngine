@@ -79,6 +79,13 @@ public abstract class EntityScript {
      */
     public void onMouseUp() {}
 
+    /**
+     * A {@link com.retro.engine.ecs.components.UIButton} on this entity was pressed: clicked with the mouse, or
+     * activated with Enter / Space / gamepad A while focused, or {@code click()}ed from code. Runs before onUpdate.
+     * Scripts elsewhere can check {@code button.wasClicked()} instead.
+     */
+    public void onButtonClick(com.retro.engine.ecs.components.UIButton button) {}
+
     public void onDestroy() {}
 
     // =========================================================================

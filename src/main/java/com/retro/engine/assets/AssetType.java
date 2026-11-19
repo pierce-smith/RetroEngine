@@ -9,6 +9,8 @@ public enum AssetType {
     PREFAB,
     MATERIAL,
     ANIMATION,
+    /** TrueType / OpenType font (.ttf, .otf) for UI text. */
+    FONT,
     FOLDER,
     UNKNOWN
 }

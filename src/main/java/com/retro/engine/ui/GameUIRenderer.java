@@ -4,6 +4,7 @@ import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.SceneWorld;
 import com.retro.engine.ecs.components.Camera;
+import com.retro.engine.ecs.components.UIButton;
 import com.retro.engine.ecs.components.UICanvasComponent;
 import com.retro.engine.ecs.components.UIElement;
 import com.retro.engine.ecs.components.UIImage;
@@ -72,7 +73,7 @@ public final class GameUIRenderer {
     private final List<UIElement> canvasElements = new ArrayList<>();
 
     // Per-frame target: viewport rect in window NDC, NDC units per window pixel, and its size in pixels
-    private float rectX0, rectY0;
+    private float rectX0, rectY0, rectX1, rectY1;
     private float ndcPerPxX, ndcPerPxY;
     private float targetW, targetH;
 
@@ -88,12 +89,16 @@ public final class GameUIRenderer {
                                         float rectX0, float rectY0, float rectX1, float rectY1,
                                         int windowWidth, int windowHeight, ViewportCamera view, float aspect) {
         buffer.reset();
+        // Buttons drawn below record where they landed; anything not drawn this frame can't be hovered or focused
+        invalidateButtonRects(entities);
         if (entities == null || entities.isEmpty() || rectX1 <= rectX0 || rectY1 <= rectY0) return buffer;
         if (!collect(entities)) return buffer;
 
         buffer.setWindowSize(windowWidth, windowHeight);
         this.rectX0 = rectX0;
         this.rectY0 = rectY0;
+        this.rectX1 = rectX1;
+        this.rectY1 = rectY1;
         this.ndcPerPxX = 2.0f / buffer.getWindowWidth();
         this.ndcPerPxY = 2.0f / buffer.getWindowHeight();
         this.targetW = (rectX1 - rectX0) / ndcPerPxX;
@@ -259,7 +264,8 @@ public final class GameUIRenderer {
             float x0 = toNdcX(cxPx - halfW), x1 = toNdcX(cxPx + halfW);
             float y0 = toNdcY(cyPx - halfH), y1 = toNdcY(cyPx + halfH);
 
-            if (el instanceof UIProgressBar bar) drawProgressBar(bar, x0, y0, x1, y1, scale);
+            if (el instanceof UIButton button) drawButton(button, x0, y0, x1, y1, scale);
+            else if (el instanceof UIProgressBar bar) drawProgressBar(bar, x0, y0, x1, y1, scale);
             else if (el instanceof UIText text) drawText(text, x0, y0, x1, y1, scale);
             else if (el instanceof UIImage image) drawImage(image, x0, y0, x1, y1, scale);
             else if (el instanceof UIPanel panel) drawPanel(panel, x0, y0, x1, y1, scale);
@@ -283,10 +289,61 @@ public final class GameUIRenderer {
         }
     }
 
+    private static void invalidateButtonRects(List<Entity> entities) {
+        if (entities == null) return;
+        for (int i = 0, n = entities.size(); i < n; i++) {
+            Entity e = entities.get(i);
+            if (e == null) continue;
+            List<Component> components = e.getAllComponents();
+            for (int c = 0; c < components.size(); c++) {
+                if (components.get(c) instanceof UIButton b) b.invalidateScreenRect();
+            }
+        }
+    }
+
+    /**
+     * Fill (focus color while focused or hovered, darkened while held, faded when not interactable), a border in the label
+     * color while focused, then the centered label. Records the on-screen rect, clipped to the game view, for UINavigation.
+     */
+    private void drawButton(UIButton b, float x0, float y0, float x1, float y1, float scale) {
+        float vw = rectX1 - rectX0, vh = rectY1 - rectY0;
+        float cx0 = Math.max(x0, rectX0), cx1 = Math.min(x1, rectX1), cy0 = Math.max(y0, rectY0), cy1 = Math.min(y1, rectY1);
+        if (cx1 > cx0 && cy1 > cy0) {
+            b.setScreenRect((cx0 - rectX0) / vw, (rectY1 - cy1) / vh, (cx1 - rectX0) / vw, (rectY1 - cy0) / vh);
+        }
+
+        boolean highlighted = b.interactable && (b.isFocused() || b.isHovered());
+        float r = highlighted ? b.focusR : b.colorR, g = highlighted ? b.focusG : b.colorG, bl = highlighted ? b.focusB : b.colorB;
+        if (b.isPressed()) { r *= 0.75f; g *= 0.75f; bl *= 0.75f; }
+        float alpha = b.interactable ? b.alpha : b.alpha * 0.45f;
+
+        float radius = Math.max(0.0f, b.cornerRadius) * scale * ndcPerPxY;
+        float bx = Math.max(0.0f, b.borderThickness) * scale * ndcPerPxX;
+        float by = Math.max(0.0f, b.borderThickness) * scale * ndcPerPxY;
+        if (highlighted && b.isFocused() && bx > 0.0f && by > 0.0f) {
+            UIGeometryBatch.addRoundedQuad(buffer, x0, y0, x1, y1, radius, rgb(b.labelR, b.labelG, b.labelB), alpha);
+            x0 += bx; x1 -= bx; y0 += by; y1 -= by;
+            radius = Math.max(0.0f, radius - by);
+        }
+        if (x1 > x0 && y1 > y0) UIGeometryBatch.addRoundedQuad(buffer, x0, y0, x1, y1, radius, rgb(r, g, bl), alpha);
+
+        if (b.label == null || b.label.isEmpty()) return;
+        float size = UIGeometryBatch.textSizeForEmPixels(buffer, Math.max(0.0f, b.fontSize) * scale);
+        if (size <= 0.01f) return;
+        buffer.setFont(FontLibrary.get(b.font));
+        float w = UIGeometryBatch.textWidth(buffer, b.label, size);
+        float startY = (y0 + y1) * 0.5f + 0.0075f * size;
+        float labelAlpha = b.interactable ? b.alpha : b.alpha * 0.45f;
+        UIGeometryBatch.addBoundedText(buffer, b.label, (x0 + x1 - w) * 0.5f, startY, (x0 + x1 + w) * 0.5f + 0.001f, size,
+                b.labelR, b.labelG, b.labelB, labelAlpha);
+        buffer.setFont(null);
+    }
+
     private void drawText(UIText t, float x0, float y0, float x1, float y1, float scale) {
         if (t.text == null || t.text.isEmpty()) return;
+        buffer.setFont(FontLibrary.get(t.font));
         float size = UIGeometryBatch.textSizeForEmPixels(buffer, Math.max(0.0f, t.fontSize) * scale);
-        if (size <= 0.01f) return;
+        if (size <= 0.01f) { buffer.setFont(null); return; }
         float w = UIGeometryBatch.textWidth(buffer, t.text, size);
         float x = switch (t.alignment) {
             case LEFT -> x0;
@@ -296,6 +353,7 @@ public final class GameUIRenderer {
         // addBoundedText centers the cap height 0.0075 * size below startY
         float startY = (y0 + y1) * 0.5f + 0.0075f * size;
         UIGeometryBatch.addBoundedText(buffer, t.text, x, startY, x + w + 0.001f, size, t.colorR, t.colorG, t.colorB, t.alpha);
+        buffer.setFont(null);
     }
 
     private void drawImage(UIImage img, float x0, float y0, float x1, float y1, float scale) {

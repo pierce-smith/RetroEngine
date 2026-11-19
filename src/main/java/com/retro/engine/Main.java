@@ -2,7 +2,6 @@ package com.retro.engine;
 
 import com.retro.engine.core.EngineContext;
 import com.retro.engine.core.EngineLoop;
-import com.retro.engine.core.FrameLimiter;
 import com.retro.engine.core.Log;
 import com.retro.engine.core.ProjectSettings;
 import com.retro.engine.core.RuntimeLoop;
@@ -128,6 +127,11 @@ public class Main {
             }
         }
         if (!configureFramePacing(context, loop, args)) return EXIT_STARTUP_FAILED;
+        // The window opens before the project loads, so it gets the game's name here; scripts can change it (Game.setTitle)
+        ProjectSettings settings = context.getEditorManager().getProjectSettings();
+        if (context.getWindow() != null && settings != null && settings.projectName != null && !settings.projectName.isBlank()) {
+            context.getWindow().setTitle(settings.projectName);
+        }
         loop.run(context, world);
         return EXIT_OK;
     }
@@ -160,11 +164,9 @@ public class Main {
             }
         }
 
-        if (context.getRhi() != null) context.getRhi().setVsync(vsync);
         int refreshHz = context.getDisplay() != null && context.getDisplay().isOpen()
                 ? context.getDisplay().getMetrics().refreshRate() : 0;
-        FrameLimiter limiter = FrameLimiter.create(vsync, cap, refreshHz);
-        loop.setFrameLimiter(limiter);
+        loop.setFramePacing(context.getRhi(), vsync, cap, refreshHz);
         Log.info("Main", "Frame pacing: vsync " + (vsync ? "on" : "off") + ", "
                 + (cap > 0 ? "cap " + cap + " FPS" : vsync ? "backstop above " + (refreshHz > 0 ? refreshHz : 60) + " Hz" : "no cap"));
         return true;

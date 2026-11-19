@@ -177,7 +177,9 @@ public class MainMenuBarInputDelegate {
         if (ndcX >= -0.42f && ndcX <= -0.07f && ndcY >= ModalDialogOverlay.PICKER_ACTION_Y0 && ndcY <= ModalDialogOverlay.PICKER_ACTION_Y1) {
             Entity selected = manager.getSelectedEntity();
             if (selected != null) {
-                if (assignMaterialChannel(manager, selected, null)) {
+                if (pickerFilterType == AssetType.FONT) {
+                    assignPickerField(manager, selected, "");
+                } else if (assignMaterialChannel(manager, selected, null)) {
                     // Non-albedo Material channel cleared through the undoable property command
                 } else if (pickerFilterType == AssetType.TEXTURE) {
                     selected.setTextureAsset(null, null);
@@ -232,7 +234,9 @@ public class MainMenuBarInputDelegate {
         Entity selected = manager.getSelectedEntity();
         // Only an asset of the picker's own type may be bound, so e.g. an audio clip can never land in a mesh or texture slot
         if (selected != null && asset != null && asset.type == pickerFilterType) {
-            if (assignMaterialChannel(manager, selected, asset.absolutePath)) {
+            if (pickerFilterType == AssetType.FONT) {
+                assignPickerField(manager, selected, asset.absolutePath);
+            } else if (assignMaterialChannel(manager, selected, asset.absolutePath)) {
                 // Non-albedo Material channel assigned through the undoable property command
             } else if (pickerFilterType == AssetType.TEXTURE) {
                 selected.setTextureAsset(asset.absolutePath, asset.name);
@@ -269,6 +273,28 @@ public class MainMenuBarInputDelegate {
      * Applies a picker result to the Material channel the picker was opened for. Returns false when the picker targets
      * the primary albedo texture (or no Material field), leaving the legacy Entity.setTextureAsset path to handle it.
      */
+    /**
+     * Writes {@code assetPath} into the field the picker was opened for (e.g. a UI text's FONT), on the component instance
+     * it was opened from, through the undoable property command. Does nothing if that component left {@code selected}.
+     */
+    private static void assignPickerField(EditorWorkspace manager, Entity selected, String assetPath) {
+        Component target = manager.getOverlayManager().getPickerTargetComponent();
+        String fieldName = manager.getOverlayManager().getPickerTargetField();
+        if (target == null || fieldName == null || !selected.getAllComponents().contains(target)) return;
+        for (Class<?> c = target.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+            try {
+                Field field = c.getDeclaredField(fieldName);
+                manager.getCommandHistory().executeCommand(new EditorCommands.ModifyPropertyCommand(target, field, field.get(target), assetPath, "FONT"));
+                return;
+            } catch (NoSuchFieldException ignored) {
+                // declared on a superclass
+            } catch (ReflectiveOperationException e) {
+                e.printStackTrace();
+                return;
+            }
+        }
+    }
+
     private static boolean assignMaterialChannel(EditorWorkspace manager, Entity selected, String assetPath) {
         String targetField = manager.getOverlayManager().getPickerTargetField();
         if (targetField == null || "textureAssetPath".equals(targetField)) return false;

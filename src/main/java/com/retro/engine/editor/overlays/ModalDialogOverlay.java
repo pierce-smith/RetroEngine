@@ -150,6 +150,7 @@ public class ModalDialogOverlay {
             case MESH_3D -> new String[] {"obj", "fbx", "gltf", "glb"};
             case AUDIO -> new String[] {"wav", "mp3", "ogg"};
             case SCRIPT -> new String[] {"java"};
+            case FONT -> new String[] {"ttf", "otf"};
             default -> new String[0];
         };
     }
@@ -158,6 +159,7 @@ public class ModalDialogOverlay {
         StringBuilder sb = new StringBuilder(switch (type) {
             case TEXTURE -> "Image Files";
             case MESH_3D -> "3D Models";
+            case FONT -> "Font Files";
             case AUDIO -> "Audio Files";
             case SCRIPT -> "Java Scripts";
             default -> "Supported Files";

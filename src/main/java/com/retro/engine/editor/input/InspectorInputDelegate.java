@@ -333,8 +333,9 @@ public class InspectorInputDelegate {
                     UISoundPlayer.play(UISound.OPEN_MODAL);
                     AssetType assetType = parseAssetType(prop.assetType());
                     // Script and Audio Source cards bind the picker to their own instance, so the pick lands in that component
-                    manager.getOverlayManager().openAssetPicker(assetType, (comp instanceof Material) ? field.getName() : null,
-                            (comp instanceof ScriptComponent || comp instanceof AudioSource) ? comp : null);
+                    boolean fieldBound = assetType == com.retro.engine.assets.AssetType.FONT;
+                    manager.getOverlayManager().openAssetPicker(assetType, (comp instanceof Material || fieldBound) ? field.getName() : null,
+                            (comp instanceof ScriptComponent || comp instanceof AudioSource || fieldBound) ? comp : null);
                     return true;
                 }
                 if (ndcX >= InspectorPanel.importX0 && ndcX <= InspectorPanel.importX1) {
@@ -841,6 +842,7 @@ public class InspectorInputDelegate {
         addComponentItem(items, entities, "+ UI Canvas", UICanvasComponent.class, UICanvasComponent::new);
         addComponentItem(items, entities, "+ UI Panel", UIPanel.class, UIPanel::new);
         addComponentItem(items, entities, "+ UI Text", UIText.class, UIText::new);
+        addComponentItem(items, entities, "+ UI Button", com.retro.engine.ecs.components.UIButton.class, com.retro.engine.ecs.components.UIButton::new);
         addComponentItem(items, entities, "+ UI Image", UIImage.class, UIImage::new);
         addComponentItem(items, entities, "+ UI Progress Bar", UIProgressBar.class, UIProgressBar::new);
 

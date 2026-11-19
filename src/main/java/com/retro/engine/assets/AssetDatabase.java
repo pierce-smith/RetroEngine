@@ -804,6 +804,7 @@ public class AssetDatabase {
             case "java" -> AssetType.SCRIPT;
             case "rmat" -> AssetType.MATERIAL;
             case "ranim" -> AssetType.ANIMATION;
+            case "ttf", "otf" -> AssetType.FONT;
             default -> AssetType.UNKNOWN;
         };
     }
