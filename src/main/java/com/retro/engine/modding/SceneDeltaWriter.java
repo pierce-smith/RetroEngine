@@ -3,6 +3,7 @@ package com.retro.engine.modding;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.ComponentSchema;
 import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.SceneSettings;
 
 import java.io.File;
 import java.nio.file.Path;
@@ -38,7 +39,21 @@ public final class SceneDeltaWriter {
 
     /** The full .rpatch document (format header + operations); operations is empty when nothing changed. */
     public Map<String, Object> diff(String targetScene, List<Entity> baseline, List<Entity> current) throws IllegalAccessException {
+        return diff(targetScene, baseline, current, null, null);
+    }
+
+    /** Also records scene setting changes (MODIFY_SCENE) when both settings are given. */
+    public Map<String, Object> diff(String targetScene, List<Entity> baseline, List<Entity> current,
+                                    SceneSettings baselineSettings, SceneSettings currentSettings) throws IllegalAccessException {
         List<Object> ops = new ArrayList<>();
+        if (baselineSettings != null && currentSettings != null && baselineSettings.rememberWhenLeft != currentSettings.rememberWhenLeft) {
+            Map<String, Object> scene = new LinkedHashMap<>();
+            scene.put("op", "MODIFY_SCENE");
+            Map<String, Object> props = new LinkedHashMap<>();
+            props.put("rememberWhenLeft", currentSettings.rememberWhenLeft);
+            scene.put("properties", props);
+            ops.add(scene);
+        }
         Map<String, Entity> base = index(baseline);
         Map<String, Entity> now = index(current);
 

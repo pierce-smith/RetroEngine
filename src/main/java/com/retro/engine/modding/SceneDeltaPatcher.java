@@ -3,6 +3,7 @@ package com.retro.engine.modding;
 import com.retro.engine.ecs.Component;
 import com.retro.engine.ecs.ComponentSchema;
 import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.SceneSettings;
 
 import java.io.File;
 import java.io.IOException;
@@ -36,7 +37,8 @@ import java.util.Set;
  *     { "op": "ATTACH_COMPONENT", "entity_name": "Cube", "component": "Wobble", "properties": { "speed": 3.0 } },
  *     { "op": "DETACH_COMPONENT", "entity": "entity_4", "component": "AudioSource" },
  *     { "op": "MODIFY_ENTITY",    "entity": "entity_4", "name": "Renamed", "parent": null },
- *     { "op": "REMOVE_ENTITY",    "entity": "entity_5" }
+ *     { "op": "REMOVE_ENTITY",    "entity": "entity_5" },
+ *     { "op": "MODIFY_SCENE",     "properties": { "rememberWhenLeft": false } }
  *   ]
  * }
  * </pre>
@@ -53,6 +55,8 @@ import java.util.Set;
  *       paths resolve through the mod VFS ({@code mod://} URIs, then overlays, then the base Assets/ folder).</li>
  *   <li>ADD_ENTITY's {@code "components"} may also be an object ({@code {"Transform": {...}}}). Listing a component
  *       the new entity already has (every entity starts with a Transform) modifies it; repeating a type adds another.</li>
+ *   <li>MODIFY_SCENE changes the scene's own settings ({@link SceneSettings}): {@code "rememberWhenLeft"} (boolean;
+ *       {@code "remember_when_left"} also works). Engines from before this operation skip it and apply the rest.</li>
  *   <li>A failing operation is logged and skipped; the rest of the patch still applies.</li>
  * </ul>
  */
@@ -64,8 +68,15 @@ public final class SceneDeltaPatcher {
     /** A parsed patch file; {@code operations} are raw JSON objects validated when applied. */
     public record Patch(File source, String modId, String targetScene, List<Map<String, Object>> operations) {}
 
-    /** Outcome of applying one patch. */
-    public record Result(int applied, int failed) {}
+    /**
+     * Outcome of applying one patch. {@code added} / {@code edited}: ids of entities the patch created, and of existing
+     * entities it changed (renamed, re-parented, component edits), for the mod workspace's Hierarchy tags.
+     */
+    public record Result(int applied, int failed, Set<String> added, Set<String> edited) {
+        public Result(int applied, int failed) {
+            this(applied, failed, Set.of(), Set.of());
+        }
+    }
 
     private final ModVirtualFileSystem vfs;
 
@@ -115,20 +126,29 @@ public final class SceneDeltaPatcher {
     // ------------------------------------------------------------------------------------------
 
     public Result apply(Patch patch, List<Entity> entities) {
+        return apply(patch, entities, null);
+    }
+
+    /** {@code settings}: the scene's settings, changed by MODIFY_SCENE (null fails those operations). */
+    public Result apply(Patch patch, List<Entity> entities, SceneSettings settings) {
         int applied = 0, failed = 0;
+        Set<String> added = new java.util.LinkedHashSet<>(), edited = new java.util.LinkedHashSet<>();
         for (int i = 0; i < patch.operations().size(); i++) {
             Map<String, Object> op = patch.operations().get(i);
             String kind = MiniJson.string(op, "", "op").trim().toUpperCase(Locale.ROOT);
             try {
+                Entity target = null;
                 switch (kind) {
-                    case "ADD_ENTITY" -> addEntity(op, entities, patch);
+                    case "ADD_ENTITY" -> added.add(addEntity(op, entities, patch));
                     case "REMOVE_ENTITY" -> removeEntity(requireEntity(op, entities), entities);
-                    case "MODIFY_ENTITY" -> modifyEntity(op, requireEntity(op, entities), entities);
-                    case "MODIFY_COMPONENT" -> modifyComponent(op, requireEntity(op, entities));
-                    case "ATTACH_COMPONENT" -> attachComponent(op, requireEntity(op, entities));
-                    case "DETACH_COMPONENT" -> detachComponent(op, requireEntity(op, entities));
+                    case "MODIFY_ENTITY" -> modifyEntity(op, target = requireEntity(op, entities), entities);
+                    case "MODIFY_COMPONENT" -> modifyComponent(op, target = requireEntity(op, entities));
+                    case "ATTACH_COMPONENT" -> attachComponent(op, target = requireEntity(op, entities));
+                    case "DETACH_COMPONENT" -> detachComponent(op, target = requireEntity(op, entities));
+                    case "MODIFY_SCENE" -> modifyScene(op, settings);
                     default -> throw new PatchException("unknown op \"" + kind + "\"");
                 }
+                if (target != null && target.id != null) edited.add(target.id);
                 applied++;
             } catch (PatchException | IllegalAccessException | RuntimeException e) {
                 failed++;
@@ -136,10 +156,11 @@ public final class SceneDeltaPatcher {
                         + " operation #" + i + " (" + kind + ") skipped: " + e.getMessage());
             }
         }
-        return new Result(applied, failed);
+        return new Result(applied, failed, added, edited);
     }
 
-    private void addEntity(Map<String, Object> op, List<Entity> entities, Patch patch) throws PatchException, IllegalAccessException {
+    /** Returns the new entity's id. */
+    private String addEntity(Map<String, Object> op, List<Entity> entities, Patch patch) throws PatchException, IllegalAccessException {
         String id = MiniJson.string(op, "", "id").trim();
         if (id.isEmpty()) throw new PatchException("ADD_ENTITY needs an \"id\"");
         if (findById(entities, id) != null) throw new PatchException("entity id \"" + id + "\" already exists");
@@ -172,6 +193,7 @@ public final class SceneDeltaPatcher {
         entities.add(entity);
         if (op.containsKey("parent")) setParent(entity, parentOf(op, entities), entities);
         for (Component c : entity.getAllComponents()) c.onDeserialized(entity);
+        return id;
     }
 
     private void upsertComponent(Entity entity, ComponentSchema schema, int occurrence, Map<String, Object> props) throws PatchException, IllegalAccessException {
@@ -331,6 +353,21 @@ public final class SceneDeltaPatcher {
         ComponentSchema schema = ComponentSchema.forSerializedName(type.trim());
         if (schema == null) throw new PatchException("unknown component type \"" + type + "\" (is its mod loaded and registered?)");
         return schema;
+    }
+
+    private static void modifyScene(Map<String, Object> op, SceneSettings settings) throws PatchException {
+        if (settings == null) throw new PatchException("no scene settings to modify here");
+        Object props = op.get("properties");
+        if (!(props instanceof Map<?, ?> map) || map.isEmpty()) throw new PatchException("\"properties\" must be a non-empty object");
+        // Validate everything first, so a bad key leaves the settings untouched
+        Boolean remember = null;
+        for (Map.Entry<?, ?> e : map.entrySet()) {
+            String key = String.valueOf(e.getKey()).replace("_", "").toLowerCase(Locale.ROOT);
+            if (!key.equals("rememberwhenleft")) throw new PatchException("unknown scene setting \"" + e.getKey() + "\"");
+            if (!(e.getValue() instanceof Boolean b)) throw new PatchException("\"" + e.getKey() + "\" must be true or false");
+            remember = b;
+        }
+        settings.rememberWhenLeft = remember;
     }
 
     private static Entity requireEntity(Map<String, Object> op, List<Entity> entities) throws PatchException {

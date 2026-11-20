@@ -950,7 +950,7 @@ public class InspectorPanel {
         return switch (label.toUpperCase()) {
             case "RED", "R" -> EditorTheme.RED;
             case "GREEN", "G" -> EditorTheme.GREEN;
-            case "BLUE", "B" -> EditorTheme.ACCENT;
+            case "BLUE", "B" -> EditorTheme.SYSTEM_BLUE;
             default -> EditorTheme.ACCENT;
         };
     }

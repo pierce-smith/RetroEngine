@@ -123,6 +123,7 @@ public class HierarchyPanel {
     /** Share of the tile width deep trees may spend on indentation, and its absolute cap for wide tiles. */
     private static final float INDENT_BUDGET_FRACTION = 0.6f, INDENT_BUDGET_MAX = 0.5f;
     private static final float GUIDE_OFFSET = 0.006f; // guides sit under the parent's disclosure triangle
+    private static final float MOD_TAG_TEXT = 0.68f;
     private static final float NAME_TEXT = 1.0f;
 
     // Scrollbar (pill thumb, Asset Browser style) along the panel's right edge; the hit band is wider than the pill
@@ -386,7 +387,20 @@ public class HierarchyPanel {
             float gw = UIGeometryBatch.textWidth(buffer, 1, 0.8f);
             UIGeometryBatch.addBoundedText(buffer, cat.glyph, (badgeX0 + badgeX1 - gw) * 0.5f, mid + 0.8f * 0.009f, badgeX1, 0.8f, EditorTheme.BACKGROUND, rowAlpha);
 
-            UIGeometryBatch.addTruncatedText(buffer, entity.name, badgeX1 + 0.012f, mid + NAME_TEXT * 0.009f, rowX1 - 0.008f, NAME_TEXT, EditorTheme.TEXT, rowAlpha);
+            // Mod workspace: NEW / EDITED tag on what the authored mod's saved patches add or change
+            float nameX1 = rowX1 - 0.008f;
+            com.retro.engine.modding.ModWorkspace.Change change = com.retro.engine.modding.ModWorkspace.changeOf(entity.id);
+            if (change != null) {
+                String tag = change == com.retro.engine.modding.ModWorkspace.Change.ADDED ? "NEW" : "EDITED";
+                float tw = UIGeometryBatch.textWidth(buffer, tag, MOD_TAG_TEXT);
+                float tagX1 = rowX1 - 0.008f, tagX0 = tagX1 - tw - 0.014f, tagH = 0.026f;
+                UIGeometryBatch.addRoundedQuad(buffer, tagX0, mid - tagH * 0.5f, tagX1, mid + tagH * 0.5f, 0.006f,
+                        selected ? EditorTheme.TEXT : EditorTheme.MOD_ACCENT, rowAlpha);
+                UIGeometryBatch.addBoundedText(buffer, tag, tagX0 + 0.007f, mid + MOD_TAG_TEXT * 0.009f, tagX1, MOD_TAG_TEXT,
+                        EditorTheme.BACKGROUND, rowAlpha);
+                nameX1 = tagX0 - 0.008f;
+            }
+            UIGeometryBatch.addTruncatedText(buffer, entity.name, badgeX1 + 0.012f, mid + NAME_TEXT * 0.009f, nameX1, NAME_TEXT, EditorTheme.TEXT, rowAlpha);
         }
 
         if (dragSource != null) {

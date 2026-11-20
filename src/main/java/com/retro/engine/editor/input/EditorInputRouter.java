@@ -182,6 +182,10 @@ public class EditorInputRouter {
                 MainMenuBarInputDelegate.processTopBarClick(ndcX, workspace);
                 return true;
             }
+            if (ndcY >= DockSpace.areaTop()) {
+                if (button == 0) com.retro.engine.editor.panels.ModWorkspaceBanner.onClick(ndcX, ndcY, workspace);
+                return true;
+            }
 
             // Dock chrome (tab bars, splitters) takes priority over panel content
             if (workspace.getDockSpace().onPress(ndcX, ndcY)) {

@@ -25,6 +25,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 
 class SceneDeltaPatcherTest {
 
@@ -57,7 +58,13 @@ class SceneDeltaPatcherTest {
         return patcher.apply(patch(operations), scene);
     }
 
-    private Entity find(String id) {
+/** Compares only the applied / failed counts (the result also lists the entities each patch touched). */
+    private static void assertCounts(int applied, int failed, Result r) {
+        assertEquals(applied, r.applied(), "applied");
+        assertEquals(failed, r.failed(), "failed");
+    }
+
+        private Entity find(String id) {
         return scene.stream().filter(e -> id.equals(e.id)).findFirst().orElse(null);
     }
 
@@ -95,7 +102,7 @@ class SceneDeltaPatcherTest {
                 { "op": "ADD_ENTITY", "id": "test_mod.chest", "name": "Chest", "parent": "crate", "components": [
                   { "type": "Transform", "properties": { "posX": 2.5 } },
                   { "type": "BoxCollider", "properties": { "sizeX": 3.0 } } ] }""");
-        assertEquals(new Result(1, 0), result);
+        assertCounts(1, 0, result);
         Entity chest = find("test_mod.chest");
         assertNotNull(chest);
         assertEquals("Chest", chest.name);
@@ -108,7 +115,7 @@ class SceneDeltaPatcherTest {
 
     @Test
     void removeEntityTakesItsDescendants() throws IOException {
-        assertEquals(new Result(1, 0), apply("{ \"op\": \"REMOVE_ENTITY\", \"entity\": \"crate\" }"));
+        assertCounts(1, 0, apply("{ \"op\": \"REMOVE_ENTITY\", \"entity\": \"crate\" }"));
         assertNull(find("crate"));
         assertNull(find("lid"));
         assertNotNull(find("light_1"));
@@ -116,7 +123,7 @@ class SceneDeltaPatcherTest {
 
     @Test
     void modifyEntityRenamesAndReparents() throws IOException {
-        assertEquals(new Result(1, 0), apply("{ \"op\": \"MODIFY_ENTITY\", \"entity\": \"lid\", \"name\": \"Top\", \"parent\": null }"));
+        assertCounts(1, 0, apply("{ \"op\": \"MODIFY_ENTITY\", \"entity\": \"lid\", \"name\": \"Top\", \"parent\": null }"));
         assertEquals("Top", lid.name);
         assertNull(lid.parentId);
         assertFalse(crate.hasChild("lid"));
@@ -124,23 +131,23 @@ class SceneDeltaPatcherTest {
 
     @Test
     void modifyComponentMatchesFieldNamesAndLabelsInAnyCase() throws IOException {
-        assertEquals(new Result(1, 0), apply("{ \"op\": \"MODIFY_COMPONENT\", \"entity\": \"light_1\", \"component\": \"Light\", \"properties\": { \"intensity\": 2.0 } }"));
+        assertCounts(1, 0, apply("{ \"op\": \"MODIFY_COMPONENT\", \"entity\": \"light_1\", \"component\": \"Light\", \"properties\": { \"intensity\": 2.0 } }"));
         assertEquals(2.0f, sun.getComponent(Light.class).intensity);
-        assertEquals(new Result(1, 0), apply("{ \"op\": \"MODIFY_COMPONENT\", \"entity\": \"light_1\", \"component\": \"Light\", \"properties\": { \"INTENSITY\": 3.0 } }"));
+        assertCounts(1, 0, apply("{ \"op\": \"MODIFY_COMPONENT\", \"entity\": \"light_1\", \"component\": \"Light\", \"properties\": { \"INTENSITY\": 3.0 } }"));
         assertEquals(3.0f, sun.getComponent(Light.class).intensity);
     }
 
     @Test
     void entitiesCanBeAddressedByName() throws IOException {
-        assertEquals(new Result(1, 0), apply("{ \"op\": \"MODIFY_COMPONENT\", \"entity_name\": \"Sun\", \"component\": \"Light\", \"properties\": { \"intensity\": 4.0 } }"));
+        assertCounts(1, 0, apply("{ \"op\": \"MODIFY_COMPONENT\", \"entity_name\": \"Sun\", \"component\": \"Light\", \"properties\": { \"intensity\": 4.0 } }"));
         assertEquals(4.0f, sun.getComponent(Light.class).intensity);
     }
 
     @Test
     void attachAndDetachComponents() throws IOException {
-        assertEquals(new Result(1, 0), apply("{ \"op\": \"ATTACH_COMPONENT\", \"entity\": \"crate\", \"component\": \"BoxCollider\", \"properties\": { \"isTrigger\": true } }"));
+        assertCounts(1, 0, apply("{ \"op\": \"ATTACH_COMPONENT\", \"entity\": \"crate\", \"component\": \"BoxCollider\", \"properties\": { \"isTrigger\": true } }"));
         assertTrue(crate.getComponent(BoxCollider.class).isTrigger);
-        assertEquals(new Result(1, 0), apply("{ \"op\": \"DETACH_COMPONENT\", \"entity\": \"crate\", \"component\": \"BoxCollider\" }"));
+        assertCounts(1, 0, apply("{ \"op\": \"DETACH_COMPONENT\", \"entity\": \"crate\", \"component\": \"BoxCollider\" }"));
         assertNull(crate.getComponent(BoxCollider.class));
     }
 
@@ -153,14 +160,14 @@ class SceneDeltaPatcherTest {
                 { "op": "MODIFY_COMPONENT", "entity": "light_1", "component": "Light", "properties": { "intensity": "bright" } },
                 { "op": "ATTACH_COMPONENT", "entity": "crate", "component": "NoSuchComponent" },
                 { "op": "MODIFY_COMPONENT", "entity": "light_1", "component": "Light", "properties": { "intensity": 7.0 } }""");
-        assertEquals(new Result(1, 5), result);
+        assertCounts(1, 5, result);
         assertEquals(7.0f, sun.getComponent(Light.class).intensity);
     }
 
     @Test
     void laterPatchesSeeEarlierOnes() throws IOException {
         apply("{ \"op\": \"ADD_ENTITY\", \"id\": \"a.thing\", \"name\": \"Thing\" }");
-        assertEquals(new Result(1, 0), apply("{ \"op\": \"MODIFY_ENTITY\", \"entity\": \"a.thing\", \"name\": \"Renamed\" }"));
+        assertCounts(1, 0, apply("{ \"op\": \"MODIFY_ENTITY\", \"entity\": \"a.thing\", \"name\": \"Renamed\" }"));
         assertEquals("Renamed", find("a.thing").name);
     }
 
@@ -173,14 +180,14 @@ class SceneDeltaPatcherTest {
         // Line breaks inside the value are documented as ignored
         String wrapped = base64.substring(0, 8) + "\\n" + base64.substring(8);
 
-        assertEquals(new Result(1, 0), apply("{ \"op\": \"ATTACH_COMPONENT\", \"entity\": \"crate\", \"component\": \"SplineComponent\", "
+        assertCounts(1, 0, apply("{ \"op\": \"ATTACH_COMPONENT\", \"entity\": \"crate\", \"component\": \"SplineComponent\", "
                 + "\"properties\": { \"splineData\": \"" + wrapped + "\" } }"));
         assertArrayEquals(knots, crate.getComponent(SplineComponent.class).splineData);
     }
 
     @Test
     void invalidBase64FailsTheOperation() throws IOException {
-        assertEquals(new Result(0, 1), apply("{ \"op\": \"ATTACH_COMPONENT\", \"entity\": \"crate\", \"component\": \"SplineComponent\", "
+        assertCounts(0, 1, apply("{ \"op\": \"ATTACH_COMPONENT\", \"entity\": \"crate\", \"component\": \"SplineComponent\", "
                 + "\"properties\": { \"splineData\": \"not*valid\" } }"));
     }
 
@@ -188,5 +195,67 @@ class SceneDeltaPatcherTest {
     void scenePathsNormalizeSoPatchesFindTheirTarget() {
         assertEquals(SceneDeltaPatcher.normalizeScenePath("Assets/Scenes/Main.rscene"),
                 SceneDeltaPatcher.normalizeScenePath("Assets\\Scenes\\Main.rscene"));
+    }
+
+    // --- Scene settings (MODIFY_SCENE) ---
+
+    @Test
+    void modifySceneChangesTheScenesSettings() throws IOException {
+        com.retro.engine.ecs.SceneSettings settings = new com.retro.engine.ecs.SceneSettings();
+        Result r = patcher.apply(patch("{ \"op\": \"MODIFY_SCENE\", \"properties\": { \"rememberWhenLeft\": false } }"), scene, settings);
+        assertEquals(1, r.applied());
+        assertFalse(settings.rememberWhenLeft);
+        patcher.apply(patch("{ \"op\": \"modify_scene\", \"properties\": { \"remember_when_left\": true } }"), scene, settings);
+        assertTrue(settings.rememberWhenLeft, "snake case and lower-case op work too");
+    }
+
+    @Test
+    void badSceneSettingsAreSkippedAndChangeNothing() throws IOException {
+        com.retro.engine.ecs.SceneSettings settings = new com.retro.engine.ecs.SceneSettings();
+        Result r = patcher.apply(patch("""
+                { "op": "MODIFY_SCENE", "properties": { "rememberWhenLeft": false, "gravity": 3 } },
+                { "op": "MODIFY_SCENE", "properties": { "rememberWhenLeft": "no" } },
+                { "op": "MODIFY_SCENE" },
+                { "op": "MODIFY_ENTITY", "entity": "crate", "name": "Box" }
+                """), scene, settings);
+        assertEquals(1, r.applied());
+        assertEquals(3, r.failed());
+        assertTrue(settings.rememberWhenLeft);
+        assertEquals("Box", find("crate").name, "the rest of the patch still applies");
+        assertEquals(1, patcher.apply(patch("{ \"op\": \"MODIFY_SCENE\", \"properties\": { \"rememberWhenLeft\": false } }"), scene).failed(),
+                "no settings given: the operation fails instead of silently doing nothing");
+    }
+
+    @Test
+    void theWriterRecordsASceneSettingChangeThatReplaysExactly() throws Exception {
+        Path modRoot = Files.createDirectories(dir.resolve("my_mod"));
+        Files.writeString(modRoot.resolve(ModManifest.FILE_NAME), "{ \"id\": \"my_mod\" }");
+        SceneDeltaWriter writer = new SceneDeltaWriter(ModManifest.read(modRoot.toFile()), ModVirtualFileSystem.empty(dir.toFile()));
+        com.retro.engine.ecs.SceneSettings vanilla = new com.retro.engine.ecs.SceneSettings();
+        com.retro.engine.ecs.SceneSettings edited = vanilla.copy();
+
+        Map<String, Object> same = writer.diff("Assets/Scenes/Main.rscene", scene, scene, vanilla, edited);
+        assertTrue(((List<?>) same.get("operations")).isEmpty(), "unchanged settings write nothing");
+
+        edited.rememberWhenLeft = false;
+        Map<String, Object> doc = writer.diff("Assets/Scenes/Main.rscene", scene, scene, vanilla, edited);
+        assertEquals(1, ((List<?>) doc.get("operations")).size());
+        Path file = dir.resolve("written.rpatch");
+        Files.writeString(file, MiniJson.write(doc));
+        com.retro.engine.ecs.SceneSettings loaded = new com.retro.engine.ecs.SceneSettings();
+        assertEquals(1, patcher.apply(SceneDeltaPatcher.parse(file.toFile(), "my_mod"), scene, loaded).applied());
+        assertFalse(loaded.rememberWhenLeft);
+    }
+
+    @Test
+    void resultsListTheEntitiesEachPatchAddedOrChanged() throws IOException {
+        Result r = apply("""
+                { "op": "ADD_ENTITY", "id": "test_mod.chest", "name": "Chest" },
+                { "op": "MODIFY_COMPONENT", "entity_name": "Sun", "component": "Light", "properties": { "intensity": 2.0 } },
+                { "op": "REMOVE_ENTITY", "entity": "lid" },
+                { "op": "MODIFY_ENTITY", "entity": "nope", "name": "X" }
+                """);
+        assertEquals(java.util.Set.of("test_mod.chest"), r.added());
+        assertEquals(java.util.Set.of("light_1"), r.edited(), "addressed by name, reported by id; removals and failures are not listed");
     }
 }

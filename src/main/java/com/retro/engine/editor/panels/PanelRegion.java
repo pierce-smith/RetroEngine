@@ -36,7 +36,7 @@ public enum PanelRegion {
             }
         }
 
-        if (ndcY >= DockSpace.AREA_Y1) {
+        if (ndcY >= DockSpace.areaTop()) {
             return TOP_BAR;
         }
         DockPanel panel = dock.panelAt(ndcX, ndcY);

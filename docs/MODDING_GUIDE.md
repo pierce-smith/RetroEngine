@@ -103,11 +103,16 @@ frames (about 10 s at 60 FPS) is unloaded from VRAM.
     { "op": "ATTACH_COMPONENT", "entity_name": "Cube", "component": "WobbleComponent", "properties": { "speed": 3 } },
     { "op": "DETACH_COMPONENT", "entity": "entity_2", "component": "ScriptComponent", "index": 0 },
     { "op": "MODIFY_ENTITY", "entity": "my_mod.chest", "name": "Big Chest", "parent": null },
-    { "op": "REMOVE_ENTITY", "entity": "entity_3" }
+    { "op": "REMOVE_ENTITY", "entity": "entity_3" },
+    { "op": "MODIFY_SCENE", "properties": { "rememberWhenLeft": false } }
   ]
 }
 ```
 
+- **Scene settings**: `MODIFY_SCENE` changes the scene's own settings. Today that is `rememberWhenLeft` (`true` /
+  `false`): whether save games keep the scene's changes after the player leaves it (the REMEMBER switch on the
+  Inspector's SCENE card). Creation Kit mode writes this for you when you flip that switch on a vanilla scene. Engines
+  older than this operation skip it and apply the rest of the patch.
 - **Targeting**: `"entity"` matches an entity id; `"entity_name"` matches the first entity with that name.
   `REMOVE_ENTITY` also removes the entity's descendants. `"index"` selects among several components of the same
   type and defaults to 0.
@@ -247,18 +252,28 @@ The editor doubles as the modding tool:
 1. Choose **Open Mod Workspace...** from the project launcher or the FILE menu.
 2. Pick a mod folder inside `<Project>/Mods/`. To make a new mod, pick an empty folder there (or `Mods/` itself).
    The editor writes a mod skeleton with `mod.json`, `Assets/`, `Patches/`, `Scripts/` and `Shaders/`.
-3. The project opens with only that mod and its dependencies loaded. The title bar shows `[MOD <id>]`.
+3. The project opens with only that mod and its dependencies loaded. You can tell you're in the workspace at a glance:
+   - an orange **MOD WORKSPACE** banner under the menu bar names the mod and has a **CLOSE** button;
+   - the editor's accent color (selection, switches, the gizmo toolbar) turns from blue to orange;
+   - the Hierarchy tags what your mod's saved patches change: **NEW** for entities it adds, **EDITED** for vanilla
+     entities it changes. Tags refresh each time you save.
 4. Edit the vanilla scene normally, then save it. The scene file is not overwritten. Instead the editor writes the
    difference to `Patches/<Scene>.editor.rpatch`. That delta is computed against vanilla plus every other patch,
    including your hand-written ones, so it holds only your edits. Saving an unchanged scene deletes the file.
 5. Scenes saved *inside* the mod folder are ordinary mod-owned `.rscene` files. Saving to any other vanilla path is
    refused.
-6. Choose **File > Close Mod Workspace** to go back to vanilla.
+6. Choose **File > Close Mod Workspace** (or **CLOSE** on the banner) to go back to vanilla.
+
+Imports in the workspace go into the mod: files you import through the asset browser, the Inspector's IMPORT buttons
+or drag and drop are copied into the mod's `Assets/` overlay, in the same subfolder the asset browser shows. If the
+game already has a file of that name there, the copy gets a new name such as `Rock (2).png`, because a file in the
+overlay with a vanilla file's path replaces that file in every scene. To replace a vanilla file on purpose, copy it
+into the overlay yourself at the same path.
 
 Limitations:
 
-- Only scenes are protected. Assets you import through the asset browser still land in the vanilla `Assets/` folder.
-  Put mod assets in the mod's `Assets/` overlay or another mod subfolder instead.
+- Files imported into the mod don't appear in the asset browser, which lists the game's `Assets/` folder. The
+  Inspector field you imported from is filled in directly, and saving writes the path into your patch.
 - New ids are written as you created them. Prefix them with your `mod_id` so they can't clash with other mods.
 - Spline edits are recorded like any other property. Knot and handle drags are written as a Base64 `splineData`
   value next to curve type, loop and resolution. A blob that's byte-identical to the baseline isn't written, so

@@ -365,7 +365,7 @@ public final class ProjectSettingsOverlay {
         }
     }
 
-    private static final int[] CHANNEL_COLORS = { EditorTheme.RED, EditorTheme.GREEN, EditorTheme.ACCENT };
+    private static final int[] CHANNEL_COLORS = { EditorTheme.RED, EditorTheme.GREEN, EditorTheme.SYSTEM_BLUE };
     private static final char[] CHANNEL_NAMES = { 'R', 'G', 'B' };
 
     private static void drawTrack(UIGeometryBatch.Buffer buffer, float x0, float x1, float midY, float t, int fillRgb) {

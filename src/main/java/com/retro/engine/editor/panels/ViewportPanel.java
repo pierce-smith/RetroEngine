@@ -494,6 +494,11 @@ public class ViewportPanel {
         UIGeometryBatch.addQuad(buffer, x1 - MARKER_LINE, y0, x1, y1, rgb, alpha);
     }
 
+    /** The toolbar's own dark blue, or the mod workspace's orange accent while one is open. */
+    private static int toolbarSelectedColor() {
+        return com.retro.engine.modding.ModWorkspace.isActive() ? EditorTheme.ACCENT : 0x0073B3;
+    }
+
     public static void renderToolbar(UIGeometryBatch.Buffer buffer, GizmoMode currentGizmoMode) {
         float barX1 = -0.52f, barY1 = 0.79f, barX2 = -0.10f, barY2 = 0.85f;
         UIGeometryBatch.addQuad(buffer, barX1, barY1, barX2, barY2, 0.10f, 0.10f, 0.13f, 1.0f);
@@ -502,7 +507,7 @@ public class ViewportPanel {
         // Button 1: [1/W] MOVE
         float btn1X1 = -0.51f, btn1X2 = -0.38f;
         if (currentGizmoMode == GizmoMode.TRANSLATE) {
-            UIGeometryBatch.addQuad(buffer, btn1X1, barY1 + 0.005f, btn1X2, barY2 - 0.005f, 0.0f, 0.45f, 0.70f, 1.0f);
+            UIGeometryBatch.addQuad(buffer, btn1X1, barY1 + 0.005f, btn1X2, barY2 - 0.005f, toolbarSelectedColor(), 1.0f);
             UIGeometryBatch.addBoundedText(buffer, "1:MOVE", btn1X1 + 0.005f, barY2 - 0.015f, btn1X2, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f);
         } else {
             UIGeometryBatch.addBoundedText(buffer, "1:MOVE", btn1X1 + 0.005f, barY2 - 0.015f, btn1X2, 1.0f, 0.6f, 0.6f, 0.6f, 1.0f);
@@ -511,7 +516,7 @@ public class ViewportPanel {
         // Button 2: [2/E] ROT
         float btn2X1 = -0.37f, btn2X2 = -0.25f;
         if (currentGizmoMode == GizmoMode.ROTATE) {
-            UIGeometryBatch.addQuad(buffer, btn2X1, barY1 + 0.005f, btn2X2, barY2 - 0.005f, 0.0f, 0.45f, 0.70f, 1.0f);
+            UIGeometryBatch.addQuad(buffer, btn2X1, barY1 + 0.005f, btn2X2, barY2 - 0.005f, toolbarSelectedColor(), 1.0f);
             UIGeometryBatch.addBoundedText(buffer, "2:ROT", btn2X1 + 0.005f, barY2 - 0.015f, btn2X2, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f);
         } else {
             UIGeometryBatch.addBoundedText(buffer, "2:ROT", btn2X1 + 0.005f, barY2 - 0.015f, btn2X2, 1.0f, 0.6f, 0.6f, 0.6f, 1.0f);
@@ -520,7 +525,7 @@ public class ViewportPanel {
         // Button 3: [3/R] SCL
         float btn3X1 = -0.24f, btn3X2 = -0.11f;
         if (currentGizmoMode == GizmoMode.SCALE) {
-            UIGeometryBatch.addQuad(buffer, btn3X1, barY1 + 0.005f, btn3X2, barY2 - 0.005f, 0.0f, 0.45f, 0.70f, 1.0f);
+            UIGeometryBatch.addQuad(buffer, btn3X1, barY1 + 0.005f, btn3X2, barY2 - 0.005f, toolbarSelectedColor(), 1.0f);
             UIGeometryBatch.addBoundedText(buffer, "3:SCL", btn3X1 + 0.005f, barY2 - 0.015f, btn3X2, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f);
         } else {
             UIGeometryBatch.addBoundedText(buffer, "3:SCL", btn3X1 + 0.005f, barY2 - 0.015f, btn3X2, 1.0f, 0.6f, 0.6f, 0.6f, 1.0f);

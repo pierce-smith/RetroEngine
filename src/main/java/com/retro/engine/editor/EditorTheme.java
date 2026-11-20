@@ -17,7 +17,10 @@ public final class EditorTheme {
     public static final int BORDER_STRONG = 0x4A4A54;
 
     // Accents
-    public static final int ACCENT = 0x0A84FF;         // Apple system blue
+    public static final int SYSTEM_BLUE = 0x0A84FF;    // Apple system blue
+    public static final int MOD_ACCENT = 0xFF9F0A;     // System orange: the mod workspace's accent
+    /** Selection, toggles and primary buttons. Orange while a mod workspace is open, so the mode shows everywhere. */
+    public static int ACCENT = SYSTEM_BLUE;
     public static final int GRAPHITE = 0x5E5E6E;
 
     // Text
@@ -42,7 +45,7 @@ public final class EditorTheme {
     // Animator graph nodes
     public static final int NODE_ENTRY = 0xD97706;     // Muted amber
     public static final int NODE_ANY_STATE = 0x475569; // Slate
-    public static final int NODE_ACTIVE = ACCENT;
+    public static final int NODE_ACTIVE = SYSTEM_BLUE;
     public static final int NODE_INACTIVE = SURFACE;
     public static final int SHADOW = 0x000000;
 
@@ -56,6 +59,11 @@ public final class EditorTheme {
     public static final float RADIUS = 0.010f;
     public static final float RADIUS_SMALL = 0.006f;
     public static final float HAIRLINE = 0.002f;
+
+    /** Called once per frame by the editor: the accent follows whether a mod workspace is open. */
+    public static void setModWorkspaceTint(boolean modWorkspace) {
+        ACCENT = modWorkspace ? MOD_ACCENT : SYSTEM_BLUE;
+    }
 
     public static int axisColor(int axis) {
         return switch (axis) {

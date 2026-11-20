@@ -34,6 +34,13 @@ public final class ModWorkspace {
     private static volatile ModManifest activeMod;
     private static volatile File projectDir;
 
+    /** How the authored mod touches an entity, for the Hierarchy's NEW / EDITED tags. */
+    public enum Change { ADDED, EDITED }
+
+    // Entity id (lower case) -> change: from the mod's own hand-written patches, and from its editor patch
+    private static final Map<String, Change> handWrittenChanges = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final Map<String, Change> editorChanges = new java.util.concurrent.ConcurrentHashMap<>();
+
     private ModWorkspace() {}
 
     public static boolean isActive() { return activeMod != null; }
@@ -80,10 +87,87 @@ public final class ModWorkspace {
     }
 
     private static void close() {
+        handWrittenChanges.clear();
+        editorChanges.clear();
         activeMod = null;
         projectDir = null;
         ModLoader.setWorkspaceModFilter(null);
         ModLoader.setEditorModsEnabled(false);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // What the mod changed (Hierarchy tags)
+    // ------------------------------------------------------------------------------------------
+
+    /** How the authored mod's saved patches touch this entity, or null when they don't (or no workspace is open). */
+    public static Change changeOf(String entityId) {
+        if (activeMod == null || entityId == null) return null;
+        String key = entityId.toLowerCase(Locale.ROOT);
+        Change a = handWrittenChanges.get(key), b = editorChanges.get(key);
+        if (a == Change.ADDED || b == Change.ADDED) return Change.ADDED;
+        return a != null ? a : b;
+    }
+
+    /** A scene is about to have its patches applied: forget the previous scene's tags. */
+    static void onSceneLoading() {
+        handWrittenChanges.clear();
+        editorChanges.clear();
+    }
+
+    /** One patch was applied while loading; only the authored mod's patches produce tags. */
+    static void onPatchApplied(SceneDeltaPatcher.Patch patch, SceneDeltaPatcher.Result result) {
+        ModManifest mod = activeMod;
+        if (mod == null || !mod.id.equals(patch.modId())) return;
+        boolean editor = patch.source().getName().endsWith(EDITOR_PATCH_SUFFIX);
+        record(editor ? editorChanges : handWrittenChanges, result.added(), result.edited());
+    }
+
+    private static void record(Map<String, Change> into, java.util.Collection<String> added, java.util.Collection<String> edited) {
+        for (String id : edited) into.putIfAbsent(id.toLowerCase(Locale.ROOT), Change.EDITED);
+        for (String id : added) into.put(id.toLowerCase(Locale.ROOT), Change.ADDED);
+    }
+
+    /** The editor patch was just written (or deleted): its tags now follow the operations saved in it. */
+    private static void onEditorPatchSaved(List<?> operations) {
+        editorChanges.clear();
+        List<String> added = new ArrayList<>(), edited = new ArrayList<>();
+        for (Object o : operations) {
+            if (!(o instanceof Map<?, ?> op)) continue;
+            String kind = String.valueOf(op.get("op"));
+            if (kind.equals("ADD_ENTITY") && op.get("id") != null) added.add(String.valueOf(op.get("id")));
+            else if (!kind.equals("REMOVE_ENTITY") && op.get("entity") != null) edited.add(String.valueOf(op.get("entity")));
+        }
+        record(editorChanges, added, edited);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Imports
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * Where an import lands while a mod workspace is open: the mod's asset overlay ({@code <mod>/Assets/} by default)
+     * at the same subfolder the asset browser shows ({@code browserFolder}, relative to Assets/). Null when no
+     * workspace is open, so imports go to the game's Assets/ as usual.
+     */
+    public static File importFolder(String browserFolder) throws IOException {
+        ModManifest mod = activeMod;
+        if (mod == null) return null;
+        String overlay = mod.assetOverlays.isEmpty() ? "Assets/" : mod.assetOverlays.get(0);
+        File root = mod.resolve(overlay);
+        File dir = (browserFolder == null || browserFolder.isEmpty()) ? root : new File(root, browserFolder);
+        Files.createDirectories(dir.toPath());
+        return dir;
+    }
+
+    /** True for a file inside the authored mod's folder (an import of it is used where it is). */
+    public static boolean isInsideActiveMod(File file) {
+        ModManifest mod = activeMod;
+        if (mod == null || file == null) return false;
+        try {
+            return file.getCanonicalFile().toPath().startsWith(mod.root.getCanonicalFile().toPath());
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     /** Called when the project is closed from the editor (switch project): drops the authoring target. */
@@ -135,7 +219,7 @@ public final class ModWorkspace {
             return true;
         }
         try {
-            File written = writeScenePatch(loader, mod, target.toFile(), world.getSceneEntities(), assetDb);
+            File written = writeScenePatch(loader, mod, target.toFile(), world.getSceneEntities(), world.getSceneSettings(), assetDb);
             System.out.println(written != null
                     ? "[ModWorkspace] Saved scene delta -> " + mod.root.getCanonicalFile().toPath().relativize(written.getCanonicalFile().toPath())
                     : "[ModWorkspace] No differences from the vanilla scene; nothing to save.");
@@ -150,6 +234,12 @@ public final class ModWorkspace {
      * differences, deletes) that patch. Returns the written file, or null when there was nothing to write.
      */
     static File writeScenePatch(ModLoader loader, ModManifest mod, File sceneFile, List<Entity> current, AssetDatabase assetDb) throws Exception {
+        return writeScenePatch(loader, mod, sceneFile, current, null, assetDb);
+    }
+
+    /** {@code currentSettings}: the open scene's settings; a difference from the baseline is written as MODIFY_SCENE. */
+    static File writeScenePatch(ModLoader loader, ModManifest mod, File sceneFile, List<Entity> current,
+                                com.retro.engine.ecs.SceneSettings currentSettings, AssetDatabase assetDb) throws Exception {
         String relScene = loader.projectRelativeScene(sceneFile.getAbsolutePath());
         if (relScene == null) throw new IOException("scene is outside the project: " + sceneFile);
         File patchFile = editorPatchFile(mod, relScene);
@@ -158,10 +248,12 @@ public final class ModWorkspace {
         // A delta against an unreadable baseline would record the whole scene as mod content
         if (data.failed()) throw new IOException("the vanilla scene could not be read: " + data.error());
         List<Entity> baseline = data.entities();
-        loader.applyPatches(sceneFile.getAbsolutePath(), baseline, patchFile);
+        com.retro.engine.ecs.SceneSettings baselineSettings = data.settings();
+        loader.applyPatches(sceneFile.getAbsolutePath(), baseline, baselineSettings, patchFile);
 
-        Map<String, Object> doc = new SceneDeltaWriter(mod, loader.vfs()).diff(relScene, baseline, current);
+        Map<String, Object> doc = new SceneDeltaWriter(mod, loader.vfs()).diff(relScene, baseline, current, baselineSettings, currentSettings);
         List<?> ops = (List<?>) doc.get("operations");
+        onEditorPatchSaved(ops);
         if (ops.isEmpty()) {
             Files.deleteIfExists(patchFile.toPath());
             loader.reindexPatches();

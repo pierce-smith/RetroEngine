@@ -514,10 +514,14 @@ public final class ModLoader {
      * diffs against this baseline). No events are posted.
      */
     void applyPatches(String scenePath, List<Entity> entities, File excluded) {
+        applyPatches(scenePath, entities, null, excluded);
+    }
+
+    void applyPatches(String scenePath, List<Entity> entities, com.retro.engine.ecs.SceneSettings settings, File excluded) {
         Path skip = (excluded != null) ? excluded.getAbsoluteFile().toPath().normalize() : null;
         for (SceneDeltaPatcher.Patch patch : patchesFor(scenePath)) {
             if (skip != null && patch.source().getAbsoluteFile().toPath().normalize().equals(skip)) continue;
-            patcher.apply(patch, entities);
+            patcher.apply(patch, entities, settings);
         }
     }
 
@@ -657,12 +661,19 @@ public final class ModLoader {
      * descendants). Mutates {@code entities} in place. Returns the number of patches applied.
      */
     public static int onSceneDeserialized(String scenePath, List<Entity> entities) {
+        return onSceneDeserialized(scenePath, entities, null);
+    }
+
+    /** {@code settings}: the loaded scene's settings, which MODIFY_SCENE operations change in place. */
+    public static int onSceneDeserialized(String scenePath, List<Entity> entities, com.retro.engine.ecs.SceneSettings settings) {
         ModLoader l = active;
         if (l == null || entities == null) return 0;
 
         List<SceneDeltaPatcher.Patch> patches = l.patchesFor(scenePath);
+        if (workspaceModId != null) ModWorkspace.onSceneLoading();
         for (SceneDeltaPatcher.Patch patch : patches) {
-            SceneDeltaPatcher.Result r = l.patcher.apply(patch, entities);
+            SceneDeltaPatcher.Result r = l.patcher.apply(patch, entities, settings);
+            if (workspaceModId != null) ModWorkspace.onPatchApplied(patch, r);
             System.out.println("[ModLoader] Applied " + patch.modId() + "/" + patch.source().getName() + " to " + patch.targetScene()
                     + " (" + r.applied() + " ops" + (r.failed() > 0 ? ", " + r.failed() + " failed" : "") + ")");
         }

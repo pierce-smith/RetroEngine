@@ -973,7 +973,7 @@ public class SceneWorld {
         this.sceneSettings = data.settings() != null ? data.settings() : new SceneSettings();
         List<Entity> loadedEntities = data.entities();
         // Mods: .rpatch deltas, SceneLoadEvent and EntitySpawnEvent run on the fresh list before it is bound
-        ModLoader.onSceneDeserialized(sanitized, loadedEntities);
+        ModLoader.onSceneDeserialized(sanitized, loadedEntities, sceneSettings);
         clearRegistryAndRebind(loadedEntities);
         getNavigation().loadForScene(resolveScenePath(sanitized));
         attachAndArmAnimators();

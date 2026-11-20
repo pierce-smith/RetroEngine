@@ -695,6 +695,8 @@ public class EditorWorkspace {
             return commitUiVertices();
         }
 
+        // The whole editor turns orange while a mod workspace is open, so the mode is never mistaken for vanilla editing
+        EditorTheme.setModWorkspaceTint(com.retro.engine.modding.ModWorkspace.isActive());
         // Master dock layout: every panel below the menu bar is a docked, tabbed tile
         dockSpace.layout(windowWidth, windowHeight);
         if (cameraController != null) cameraController.setSceneAspect(ViewportPanel.getSceneAspect(dockSpace));
@@ -713,6 +715,7 @@ public class EditorWorkspace {
         dockSpace.renderChrome(uiGeometryBuffer);
 
         MainMenuBar.render(uiGeometryBuffer, overlayManager.getActiveDropdownMenu(), sceneManager.getActiveScenePath(), sceneManager.getPlayState());
+        com.retro.engine.editor.panels.ModWorkspaceBanner.render(uiGeometryBuffer, lastNdcX, lastNdcY);
 
         dockSpace.renderDragOverlay(uiGeometryBuffer);
 

@@ -23,6 +23,11 @@ import java.util.List;
 public final class DockSpace {
 
     public static final float AREA_X0 = -1.0f, AREA_Y0 = -1.0f, AREA_X1 = 1.0f, AREA_Y1 = 0.92f;
+
+    /** Top of the docked panels: {@link #AREA_Y1}, lowered by the mod workspace banner while it shows. */
+    public static float areaTop() {
+        return ModWorkspaceBanner.isVisible() ? AREA_Y1 - ModWorkspaceBanner.HEIGHT : AREA_Y1;
+    }
     static final float TAB_BAR_H = 0.05f;
 
     private static final float GAP = 0.006f;
@@ -121,7 +126,7 @@ public final class DockSpace {
         splits.clear();
         Arrays.fill(visible, false);
         for (DockPanel p : DockPanel.values()) p.rect.visible = false;
-        layoutNode(root, AREA_X0, AREA_Y0, AREA_X1, AREA_Y1);
+        layoutNode(root, AREA_X0, AREA_Y0, AREA_X1, areaTop());
 
         // Keep Scene/Animator focus on a panel the user can actually see
         DockPanel other = (focusedWorkspace == DockPanel.SCENE) ? DockPanel.ANIMATOR : DockPanel.SCENE;
@@ -338,7 +343,7 @@ public final class DockSpace {
 
     /** Left press on dock chrome (tab bars, splitters). Returns true if consumed. */
     public boolean onPress(float x, float y) {
-        if (x < AREA_X0 || x > AREA_X1 || y < AREA_Y0 || y > AREA_Y1) return false;
+        if (x < AREA_X0 || x > AREA_X1 || y < AREA_Y0 || y > areaTop()) return false;
 
         DockNode split = splitterAt(x, y);
         if (split != null) {

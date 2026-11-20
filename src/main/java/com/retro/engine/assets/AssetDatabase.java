@@ -638,19 +638,30 @@ public class AssetDatabase {
         List<String> resolved = new ArrayList<>();
         if (filePaths == null || !hasActiveProject()) return resolved;
 
-        File targetDir = currentDirectory();
+        File vanillaDir = currentDirectory();
+        // Mod workspace: imports belong to the mod, in its Assets/ overlay at the same subfolder
+        File modDir = null;
+        try {
+            modDir = com.retro.engine.modding.ModWorkspace.importFolder(currentFolderPath);
+        } catch (IOException e) {
+            System.err.println("[AssetDatabase] Could not create the mod's import folder (" + e.getMessage() + "); importing into Assets/ instead.");
+        }
+        File targetDir = (modDir != null) ? modDir : vanillaDir;
         for (String path : filePaths) {
             if (path == null || path.trim().isEmpty()) continue;
             File source = new File(path.trim()).getAbsoluteFile();
-            if (isInsideAssets(source)) {
+            if (isInsideAssets(source) || (modDir != null && com.retro.engine.modding.ModWorkspace.isInsideActiveMod(source))) {
                 resolved.add(normalizePath(source.getAbsolutePath()));
                 continue;
             }
-            File target = uniqueChild(targetDir, source.getName());
+            // In a mod overlay a file named like a vanilla one replaces it everywhere, so pick a name free in both
+            File target = (modDir != null) ? uniqueChildInBoth(targetDir, vanillaDir, source.getName()) : uniqueChild(targetDir, source.getName());
             try {
                 copyRecursive(source.toPath(), target.toPath());
                 resolved.add(normalizePath(target.getAbsolutePath()));
-                System.out.println("[AssetDatabase] Imported " + source.getName() + " -> " + toProjectRelative(target.getAbsolutePath()));
+                System.out.println("[AssetDatabase] Imported " + source.getName() + " -> "
+                        + (modDir != null ? "mod " + com.retro.engine.modding.ModWorkspace.activeMod().id + ": " + target.getAbsolutePath()
+                                          : toProjectRelative(target.getAbsolutePath())));
             } catch (IOException | UncheckedIOException e) {
                 System.err.println("[AssetDatabase] Import failed for " + source + ": " + e.getMessage());
                 resolved.add(path);
@@ -871,6 +882,17 @@ public class AssetDatabase {
         for (int i = 2; ; i++) {
             candidate = new File(dir, base + " (" + i + ")" + ext);
             if (!candidate.exists()) return candidate;
+        }
+    }
+
+    /** Like {@link #uniqueChild}, but the name must also be free in {@code twin}. */
+    private static File uniqueChildInBoth(File dir, File twin, String name) {
+        if (!new File(dir, name).exists() && !new File(twin, name).exists()) return new File(dir, name);
+        String ext = fullExtension(name);
+        String base = name.substring(0, name.length() - ext.length());
+        for (int i = 2; ; i++) {
+            String candidate = base + " (" + i + ")" + ext;
+            if (!new File(dir, candidate).exists() && !new File(twin, candidate).exists()) return new File(dir, candidate);
         }
     }
 

@@ -288,7 +288,8 @@ This is the Creation Engine idea done in JSON. Mods **never edit a vanilla `.rsc
 ```
 
 Operations: `ADD_ENTITY`, `REMOVE_ENTITY`, `MODIFY_ENTITY`, `MODIFY_COMPONENT`, `ATTACH_COMPONENT`,
-`DETACH_COMPONENT`.
+`DETACH_COMPONENT`, and `MODIFY_SCENE` for the scene's own settings (`{"rememberWhenLeft": false}`, see
+`SceneSettings`). The format version stays 1: an engine that predates an operation logs and skips just that one.
 
 - **Applied every time the target scene loads**, in mod load order. Each mod sees the result of the mods before it.
 - **Fault-tolerant:** a bad operation is logged and skipped, and the rest of the patch still applies.
