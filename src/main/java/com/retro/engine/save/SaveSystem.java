@@ -1,7 +1,6 @@
 package com.retro.engine.save;
 
 import com.retro.engine.api.Internal;
-import com.retro.engine.core.ProjectWorkspace;
 import com.retro.engine.ecs.Entity;
 import com.retro.engine.ecs.components.ScriptComponent;
 import com.retro.engine.ecs.serialization.SceneSerializer;
@@ -34,9 +33,6 @@ public final class SaveSystem {
     private final Map<String, SceneState> levels = new LinkedHashMap<>();
     private final SaveRecord values = new SaveRecord();
     private final List<String[]> queuedSaves = new ArrayList<>();
-    private boolean sessionStarted;
-    private boolean rememberLevelsSetting = true;
-    private Boolean rememberLevelsOverride;
     private boolean levelRunning;
     private boolean restoring;
     private double playTime;
@@ -55,10 +51,6 @@ public final class SaveSystem {
 
     public void onLevelStarting() {
         active = this;
-        if (!sessionStarted) {
-            sessionStarted = true;
-            rememberLevelsSetting = readRememberLevelsSetting();
-        }
         pendingScripts.clear();
         baseline.captureScene(world.entities());
         levelRunning = true;
@@ -81,9 +73,12 @@ public final class SaveSystem {
             return;
         }
         String current = levelKey(world.activeScenePath());
-        // Loading the same scene again is a restart: it comes back as the scene file has it
-        if (rememberLevels() && !current.equals(levelKey(nextScenePath))) levels.put(current, SceneDiff.capture(world.entities(), baseline));
-        else levels.remove(current);
+        // The scene's Remember When Left setting decides; loading the same scene again is always a restart
+        if (world.remembersActiveLevel() && !current.equals(levelKey(nextScenePath))) {
+            levels.put(current, SceneDiff.capture(world.entities(), baseline));
+        } else {
+            levels.remove(current);
+        }
     }
 
     /** A queued {@link SaveGame#load} whose scene could not be loaded is dropped, and the current level keeps running. */
@@ -110,8 +105,6 @@ public final class SaveSystem {
         values.clear();
         queuedSaves.clear();
         pendingLoad = null;
-        rememberLevelsOverride = null;
-        sessionStarted = false;
         levelRunning = false;
         playTime = 0;
         if (active == this) active = null;
@@ -155,10 +148,9 @@ public final class SaveSystem {
         data.savedAtMillis = System.currentTimeMillis();
         data.playTimeSeconds = playTime;
         data.values.copyFrom(values);
-        if (rememberLevels()) {
-            for (Map.Entry<String, SceneState> e : levels.entrySet()) {
-                if (!e.getKey().equals(data.scenePath)) data.levels.put(e.getKey(), e.getValue());
-            }
+        // Remembered levels, plus the level the player is in as it is right now (whatever its Remember When Left setting)
+        for (Map.Entry<String, SceneState> e : levels.entrySet()) {
+            if (!e.getKey().equals(data.scenePath)) data.levels.put(e.getKey(), e.getValue());
         }
         data.levels.put(data.scenePath, SceneDiff.capture(world.entities(), baseline));
         try {
@@ -234,16 +226,6 @@ public final class SaveSystem {
 
     double playTime() { return playTime; }
 
-    boolean rememberLevels() { return rememberLevelsOverride != null ? rememberLevelsOverride : rememberLevelsSetting; }
-
-    void setRememberLevels(boolean remember) {
-        rememberLevelsOverride = remember;
-        if (!remember) {
-            // Keep nothing but what a save needs: the running level is captured when saving
-            levels.clear();
-        }
-    }
-
     void forgetLevel(String scenePath) { levels.remove(levelKey(scenePath)); }
 
     void forgetAllLevels() { levels.clear(); }
@@ -252,17 +234,5 @@ public final class SaveSystem {
     static String levelKey(String scenePath) {
         if (scenePath == null) return "";
         return SceneSerializer.sanitizeAssetPath(SceneSerializer.sanitizeScenePath(scenePath));
-    }
-
-    private static boolean readRememberLevelsSetting() {
-        String assets = ScriptEngine.getProjectAssetsRoot();
-        if (assets == null) return true;
-        File root = new File(assets).getAbsoluteFile();
-        File projectDir = root.getName().equalsIgnoreCase("Assets") ? root.getParentFile() : root;
-        try {
-            return ProjectWorkspace.readSettings(projectDir).rememberLevels;
-        } catch (IOException | RuntimeException e) {
-            return true;
-        }
     }
 }

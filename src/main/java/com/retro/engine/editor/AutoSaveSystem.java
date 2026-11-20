@@ -65,7 +65,7 @@ public final class AutoSaveSystem implements CommandStack.CommandListener {
             System.err.println("[AutoSave] Could not rotate backups for " + scene + ": " + e.getMessage());
         }
         boolean ok = SceneSerializer.saveBinaryScene(target, workspace.getSceneManager().getSceneEntities(),
-                workspace.getAssetDirectory(), workspace.getAssetDatabase());
+                workspace.getAssetDirectory(), workspace.getAssetDatabase(), workspace.getSceneManager().getSceneSettings());
         if (ok) {
             System.out.println("[AutoSave] Scene backed up to " + target);
         } else {

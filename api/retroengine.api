@@ -1257,7 +1257,6 @@ public @interface com.retro.engine.save.Save
 public final class com.retro.engine.save.SaveGame
   method public static boolean delete(java.lang.String)
   method public static boolean exists(java.lang.String)
-  method public static boolean isRememberingLevels()
   method public static boolean load(java.lang.String)
   method public static boolean newGame(java.lang.String)
   method public static boolean save(java.lang.String)
@@ -1269,7 +1268,6 @@ public final class com.retro.engine.save.SaveGame
   method public static void forgetAllLevels()
   method public static void forgetLevel(java.lang.String)
   method public static void saveAtEndOfFrame(java.lang.String,java.lang.String)
-  method public static void setRememberLevels(boolean)
 public static record com.retro.engine.save.SaveGame$SlotInfo
   ctor public com.retro.engine.save.SaveGame$SlotInfo(java.lang.String,java.lang.String,java.lang.String,long,double)
   method public double playTimeSeconds()

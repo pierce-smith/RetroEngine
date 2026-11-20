@@ -13,11 +13,12 @@ import java.util.List;
  * {@link Save} plus whatever scripts write in {@code onSave}. Loading loads the level fresh from its scene file and
  * applies those changes, so a level you patch after release still loads under old saves.</p>
  *
- * <p>Level memory: with <b>Remember Levels</b> on (Project Settings, Runtime tab; {@link #setRememberLevels} changes it
- * while the game runs) a level the player leaves keeps its changes, and returning to it brings them back; every
- * remembered level goes into the save. With it off, a level resets whenever it is left and a save holds only the
- * level the player is in. Loading the level that is already running ({@code SceneManager.reloadCurrentScene()}) always
- * restarts it as the scene file has it.</p>
+ * <p>Level memory is set per scene: <b>Remember When Left</b> (the REMEMBER switch on the Inspector's SCENE card, shown when nothing is selected; on by default). On: a
+ * level the player leaves keeps its changes, returning brings them back, and they go into every save. Off: the level
+ * resets whenever the player leaves it. Either way, a save made inside a level stores that level as it is at that
+ * moment, so loading puts the player back exactly where they were. Loading the level that is already running
+ * ({@code SceneManager.reloadCurrentScene()}) always restarts it as the scene file has it. {@link #forgetLevel} and
+ * {@link #newGame} reset levels from a script.</p>
  *
  * <p>Not saved: physics velocities, animation playback, sounds that are playing, particles. Save what your game needs of
  * those in {@code onSave}. Saving works while the game runs (in the editor: in Play mode); files go to the game's
@@ -110,17 +111,6 @@ public final class SaveGame {
     public static double getPlayTime() {
         SaveSystem s = SaveSystem.active();
         return s != null ? s.playTime() : 0;
-    }
-
-    public static boolean isRememberingLevels() {
-        SaveSystem s = SaveSystem.active();
-        return s == null || s.rememberLevels();
-    }
-
-    /** Overrides the project's Remember Levels setting until the game quits (or the editor stops Play). Off forgets every remembered level. */
-    public static void setRememberLevels(boolean remember) {
-        SaveSystem s = system("setRememberLevels");
-        if (s != null) s.setRememberLevels(remember);
     }
 
     /** The level comes back as its scene file has it the next time it loads. */

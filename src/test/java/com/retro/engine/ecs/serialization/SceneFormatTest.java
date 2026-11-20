@@ -67,6 +67,37 @@ class SceneFormatTest {
         return SceneSerializer.loadSceneData(scene().toString());
     }
 
+    // --- Scene settings (format 12) ---
+
+    @Test
+    void sceneSettingsSurviveSaving() {
+        com.retro.engine.ecs.SceneSettings off = new com.retro.engine.ecs.SceneSettings();
+        off.rememberWhenLeft = false;
+        assertTrue(SceneSerializer.saveScene(scene().toString(), sampleScene(), new ArrayList<>(), null, off));
+        SceneLoadData data = load();
+        assertFalse(data.failed());
+        assertFalse(data.settings().rememberWhenLeft);
+        assertEquals(2, data.entities().size());
+    }
+
+    @Test
+    void anEmptySceneKeepsItsSettings() {
+        com.retro.engine.ecs.SceneSettings off = new com.retro.engine.ecs.SceneSettings();
+        off.rememberWhenLeft = false;
+        assertTrue(SceneSerializer.saveScene(scene().toString(), new ArrayList<>(), new ArrayList<>(), null, off));
+        SceneLoadData data = load();
+        assertFalse(data.failed());
+        assertTrue(data.entities().isEmpty());
+        assertFalse(data.settings().rememberWhenLeft);
+    }
+
+    @Test
+    void scenesFromBeforeSettingsRememberByDefault() {
+        SceneLoadData data = SceneSerializer.loadSceneData(FORMATS.resolve("scene-v9-first-person.rscene").toString());
+        assertFalse(data.failed());
+        assertTrue(data.settings().rememberWhenLeft);
+    }
+
     // --- Damage detection ---
 
     @Test

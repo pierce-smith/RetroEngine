@@ -230,27 +230,63 @@ class SaveGameTest {
         assertNotNull(find("crate"));
     }
 
-    @Test
-    void withRememberLevelsOffALevelResetsWhenLeft() {
-        launch(levelA);
-        SaveGame.setRememberLevels(false);
-        destroy("key");
-        goTo(levelB);
-        goTo(levelA);
-        assertNotNull(find("key"));
+    /** Level B with Remember When Left off and a box the player can move. */
+    private void writeForgetfulLevelB() {
+        com.retro.engine.ecs.SceneSettings off = new com.retro.engine.ecs.SceneSettings();
+        off.rememberWhenLeft = false;
+        assertTrue(SceneSerializer.saveScene(levelB, new ArrayList<>(List.of(new Entity("b_floor", "b_floor", null),
+                new Entity("b_box", "b_box", null))), new ArrayList<>(), null, off));
     }
 
     @Test
-    void theProjectSettingTurnsLevelMemoryOff() throws IOException {
-        ProjectSettings s = ProjectWorkspace.readSettings(dir.resolve("Proj").toFile());
-        s.rememberLevels = false;
-        ProjectWorkspace.writeSettings(dir.resolve("Proj").toFile(), s);
+    void aSceneWithRememberOffResetsWhenLeft() {
+        writeForgetfulLevelB();
+        launch(levelB);
+        destroy("b_box");
+        goTo(levelA);
+        goTo(levelB);
+        assertNotNull(find("b_box"), "B forgot");
+    }
+
+    @Test
+    void scenesChooseIndependently() {
+        writeForgetfulLevelB();
         launch(levelA);
-        assertFalse(SaveGame.isRememberingLevels());
         destroy("key");
         goTo(levelB);
+        destroy("b_box");
         goTo(levelA);
-        assertNotNull(find("key"));
+        assertNull(find("key"), "A remembers");
+        goTo(levelB);
+        assertNotNull(find("b_box"), "B does not");
+        assertTrue(SaveGame.save("slot1"));
+        world.stop();
+        world = null;
+
+        launch(levelB);
+        loadSlot("slot1");
+        goTo(levelA);
+        assertNull(find("key"), "A's memory went into the save");
+    }
+
+    @Test
+    void savingInsideARoomWithRememberOffStillKeepsItAsItIs() {
+        writeForgetfulLevelB();
+        launch(levelB);
+        destroy("b_box");
+        find("b_floor").getTransform().posY = -1f;
+        assertTrue(SaveGame.save("slot1"));
+        world.stop();
+        world = null;
+
+        launch(levelB);
+        assertNotNull(find("b_box"));
+        loadSlot("slot1");
+        assertNull(find("b_box"), "the room comes back as it was when saved");
+        assertEquals(-1f, find("b_floor").getTransform().posY);
+        goTo(levelA);
+        goTo(levelB);
+        assertNotNull(find("b_box"), "leaving it still resets it");
     }
 
     @Test

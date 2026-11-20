@@ -802,7 +802,8 @@ public class EditorWorkspace {
                 if (sceneManager.getSelectionCount() > 1) {
                     InspectorPanel.renderMultiSelection(uiContext, sceneManager.getSelectedEntities(), sceneManager.getSelectedEntity());
                 } else {
-                    InspectorPanel.render(uiContext, sceneManager.getSelectedEntity(), getSelectedBone(), getSelectedBoneIndex(), assetDirectoryManager.getAssetDirectory());
+                    InspectorPanel.render(uiContext, sceneManager.getSelectedEntity(), getSelectedBone(), getSelectedBoneIndex(), assetDirectoryManager.getAssetDirectory(),
+                            sceneManager.getSceneSettings(), sceneManager.getActiveScenePath());
                 }
             }
             case ANIMATOR -> AnimatorGraphPanel.renderCanvas(uiGeometryBuffer, getActiveAnimatorController(), getActiveAnimator(), selectedStateName);

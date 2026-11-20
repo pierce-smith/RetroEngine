@@ -312,6 +312,12 @@ public class InspectorPanel {
 
     public static void render(UIContext ui, Entity selectedEntity, Skeleton.BoneNode selectedBone, int selectedBoneIndex,
                               List<AssetMeta> assetDirectory) {
+        render(ui, selectedEntity, selectedBone, selectedBoneIndex, assetDirectory, null, null);
+    }
+
+    /** {@code sceneSettings} / {@code scenePath}: the open scene, shown as the SCENE card when nothing is selected. */
+    public static void render(UIContext ui, Entity selectedEntity, Skeleton.BoneNode selectedBone, int selectedBoneIndex,
+                              List<AssetMeta> assetDirectory, com.retro.engine.ecs.SceneSettings sceneSettings, String scenePath) {
         UIGeometryBatch.Buffer buffer = ui.geometry();
         layout();
         PanelRect r = DockPanel.INSPECTOR.rect;
@@ -320,6 +326,10 @@ public class InspectorPanel {
 
         if (selectedEntity == null) {
             resetScroll();
+            if (sceneSettings != null) {
+                renderSceneCard(buffer, sceneSettings, scenePath);
+                return;
+            }
             float y = r.y1 - Math.min(0.64f, r.height() * 0.4f);
             centeredText(buffer, "NO SELECTION", y, 1.15f, EditorTheme.TEXT_MUTED);
             centeredText(buffer, "SELECT AN ENTITY IN THE HIERARCHY", y - 0.07f, 0.8f, EditorTheme.TEXT_DISABLED);
@@ -795,6 +805,33 @@ public class InspectorPanel {
     public static boolean isOverRemoveButton(float ndcX, float ndcY, float drawY) {
         return ndcX >= removeX0 && ndcX <= removeX1
                 && ndcY >= drawY - CTRL_BELOW + REMOVE_INSET && ndcY <= drawY + CTRL_ABOVE + 0.002f - REMOVE_INSET;
+    }
+
+    /** Y of the REMEMBER WHEN LEFT row on the SCENE card (the row's drawY, as property rows use it). */
+    public static float sceneRememberRowY() {
+        return contentTop - HEADER_ADVANCE;
+    }
+
+    /** Nothing selected: the open scene's own settings, stored in its .rscene file. */
+    private static void renderSceneCard(UIGeometryBatch.Buffer buffer, com.retro.engine.ecs.SceneSettings settings, String scenePath) {
+        String name = scenePath != null ? new java.io.File(scenePath).getName() : "Untitled";
+        if (name.toLowerCase(java.util.Locale.ROOT).endsWith(".rscene")) name = name.substring(0, name.length() - ".rscene".length());
+        headerSb.setLength(0);
+        headerSb.append("SCENE: ").append(name);
+        UIGeometryBatch.addTruncatedText(buffer, headerSb, labelX, headerTextY, valueX1, 1.1f, EditorTheme.TEXT, 1.0f);
+        UIGeometryBatch.addQuad(buffer, labelX, headerRuleY, valueX1, headerRuleY + EditorTheme.HAIRLINE, EditorTheme.BORDER, 1.0f);
+
+        renderSectionHeader(buffer, "Save Games", contentTop, false, false);
+        float drawY = sceneRememberRowY();
+        float midY = drawY - (CTRL_BELOW - CTRL_ABOVE) * 0.5f;
+        rowLabel(buffer, "REMEMBER", midY);
+        renderSwitch(buffer, settings.rememberWhenLeft, midY);
+        // One short hint line a full row below the switch, so the narrow panel never cuts it off
+        float hintY = midY - ROW_ADVANCE * 1.1f;
+        UIGeometryBatch.addTruncatedText(buffer, settings.rememberWhenLeft ? "KEEPS CHANGES WHEN LEFT" : "RESETS WHEN LEFT",
+                labelX, textTop(hintY, 0.75f), valueX1, 0.75f, EditorTheme.TEXT_MUTED, 1.0f);
+        UIGeometryBatch.addTruncatedText(buffer, "SELECT AN ENTITY TO EDIT IT.",
+                labelX, textTop(hintY - ROW_ADVANCE * 1.2f, 0.75f), valueX1, 0.75f, EditorTheme.TEXT_DISABLED, 1.0f);
     }
 
     private static void renderSectionHeader(UIGeometryBatch.Buffer buffer, String name, float drawY, boolean removable, boolean collapsed) {

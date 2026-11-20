@@ -4,6 +4,7 @@ import com.retro.engine.assets.AssetDatabase;
 import com.retro.engine.assets.AssetMeta;
 import com.retro.engine.core.AtomicFile;
 import com.retro.engine.ecs.Entity;
+import com.retro.engine.ecs.SceneSettings;
 
 import java.io.*;
 import java.nio.file.Files;
@@ -18,16 +19,22 @@ import java.util.List;
 public class SceneSerializer {
 
     public static final int BINARY_MAGIC = 0x52455452; // 'RETR' in ASCII
-    public static final int BINARY_VERSION = 11;        // Version 11 (UIText font, UIButton)
+    public static final int BINARY_VERSION = 12;        // Version 12 (scene settings block)
+    /** First version with the {@link SceneSettings} block right after the header. */
+    public static final int SCENE_SETTINGS_VERSION = 12;
 
     /** {@code error} is null on success. A failed load has no entities, which must never be mistaken for an empty scene. */
-    public record SceneLoadData(List<Entity> entities, List<AssetMeta> assetDirectory, String error) {
+    public record SceneLoadData(List<Entity> entities, List<AssetMeta> assetDirectory, String error, SceneSettings settings) {
         public SceneLoadData(List<Entity> entities, List<AssetMeta> assetDirectory) {
-            this(entities, assetDirectory, null);
+            this(entities, assetDirectory, null, new SceneSettings());
+        }
+
+        public SceneLoadData(List<Entity> entities, List<AssetMeta> assetDirectory, SceneSettings settings) {
+            this(entities, assetDirectory, null, settings != null ? settings : new SceneSettings());
         }
 
         static SceneLoadData failure(String error) {
-            return new SceneLoadData(new ArrayList<>(), new ArrayList<>(), error);
+            return new SceneLoadData(new ArrayList<>(), new ArrayList<>(), error, new SceneSettings());
         }
 
         public boolean failed() { return error != null; }
@@ -72,9 +79,15 @@ public class SceneSerializer {
     }
 
     public static boolean saveScene(String filePath, List<Entity> entities, List<AssetMeta> assetDirectory, AssetDatabase assetDb) {
+        return saveScene(filePath, entities, assetDirectory, assetDb, null);
+    }
+
+    /** {@code settings} null writes the defaults. */
+    public static boolean saveScene(String filePath, List<Entity> entities, List<AssetMeta> assetDirectory, AssetDatabase assetDb,
+                                    SceneSettings settings) {
         if (filePath == null || filePath.trim().isEmpty()) return false;
         String sanitizedPath = sanitizeScenePath(filePath);
-        return saveBinaryScene(sanitizedPath, entities, assetDirectory, assetDb);
+        return saveBinaryScene(sanitizedPath, entities, assetDirectory, assetDb, settings);
     }
 
     // --- BINARY SERIALIZATION (.rscene) ---
@@ -84,6 +97,11 @@ public class SceneSerializer {
      * the existing file. Returns false, leaving that file untouched, when the scene can't be written.
      */
     public static boolean saveBinaryScene(String filePath, List<Entity> entities, List<AssetMeta> assetDirectory, AssetDatabase assetDb) {
+        return saveBinaryScene(filePath, entities, assetDirectory, assetDb, null);
+    }
+
+    public static boolean saveBinaryScene(String filePath, List<Entity> entities, List<AssetMeta> assetDirectory, AssetDatabase assetDb,
+                                          SceneSettings settings) {
         if (filePath == null || filePath.trim().isEmpty()) return false;
         File file = new File(filePath);
 
@@ -96,6 +114,7 @@ public class SceneSerializer {
             dos.writeInt(BINARY_VERSION);
             dos.writeInt(entities != null ? entities.size() : 0);
             dos.writeInt(0);            // Checksum, filled in below
+            (settings != null ? settings : new SceneSettings()).write(dos);
 
             if (entities != null && !entities.isEmpty()) {
                 // 2. Build String Dictionary
@@ -173,11 +192,12 @@ public class SceneSerializer {
             int entityCount = dis.readInt();
             dis.readInt(); // Checksum, or padding in older files
             if (version >= ComponentBinaryCodec.SCENE_SELF_CONTAINED_VERSION) ComponentBinaryCodec.verifyChecksum(bytes);
+            SceneSettings settings = version >= SCENE_SETTINGS_VERSION ? SceneSettings.read(dis) : new SceneSettings();
 
-            // Empty scenes are written header-only (see saveBinaryScene)
+            // Empty scenes are written without entity, string or directory sections (see saveBinaryScene)
             if (entityCount == 0 && dis.available() == 0) {
                 System.out.println("[SceneSerializer] Loaded empty binary scene (.rscene): " + file.getAbsolutePath());
-                return new SceneLoadData(entities, assets);
+                return new SceneLoadData(entities, assets, settings);
             }
 
             // Read String Table
@@ -214,7 +234,7 @@ public class SceneSerializer {
 
             postProcessHierarchy(entities);
             System.out.println("[SceneSerializer] Loaded binary scene (.rscene): " + file.getAbsolutePath());
-            return new SceneLoadData(entities, assets);
+            return new SceneLoadData(entities, assets, settings);
         } catch (Exception e) {
             System.err.println("[SceneSerializer] Could not load " + file.getAbsolutePath() + ": " + e);
             e.printStackTrace();

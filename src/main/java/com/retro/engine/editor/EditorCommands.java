@@ -323,6 +323,22 @@ public class EditorCommands {
         }
     }
 
+    /** Flips the open scene's Remember When Left setting (Inspector SCENE card). */
+    public static class SetSceneRememberCommand implements ICommand {
+        private final com.retro.engine.ecs.SceneSettings settings;
+        private final boolean oldValue, newValue;
+
+        public SetSceneRememberCommand(com.retro.engine.ecs.SceneSettings settings, boolean newValue) {
+            this.settings = settings;
+            this.oldValue = settings.rememberWhenLeft;
+            this.newValue = newValue;
+        }
+
+        @Override public void execute() { settings.rememberWhenLeft = newValue; }
+        @Override public void undo() { settings.rememberWhenLeft = oldValue; }
+        @Override public String getName() { return "Modify Scene [REMEMBER WHEN LEFT]"; }
+    }
+
     public static class RemoveComponentCommand implements ICommand {
         private final EditorWorkspace workspace;
         private final Entity entity;

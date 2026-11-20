@@ -97,6 +97,7 @@ public class SceneWorld {
 
     private String activeScenePath = "Assets/Scenes/Default.rscene";
     private final com.retro.engine.save.SaveSystem saves = new com.retro.engine.save.SaveSystem(new SceneSaveWorld());
+    private SceneSettings sceneSettings = new SceneSettings();
     // Scene transition requested by a script; applied at the end of update() so no entity list is mid-iteration
     private volatile String pendingScenePath = null;
     // Last project database used to load a scene, reused so deferred transitions resolve project-relative assets
@@ -486,6 +487,7 @@ public class SceneWorld {
     private final class SceneSaveWorld implements com.retro.engine.save.SaveWorld {
         @Override public List<Entity> entities() { return sceneEntities; }
         @Override public String activeScenePath() { return activeScenePath; }
+        @Override public boolean remembersActiveLevel() { return sceneSettings.rememberWhenLeft; }
         @Override public Entity findEntityById(String id) { return SceneWorld.this.findEntityById(id); }
         @Override public void removeEntity(Entity e) { deleteEntity(e); }
         @Override public List<Entity> instantiatePrefab(String prefabPath) { return instantiatePrefabRuntimeAll(prefabPath); }
@@ -874,8 +876,12 @@ public class SceneWorld {
         pendingScenePath = null;
         clearRegistryAndRebind(new ArrayList<>());
         this.activeScenePath = "Assets/Scenes/Untitled.rscene";
+        this.sceneSettings = new SceneSettings();
         getNavigation().setMesh(null);
     }
+
+    /** The open scene's own settings, saved in its file. Editing them marks the scene changed (through undo commands). */
+    public SceneSettings getSceneSettings() { return sceneSettings; }
 
     public void saveActiveScene(String filePath, List<AssetMeta> assetDirectory) {
         saveActiveScene(filePath, assetDirectory, null);
@@ -904,7 +910,7 @@ public class SceneWorld {
         } catch (java.io.IOException e) {
             System.err.println("[SceneWorld] Could not back up " + target + " before saving: " + e.getMessage());
         }
-        if (!SceneSerializer.saveScene(sanitized, sceneEntities, assetDirectory, assetDb)) {
+        if (!SceneSerializer.saveScene(sanitized, sceneEntities, assetDirectory, assetDb, sceneSettings)) {
             reportDataError("Could not save " + target.getName() + ". The file on disk has not changed. See the log for details.");
             return;
         }
@@ -964,6 +970,7 @@ public class SceneWorld {
     private void bindLoadedScene(String filePath, SceneSerializer.SceneLoadData data) {
         String sanitized = SceneSerializer.sanitizeScenePath(filePath);
         this.activeScenePath = sanitized;
+        this.sceneSettings = data.settings() != null ? data.settings() : new SceneSettings();
         List<Entity> loadedEntities = data.entities();
         // Mods: .rpatch deltas, SceneLoadEvent and EntitySpawnEvent run on the fresh list before it is bound
         ModLoader.onSceneDeserialized(sanitized, loadedEntities);

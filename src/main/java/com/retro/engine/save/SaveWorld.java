@@ -8,6 +8,8 @@ import java.util.List;
 public interface SaveWorld {
     List<Entity> entities();
     String activeScenePath();
+    /** The running scene's Remember When Left setting. */
+    boolean remembersActiveLevel();
     Entity findEntityById(String id);
     /** Removes the entity right away (only called before the level starts running). */
     void removeEntity(Entity e);

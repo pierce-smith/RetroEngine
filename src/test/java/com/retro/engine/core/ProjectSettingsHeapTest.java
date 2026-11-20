@@ -129,4 +129,19 @@ class ProjectSettingsHeapTest {
         java.nio.ByteBuffer.wrap(v7).putInt(4, 7);
         assertEquals(ColorSpace.GAMMA, ProjectSettings.readPayload(v7, "v7").colorSpace);
     }
+
+    @Test
+    void aVersion9FileStillLoads() throws IOException {
+        ProjectSettings settings = new ProjectSettings("Game", "");
+        settings.vsync = false;
+        settings.write(dir);
+        byte[] current = ProjectSettings.read(dir).toPayload(dir);
+        // Version 9 (between Beta 4 and Beta 5) had one extra bool, rememberLevels, after the color space
+        byte[] v9 = java.util.Arrays.copyOf(current, current.length + 1);
+        v9[v9.length - 1] = 0;
+        java.nio.ByteBuffer.wrap(v9).putInt(4, 9);
+        ProjectSettings loaded = ProjectSettings.readPayload(v9, "v9");
+        assertEquals(false, loaded.vsync);
+        assertEquals(ColorSpace.LINEAR, loaded.colorSpace);
+    }
 }

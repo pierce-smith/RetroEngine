@@ -63,7 +63,10 @@ public class InspectorInputDelegate {
         }
 
         Entity selected = manager.getSelectedEntity();
-        if (selected == null) return;
+        if (selected == null) {
+            processSceneCardClick(ndcX, ndcY, manager);
+            return;
+        }
 
         // Top Header: "+ PREFAB" Button
         if (ndcX >= InspectorPanel.prefabX0 && ndcX <= InspectorPanel.prefabX1 && ndcY >= InspectorPanel.prefabY0 && ndcY <= InspectorPanel.prefabY1) {
@@ -236,6 +239,16 @@ public class InspectorInputDelegate {
                 return;
             }
         }
+    }
+
+    /** Nothing selected: the SCENE card's REMEMBER WHEN LEFT switch (row hit area, like component toggles). */
+    private static void processSceneCardClick(float ndcX, float ndcY, EditorWorkspace manager) {
+        float drawY = InspectorPanel.sceneRememberRowY();
+        if (ndcX < InspectorPanel.labelX || ndcX > InspectorPanel.valueX1) return;
+        if (ndcY < drawY - InspectorPanel.CTRL_BELOW || ndcY > drawY + InspectorPanel.CTRL_ABOVE) return;
+        com.retro.engine.ecs.SceneSettings settings = manager.getSceneManager().getSceneSettings();
+        UISoundPlayer.play(UISound.CLICK);
+        manager.getCommandHistory().executeCommand(new EditorCommands.SetSceneRememberCommand(settings, !settings.rememberWhenLeft));
     }
 
     /** Applies a click inside a property row; returns true when the click was consumed. */
