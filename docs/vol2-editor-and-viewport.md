@@ -150,19 +150,23 @@ also shows a dialog and leaves the existing file as it was.
 
 ### 1.7 Project Settings (*File → Project Settings…*)
 
-A modal with two tabs. Edits apply live to the workspace's `ProjectSettings`, which the renderer and the audio
+A modal with three tabs. Edits apply live to the workspace's `ProjectSettings`, which the renderer and the audio
 mixer read every frame. **SAVE** writes the project file (`<Name>.rproj`), **CANCEL** restores the values the modal opened with,
-and **RESET DEFAULTS** resets the fields.
+and **RESET DEFAULTS** resets the fields on the open tab only.
 
 | Tab    | Section | Controls |
 |--------|---------|----------|
 | RENDER | Shading | **Global shading model**: `BLINN-PHONG` (per-pixel) or `GOURAUD` (per-vertex, faceted). See Volume 3 §2.1 |
+|        |         | **BILINEAR TEXTURES**: off by default, which keeps nearest-neighbor, blocky texels. See Volume 3 §2.0 |
+|        |         | **LINEAR LIGHTING**: on for new projects, off (Gamma) for projects saved before the setting existed. **RESET DEFAULTS** leaves it as it is. See Volume 3 §2.1b |
 |        | Shadows | Ground shadow blobs on/off |
 |        | Distance fog | Enabled, start, end, density, color |
 |        | Ambient light | Color, intensity |
 | AUDIO  | Mixer buses | Volume + MUTE for MASTER, BGM (MUSIC), SFX, VOICE (Volume 1 §4.2) |
 |        | Ducking | Enabled, ducked BGM level, attack and release times |
 |        | Spatial reverb | **REVERB ZONES** master switch for `AudioReverbZone` (Volume 1 §4.3) |
+| RUNTIME | Memory | **MAX JAVA HEAP (MB)** for the exported game: 512 to 32,768, 2,048 by default (Volume 5 §1.2) |
+|        | Frame pacing | **VSYNC** (on by default) and **FRAME RATE CAP (FPS)**: 0 (the default) means no cap; other values are kept between 30 and 1,000 |
 
 Sliders drag on press. Clicking the value box next to a slider opens a prompt for an exact number. Values are
 formatted into a reused `StringBuilder`, so an open modal adds no per-frame allocation.

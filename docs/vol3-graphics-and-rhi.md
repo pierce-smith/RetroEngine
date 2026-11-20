@@ -171,6 +171,24 @@ casts shadows. The flag is per mesh (`MeshBufferData.unlit`), comes from the imp
 after the `.rpack` payload. It reaches the shaders as `isUnlit = 3` on Metal and `surface.w` on Vulkan. Sub-meshes merge
 into one draw, so a model that mixes unlit and lit materials draws lit and logs a warning.
 
+### 2.1b Linear or Gamma Lighting (`ColorSpace`)
+
+*Project Settings → Render → **LINEAR LIGHTING*** (Volume 2 §1.7) picks where the lit shaders do their light math.
+Either way, every color you pick (texture pixels, light colors, fog, ambient, vertex tints) means the color you see
+on screen. Only the math in between changes:
+
+| Mode | What happens | Look |
+|------|--------------|------|
+| `LINEAR` (new projects) | The lit shaders convert colors to linear light, light and fog them there, and convert back as the last step | Light falls off and mixes the way it does in real life, and matches Blender and glTF viewers |
+| `GAMMA (CLASSIC)` | The math runs directly on the on-screen color values, as PS1/PS2-era hardware did | Steeper falloff; overlapping lights wash out sooner |
+
+Projects saved before this setting existed open as **Gamma**, so they keep the look they were tuned for. **RESET
+DEFAULTS** on the Render tab doesn't change it.
+
+The mode only affects lit shading and fog. Blending (transparency, decals, shadow blobs), post-processing and the UI
+work the same way in both modes, and unlit meshes and particles look identical. Normal, specular and lightmap/AO textures are data and are never converted. The
+`ColorSpace` enum is `@Experimental`.
+
 ### 2.2 Skeletal Skinning
 
 | Layout   | Stride            | Pipeline |

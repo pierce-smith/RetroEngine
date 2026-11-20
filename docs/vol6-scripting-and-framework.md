@@ -860,6 +860,61 @@ for (SaveGame.SlotInfo s : SaveGame.listSlots()) { ... }    // newest first, for
 | File | `<slot>.rsave` in `ScriptSaveData.getSaveFolder()` (the game's folder in the OS save location). Binary, versioned (`SaveFileFormat`), CRC32-checked and written atomically. A damaged or missing slot makes `load` return false and the running level carries on. |
 | Editor | Saving and loading work in Play mode and write real files. Stop forgets the session (remembered levels, values, play time) and keeps the files. Loading reads scenes from disk, so save a scene before testing saves made in it. |
 
+### 4.6 Menus: Buttons, Fonts and Window Settings
+
+**Buttons.** Add **UI Button** (`UIButton`) to an entity under a UI Canvas. It draws a filled, optionally rounded and
+bordered rectangle with a centered label, and works three ways during Play:
+
+| Input | Moves focus | Presses |
+|-------|-------------|---------|
+| Mouse | Hovering focuses the button | Left click (press and release over it) |
+| Keyboard | Arrow keys go to the nearest button in that direction; Tab / Shift+Tab step through in reading order | Enter or Space |
+| Gamepad | D-pad or left stick | A |
+
+Focus only moves between visible buttons with **interactable** on whose canvas is on screen. The first keyboard or
+gamepad move focuses the button with **focusFirst** set (a menu's default choice), or else the top-left one.
+Turning **interactable** off greys the button out.
+
+React to a press with `onButtonClick(UIButton)` in a script on the button's entity, or check `button.wasClicked()`
+(true for one frame) from any script that holds the button. `isHovered()`, `isFocused()` and `isPressed()` report the
+current state, `focus()` moves focus to it and `click()` presses it from code, both on the next frame.
+
+```java
+import com.retro.engine.ecs.components.UIButton;
+import com.retro.engine.scripting.Game;
+import com.retro.engine.scripting.framework.SimpleEntityScript;
+
+public class MainMenu extends SimpleEntityScript {
+    @Override public void onButtonClick(UIButton button) {
+        if (button.label.equals("QUIT")) Game.quit();
+    }
+}
+```
+
+**Fonts.** UI text with no font set uses the engine's bundled default, **TeX Gyre Heros** (a Helvetica design under
+the GUST Font License, listed in `NOTICE.txt`), so a game's text looks the same on every OS. The editor's own UI keeps
+the system font. To use your own, import a `.ttf` or `.otf` file and pick it in the **FONT** field of a `UIText` or
+`UIButton`, or set the field from a script to a path under `Assets/`, such as `"Fonts/Title.ttf"`. A font loads the
+first time it's used, so text can show in the default font for a frame or two.
+
+**Window settings (`Game`).** For an options menu:
+
+| Call | Does |
+|------|------|
+| `Game.setFullscreen(bool)` / `isFullscreen()` | Fullscreen on the primary monitor, or back to a window. Players can also press **F11** or **Alt+Enter** |
+| `Game.setResolution(w, h)` | Windowed: resizes the window. Fullscreen: switches to the closest supported mode from `getDisplayModes()` |
+| `Game.getDisplayModes()` | The primary monitor's fullscreen modes (`width`, `height`, `refreshRate`), largest first. Empty in headless runs |
+| `Game.setVsync(bool)` / `isVsync()` | Starts at the project's Runtime setting. Graphics drivers can override it |
+| `Game.setFrameRateCap(fps)` / `getFrameRateCap()` | 0 removes the cap; other values are kept between 30 and 1,000 |
+| `Game.setTitle(text)` / `getTitle()` | The window title. An exported game starts with its project name |
+| `Game.quit()` | Closes the game after this frame (every script's `onDestroy` runs). In the editor it stops Play instead |
+| `Game.isEditor()` | True in the editor's Play mode, false in an exported game or a headless run |
+
+Changes take effect between frames, after every script's update, and the getters report a requested value right away.
+In the editor's Play mode the window belongs to the editor, so title and display requests are remembered but only an
+exported game applies them. These settings aren't saved for you. Store the player's choices with `ScriptSaveData` (§4.4) and apply them from the
+first script that starts.
+
 ---
 
 ## 5. Engine Runtime Fixes & Zero-Allocation Case Studies

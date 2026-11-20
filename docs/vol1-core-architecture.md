@@ -308,10 +308,11 @@ changing the writer. Once the writer moves on, you can't make one any more.
 | Category    | Components |
 |-------------|------------|
 | Core        | `Transform`, `MeshFilter`, `Material`, `Light`, `Camera`, `AudioSource`, `ScriptComponent` |
-| Physics     | `RigidBodyComponent`, `BoxCollider`, `SphereCollider`, `CapsuleCollider` |
+| Physics     | `RigidBodyComponent`, `BoxCollider`, `SphereCollider`, `CapsuleCollider`, `MeshCollider` (Volume 4 §1) |
 | Controllers | `CharacterControllerComponent`, `VehicleControllerComponent` |
 | Animation   | `AnimatorComponent`, `BoneSocket`, `FootIK`, `LookAtIK`, `AimIK` |
-| Game UI     | `UICanvasComponent`, `UIPanel`, `UIText`, `UIImage`, `UIProgressBar` |
+| Game UI     | `UICanvasComponent`, `UIPanel`, `UIText`, `UIButton`, `UIImage`, `UIProgressBar` (Volume 6 §4.6) |
+| Save games  | `Checkpoint` (Volume 6 §4.5) |
 | Effects     | `ParticleSystem` (Volume 3 §2.4), `Decal` (Volume 3 §2.4a) |
 | Audio       | `AudioReverbZone` (§4) |
 | Navigation  | `NavMeshAgent`, `NavMeshGate` (Volume 4 §1.5) |
@@ -366,7 +367,8 @@ The lifecycle matches what Unity and Minecraft modders already know:
 
 `onAwake → onEnable → onStart → onUpdate → onLateUpdate → onPhysicsUpdate (60 Hz) → onDisable → onDestroy`
 
-Plus `onCollision{Enter,Stay,Exit}`, `onTrigger{Enter,Stay,Exit}` and `onMouse{Enter,Exit,Down,Up}`.
+Plus `onCollision{Enter,Stay,Exit}`, `onTrigger{Enter,Stay,Exit}`, `onMouse{Enter,Exit,Down,Up}` and
+`onButtonClick(UIButton)`.
 
 When the engine calls each hook:
 
@@ -375,6 +377,7 @@ When the engine calls each hook:
 | `onAwake` | From `init()`, when the instance is created |
 | `onEnable` | Before `onStart`, and on the next tick after `ScriptComponent.enabled` turns back on |
 | `onStart` | Right after `init()` and the Inspector overrides are applied |
+| `onButtonClick(UIButton)` | When a `UIButton` on this entity is pressed (mouse, Enter / Space, gamepad A, or `click()` from code), before `onUpdate` (Volume 6 §4.6) |
 | `onMouse{Enter,Exit,Down,Up}` | Every simulation frame, after physics and before `onUpdate` (see below) |
 | `onUpdate` | Every simulation frame (after the framework's `onFrameworkUpdate`) |
 | `onLateUpdate` | Every simulation frame, after physics, every `onUpdate`, animation, IK and bone sockets, and before camera shake is applied and this frame's key/button presses clear. Use it for follow cameras and anything that must see final poses |
