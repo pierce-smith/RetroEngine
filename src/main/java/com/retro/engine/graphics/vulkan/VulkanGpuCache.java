@@ -306,19 +306,20 @@ public class VulkanGpuCache {
                 DeferredVulkanResource res = deferredDisposalQueue.peek();
                 if (totalFrameCount - res.frameEnqueued < RING_SLOTS || !uploadRing.isComplete(res.uploadValue)) break;
                 deferredDisposalQueue.poll();
-                destroyDeferred(vkDevice, res);
+                destroyDeferred(device, res);
                 // The slot still names the destroyed view; repoint it at white before it can be handed out again
                 if (res.bindlessSlot != NO_TEXTURE) queueTableWrite(new PendingTableWrite(res.bindlessSlot, 0L, null, true));
             }
         }
     }
 
-    private static void destroyDeferred(VkDevice vkDevice, DeferredVulkanResource res) {
+    private static void destroyDeferred(VulkanDevice device, DeferredVulkanResource res) {
+        VkDevice vkDevice = device.getLogicalDevice();
         if (res.imageViewHandle != 0L) vkDestroyImageView(vkDevice, res.imageViewHandle, null);
         if (res.samplerHandle != 0L) vkDestroySampler(vkDevice, res.samplerHandle, null);
         if (res.imageHandle != 0L) vkDestroyImage(vkDevice, res.imageHandle, null);
         if (res.bufferHandle != 0L) vkDestroyBuffer(vkDevice, res.bufferHandle, null);
-        if (res.memoryHandle != 0L) vkFreeMemory(vkDevice, res.memoryHandle, null);
+        device.getAllocator().free(res.memoryHandle);
     }
 
     /** Uploads a static VBO once (or returns the live handle for assetKey). Thread-safe. */
@@ -365,7 +366,7 @@ public class VulkanGpuCache {
         });
         if (uploadValue < 0L) {
             vkDestroyBuffer(device.getLogicalDevice(), handles[0], null);
-            vkFreeMemory(device.getLogicalDevice(), handles[1], null);
+            device.getAllocator().free(handles[1]);
             return false;
         }
 
@@ -558,7 +559,7 @@ public class VulkanGpuCache {
         long uploadValue = uploadRing.uploadBuffer(handles[0], bufferSize, dst -> MemoryUtil.memFloatBuffer(dst, vertices.length).put(vertices));
         if (uploadValue < 0L) {
             vkDestroyBuffer(device.getLogicalDevice(), handles[0], null);
-            vkFreeMemory(device.getLogicalDevice(), handles[1], null);
+            device.getAllocator().free(handles[1]);
             return null;
         }
         VulkanBuffer created = new VulkanBuffer(handles[0], handles[1], vertices.length / floatStride);
@@ -578,29 +579,22 @@ public class VulkanGpuCache {
         long buffer = handles[0];
         long bufferMemory = handles[1];
 
-        try (MemoryStack stack = stackPush()) {
-            PointerBuffer pData = stack.mallocPointer(1);
-            if (vkMapMemory(vkDevice, bufferMemory, 0, bufferSize, 0, pData) != VK_SUCCESS) {
-                vkDestroyBuffer(vkDevice, buffer, null);
-                vkFreeMemory(vkDevice, bufferMemory, null);
-                return null;
-            }
-            FloatBuffer floatBuf = pData.getFloatBuffer(0, vertices.length);
-            floatBuf.put(vertices);
-            vkUnmapMemory(vkDevice, bufferMemory);
-        }
+        MemoryUtil.memFloatBuffer(device.getAllocator().mappedAddress(bufferMemory), vertices.length).put(vertices);
 
         VulkanBuffer created = new VulkanBuffer(buffer, bufferMemory, vertices.length / floatStride);
         created.floatStride = floatStride;
         return created;
     }
 
-    /** Creates a host-visible, coherent buffer with bound memory; returns {buffer, memory} or null on failure. */
+    /**
+     * Creates a host-visible, coherent buffer with bound memory; returns {buffer, allocation} or null on failure. The
+     * memory stays mapped: write through {@code device.getAllocator().mappedAddress(allocation)}.
+     */
     static long[] allocateHostVisibleBuffer(VulkanDevice device, long bufferSize, int usage) {
         return allocateBuffer(device, bufferSize, usage, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     }
 
-    private static long[] allocateBuffer(VulkanDevice device, long bufferSize, int usage, int memoryProperties) {
+    static long[] allocateBuffer(VulkanDevice device, long bufferSize, int usage, int memoryProperties) {
         if (device == null || device.getLogicalDevice() == null || bufferSize <= 0) return null;
         VkDevice vkDevice = device.getLogicalDevice();
 
@@ -615,32 +609,13 @@ public class VulkanGpuCache {
             if (vkCreateBuffer(vkDevice, bufferInfo, null, pBuffer) != VK_SUCCESS) return null;
             long buffer = pBuffer.get(0);
 
-            VkMemoryRequirements memReqs = VkMemoryRequirements.calloc(stack);
-            vkGetBufferMemoryRequirements(vkDevice, buffer, memReqs);
-
-            // Streamed meshes land here at runtime, so a missing memory type must not orphan the buffer
-            int memTypeIndex;
-            try {
-                memTypeIndex = findMemoryType(device.getPhysicalDevice(), memReqs.memoryTypeBits(), memoryProperties);
-            } catch (IllegalStateException e) {
-                vkDestroyBuffer(vkDevice, buffer, null);
-                throw e;
-            }
-
-            VkMemoryAllocateInfo allocInfo = VkMemoryAllocateInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
-                    .allocationSize(memReqs.size())
-                    .memoryTypeIndex(memTypeIndex);
-
-            LongBuffer pBufferMemory = stack.mallocLong(1);
-            if (vkAllocateMemory(vkDevice, allocInfo, null, pBufferMemory) != VK_SUCCESS) {
+            // Streamed meshes land here at runtime, so a failed allocation must not orphan the buffer
+            long allocation = device.getAllocator().bindBuffer(buffer, memoryProperties);
+            if (allocation == 0L) {
                 vkDestroyBuffer(vkDevice, buffer, null);
                 return null;
             }
-            long bufferMemory = pBufferMemory.get(0);
-
-            vkBindBufferMemory(vkDevice, buffer, bufferMemory, 0);
-            return new long[] { buffer, bufferMemory };
+            return new long[] { buffer, allocation };
         }
     }
 
@@ -825,21 +800,11 @@ public class VulkanGpuCache {
             if (vkCreateImage(vkDevice, imageInfo, null, pImage) != VK_SUCCESS) return false;
             shadowMapImage = pImage.get(0);
 
-            VkMemoryRequirements memReqs = VkMemoryRequirements.calloc(stack);
-            vkGetImageMemoryRequirements(vkDevice, shadowMapImage, memReqs);
-
-            VkMemoryAllocateInfo allocInfo = VkMemoryAllocateInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
-                    .allocationSize(memReqs.size())
-                    .memoryTypeIndex(findMemoryType(device.getPhysicalDevice(), memReqs.memoryTypeBits(), VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
-
-            LongBuffer pMemory = stack.mallocLong(1);
-            if (vkAllocateMemory(vkDevice, allocInfo, null, pMemory) != VK_SUCCESS) {
-                destroyShadowMap(vkDevice);
+            shadowMapMemory = device.getAllocator().bindImage(shadowMapImage, true);
+            if (shadowMapMemory == 0L) {
+                destroyShadowMap(device);
                 return false;
             }
-            shadowMapMemory = pMemory.get(0);
-            vkBindImageMemory(vkDevice, shadowMapImage, shadowMapMemory, 0);
 
             VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
@@ -850,7 +815,7 @@ public class VulkanGpuCache {
 
             LongBuffer pView = stack.mallocLong(1);
             if (vkCreateImageView(vkDevice, viewInfo, null, pView) != VK_SUCCESS) {
-                destroyShadowMap(vkDevice);
+                destroyShadowMap(device);
                 return false;
             }
             shadowMapImageView = pView.get(0);
@@ -878,7 +843,7 @@ public class VulkanGpuCache {
 
             LongBuffer pSampler = stack.mallocLong(1);
             if (vkCreateSampler(vkDevice, samplerInfo, null, pSampler) != VK_SUCCESS) {
-                destroyShadowMap(vkDevice);
+                destroyShadowMap(device);
                 return false;
             }
             shadowMapSampler = pSampler.get(0);
@@ -886,11 +851,12 @@ public class VulkanGpuCache {
         }
     }
 
-    private void destroyShadowMap(VkDevice vkDevice) {
+    private void destroyShadowMap(VulkanDevice device) {
+        VkDevice vkDevice = device.getLogicalDevice();
         if (shadowMapSampler != 0L) { vkDestroySampler(vkDevice, shadowMapSampler, null); shadowMapSampler = 0L; }
         if (shadowMapImageView != 0L) { vkDestroyImageView(vkDevice, shadowMapImageView, null); shadowMapImageView = 0L; }
         if (shadowMapImage != 0L) { vkDestroyImage(vkDevice, shadowMapImage, null); shadowMapImage = 0L; }
-        if (shadowMapMemory != 0L) { vkFreeMemory(vkDevice, shadowMapMemory, null); shadowMapMemory = 0L; }
+        if (shadowMapMemory != 0L) { device.getAllocator().free(shadowMapMemory); shadowMapMemory = 0L; }
     }
 
     public long getShadowMapImage() { return shadowMapImage; }
@@ -904,59 +870,20 @@ public class VulkanGpuCache {
     private VulkanBuffer createIdentityPaletteBuffer(VulkanDevice device, int slots, long[] mappedOut) {
         if (device == null || device.getLogicalDevice() == null) return null;
 
-        VkDevice vkDevice = device.getLogicalDevice();
         long bufferSize = BONE_PALETTE_STRIDE * slots;
+        long[] handles = allocateHostVisibleBuffer(device, bufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        if (handles == null) return null;
+        long mapped = device.getAllocator().mappedAddress(handles[1]);
 
-        try (MemoryStack stack = stackPush()) {
-            VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
-                    .size(bufferSize)
-                    .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
-                    .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
-
-            LongBuffer pBuffer = stack.mallocLong(1);
-            if (vkCreateBuffer(vkDevice, bufferInfo, null, pBuffer) != VK_SUCCESS) return null;
-            long buffer = pBuffer.get(0);
-
-            VkMemoryRequirements memReqs = VkMemoryRequirements.calloc(stack);
-            vkGetBufferMemoryRequirements(vkDevice, buffer, memReqs);
-
-            int memTypeIndex = findMemoryType(device.getPhysicalDevice(), memReqs.memoryTypeBits(),
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-            VkMemoryAllocateInfo allocInfo = VkMemoryAllocateInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
-                    .allocationSize(memReqs.size())
-                    .memoryTypeIndex(memTypeIndex);
-
-            LongBuffer pMemory = stack.mallocLong(1);
-            if (vkAllocateMemory(vkDevice, allocInfo, null, pMemory) != VK_SUCCESS) {
-                vkDestroyBuffer(vkDevice, buffer, null);
-                return null;
-            }
-            long memory = pMemory.get(0);
-            vkBindBufferMemory(vkDevice, buffer, memory, 0);
-
-            PointerBuffer pData = stack.mallocPointer(1);
-            if (vkMapMemory(vkDevice, memory, 0, bufferSize, 0, pData) != VK_SUCCESS) {
-                vkDestroyBuffer(vkDevice, buffer, null);
-                vkFreeMemory(vkDevice, memory, null);
-                return null;
-            }
-            long mapped = pData.get(0);
-
-            // Seed every slot with identity matrices so an unwritten slot never skins with garbage
-            FloatBuffer fb = MemoryUtil.memFloatBuffer(mapped, (int) (bufferSize / Float.BYTES));
-            for (int m = 0; m < MAX_PALETTE_BONES * slots; m++) {
-                for (int i = 0; i < 16; i++) fb.put((i % 5 == 0) ? 1.0f : 0.0f);
-            }
-
-            // Persistently mapped palettes are rewritten every frame after the in-flight fence wait
-            if (mappedOut != null) mappedOut[0] = mapped;
-            else vkUnmapMemory(vkDevice, memory);
-
-            return new VulkanBuffer(buffer, memory, 0);
+        // Seed every slot with identity matrices so an unwritten slot never skins with garbage
+        FloatBuffer fb = MemoryUtil.memFloatBuffer(mapped, (int) (bufferSize / Float.BYTES));
+        for (int m = 0; m < MAX_PALETTE_BONES * slots; m++) {
+            for (int i = 0; i < 16; i++) fb.put((i % 5 == 0) ? 1.0f : 0.0f);
         }
+
+        // Persistently mapped palettes are rewritten every frame after the in-flight fence wait
+        if (mappedOut != null) mappedOut[0] = mapped;
+        return new VulkanBuffer(handles[0], handles[1], 0);
     }
 
     /** Copies up to 64 column-major 4x4 matrices into the given skinned-entity slot of the mapped palette buffer. */
@@ -1029,57 +956,19 @@ public class VulkanGpuCache {
 
     private final float[][][] slotPalettes = new float[MAX_SKINNED_ENTITIES_PER_FRAME][][];
 
+    private FloatBuffer lightUniformView; // the light UBO's mapped memory
+
     public VulkanBuffer getOrCreateLightUniformBuffer(VulkanDevice device) {
         if (lightUniformBuffer != null) return lightUniformBuffer;
         if (device == null || device.getLogicalDevice() == null) return null;
 
-        VkDevice vkDevice = device.getLogicalDevice();
-        long bufferSize = LIGHT_UBO_SIZE;
+        long[] handles = allocateHostVisibleBuffer(device, LIGHT_UBO_SIZE, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+        if (handles == null) return null;
+        lightUniformView = MemoryUtil.memFloatBuffer(device.getAllocator().mappedAddress(handles[1]), LIGHT_UBO_FLOATS);
+        lightUniformView.put(0, new float[]{-0.5f, -1.0f, -0.5f, 0.0f, 1.0f, 0.95f, 0.85f, 1.2f});
 
-        try (MemoryStack stack = stackPush()) {
-            VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
-                    .size(bufferSize)
-                    .usage(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)
-                    .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
-
-            LongBuffer pBuffer = stack.mallocLong(1);
-            if (vkCreateBuffer(vkDevice, bufferInfo, null, pBuffer) != VK_SUCCESS) return null;
-            long buffer = pBuffer.get(0);
-
-            VkMemoryRequirements memReqs = VkMemoryRequirements.calloc(stack);
-            vkGetBufferMemoryRequirements(vkDevice, buffer, memReqs);
-
-            int memTypeIndex = findMemoryType(device.getPhysicalDevice(), memReqs.memoryTypeBits(),
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-            VkMemoryAllocateInfo allocInfo = VkMemoryAllocateInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
-                    .allocationSize(memReqs.size())
-                    .memoryTypeIndex(memTypeIndex);
-
-            LongBuffer pMemory = stack.mallocLong(1);
-            if (vkAllocateMemory(vkDevice, allocInfo, null, pMemory) != VK_SUCCESS) {
-                vkDestroyBuffer(vkDevice, buffer, null);
-                return null;
-            }
-            long memory = pMemory.get(0);
-
-            vkBindBufferMemory(vkDevice, buffer, memory, 0);
-
-            PointerBuffer pData = stack.mallocPointer(1);
-            if (vkMapMemory(vkDevice, memory, 0, bufferSize, 0, pData) != VK_SUCCESS) {
-                vkDestroyBuffer(vkDevice, buffer, null);
-                vkFreeMemory(vkDevice, memory, null);
-                return null;
-            }
-            FloatBuffer floatBuf = pData.getFloatBuffer(0, LIGHT_UBO_FLOATS);
-            floatBuf.put(new float[]{-0.5f, -1.0f, -0.5f, 0.0f, 1.0f, 0.95f, 0.85f, 1.2f});
-            vkUnmapMemory(vkDevice, memory);
-
-            lightUniformBuffer = new VulkanBuffer(buffer, memory, 0);
-            return lightUniformBuffer;
-        }
+        lightUniformBuffer = new VulkanBuffer(handles[0], handles[1], 0);
+        return lightUniformBuffer;
     }
 
     public void updateLightUniformBuffer(VulkanDevice device, SceneLights lights,
@@ -1093,74 +982,69 @@ public class VulkanGpuCache {
         RenderEnvironment env = lights.environment();
         applyTextureFiltering(vkDevice, env.textureFiltering);
 
-        try (MemoryStack stack = stackPush()) {
-            PointerBuffer pData = stack.mallocPointer(1);
-            if (vkMapMemory(vkDevice, buf.memoryHandle, 0, LIGHT_UBO_SIZE, 0, pData) == VK_SUCCESS) {
-                FloatBuffer floatBuf = pData.getFloatBuffer(0, LIGHT_UBO_FLOATS);
-
-                // Only the first pointCount / spotCount array entries are written; the shader loops stop at those counts
-                boolean hasDir = lights.hasDirectional();
-                SceneLights.Light dir = lights.directional();
-                floatBuf.put(0, dir.dirX); floatBuf.put(1, dir.dirY); floatBuf.put(2, dir.dirZ); floatBuf.put(3, 0.0f);
-                if (hasDir) {
-                    putLightColor(floatBuf, 4, dir, env);
-                } else {
-                    floatBuf.put(4, 0.0f); floatBuf.put(5, 0.0f); floatBuf.put(6, 0.0f); floatBuf.put(7, 0.0f);
-                }
-
-                int pointCount = lights.pointCount();
-                for (int i = 0; i < pointCount; i++) {
-                    SceneLights.Light point = lights.point(i);
-                    int base = LIGHT_UBO_POINT_LIGHTS_FLOAT_INDEX + i * LIGHT_UBO_POINT_LIGHT_FLOATS;
-                    floatBuf.put(base, point.posX); floatBuf.put(base + 1, point.posY); floatBuf.put(base + 2, point.posZ); floatBuf.put(base + 3, 0.0f);
-                    putLightColor(floatBuf, base + 4, point, env);
-                    floatBuf.put(base + 8, 1.0f); floatBuf.put(base + 9, 0.09f); floatBuf.put(base + 10, 0.032f); floatBuf.put(base + 11, 0.0f);
-                }
-
-                int spotCount = lights.spotCount();
-                for (int i = 0; i < spotCount; i++) {
-                    SceneLights.Light spot = lights.spot(i);
-                    int base = LIGHT_UBO_SPOT_LIGHTS_FLOAT_INDEX + i * LIGHT_UBO_SPOT_LIGHT_FLOATS;
-                    floatBuf.put(base, spot.posX); floatBuf.put(base + 1, spot.posY); floatBuf.put(base + 2, spot.posZ); floatBuf.put(base + 3, 0.93f);
-                    floatBuf.put(base + 4, spot.dirX); floatBuf.put(base + 5, spot.dirY); floatBuf.put(base + 6, spot.dirZ); floatBuf.put(base + 7, 0.82f);
-                    putLightColor(floatBuf, base + 8, spot, env);
-                    floatBuf.put(base + 12, 1.0f); floatBuf.put(base + 13, 0.09f); floatBuf.put(base + 14, 0.032f); floatBuf.put(base + 15, 0.0f);
-                }
-
-                int counts = LIGHT_UBO_NUM_LIGHTS_FLOAT_INDEX;
-                floatBuf.put(counts, hasDir ? 1.0f : 0.0f);
-                floatBuf.put(counts + 1, pointCount);
-                floatBuf.put(counts + 2, spotCount);
-                floatBuf.put(counts + 3, DirectionalShadowFrustum.SHADOW_BIAS);
-
-                int viewPos = LIGHT_UBO_VIEW_POS_FLOAT_INDEX;
-                floatBuf.put(viewPos, camX); floatBuf.put(viewPos + 1, camY); floatBuf.put(viewPos + 2, camZ); floatBuf.put(viewPos + 3, groundY);
-
-                // Camera matrices live here rather than in push constants, which carry material slots
-                putMatrixOrIdentity(floatBuf, LIGHT_UBO_VIEW_FLOAT_INDEX, viewMatrix);
-                putMatrixOrIdentity(floatBuf, LIGHT_UBO_PROJ_FLOAT_INDEX, projMatrix);
-                putMatrixOrIdentity(floatBuf, LIGHT_UBO_LIGHT_SPACE_FLOAT_INDEX, lightSpaceMatrix);
-                putMatrixOrIdentity(floatBuf, LIGHT_UBO_PREVIEW_VIEW_PROJ_FLOAT_INDEX, previewViewProj);
-                int pos = LIGHT_UBO_PREVIEW_VIEW_POS_FLOAT_INDEX;
-                floatBuf.put(pos, previewX); floatBuf.put(pos + 1, previewY); floatBuf.put(pos + 2, previewZ); floatBuf.put(pos + 3, 0.0f);
-
-                // Project render environment: premultiplied ambient with the color space in its last float (LightBuffer.ambientColor.w:
-                // 0 = Gamma, 1 = Linear), fog color + opacity (0 = off), fog start / end / ramp exponent, and the shading model in
-                // the fog params' last float (LightBuffer.shadingModel: 0 = Blinn-Phong, 1 = Gouraud). Colors are converted for the
-                // color space here, so the shaders receive them ready to light with.
-                int amb = LIGHT_UBO_AMBIENT_FLOAT_INDEX;
-                float ambientScale = env.ambientIntensity;
-                floatBuf.put(amb, env.toShading(env.ambientR) * ambientScale); floatBuf.put(amb + 1, env.toShading(env.ambientG) * ambientScale);
-                floatBuf.put(amb + 2, env.toShading(env.ambientB) * ambientScale); floatBuf.put(amb + 3, env.colorSpaceShaderValue());
-                int fog = LIGHT_UBO_FOG_COLOR_FLOAT_INDEX;
-                floatBuf.put(fog, env.toShading(env.fogR)); floatBuf.put(fog + 1, env.toShading(env.fogG)); floatBuf.put(fog + 2, env.toShading(env.fogB));
-                floatBuf.put(fog + 3, env.fogOpacity());
-                int fogParams = LIGHT_UBO_FOG_PARAMS_FLOAT_INDEX;
-                floatBuf.put(fogParams, env.safeFogStart()); floatBuf.put(fogParams + 1, env.safeFogEnd());
-                floatBuf.put(fogParams + 2, env.fogCurveExponent()); floatBuf.put(fogParams + 3, env.shadingModelShaderValue());
-
-                vkUnmapMemory(vkDevice, buf.memoryHandle);
+        // Persistently mapped and coherent: written after the in-flight fence wait, read by the next submit
+        FloatBuffer floatBuf = lightUniformView;
+        if (floatBuf != null) {
+            // Only the first pointCount / spotCount array entries are written; the shader loops stop at those counts
+            boolean hasDir = lights.hasDirectional();
+            SceneLights.Light dir = lights.directional();
+            floatBuf.put(0, dir.dirX); floatBuf.put(1, dir.dirY); floatBuf.put(2, dir.dirZ); floatBuf.put(3, 0.0f);
+            if (hasDir) {
+                putLightColor(floatBuf, 4, dir, env);
+            } else {
+                floatBuf.put(4, 0.0f); floatBuf.put(5, 0.0f); floatBuf.put(6, 0.0f); floatBuf.put(7, 0.0f);
             }
+
+            int pointCount = lights.pointCount();
+            for (int i = 0; i < pointCount; i++) {
+                SceneLights.Light point = lights.point(i);
+                int base = LIGHT_UBO_POINT_LIGHTS_FLOAT_INDEX + i * LIGHT_UBO_POINT_LIGHT_FLOATS;
+                floatBuf.put(base, point.posX); floatBuf.put(base + 1, point.posY); floatBuf.put(base + 2, point.posZ); floatBuf.put(base + 3, 0.0f);
+                putLightColor(floatBuf, base + 4, point, env);
+                floatBuf.put(base + 8, 1.0f); floatBuf.put(base + 9, 0.09f); floatBuf.put(base + 10, 0.032f); floatBuf.put(base + 11, 0.0f);
+            }
+
+            int spotCount = lights.spotCount();
+            for (int i = 0; i < spotCount; i++) {
+                SceneLights.Light spot = lights.spot(i);
+                int base = LIGHT_UBO_SPOT_LIGHTS_FLOAT_INDEX + i * LIGHT_UBO_SPOT_LIGHT_FLOATS;
+                floatBuf.put(base, spot.posX); floatBuf.put(base + 1, spot.posY); floatBuf.put(base + 2, spot.posZ); floatBuf.put(base + 3, 0.93f);
+                floatBuf.put(base + 4, spot.dirX); floatBuf.put(base + 5, spot.dirY); floatBuf.put(base + 6, spot.dirZ); floatBuf.put(base + 7, 0.82f);
+                putLightColor(floatBuf, base + 8, spot, env);
+                floatBuf.put(base + 12, 1.0f); floatBuf.put(base + 13, 0.09f); floatBuf.put(base + 14, 0.032f); floatBuf.put(base + 15, 0.0f);
+            }
+
+            int counts = LIGHT_UBO_NUM_LIGHTS_FLOAT_INDEX;
+            floatBuf.put(counts, hasDir ? 1.0f : 0.0f);
+            floatBuf.put(counts + 1, pointCount);
+            floatBuf.put(counts + 2, spotCount);
+            floatBuf.put(counts + 3, DirectionalShadowFrustum.SHADOW_BIAS);
+
+            int viewPos = LIGHT_UBO_VIEW_POS_FLOAT_INDEX;
+            floatBuf.put(viewPos, camX); floatBuf.put(viewPos + 1, camY); floatBuf.put(viewPos + 2, camZ); floatBuf.put(viewPos + 3, groundY);
+
+            // Camera matrices live here rather than in push constants, which carry material slots
+            putMatrixOrIdentity(floatBuf, LIGHT_UBO_VIEW_FLOAT_INDEX, viewMatrix);
+            putMatrixOrIdentity(floatBuf, LIGHT_UBO_PROJ_FLOAT_INDEX, projMatrix);
+            putMatrixOrIdentity(floatBuf, LIGHT_UBO_LIGHT_SPACE_FLOAT_INDEX, lightSpaceMatrix);
+            putMatrixOrIdentity(floatBuf, LIGHT_UBO_PREVIEW_VIEW_PROJ_FLOAT_INDEX, previewViewProj);
+            int pos = LIGHT_UBO_PREVIEW_VIEW_POS_FLOAT_INDEX;
+            floatBuf.put(pos, previewX); floatBuf.put(pos + 1, previewY); floatBuf.put(pos + 2, previewZ); floatBuf.put(pos + 3, 0.0f);
+
+            // Project render environment: premultiplied ambient with the color space in its last float (LightBuffer.ambientColor.w:
+            // 0 = Gamma, 1 = Linear), fog color + opacity (0 = off), fog start / end / ramp exponent, and the shading model in
+            // the fog params' last float (LightBuffer.shadingModel: 0 = Blinn-Phong, 1 = Gouraud). Colors are converted for the
+            // color space here, so the shaders receive them ready to light with.
+            int amb = LIGHT_UBO_AMBIENT_FLOAT_INDEX;
+            float ambientScale = env.ambientIntensity;
+            floatBuf.put(amb, env.toShading(env.ambientR) * ambientScale); floatBuf.put(amb + 1, env.toShading(env.ambientG) * ambientScale);
+            floatBuf.put(amb + 2, env.toShading(env.ambientB) * ambientScale); floatBuf.put(amb + 3, env.colorSpaceShaderValue());
+            int fog = LIGHT_UBO_FOG_COLOR_FLOAT_INDEX;
+            floatBuf.put(fog, env.toShading(env.fogR)); floatBuf.put(fog + 1, env.toShading(env.fogG)); floatBuf.put(fog + 2, env.toShading(env.fogB));
+            floatBuf.put(fog + 3, env.fogOpacity());
+            int fogParams = LIGHT_UBO_FOG_PARAMS_FLOAT_INDEX;
+            floatBuf.put(fogParams, env.safeFogStart()); floatBuf.put(fogParams + 1, env.safeFogEnd());
+            floatBuf.put(fogParams + 2, env.fogCurveExponent()); floatBuf.put(fogParams + 3, env.shadingModelShaderValue());
         }
     }
 
@@ -1175,25 +1059,11 @@ public class VulkanGpuCache {
         for (int i = 0; i < 16; i++) dst.put(index + i, valid ? matrix[i] : ((i % 5 == 0) ? 1.0f : 0.0f));
     }
 
-    public static int findMemoryType(VkPhysicalDevice physicalDevice, int typeFilter, int properties) {
-        try (MemoryStack stack = stackPush()) {
-            VkPhysicalDeviceMemoryProperties memProperties = VkPhysicalDeviceMemoryProperties.calloc(stack);
-            vkGetPhysicalDeviceMemoryProperties(physicalDevice, memProperties);
-
-            for (int i = 0; i < memProperties.memoryTypeCount(); i++) {
-                if ((typeFilter & (1 << i)) != 0 && (memProperties.memoryTypes(i).propertyFlags() & properties) == properties) {
-                    return i;
-                }
-            }
-        }
-        // Never fall back to type 0: on discrete GPUs it is DEVICE_LOCAL-only, so mapping it as a staging buffer crashes
-        throw new IllegalStateException("[VulkanGpuCache] No memory type matches filter 0x" + Integer.toHexString(typeFilter)
-                + " with properties 0x" + Integer.toHexString(properties));
-    }
-
     public void cleanup(VulkanDevice device) {
         if (device == null || device.getLogicalDevice() == null) return;
         VkDevice vkDevice = device.getLogicalDevice();
+
+        VulkanMemoryAllocator memory = device.getAllocator();
 
         // Waits for outstanding uploads before anything they write is destroyed
         uploadRing.cleanup(vkDevice);
@@ -1216,31 +1086,31 @@ public class VulkanGpuCache {
             screenSampler = 0L;
         }
 
-        textureRegistry.cleanup(vkDevice);
-        destroyShadowMap(vkDevice);
-        uiRingBuffer.cleanup(vkDevice);
-        pickOverlayRingBuffer.cleanup(vkDevice);
-        gridRingBuffer.cleanup(vkDevice);
-        particleRingBuffer.cleanup(vkDevice);
+        textureRegistry.cleanup(device);
+        destroyShadowMap(device);
+        uiRingBuffer.cleanup(device);
+        pickOverlayRingBuffer.cleanup(device);
+        gridRingBuffer.cleanup(device);
+        particleRingBuffer.cleanup(device);
 
         meshHandles.clear(buf -> {
             if (buf.bufferHandle != 0L) vkDestroyBuffer(vkDevice, buf.bufferHandle, null);
-            if (buf.memoryHandle != 0L) vkFreeMemory(vkDevice, buf.memoryHandle, null);
+            memory.free(buf.memoryHandle);
             if (buf.indexBufferHandle != 0L) vkDestroyBuffer(vkDevice, buf.indexBufferHandle, null);
-            if (buf.indexMemoryHandle != 0L) vkFreeMemory(vkDevice, buf.indexMemoryHandle, null);
+            memory.free(buf.indexMemoryHandle);
         });
         textureHandles.clear(tex -> {
             if (tex.imageViewHandle != 0L) vkDestroyImageView(vkDevice, tex.imageViewHandle, null);
             if (tex.samplerHandle != 0L) vkDestroySampler(vkDevice, tex.samplerHandle, null);
             if (tex.imageHandle != 0L) vkDestroyImage(vkDevice, tex.imageHandle, null);
-            if (tex.memoryHandle != 0L) vkFreeMemory(vkDevice, tex.memoryHandle, null);
+            memory.free(tex.memoryHandle);
         });
 
         // Device is idle at shutdown, so anything still awaiting deferred disposal can be destroyed now
         synchronized (deferredDisposalQueue) {
             DeferredVulkanResource res;
             while ((res = deferredDisposalQueue.poll()) != null) {
-                destroyDeferred(vkDevice, res);
+                destroyDeferred(device, res);
             }
         }
         synchronized (pendingTableWrites) {
@@ -1249,26 +1119,27 @@ public class VulkanGpuCache {
 
         if (lightUniformBuffer != null) {
             if (lightUniformBuffer.bufferHandle != 0L) vkDestroyBuffer(vkDevice, lightUniformBuffer.bufferHandle, null);
-            if (lightUniformBuffer.memoryHandle != 0L) vkFreeMemory(vkDevice, lightUniformBuffer.memoryHandle, null);
+            memory.free(lightUniformBuffer.memoryHandle);
             lightUniformBuffer = null;
+            lightUniformView = null;
         }
 
         if (bonePaletteBuffer != null) {
             if (bonePaletteBuffer.bufferHandle != 0L) vkDestroyBuffer(vkDevice, bonePaletteBuffer.bufferHandle, null);
-            if (bonePaletteBuffer.memoryHandle != 0L) vkFreeMemory(vkDevice, bonePaletteBuffer.memoryHandle, null);
+            memory.free(bonePaletteBuffer.memoryHandle);
             bonePaletteBuffer = null;
             bonePaletteMapped = 0L;
         }
 
         if (dummyBonePaletteBuffer != null) {
             if (dummyBonePaletteBuffer.bufferHandle != 0L) vkDestroyBuffer(vkDevice, dummyBonePaletteBuffer.bufferHandle, null);
-            if (dummyBonePaletteBuffer.memoryHandle != 0L) vkFreeMemory(vkDevice, dummyBonePaletteBuffer.memoryHandle, null);
+            memory.free(dummyBonePaletteBuffer.memoryHandle);
             dummyBonePaletteBuffer = null;
         }
 
         if (groundQuadBuffer != null) {
             if (groundQuadBuffer.bufferHandle != 0L) vkDestroyBuffer(vkDevice, groundQuadBuffer.bufferHandle, null);
-            if (groundQuadBuffer.memoryHandle != 0L) vkFreeMemory(vkDevice, groundQuadBuffer.memoryHandle, null);
+            memory.free(groundQuadBuffer.memoryHandle);
             groundQuadBuffer = null;
         }
     }

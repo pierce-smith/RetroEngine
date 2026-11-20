@@ -285,15 +285,7 @@ public class VulkanBackend implements IRenderBackend {
             System.err.println("[VulkanBackend] WARNING: Color-ID pick readback buffer unavailable; GPU picking disabled.");
             return;
         }
-        try (MemoryStack stack = stackPush()) {
-            PointerBuffer pData = stack.mallocPointer(1);
-            if (vkMapMemory(deviceManager.getLogicalDevice(), handles[1], 0, VK_WHOLE_SIZE, 0, pData) != VK_SUCCESS) {
-                vkDestroyBuffer(deviceManager.getLogicalDevice(), handles[0], null);
-                vkFreeMemory(deviceManager.getLogicalDevice(), handles[1], null);
-                return;
-            }
-            pickReadbackMapped = pData.get(0);
-        }
+        pickReadbackMapped = deviceManager.getAllocator().mappedAddress(handles[1]);
         pickReadbackBuffer = handles[0];
         pickReadbackMemory = handles[1];
     }
@@ -486,9 +478,8 @@ public class VulkanBackend implements IRenderBackend {
         cameraPreviewTarget.cleanup(deviceManager);
         pickTarget.cleanup(deviceManager);
         if (device != null && pickReadbackBuffer != 0L) {
-            vkUnmapMemory(device, pickReadbackMemory);
             vkDestroyBuffer(device, pickReadbackBuffer, null);
-            vkFreeMemory(device, pickReadbackMemory, null);
+            deviceManager.getAllocator().free(pickReadbackMemory);
             pickReadbackBuffer = pickReadbackMemory = pickReadbackMapped = 0L;
         }
         pipelineManager.cleanup(deviceManager);

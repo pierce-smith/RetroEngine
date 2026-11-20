@@ -56,27 +56,17 @@ public class VulkanTextureRegistry {
             if (vkCreateImage(vkDevice, imageInfo, null, pImage) != VK_SUCCESS) return null;
             long textureImage = pImage.get(0);
 
-            VkMemoryRequirements imgMemReqs = VkMemoryRequirements.calloc(stack);
-            vkGetImageMemoryRequirements(vkDevice, textureImage, imgMemReqs);
-
-            VkMemoryAllocateInfo imgAllocInfo = VkMemoryAllocateInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
-                    .allocationSize(imgMemReqs.size())
-                    .memoryTypeIndex(VulkanGpuCache.findMemoryType(device.getPhysicalDevice(), imgMemReqs.memoryTypeBits(), VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
-
-            LongBuffer pImageMemory = stack.mallocLong(1);
-            if (vkAllocateMemory(vkDevice, imgAllocInfo, null, pImageMemory) != VK_SUCCESS) {
+            long textureImageMemory = device.getAllocator().bindImage(textureImage, false);
+            if (textureImageMemory == 0L) {
                 vkDestroyImage(vkDevice, textureImage, null);
                 return null;
             }
-            long textureImageMemory = pImageMemory.get(0);
-            vkBindImageMemory(vkDevice, textureImage, textureImageMemory, 0);
 
             // Nothing has been submitted yet on failure, so the image can be destroyed immediately
             long uploadValue = uploadRing.uploadImage(textureImage, mips);
             if (uploadValue < 0L) {
                 vkDestroyImage(vkDevice, textureImage, null);
-                vkFreeMemory(vkDevice, textureImageMemory, null);
+                device.getAllocator().free(textureImageMemory);
                 return null;
             }
 
@@ -102,13 +92,14 @@ public class VulkanTextureRegistry {
         }
     }
 
-    public void cleanup(VkDevice vkDevice) {
+    public void cleanup(VulkanDevice device) {
+        VkDevice vkDevice = device.getLogicalDevice();
         if (vkDevice == null) return;
 
         if (defaultWhiteTexture != null) {
             if (defaultWhiteTexture.imageViewHandle != 0L) vkDestroyImageView(vkDevice, defaultWhiteTexture.imageViewHandle, null);
             if (defaultWhiteTexture.imageHandle != 0L) vkDestroyImage(vkDevice, defaultWhiteTexture.imageHandle, null);
-            if (defaultWhiteTexture.memoryHandle != 0L) vkFreeMemory(vkDevice, defaultWhiteTexture.memoryHandle, null);
+            device.getAllocator().free(defaultWhiteTexture.memoryHandle);
             defaultWhiteTexture = null;
         }
     }

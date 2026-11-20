@@ -1,10 +1,9 @@
 package com.retro.engine.graphics.vulkan;
 
-import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
 
-import java.nio.FloatBuffer;
 import java.nio.LongBuffer;
 import java.util.Queue;
 
@@ -38,7 +37,6 @@ public class VulkanRingBuffer {
 
         VkDevice vkDevice = device.getLogicalDevice();
         int neededCap = count * strideFloats;
-        long bufferSize = (long) neededCap * Float.BYTES;
 
         this.ringIndex = (this.ringIndex + 1) % RING_SLOTS;
 
@@ -66,25 +64,13 @@ public class VulkanRingBuffer {
                 }
                 long newBuffer = pBuffer.get(0);
 
-                VkMemoryRequirements memReqs = VkMemoryRequirements.calloc(stack);
-                vkGetBufferMemoryRequirements(vkDevice, newBuffer, memReqs);
-
-                int memTypeIndex = VulkanGpuCache.findMemoryType(device.getPhysicalDevice(), memReqs.memoryTypeBits(),
+                long newMemory = device.getAllocator().bindBuffer(newBuffer,
                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-                VkMemoryAllocateInfo allocInfo = VkMemoryAllocateInfo.calloc(stack)
-                        .sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
-                        .allocationSize(memReqs.size())
-                        .memoryTypeIndex(memTypeIndex);
-
-                LongBuffer pMemory = stack.mallocLong(1);
-                if (vkAllocateMemory(vkDevice, allocInfo, null, pMemory) != VK_SUCCESS) {
+                if (newMemory == 0L) {
                     vkDestroyBuffer(vkDevice, newBuffer, null);
                     this.vertexCount = 0;
                     return;
                 }
-                long newMemory = pMemory.get(0);
-                vkBindBufferMemory(vkDevice, newBuffer, newMemory, 0);
 
                 if (currentBuffer != 0L && disposalQueue != null) {
                     synchronized (disposalQueue) {
@@ -99,11 +85,9 @@ public class VulkanRingBuffer {
                 capacityRing[ringIndex] = newCap;
             }
 
-            PointerBuffer pData = stack.mallocPointer(1);
-            if (vkMapMemory(vkDevice, currentMemory, 0, bufferSize, 0, pData) == VK_SUCCESS) {
-                FloatBuffer floatBuf = pData.getFloatBuffer(0, neededCap);
-                floatBuf.put(vertices, 0, neededCap);
-                vkUnmapMemory(vkDevice, currentMemory);
+            long mapped = device.getAllocator().mappedAddress(currentMemory);
+            if (mapped != 0L) {
+                MemoryUtil.memFloatBuffer(mapped, neededCap).put(vertices, 0, neededCap);
                 this.vertexCount = count;
             } else {
                 this.vertexCount = 0;
@@ -111,11 +95,12 @@ public class VulkanRingBuffer {
         }
     }
 
-    public void cleanup(VkDevice vkDevice) {
+    public void cleanup(VulkanDevice device) {
+        VkDevice vkDevice = device.getLogicalDevice();
         for (int i = 0; i < RING_SLOTS; i++) {
             if (bufferRing[i] != 0L) {
                 vkDestroyBuffer(vkDevice, bufferRing[i], null);
-                vkFreeMemory(vkDevice, memoryRing[i], null);
+                device.getAllocator().free(memoryRing[i]);
                 bufferRing[i] = 0L;
                 memoryRing[i] = 0L;
                 capacityRing[i] = 0;

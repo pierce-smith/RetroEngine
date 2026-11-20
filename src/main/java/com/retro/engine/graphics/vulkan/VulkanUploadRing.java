@@ -266,36 +266,21 @@ public class VulkanUploadRing {
             if (vkCreateBuffer(vkDevice, bufferInfo, null, pBuffer) != VK_SUCCESS) return false;
             slot.stagingBuffer = pBuffer.get(0);
 
-            VkMemoryRequirements memReqs = VkMemoryRequirements.calloc(stack);
-            vkGetBufferMemoryRequirements(vkDevice, slot.stagingBuffer, memReqs);
-            VkMemoryAllocateInfo allocInfo = VkMemoryAllocateInfo.calloc(stack)
-                    .sType$Default()
-                    .allocationSize(memReqs.size())
-                    .memoryTypeIndex(VulkanGpuCache.findMemoryType(device.getPhysicalDevice(), memReqs.memoryTypeBits(),
-                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT));
-            LongBuffer pMemory = stack.mallocLong(1);
-            if (vkAllocateMemory(vkDevice, allocInfo, null, pMemory) != VK_SUCCESS) {
+            slot.stagingMemory = device.getAllocator().bindBuffer(slot.stagingBuffer,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            if (slot.stagingMemory == 0L) {
                 destroyStaging(vkDevice, slot);
                 return false;
             }
-            slot.stagingMemory = pMemory.get(0);
-            vkBindBufferMemory(vkDevice, slot.stagingBuffer, slot.stagingMemory, 0);
-
-            PointerBuffer pData = stack.mallocPointer(1);
-            if (vkMapMemory(vkDevice, slot.stagingMemory, 0, capacity, 0, pData) != VK_SUCCESS) {
-                destroyStaging(vkDevice, slot);
-                return false;
-            }
-            slot.mappedAddress = pData.get(0);
+            slot.mappedAddress = device.getAllocator().mappedAddress(slot.stagingMemory);
             slot.capacity = capacity;
             return true;
         }
     }
 
-    private static void destroyStaging(VkDevice vkDevice, Slot slot) {
-        if (slot.stagingMemory != 0L && slot.mappedAddress != 0L) vkUnmapMemory(vkDevice, slot.stagingMemory);
+    private void destroyStaging(VkDevice vkDevice, Slot slot) {
         if (slot.stagingBuffer != 0L) vkDestroyBuffer(vkDevice, slot.stagingBuffer, null);
-        if (slot.stagingMemory != 0L) vkFreeMemory(vkDevice, slot.stagingMemory, null);
+        device.getAllocator().free(slot.stagingMemory);
         slot.stagingBuffer = 0L;
         slot.stagingMemory = 0L;
         slot.mappedAddress = 0L;

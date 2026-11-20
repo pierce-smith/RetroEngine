@@ -65,6 +65,14 @@ The Vulkan backend is written for core 1.3, with no legacy fallbacks:
 - **3-slot ring buffers** (`VulkanRingBuffer`) for dynamic vertex data. They grow on demand.
 - **Device-local meshes.** Registered meshes upload through the staging ring (`VulkanUploadRing.uploadBuffer`) into
   device-local memory, so discrete GPUs read vertices from VRAM. Disposal waits for the upload to finish.
+- **Pooled GPU memory** (`VulkanMemoryAllocator`, in-house rather than VMA). Drivers cap live `VkDeviceMemory`
+  objects (about 4,096 on many Windows drivers), so buffers and images are placed inside shared blocks instead of
+  getting one allocation each. A block is 64 MB or an eighth of its heap, whichever is smaller. Buffers and images
+  never share a block, which keeps `bufferImageGranularity` out of the picture. Render targets, the shadow map and
+  anything over half a block get their own allocation. CPU-visible blocks stay mapped for their whole life: write
+  through `allocator.mappedAddress(handle)` and never call `vkMapMemory` on allocator memory. An empty block is
+  released unless it is the last of its kind. At shutdown the log reports the peak count, for example
+  `Peak 8 VkDeviceMemory objects for 29 resources`, and warns about any allocation that was never freed.
 - **Persistent `VkPipelineCache`** serialized to `~/.retroengine/cache/vulkan_pipeline.cache`, validated against vendor/device ID and
   `pipelineCacheUUID`, and written atomically so a crash can't leave a truncated cache.
 

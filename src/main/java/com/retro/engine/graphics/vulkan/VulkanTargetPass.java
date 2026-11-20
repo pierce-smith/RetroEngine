@@ -61,20 +61,11 @@ public class VulkanTargetPass {
             }
             offscreenImage = pImage.get(0);
 
-            VkMemoryRequirements memReqs = VkMemoryRequirements.calloc(stack);
-            vkGetImageMemoryRequirements(vkDevice, offscreenImage, memReqs);
-
-            VkMemoryAllocateInfo allocInfo = VkMemoryAllocateInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
-                    .allocationSize(memReqs.size())
-                    .memoryTypeIndex(findMemoryType(device.getPhysicalDevice(), memReqs.memoryTypeBits(), VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
-
-            LongBuffer pMem = stack.mallocLong(1);
-            if (vkAllocateMemory(vkDevice, allocInfo, null, pMem) != VK_SUCCESS) {
+            // Render targets are rebuilt on every resize, so each gets its own allocation instead of fragmenting a block
+            offscreenMemory = device.getAllocator().bindImage(offscreenImage, true);
+            if (offscreenMemory == 0L) {
                 throw new RuntimeException("[VulkanTargetPass] Failed to allocate offscreen color VkDeviceMemory!");
             }
-            offscreenMemory = pMem.get(0);
-            vkBindImageMemory(vkDevice, offscreenImage, offscreenMemory, 0);
 
             VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
@@ -109,19 +100,10 @@ public class VulkanTargetPass {
             }
             depthImage = pDepthImage.get(0);
 
-            vkGetImageMemoryRequirements(vkDevice, depthImage, memReqs);
-
-            VkMemoryAllocateInfo depthAllocInfo = VkMemoryAllocateInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
-                    .allocationSize(memReqs.size())
-                    .memoryTypeIndex(findMemoryType(device.getPhysicalDevice(), memReqs.memoryTypeBits(), VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
-
-            LongBuffer pDepthMem = stack.mallocLong(1);
-            if (vkAllocateMemory(vkDevice, depthAllocInfo, null, pDepthMem) != VK_SUCCESS) {
+            depthMemory = device.getAllocator().bindImage(depthImage, true);
+            if (depthMemory == 0L) {
                 throw new RuntimeException("[VulkanTargetPass] Failed to allocate offscreen depth VkDeviceMemory!");
             }
-            depthMemory = pDepthMem.get(0);
-            vkBindImageMemory(vkDevice, depthImage, depthMemory, 0);
 
             VkImageViewCreateInfo depthViewInfo = VkImageViewCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
@@ -146,32 +128,17 @@ public class VulkanTargetPass {
         }
     }
 
-    private int findMemoryType(VkPhysicalDevice physicalDevice, int typeFilter, int properties) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkPhysicalDeviceMemoryProperties memProperties = VkPhysicalDeviceMemoryProperties.calloc(stack);
-            vkGetPhysicalDeviceMemoryProperties(physicalDevice, memProperties);
-
-            for (int i = 0; i < memProperties.memoryTypeCount(); i++) {
-                if ((typeFilter & (1 << i)) != 0 &&
-                        (memProperties.memoryTypes(i).propertyFlags() & properties) == properties) {
-                    return i;
-                }
-            }
-        }
-        throw new RuntimeException("[VulkanTargetPass] Failed to find suitable GPU memory type!");
-    }
-
     public void dispose(VulkanDevice device) {
         if (device == null || device.getLogicalDevice() == null) return;
         VkDevice vkDevice = device.getLogicalDevice();
 
         if (offscreenImageView != 0L) { vkDestroyImageView(vkDevice, offscreenImageView, null); offscreenImageView = 0L; }
         if (offscreenImage != 0L) { vkDestroyImage(vkDevice, offscreenImage, null); offscreenImage = 0L; }
-        if (offscreenMemory != 0L) { vkFreeMemory(vkDevice, offscreenMemory, null); offscreenMemory = 0L; }
+        if (offscreenMemory != 0L) { device.getAllocator().free(offscreenMemory); offscreenMemory = 0L; }
 
         if (depthImageView != 0L) { vkDestroyImageView(vkDevice, depthImageView, null); depthImageView = 0L; }
         if (depthImage != 0L) { vkDestroyImage(vkDevice, depthImage, null); depthImage = 0L; }
-        if (depthMemory != 0L) { vkFreeMemory(vkDevice, depthMemory, null); depthMemory = 0L; }
+        if (depthMemory != 0L) { device.getAllocator().free(depthMemory); depthMemory = 0L; }
     }
 
     public void cleanup(VulkanDevice device) { dispose(device); }

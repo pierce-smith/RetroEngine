@@ -45,6 +45,7 @@ public class VulkanDevice {
 
     // Set once by whichever thread first sees the device go (render, upload, swapchain); read by beginFrame
     private volatile String lostReason;
+    private VulkanMemoryAllocator allocator;
 
     // Vulkan 1.2 feature gating the depth-only VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL layout
     private boolean separateDepthStencilLayouts = false;
@@ -273,6 +274,7 @@ public class VulkanDevice {
 
             VK10.vkGetDeviceQueue(device, presentQueueFamilyIndex, 0, pQueue);
             presentQueue = new VkQueue(pQueue.get(0), device);
+            allocator = new VulkanMemoryAllocator(this);
 
             System.out.println("[VulkanDevice] " + getDriverName() + " Logical VkDevice & Queues created successfully.");
             return true;
@@ -384,6 +386,10 @@ public class VulkanDevice {
     }
 
     public void shutdown() {
+        if (allocator != null) {
+            allocator.destroy();
+            allocator = null;
+        }
         if (device != null) {
             VK10.vkDestroyDevice(device, null);
             device = null;
@@ -406,6 +412,9 @@ public class VulkanDevice {
     public int getGraphicsQueueFamilyIndex() { return graphicsQueueFamilyIndex; }
     public int getPresentQueueFamilyIndex() { return presentQueueFamilyIndex; }
     public Object getQueueLock() { return queueLock; }
+
+    /** Places every buffer and image in pooled GPU memory; null before the logical device exists or after shutdown. */
+    public VulkanMemoryAllocator getAllocator() { return allocator; }
 
     /**
      * Records VK_ERROR_DEVICE_LOST from {@code call}; returns {@code result == VK_SUCCESS}. Any thread may call it, and it
