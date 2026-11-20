@@ -92,6 +92,22 @@ error at startup instead of failing later.
 > more than LWJGL's JNI invokers cover. `MetalPassEncoder` calls `objc_msgSend` through **libffi** with a prepared
 > call interface instead.
 
+### 1.5 When the GPU Is Lost
+
+A driver crash or update, a GPU reset (Windows resets a GPU that stalls for 2 seconds), or an unplugged GPU leaves
+the backend with a dead device. Nothing it owns can be used again, so the engine does not try to keep drawing. Both
+backends detect the loss and throw `GpuDeviceLostException` from the next `beginFrame`:
+
+- **Vulkan:** `VK_ERROR_DEVICE_LOST` from any fence wait, submit, acquire, present or upload, from any thread.
+- **Metal:** a finished command buffer reporting `DeviceRemoved` or `AccessRevoked`, or 60 failed frames in a row. A
+  single timeout or page fault only drops that frame.
+- **Both:** a GPU that does not finish a frame within 10 seconds is treated as hung. Frame waits no longer block
+  forever.
+
+`Main` then writes the editor's unsaved scene to its `.rscene.bak` (it leaves Play first, so the authored scene is
+what gets saved), shows the user a plain-language dialog, shuts down and exits with code **4**. Test the whole path
+without crashing a driver with `--simulate-gpu-loss <frames>`.
+
 ---
 
 ## 2. The Frame Pipeline

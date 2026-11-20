@@ -295,5 +295,9 @@ normally. On a Mac with more than one Vulkan driver installed, choose MoltenVK w
 `VK_DRIVER_FILES=/usr/local/share/vulkan/icd.d/MoltenVK_icd.json`. Metal has its own validation, enabled with
 `MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1` in the environment.
 
+**GPU loss.** `--simulate-gpu-loss <frames>` makes either backend report a lost device after that many frames. The game
+should show the "graphics card stopped responding" dialog and exit with code 4. The editor should also back up an
+unsaved scene to `.rscene.bak`. See Volume 3, section 1.5.
+
 > The target is a **flat 16.67 ms** frame line with **no GC spikes**. If you see sawtooth heap growth in the
 > console, the frame loop is allocating somewhere.

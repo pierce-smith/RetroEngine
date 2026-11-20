@@ -1,6 +1,8 @@
 package com.retro.engine.graphics.metal;
 
+import com.retro.engine.core.Log;
 import com.retro.engine.graphics.BufferDesc;
+import com.retro.engine.graphics.GpuDeviceLostException;
 import com.retro.engine.graphics.GraphicsAPI;
 import com.retro.engine.graphics.IRenderBackend;
 import com.retro.engine.graphics.RenderCommand;
@@ -48,6 +50,13 @@ public class MetalBackend implements IRenderBackend {
     private static final long SEL_ADD_COMPLETED_HANDLER = sel_registerName("addCompletedHandler:");
     private static final long SEL_COMMIT = sel_registerName("commit");
     private static final long SEL_CONTENTS = sel_registerName("contents");
+    private static final long SEL_STATUS = sel_registerName("status");
+    private static final long SEL_ERROR = sel_registerName("error");
+    private static final long SEL_CODE = sel_registerName("code");
+
+    // Written by Metal's completion-handler thread, read by the render thread
+    private volatile String lostReason;
+    private int consecutiveFailedFrames; // completion-handler thread only
 
     private final MetalDevice metalDevice = new MetalDevice();
     private final MetalTexture metalTexture = new MetalTexture();
@@ -183,6 +192,7 @@ public class MetalBackend implements IRenderBackend {
         }
 
         CommandBufferCompletedHandler onCompleted = (block, commandBuffer) -> {
+            checkCompletedCommandBuffer(commandBuffer);
             // Advance the disposal fence before the permit lets the render thread start another frame
             resourceCache.onFrameCompleted();
             inFlightFrames.release();
@@ -202,6 +212,54 @@ public class MetalBackend implements IRenderBackend {
         MemoryUtil.memPutLong(blockDescriptor, 0L);
         MemoryUtil.memPutLong(blockDescriptor + 8, 32L);
         return true;
+    }
+
+    /** Completion-handler thread: reads the finished command buffer's status and records a lost device. */
+    private void checkCompletedCommandBuffer(long commandBuffer) {
+        long send = metalDevice.getObjcMsgSend();
+        if (commandBuffer == 0L || send == 0L) return;
+        long status = invokePPP(commandBuffer, SEL_STATUS, send);
+        if (status != MetalCommandBufferErrors.STATUS_ERROR) {
+            consecutiveFailedFrames = 0;
+            return;
+        }
+        long error = invokePPP(commandBuffer, SEL_ERROR, send);
+        long code = error != 0L ? invokePPP(error, SEL_CODE, send) : -1L;
+        consecutiveFailedFrames++;
+        String fatal = MetalCommandBufferErrors.fatalReason(code, consecutiveFailedFrames);
+        if (fatal != null) {
+            markLost(fatal);
+        } else if (consecutiveFailedFrames == 1) {
+            Log.warn("MetalBackend", "A frame failed on the GPU (MTLCommandBufferError " + code + "); dropping it.");
+        }
+    }
+
+    private void markLost(String reason) {
+        synchronized (this) {
+            if (lostReason != null) return;
+            lostReason = reason;
+        }
+        Log.error("MetalBackend", "GPU device lost: " + reason);
+    }
+
+    private void throwIfLost() {
+        String reason = lostReason;
+        if (reason != null) throw new GpuDeviceLostException(GraphicsAPI.METAL, reason);
+    }
+
+    /** Takes {@code permits} in-flight permits, treating a GPU that returns none within the hang timeout as lost. */
+    private void acquireFramePermits(int permits, String what) {
+        boolean acquired;
+        try {
+            acquired = inFlightFrames.tryAcquire(permits, GpuDeviceLostException.HANG_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            acquired = false;
+        }
+        if (!acquired) {
+            markLost("the GPU did not finish " + what + " within " + GpuDeviceLostException.HANG_TIMEOUT_SECONDS + " seconds");
+            throwIfLost();
+        }
     }
 
     @Override public long getOffscreenViewportTexture() { return framebuffer.getOffscreenColorTexture(); }
@@ -410,7 +468,7 @@ public class MetalBackend implements IRenderBackend {
         MetalPipeline previous = metalPipeline;
         metalPipeline = rebuilt;
         // Taking every permit means the GPU has completed all submitted frames that could reference the old states
-        inFlightFrames.acquireUninterruptibly(MAX_FRAMES_IN_FLIGHT);
+        acquireFramePermits(MAX_FRAMES_IN_FLIGHT, "its frames before a shader reload");
         try {
             previous.release(metalDevice);
         } finally {
@@ -426,6 +484,9 @@ public class MetalBackend implements IRenderBackend {
         long send = metalDevice.getObjcMsgSend();
 
         if (metalLayer == 0L || commandQueue == 0L || metalPipeline.getPipelineState3D() == 0L) return;
+        // A loss recorded by the completion handler ends the frame loop here, on the main thread
+        if (com.retro.engine.graphics.GpuDebug.simulatedLossDue()) markLost("simulated by --simulate-gpu-loss");
+        throwIfLost();
 
         if (autoreleasePoolClass == 0L) {
             autoreleasePoolClass = objc_getClass("NSAutoreleasePool");
@@ -435,13 +496,25 @@ public class MetalBackend implements IRenderBackend {
             currentAutoreleasePool = invokePPP(alloc, SEL_INIT, send);
         }
 
-        // Block until the GPU has retired the frame that last used the uniform slot we are about to advance into
-        inFlightFrames.acquireUninterruptibly();
+        // Block until the GPU has retired the frame that last used the uniform slot we are about to advance into.
+        // The autorelease pool is drained by present(), which the frame loop never reaches if this throws.
+        try {
+            acquireFramePermits(1, "the previous frame");
+        } catch (GpuDeviceLostException lost) {
+            drainAutoreleasePool(send);
+            throw lost;
+        }
         framePermitHeld = true;
 
         // A scene that outgrew the per-draw buffers replaces them; every frame that could read the old ones must retire first
         if (uniformStreamer.needsGrowth(drawBuffers.count)) {
-            inFlightFrames.acquireUninterruptibly(MAX_FRAMES_IN_FLIGHT - 1);
+            try {
+                acquireFramePermits(MAX_FRAMES_IN_FLIGHT - 1, "its frames before growing the draw buffers");
+            } catch (GpuDeviceLostException lost) {
+                releaseUnsubmittedFramePermit();
+                drainAutoreleasePool(send);
+                throw lost;
+            }
             try {
                 uniformStreamer.growTo(metalDevice, drawBuffers.count);
             } finally {
@@ -568,7 +641,10 @@ public class MetalBackend implements IRenderBackend {
             currentDrawable = 0L;
         }
         releaseUnsubmittedFramePermit();
+        drainAutoreleasePool(send);
+    }
 
+    private void drainAutoreleasePool(long send) {
         if (currentAutoreleasePool != 0L && send != 0L) {
             invokePPP(currentAutoreleasePool, SEL_DRAIN, send);
             currentAutoreleasePool = 0L;

@@ -54,8 +54,25 @@ public final class AutoSaveSystem implements CommandStack.CommandListener {
         // Play mode holds simulated (not authored) state, and mod sessions must not bake deltas; retry next tick window
         if (workspace.getPlayState() != PlayState.EDITING) return;
         saveDue.set(false);
-        if (!workspace.hasActiveProject() || com.retro.engine.modding.ModLoader.isActive()) return;
-        if (!dirty.getAndSet(false)) return;
+        writeBackup();
+    }
+
+    /**
+     * Emergency backup when the editor is about to close abnormally (the GPU was lost): leaves Play mode so the authored
+     * scene is restored, then writes the same rotating {@code .rscene.bak} the timer does. CPU-only, so it works with a
+     * dead GPU. Returns the backup path, or null when nothing needed saving or the write failed.
+     */
+    public String backupNow() {
+        if (workspace.getPlayState() != PlayState.EDITING) {
+            workspace.stop();
+            if (workspace.getPlayState() != PlayState.EDITING) return null;
+        }
+        return writeBackup();
+    }
+
+    private String writeBackup() {
+        if (!workspace.hasActiveProject() || com.retro.engine.modding.ModLoader.isActive()) return null;
+        if (!dirty.getAndSet(false)) return null;
 
         File scene = sceneFileFor(workspace.getActiveScenePath());
         String target = SceneBackups.newestFor(scene).getPath();
@@ -68,10 +85,11 @@ public final class AutoSaveSystem implements CommandStack.CommandListener {
                 workspace.getAssetDirectory(), workspace.getAssetDatabase(), workspace.getSceneManager().getSceneSettings());
         if (ok) {
             System.out.println("[AutoSave] Scene backed up to " + target);
-        } else {
-            dirty.set(true);
-            System.err.println("[AutoSave] Failed to write " + target);
+            return target;
         }
+        dirty.set(true);
+        System.err.println("[AutoSave] Failed to write " + target);
+        return null;
     }
 
     /** The scene file backups are named after; relative (untitled) scenes go to the project's Scenes folder. */

@@ -265,7 +265,8 @@ public class VulkanSwapchain {
                 // Nothing was acquired and the semaphore stays unsignaled; the frame must be skipped
                 needsRecreate = true;
             } else {
-                System.err.println("[VulkanSwapchain] ERROR: vkAcquireNextImageKHR failed with code: " + res);
+                device.check(res, "vkAcquireNextImageKHR");
+                if (!device.isLost()) System.err.println("[VulkanSwapchain] ERROR: vkAcquireNextImageKHR failed with code: " + res);
             }
         }
         return -1;
@@ -289,7 +290,7 @@ public class VulkanSwapchain {
                 needsRecreate = true;
                 return res == KHRSwapchain.VK_SUBOPTIMAL_KHR;
             }
-            if (res != VK_SUCCESS) {
+            if (!device.check(res, "vkQueuePresentKHR") && !device.isLost()) {
                 System.err.println("[VulkanSwapchain] ERROR: vkQueuePresentKHR failed with code: " + res);
             }
             return res == VK_SUCCESS;

@@ -2,6 +2,8 @@ package com.retro.engine.graphics.vulkan;
 
 import com.retro.engine.core.Log;
 import com.retro.engine.graphics.GpuDebug;
+import com.retro.engine.graphics.GpuDeviceLostException;
+import com.retro.engine.graphics.GraphicsAPI;
 
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.glfw.GLFWVulkan;
@@ -40,6 +42,9 @@ public class VulkanDevice {
     // VkQueue access must be externally synchronized: frame submission/present on the render thread
     // and asset uploads from AssetStreamer virtual threads all serialize on this lock.
     private final Object queueLock = new Object();
+
+    // Set once by whichever thread first sees the device go (render, upload, swapchain); read by beginFrame
+    private volatile String lostReason;
 
     // Vulkan 1.2 feature gating the depth-only VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL layout
     private boolean separateDepthStencilLayouts = false;
@@ -401,6 +406,55 @@ public class VulkanDevice {
     public int getGraphicsQueueFamilyIndex() { return graphicsQueueFamilyIndex; }
     public int getPresentQueueFamilyIndex() { return presentQueueFamilyIndex; }
     public Object getQueueLock() { return queueLock; }
+
+    /**
+     * Records VK_ERROR_DEVICE_LOST from {@code call}; returns {@code result == VK_SUCCESS}. Any thread may call it, and it
+     * never throws: the render thread raises {@link GpuDeviceLostException} from the next {@link #throwIfLost()}.
+     */
+    public boolean check(int result, String call) {
+        if (result == VK10.VK_ERROR_DEVICE_LOST) markLost(call + " returned VK_ERROR_DEVICE_LOST");
+        return result == VK10.VK_SUCCESS;
+    }
+
+    /** Marks the device unusable; the first reason wins and is logged once. */
+    public void markLost(String reason) {
+        synchronized (this) {
+            if (lostReason != null) return;
+            lostReason = reason;
+        }
+        Log.error("VulkanDevice", "GPU device lost: " + reason);
+    }
+
+    public boolean isLost() { return lostReason != null; }
+
+    /** Render thread: throws once the device has been lost, so the frame loop stops instead of drawing into a dead device. */
+    public void throwIfLost() {
+        String reason = lostReason;
+        if (reason != null) throw new GpuDeviceLostException(GraphicsAPI.VULKAN, reason);
+    }
+
+    /**
+     * Waits for {@code fence} with the hang timeout instead of forever: a GPU that never signals is treated as lost.
+     * Returns true when the fence signalled.
+     */
+    public boolean waitForFence(long fence, String what) {
+        int result = VK10.vkWaitForFences(device, fence, true, GpuDeviceLostException.HANG_TIMEOUT_NS);
+        if (result == VK10.VK_TIMEOUT) {
+            markLost("the GPU did not finish " + what + " within " + GpuDeviceLostException.HANG_TIMEOUT_SECONDS + " seconds");
+            return false;
+        }
+        return check(result, "vkWaitForFences (" + what + ")");
+    }
+
+    /** vkDeviceWaitIdle under the queue lock, recording a lost device. */
+    public boolean waitIdle(String what) {
+        if (device == null) return false;
+        int result;
+        synchronized (queueLock) {
+            result = VK10.vkDeviceWaitIdle(device);
+        }
+        return check(result, "vkDeviceWaitIdle (" + what + ")");
+    }
     public boolean supportsSeparateDepthStencilLayouts() { return separateDepthStencilLayouts; }
 
     /** Engine version for VkApplicationInfo, so driver and validation logs name the real build. */

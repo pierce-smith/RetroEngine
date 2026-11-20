@@ -3,6 +3,7 @@ package com.retro.engine;
 import com.retro.engine.core.EngineContext;
 import com.retro.engine.core.EngineLoop;
 import com.retro.engine.core.Log;
+import com.retro.engine.core.NativeFileDialog;
 import com.retro.engine.core.ProjectSettings;
 import com.retro.engine.core.RuntimeLoop;
 import com.retro.engine.editor.StandaloneExporter;
@@ -40,6 +41,8 @@ public class Main {
     public static final int EXIT_STARTUP_FAILED = 2;
     /** Headless --frames: at least one script failed to compile or threw. */
     public static final int EXIT_SCRIPT_FAILED = 3;
+    /** The GPU device was lost (driver crash or reset, GPU removed, or hung); the user was told why. */
+    public static final int EXIT_GPU_LOST = 4;
 
     private static final float DEFAULT_BENCH_WARMUP_SECONDS = 60.0f;
 
@@ -97,6 +100,9 @@ public class Main {
                     new EngineLoop().run(context);
                 }
             }
+        } catch (com.retro.engine.graphics.GpuDeviceLostException lost) {
+            exitCode = EXIT_GPU_LOST;
+            reportGpuLost(context, lost, isRuntime);
         } catch (Throwable fatal) {
             // Logged here so the stack trace reaches the log file before shutdown runs
             System.err.println("[FATAL] Engine loop terminated by an uncaught exception.");
@@ -106,6 +112,36 @@ public class Main {
             context.shutdown();
         }
         if (exitCode != EXIT_OK) System.exit(exitCode);
+    }
+
+    /**
+     * The GPU is gone and nothing can be drawn again: back up the editor's scene (CPU-only), then tell the user in plain
+     * words. Context shutdown follows in Main's finally; Vulkan and Metal teardown tolerate the dead device.
+     */
+    private static void reportGpuLost(EngineContext context, com.retro.engine.graphics.GpuDeviceLostException lost, boolean isRuntime) {
+        Log.error("Main", lost.getMessage());
+        String appName = isRuntime ? com.retro.engine.scripting.Game.getTitle() : "RetroEngine";
+        String message = lost.userMessage(appName);
+        com.retro.engine.editor.EditorWorkspace editor = context.getEditorManager();
+        if (!isRuntime && editor != null) {
+            String backup = null;
+            boolean hadChanges = editor.getAutoSaveSystem().isDirty();
+            try {
+                backup = editor.getAutoSaveSystem().backupNow();
+            } catch (RuntimeException e) {
+                Log.error("Main", "Emergency scene backup failed", e);
+            }
+            if (backup != null) {
+                message += "\n\nYour unsaved scene changes were backed up to " + backup;
+            } else if (hadChanges) {
+                message += "\n\nYour unsaved scene changes could not be backed up; see the log.";
+            }
+        }
+        try {
+            NativeFileDialog.showError("Graphics error", message);
+        } catch (Throwable dialogFailure) {
+            Log.error("Main", "Could not show the GPU-lost dialog", dialogFailure);
+        }
     }
 
     private static int runGame(EngineContext context, String[] args) {

@@ -181,4 +181,25 @@ class SceneWorldDataSafetyTest {
         assertEquals("Autosave One", SceneSerializer.loadSceneData(older.getPath()).entities().get(0).name);
         assertArrayEquals(sceneBefore, Files.readAllBytes(scene.toPath()));
     }
+
+    @Test
+    void gpuLossBacksUpTheAuthoredSceneEvenDuringPlay() throws Exception {
+        EditorWorkspace workspace = new EditorWorkspace();
+        File project = ProjectWorkspace.createProject(workspace, dir.toFile(), "Lost", TemplateManager.STARTER_CONTENT);
+        AutoSaveSystem autoSave = workspace.getAutoSaveSystem();
+        File scene = new File(project, ProjectWorkspace.STARTER_SCENE);
+
+        assertEquals(null, autoSave.backupNow()); // nothing edited yet: nothing to back up
+
+        workspace.getSceneManager().getSceneEntities().get(0).name = "Unsaved Edit";
+        autoSave.markDirty();
+        workspace.play();
+        workspace.getSceneManager().getSceneEntities().get(0).name = "Changed During Play";
+
+        String backup = autoSave.backupNow();
+        assertEquals(PlayState.EDITING, workspace.getPlayState());
+        assertEquals(SceneBackups.newestFor(scene).getPath(), backup);
+        assertEquals("Unsaved Edit", SceneSerializer.loadSceneData(backup).entities().get(0).name);
+        assertFalse(autoSave.isDirty());
+    }
 }

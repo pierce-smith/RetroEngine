@@ -164,7 +164,10 @@ public class VulkanBackend implements IRenderBackend {
         VkDevice device = deviceManager.getDevice();
         if (!spirvChanged || device == null) return;
 
-        vkWaitForFences(device, queueSubmitter.getInFlightFence(), true, Long.MAX_VALUE);
+        if (!deviceManager.waitForFence(queueSubmitter.getInFlightFence(), "the frame before a shader reload")) {
+            deviceManager.throwIfLost();
+            return;
+        }
         if (pipelineManager.reloadGraphicsPipelines(deviceManager)) {
             System.out.println("[VulkanBackend] Shader hot reload: Vulkan pipelines rebuilt and swapped.");
         } else {
@@ -176,10 +179,17 @@ public class VulkanBackend implements IRenderBackend {
     public void beginFrame() {
         VkDevice device = deviceManager.getDevice();
         if (device == null) return;
+        // A loss seen anywhere (last submit or present, an upload thread) ends the frame loop here, on the main thread
+        if (com.retro.engine.graphics.GpuDebug.simulatedLossDue()) deviceManager.markLost("simulated by --simulate-gpu-loss");
+        deviceManager.throwIfLost();
 
         // The previous frame's command buffer, descriptor sets, light UBO and bone palettes are only safe to touch
-        // once its fence signals.
-        vkWaitForFences(device, queueSubmitter.getInFlightFence(), true, Long.MAX_VALUE);
+        // once its fence signals. A fence that never signals means a hung GPU, not a slow one.
+        if (!deviceManager.waitForFence(queueSubmitter.getInFlightFence(), "the previous frame")) {
+            deviceManager.throwIfLost();
+            activeImageIndex = -1;
+            return;
+        }
         harvestPickReadback();
 
         // A resize/maximize event, or OUT_OF_DATE/SUBOPTIMAL from the previous acquire or present, invalidated the
@@ -192,6 +202,7 @@ public class VulkanBackend implements IRenderBackend {
         // Acquire before resetting the fence: if acquisition fails no submit follows, and a reset fence would
         // never be signaled again, deadlocking the next frame's wait.
         activeImageIndex = swapchainManager.acquireNextImage(deviceManager, queueSubmitter.getImageAvailableSemaphore());
+        deviceManager.throwIfLost();
         if (activeImageIndex < 0 && swapchainManager.needsRecreate() && recreateSwapchain()) {
             // OUT_OF_DATE leaves the semaphore unsignaled, so one retry against the fresh swapchain is safe
             activeImageIndex = swapchainManager.acquireNextImage(deviceManager, queueSubmitter.getImageAvailableSemaphore());
@@ -357,8 +368,9 @@ public class VulkanBackend implements IRenderBackend {
         if (fbWidth <= 0 || fbHeight <= 0) return false;
 
         // The old images may still be read by an in-flight present; the upload thread shares the queue lock
-        synchronized (deviceManager.getQueueLock()) {
-            vkDeviceWaitIdle(device);
+        if (!deviceManager.waitIdle("swapchain rebuild")) {
+            deviceManager.throwIfLost();
+            return false;
         }
         return swapchainManager.recreateSwapchain(deviceManager, surfaceManager.getSurfaceHandle(), fbWidth, fbHeight);
     }
@@ -448,7 +460,7 @@ public class VulkanBackend implements IRenderBackend {
             synchronized (deviceManager.getQueueLock()) {
                 result = vkQueueSubmit2(deviceManager.getGraphicsQueue(), submitInfo, queueSubmitter.getInFlightFence());
             }
-            if (result != VK_SUCCESS) {
+            if (!deviceManager.check(result, "vkQueueSubmit2 (frame)") && !deviceManager.isLost()) {
                 System.err.println("[VulkanBackend] ERROR: vkQueueSubmit2 failed with code: " + result);
             }
         }
@@ -506,7 +518,11 @@ public class VulkanBackend implements IRenderBackend {
     public void resizeViewport(int width, int height) {
         if (width == targetPass.getWidth() && height == targetPass.getHeight()) return;
         long previousView = targetPass.getOffscreenImageView();
-        vkDeviceWaitIdle(deviceManager.getDevice()); // The last frame may still be reading the old images
+        // The last frame may still be reading the old images
+        if (!deviceManager.waitIdle("viewport resize")) {
+            deviceManager.throwIfLost();
+            return;
+        }
         targetPass.resizeViewport(deviceManager, width, height);
         long view = targetPass.getOffscreenImageView();
         if (view != previousView) gpuCache.rebindRenderTargetView(sceneColorSlot, view);

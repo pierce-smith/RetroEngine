@@ -217,8 +217,8 @@ public class VulkanUploadRing {
         synchronized (device.getQueueLock()) {
             result = vkQueueSubmit2(device.getGraphicsQueue(), submitInfo, VK_NULL_HANDLE);
         }
-        if (result != VK_SUCCESS) {
-            System.err.println("[VulkanUploadRing] ERROR: vkQueueSubmit2 failed for an upload: " + result);
+        if (!device.check(result, "vkQueueSubmit2 (texture upload)")) {
+            if (!device.isLost()) System.err.println("[VulkanUploadRing] ERROR: vkQueueSubmit2 failed for an upload: " + result);
             return -1L;
         }
 
@@ -236,7 +236,8 @@ public class VulkanUploadRing {
                     .pSemaphores(stack.longs(timelineSemaphore))
                     .pValues(stack.longs(value));
             int result = vkWaitSemaphores(device.getLogicalDevice(), waitInfo, WAIT_TIMEOUT_NS);
-            if (result != VK_SUCCESS) {
+            if (!device.check(result, "vkWaitSemaphores (upload slot)")) {
+                if (device.isLost()) return false;
                 System.err.println("[VulkanUploadRing] ERROR: Timed out waiting for staging slot (timeline value " + value + ", result " + result + ").");
                 return false;
             }
