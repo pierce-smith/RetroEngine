@@ -166,6 +166,11 @@ alongside it. Choose the threshold with `-Dretro.log=debug|info|warn|error`. Old
 | Crash, full disk or bad component during a save | Saves are atomic, so the existing file is untouched, and a dialog reports the failure (Volume 1 §2.3) |
 | Scene file damaged or from a newer engine | Detected by checksum and version. The open scene stays, and the file can't be saved over (Volume 2 §1.6) |
 | Mod removed from a project                | Its components load as `Missing: <type>` and keep their data through saves |
+| Exported game can't load its data or startup scene | A **Could not start** dialog names the problem and the log file. Exits with code 2 instead of showing an empty scene |
+| A level fails to load mid-game            | A **Level error** dialog. The game stays on the scene it had (one dialog at a time) |
+| Uncaught crash                            | A **Crash** dialog with the error and the log path. The editor backs up the unsaved scene to `.rscene.bak` first |
+| GPU lost (driver crash or reset)          | A plain dialog, an editor scene backup, exit code 4 (Volume 3 §1.5) |
+| Mod with code that the player hasn't allowed | Asks first, **No** by default (Modding Guide, Security) |
 
 ---
 

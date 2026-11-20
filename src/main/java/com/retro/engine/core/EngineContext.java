@@ -79,6 +79,8 @@ public class EngineContext {
         }
 
         com.retro.engine.modding.ModLoader.setRuntimeModsEnabled(!hasCliFlag(args, "--no-mods"));
+        // Nobody can be asked headless: mods with code load only with --trust-mods
+        com.retro.engine.modding.ModTrust.setTrustAll(hasCliFlag(args, com.retro.engine.modding.ModTrust.TRUST_ALL_FLAG));
 
         // An explicit --project must not fall through to another folder, or a typo would test the wrong game
         String cliProject = findCliValue(args, "--project");
@@ -271,17 +273,34 @@ public class EngineContext {
         // Mods: runtime builds load Game_Data/Mods/ unless --no-mods; the editor loads <project>/Mods/ only with --mods
         com.retro.engine.modding.ModLoader.setRuntimeModsEnabled(!hasCliFlag(cliArgs, "--no-mods"));
         com.retro.engine.modding.ModLoader.setEditorModsEnabled(hasCliFlag(cliArgs, "--mods"));
+        // A mod with code asks the player once (No is the default button), then is remembered; see ModTrust
+        com.retro.engine.modding.ModTrust.setTrustAll(hasCliFlag(cliArgs, com.retro.engine.modding.ModTrust.TRUST_ALL_FLAG));
+        com.retro.engine.modding.ModTrust.setPrompter((gameName, mods) ->
+                NativeFileDialog.confirm("Load mods?", com.retro.engine.modding.ModTrust.promptText(gameName, mods), false));
+        ErrorDialogs.setEnabled(true);
 
         if (isRuntimeOnly) {
             java.io.File gameData = resolveRuntimeGameData(cliArgs);
             if (gameData == null) {
-                Log.error("EngineContext", "No Game_Data/ or --project folder found; starting with an empty scene.");
+                Log.error("EngineContext", "No Game_Data/ or --project folder found.");
+                // An exported game without its data is a broken install; a bare --runtime launch is a developer's empty sandbox
+                if (Boolean.getBoolean("retro.packaged")) {
+                    ErrorDialogs.startupFailed(title, "Its Game_Data folder is missing. Reinstalling the game should fix this.");
+                    shutdown();
+                    return false;
+                }
             } else {
                 try {
                     ProjectWorkspace.openRuntimeProject(editorManager, gameData, findCliValue(cliArgs, "--scene"));
                 } catch (java.io.IOException e) {
+                    // Starting on an empty scene would leave the player staring at nothing with no idea why
                     Log.error("EngineContext", "Failed to load game data: " + e.getMessage());
+                    ErrorDialogs.startupFailed(gameName(gameData, title), e.getMessage());
+                    shutdown();
+                    return false;
                 }
+                String name = gameName(gameData, title);
+                editorManager.getSceneManager().setDataErrorListener(message -> ErrorDialogs.levelLoadFailed(name, message));
             }
         } else {
             String cliProject = findCliValue(cliArgs, "--project");
@@ -294,6 +313,17 @@ public class EngineContext {
 
         Log.info("Engine", "Running. Virtual Thread Asset Streaming Active (RuntimeOnly: " + isRuntimeOnly + ").");
         return true;
+    }
+
+    /** The exported game's name for dialogs, else the window title. */
+    private static String gameName(java.io.File gameData, String fallback) {
+        try {
+            String name = ProjectWorkspace.readSettings(gameData).projectName;
+            if (name != null && !name.isBlank()) return name;
+        } catch (java.io.IOException ignored) {
+            // the dialog falls back to the window title
+        }
+        return fallback;
     }
 
     /** Opens an existing project directory (a .rproj, or a pre-.rproj project to migrate) and binds the editor's AssetDatabase to it. */

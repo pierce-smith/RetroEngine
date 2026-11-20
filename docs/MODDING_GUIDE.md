@@ -33,6 +33,25 @@ Mods/example_mod/
 - **Saving under `--mods`:** scene saving is disabled, because the open scene contains patched content and saving
   would bake it into the vanilla `.rscene`. Use Creation Kit mode to author scene changes instead.
 
+## Security: mods with code ask first
+
+**Mod code is not sandboxed.** A mod's scripts are ordinary Java. They run with the same access to the player's
+computer as the game itself: files, network, other programs. RetroEngine does not try to restrict them, because a
+Java sandbox would be leaky and would break the mods people actually write. Instead, the player decides:
+
+- **A mod with code asks before it loads.** "Code" means any `.java`, `.class` or `.jar` file anywhere in the mod. The
+  prompt names each mod, its version and author, and says plainly what the code can reach. **No** is the default button.
+- **Yes is remembered** per game, in `<OS app data>/<game>/trusted_mods.properties`, together with a SHA-256 of the
+  mod's code. An update that changes the code asks again. Changing only textures or models doesn't.
+- **No is remembered until the game closes.** The mod is skipped, and so are mods that require it.
+- **Mods without code never ask.** Assets, scene patches and shaders load as data.
+- **No one to ask** (`--headless`, a dedicated server): mods with code are skipped unless the game starts with
+  `--trust-mods`.
+- **Developers aren't asked about their own work:** the mod open in the mod workspace and folders mounted by hand
+  count as trusted.
+
+Tell players the same thing on your mod page: only install mods from people you trust.
+
 ## mod.json
 
 | Key | Default | Meaning |

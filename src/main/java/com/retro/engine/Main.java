@@ -93,6 +93,8 @@ public class Main {
                 Log.info("Main", "Mode: standalone game (--runtime)");
                 if (context.initialize(1280, 720, "RetroEngine Standalone Runtime", true, args)) {
                     exitCode = runGame(context, args);
+                } else {
+                    exitCode = EXIT_STARTUP_FAILED;
                 }
             } else {
                 Log.info("Main", "Mode: editor");
@@ -107,11 +109,30 @@ public class Main {
             // Logged here so the stack trace reaches the log file before shutdown runs
             System.err.println("[FATAL] Engine loop terminated by an uncaught exception.");
             fatal.printStackTrace();
+            reportCrash(context, fatal, isRuntime);
             throw fatal;
         } finally {
             context.shutdown();
         }
         if (exitCode != EXIT_OK) System.exit(exitCode);
+    }
+
+    /** Tells the player the game crashed and where the log is; the editor first backs up the open scene. */
+    private static void reportCrash(EngineContext context, Throwable fatal, boolean isRuntime) {
+        if (!com.retro.engine.core.ErrorDialogs.isEnabled()) return;
+        String extra = null;
+        com.retro.engine.editor.EditorWorkspace editor = context.getEditorManager();
+        if (!isRuntime && editor != null) {
+            boolean hadChanges = editor.getAutoSaveSystem().isDirty();
+            try {
+                String backup = editor.getAutoSaveSystem().backupNow();
+                if (backup != null) extra = "Your unsaved scene changes were backed up to " + backup;
+                else if (hadChanges) extra = "Your unsaved scene changes could not be backed up.";
+            } catch (Throwable e) {
+                Log.error("Main", "Emergency scene backup failed", e);
+            }
+        }
+        com.retro.engine.core.ErrorDialogs.crashed(isRuntime ? com.retro.engine.scripting.Game.getTitle() : "RetroEngine", fatal, extra);
     }
 
     /**
@@ -265,6 +286,7 @@ public class Main {
             System.setOut(new java.io.PrintStream(new Tee(System.out, file), true, java.nio.charset.StandardCharsets.UTF_8));
             System.setErr(new java.io.PrintStream(new Tee(System.err, file), true, java.nio.charset.StandardCharsets.UTF_8));
             Log.info("Main", "Logging to " + log);
+            com.retro.engine.core.ErrorDialogs.setLogFile(log);
         } catch (java.io.IOException e) {
             Log.error("Main", "Could not open log file " + log + ": " + e.getMessage());
         }

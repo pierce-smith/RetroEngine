@@ -124,6 +124,13 @@ public final class ModLoader {
         ModLoader loader = new ModLoader(project);
         List<ModManifest> discovered = loader.discoverMods(new File(project, MODS_DIR));
         discovered = filterToWorkspace(discovered);
+        // Code runs with the game's full access, so the player agrees to each new or changed code mod first
+        // Folders mounted by hand and the mod open in the mod workspace are the developer's own choice: trusted
+        List<File> chosen = new ArrayList<>(extraModRoots);
+        for (ModManifest m : discovered) {
+            if (m.id.equals(workspaceModId)) chosen.add(m.root);
+        }
+        discovered = ModTrust.filter(discovered, gameName(project), chosen);
         if (discovered.isEmpty()) return null;
         loader.load(discovered);
         if (loader.loaded.isEmpty()) {
@@ -135,6 +142,17 @@ public final class ModLoader {
         ScriptEngine.clearCache();
         ModShaders.apply(loader);
         return loader;
+    }
+
+    /** The game's name (what players see, and what its OS data folder is called), else the project folder's name. */
+    static String gameName(File project) {
+        try {
+            String name = com.retro.engine.core.ProjectWorkspace.readSettings(project).projectName;
+            if (name != null && !name.isBlank()) return name;
+        } catch (IOException e) {
+            System.err.println("[ModLoader] Could not read the project name in " + project + ": " + e.getMessage());
+        }
+        return project.getName();
     }
 
     /**

@@ -98,7 +98,7 @@ public class NativeFileDialog {
     public static boolean confirm(String title, String message, boolean defaultYes) {
         return TinyFileDialogs.tinyfd_messageBox(
             title != null ? title : "Confirm",
-            message != null ? message : "",
+            dialogSafe(message),
             "yesno", "question", defaultYes ? 1 : 0
         ) == 1;
     }
