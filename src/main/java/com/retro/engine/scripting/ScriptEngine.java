@@ -319,7 +319,10 @@ public class ScriptEngine {
     public static void dispatchCollisionEnter(Entity entity, Entity other) { dispatchContact(entity, other, Contact.COLLISION_ENTER); }
     public static void dispatchCollisionStay(Entity entity, Entity other) { dispatchContact(entity, other, Contact.COLLISION_STAY); }
     public static void dispatchCollisionExit(Entity entity, Entity other) { dispatchContact(entity, other, Contact.COLLISION_EXIT); }
-    public static void dispatchTriggerEnter(Entity entity, Entity other) { dispatchContact(entity, other, Contact.TRIGGER_ENTER); }
+    public static void dispatchTriggerEnter(Entity entity, Entity other) {
+        com.retro.engine.save.CheckpointSystem.onTriggerEnter(entity, other);
+        dispatchContact(entity, other, Contact.TRIGGER_ENTER);
+    }
     public static void dispatchTriggerStay(Entity entity, Entity other) { dispatchContact(entity, other, Contact.TRIGGER_STAY); }
     public static void dispatchTriggerExit(Entity entity, Entity other) { dispatchContact(entity, other, Contact.TRIGGER_EXIT); }
 
@@ -620,6 +623,7 @@ public class ScriptEngine {
             sc.enableDispatched = true;
             script.onEnable();
             script.onStart();
+            com.retro.engine.save.SaveSystem.onScriptStarted(entity, sc, script);
             System.out.println("[ScriptEngine] Started script '" + clazz.getSimpleName() + "' on Entity '" + entity.name + "'");
         } catch (Throwable t) {
             disableFailedScript(entity, sc, "onAwake/onEnable/onStart", t);

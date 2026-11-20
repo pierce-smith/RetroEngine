@@ -838,6 +838,7 @@ public class InspectorInputDelegate {
         addComponentItem(items, entities, "+ Spline", com.retro.engine.ecs.components.SplineComponent.class, com.retro.engine.ecs.components.SplineComponent::new);
         addComponentItem(items, entities, "+ Spline Follower", com.retro.engine.ecs.components.SplineFollower.class, com.retro.engine.ecs.components.SplineFollower::new);
         addComponentItem(items, entities, "+ Vehicle Controller", VehicleControllerComponent.class, VehicleControllerComponent::new);
+        addComponentItem(items, entities, "+ Checkpoint", com.retro.engine.ecs.components.Checkpoint.class, com.retro.engine.ecs.components.Checkpoint::new);
 
         addComponentItem(items, entities, "+ UI Canvas", UICanvasComponent.class, UICanvasComponent::new);
         addComponentItem(items, entities, "+ UI Panel", UIPanel.class, UIPanel::new);

@@ -53,6 +53,8 @@ public class SimulationSystem {
             if (activeEntities != null) {
                 backupManager.captureSnapshot(activeEntities);
             }
+            // After the snapshot (so Stop undoes it), before physics and scripts: a loaded save or remembered level
+            if (sceneWorld != null) sceneWorld.onLevelStarting();
 
             this.playState = PlayState.SIMULATING;
 

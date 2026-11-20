@@ -313,3 +313,8 @@ UIButton 21 borderThickness FLOAT since=1 prefabSince=1
 UIButton 22 interactable BOOLEAN since=1 prefabSince=1
 UIButton 23 focusFirst BOOLEAN since=1 prefabSince=1
 UIButton 24 font ASSET_PATH since=1 prefabSince=1
+Checkpoint 0 slot STRING since=1 prefabSince=1
+Checkpoint 1 displayName STRING since=1 prefabSince=1
+Checkpoint 2 onlyOnce BOOLEAN since=1 prefabSince=1
+Checkpoint 3 playerName STRING since=1 prefabSince=1
+Checkpoint 4 reached BOOLEAN since=1 prefabSince=1

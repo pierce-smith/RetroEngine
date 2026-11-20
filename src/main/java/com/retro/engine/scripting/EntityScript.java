@@ -88,6 +88,18 @@ public abstract class EntityScript {
 
     public void onDestroy() {}
 
+    /**
+     * A save game is being written: put anything {@link com.retro.engine.save.Save @Save} fields can't hold into
+     * {@code data}. Called for every running script; leave it empty when there is nothing to add.
+     */
+    public void onSave(com.retro.engine.save.SaveRecord data) {}
+
+    /**
+     * A save game was loaded: called right after {@link #onStart()} and after this script's {@code @Save} fields got
+     * their saved values. {@code data} is what {@link #onSave} wrote (empty if nothing).
+     */
+    public void onLoad(com.retro.engine.save.SaveRecord data) {}
+
     // =========================================================================
     // Framework Hooks (engine-internal)
     // =========================================================================

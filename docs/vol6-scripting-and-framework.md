@@ -810,7 +810,8 @@ saveGame();                                                 // force a write now
 
 | Aspect | Behavior |
 |--------|----------|
-| File | `~/.retroengine/saves/<project>.properties`. `<project>` is the folder containing `Assets/` (for an exported game, the project's name, because every export's folder is `Game_Data`), sanitized to `[A-Za-z0-9-_.]`. |
+| File | `<game>/Saves/save.properties` in the OS folder for app data: `~/Library/Application Support` (macOS), `%APPDATA%` (Windows), `$XDG_DATA_HOME` or `~/.local/share` (Linux). `<game>` is the project's name for an exported game (every export's folder is `Game_Data`) and the folder containing `Assets/` in the editor, with characters Windows forbids replaced by `_`. `ScriptSaveData.getSaveFolder()` returns the folder for a script's own files. |
+| Older saves | A save from Beta 4 or earlier (`~/.retroengine/saves/<project>.properties`) is copied to the new folder the first time the game finds none there. The old file stays. |
 | Format | `java.util.Properties`: plain text that's easy to diff. Values are stored as strings and read back with the typed getters (`getBool` accepts `true`/`false`/`1`/`0`). |
 | When it writes | `saveGame()`, **when Play stops in the editor**, and from a **JVM shutdown hook** when the game exits. It writes only when something changed. |
 | Crash safety | **Write-then-rename:** the data goes to `<file>.tmp` first and then replaces the save, so a crash mid-write never leaves a truncated file. |
@@ -821,6 +822,37 @@ saveGame();                                                 // force a write now
 > Testing "first launch" behavior in the editor means calling `ScriptSaveData.deleteAll()` (then `saveGame()`) or
 > deleting the file. This is intentional: high-score and unlock logic behaves the same in the editor as in the
 > shipped game.
+
+`ScriptSaveData` holds settings that belong to the player, not to one playthrough (volume, display choices). Progress
+belongs in a save slot: see §4.5.
+
+### 4.5 `SaveGame`: Save Slots
+
+```java
+public class Player extends SimpleEntityScript {
+    @Save int health = 100;                                // restored after onStart, so onStart can set defaults
+    @Save float[] lastCheckpoint = {0, 0, 0};
+
+    @Override public void onSave(SaveRecord data) { data.set("weapon", weapon.getName()); }  // anything @Save can't hold
+    @Override public void onLoad(SaveRecord data) { equip(data.getString("weapon", "knife")); }
+}
+
+SaveGame.save("slot1", "Chapter 2 - Docks");               // writes now
+SaveGame.load("slot1");                                     // switches level at the end of the frame
+SaveGame.values().set("met_ferryman", true);                // belongs to this playthrough, saved with every slot
+for (SaveGame.SlotInfo s : SaveGame.listSlots()) { ... }    // newest first, for a load menu
+```
+
+| Aspect | Behavior |
+|--------|----------|
+| What a save holds | The level the player is in, `SaveGame.values()`, the play time, and for each level **what changed since it loaded from its scene file**: destroyed entities, entities spawned during play (`instantiatePrefabRuntime` / `spawnEntity`, which come back under the same ids), changed component properties (positions, light settings, components added or removed during play), entity names and parents, `@Save` script fields and `onSave` data. |
+| Loading | The saved level loads fresh from its scene file, the changes are applied before physics and scripts start, then each script runs `onStart`, gets its `@Save` fields, and `onLoad`. Because only changes are stored, a level patched after release still loads under old saves: new content appears, removed entities are skipped. |
+| Level memory | **Remember Levels** (Project Settings, Runtime tab; on by default; `SaveGame.setRememberLevels` overrides it while the game runs). On: a level the player leaves keeps its changes and every remembered level goes into the save. Off: a level resets whenever it is left and a save holds only the current level. Loading the level that is already running (`SceneManager.reloadCurrentScene()`) always restarts it. `SaveGame.forgetLevel(path)` resets one level, `SaveGame.newGame(firstScene)` starts over. |
+| Checkpoint component | Add **Checkpoint** next to a trigger collider. When the player (the entity named in PLAYER NAME, or any entity with a Character or Vehicle Controller) enters it, the game saves into SAVE SLOT at the end of that frame. With ONLY ONCE on, a used checkpoint stays used, in the save too. `SaveGame.saveAtEndOfFrame` does the same from a script. |
+| `@Save` types | `int`, `long`, `float`, `double`, `boolean` (and boxed), `String`, enums, `int[]`, `float[]`. Other types are skipped with a console message; save them in `onSave`. |
+| Not saved | Physics velocities, animation playback, playing sounds, particles, NavMesh Gate open/closed (`setOpen` is runtime state). Save what your game needs in `onSave` and reapply it in `onLoad`. |
+| File | `<slot>.rsave` in `ScriptSaveData.getSaveFolder()` (the game's folder in the OS save location). Binary, versioned (`SaveFileFormat`), CRC32-checked and written atomically. A damaged or missing slot makes `load` return false and the running level carries on. |
+| Editor | Saving and loading work in Play mode and write real files. Stop forgets the session (remembered levels, values, play time) and keeps the files. Loading reads scenes from disk, so save a scene before testing saves made in it. |
 
 ---
 

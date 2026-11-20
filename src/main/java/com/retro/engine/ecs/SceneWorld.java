@@ -96,6 +96,7 @@ public class SceneWorld {
     private final List<Entity> selectionView = Collections.unmodifiableList(selectionSnapshot);
 
     private String activeScenePath = "Assets/Scenes/Default.rscene";
+    private final com.retro.engine.save.SaveSystem saves = new com.retro.engine.save.SaveSystem(new SceneSaveWorld());
     // Scene transition requested by a script; applied at the end of update() so no entity list is mid-iteration
     private volatile String pendingScenePath = null;
     // Last project database used to load a scene, reused so deferred transitions resolve project-relative assets
@@ -337,6 +338,7 @@ public class SceneWorld {
         if (leavingPlayMode && restoreOrigin) {
             pendingScenePath = null;
             restoreOriginScene();
+            saves.onPlayStopped();
         }
     }
 
@@ -469,7 +471,34 @@ public class SceneWorld {
         // and every frame outside Play too, so editor clicks don't arrive as a burst of presses on the first Play frame
         com.retro.engine.scripting.Input.endFrame();
 
+        // Checkpoint and end-of-frame saves see everything this frame did, before a scene transition swaps the level
+        saves.endOfFrame(deltaTime, simulating);
         applyPendingSceneLoad();
+    }
+
+    /** Called by the simulation when a level starts running: after the play snapshot, before physics and scripts. */
+    @com.retro.engine.api.Internal
+    public void onLevelStarting() {
+        saves.onLevelStarting();
+    }
+
+    /** What the save system reads and changes in this world. */
+    private final class SceneSaveWorld implements com.retro.engine.save.SaveWorld {
+        @Override public List<Entity> entities() { return sceneEntities; }
+        @Override public String activeScenePath() { return activeScenePath; }
+        @Override public Entity findEntityById(String id) { return SceneWorld.this.findEntityById(id); }
+        @Override public void removeEntity(Entity e) { deleteEntity(e); }
+        @Override public List<Entity> instantiatePrefab(String prefabPath) { return instantiatePrefabRuntimeAll(prefabPath); }
+        @Override public Entity spawnEntity(String id, String name, String meshPath) { return SceneWorld.this.spawnEntity(id, name, meshPath); }
+        @Override public void setParent(Entity child, Entity parent) { SceneWorld.this.setParent(child, parent); }
+        @Override public void refreshComponents(Entity e) { SceneWorld.this.refreshComponents(e); }
+        @Override public String resolveAssetPath(String path) {
+            String resolved = lastAssetDatabase != null ? lastAssetDatabase.resolveAsset(path) : ModLoader.resolveAssetPath(path);
+            return resolved != null ? resolved : path;
+        }
+        @Override public boolean isPlaying() { return simulationEngine.getPlayState() != PlayState.EDITING; }
+        @Override public void requestSceneLoad(String scenePath) { SceneWorld.this.requestSceneLoad(scenePath); }
+        @Override public boolean sceneExists(String scenePath) { return resolveScenePath(scenePath) != null; }
     }
 
     /**
@@ -502,15 +531,19 @@ public class SceneWorld {
         // Abort before tearing anything down: a bad path or file must not swap the running scene for an empty one
         if (resolveScenePath(path) == null) {
             ScriptEngine.reportFailure("[SceneWorld] Scene transition aborted: '" + path + "' could not be resolved through the project VFS.");
+            saves.onSceneLoadAborted();
             return;
         }
         SceneSerializer.SceneLoadData data = readScene(path, lastAssetDatabase);
         if (data.failed()) {
             ScriptEngine.reportFailure("[SceneWorld] Scene transition aborted: '" + path + "' could not be loaded.");
+            saves.onSceneLoadAborted();
             return;
         }
 
         boolean wasRunning = simulationEngine.getPlayState() != PlayState.EDITING;
+        // Remember the level being left (scripts still running), or take over a save that is being loaded
+        if (wasRunning) saves.onLeavingLevel(path);
         // Tear down the running scene without jumping back to the origin; this restores it to its pre-play state
         stopSimulation(false);
         if (wasRunning && originSceneEntities == null) {
@@ -545,6 +578,7 @@ public class SceneWorld {
         sceneEntities.add(entity);
         registerEntityHandle(entity);
         graphEvaluator.clearCache();
+        saves.onEntitySpawned(entity, name, meshAssetPath);
         return entity;
     }
 
@@ -613,7 +647,13 @@ public class SceneWorld {
      */
     @PublicApi
     public Entity instantiatePrefabRuntime(String prefabPath) {
-        if (prefabPath == null || prefabPath.isBlank()) return null;
+        List<Entity> created = instantiatePrefabRuntimeAll(prefabPath);
+        return created.isEmpty() ? null : created.get(0);
+    }
+
+    /** {@link #instantiatePrefabRuntime}, returning every entity the prefab created (root first; empty on failure). */
+    private List<Entity> instantiatePrefabRuntimeAll(String prefabPath) {
+        if (prefabPath == null || prefabPath.isBlank()) return new ArrayList<>();
         String resolved = resolvePrefabRuntimePath(prefabPath);
         if (resolved == null) {
             // Scripts written before the .rprefab rename name "X.prefab.bin"; mods and old exports may still ship it
@@ -630,7 +670,7 @@ public class SceneWorld {
         setSelection(previousSelection, previousPrimary);
         if (spawned == null || spawned.isEmpty()) {
             ScriptEngine.reportFailure("[SceneWorld] Prefab '" + prefabPath + "' could not be instantiated (missing or unreadable).");
-            return null;
+            return new ArrayList<>();
         }
         if (simulationEngine.getPlayState() != PlayState.EDITING) {
             PhysicsSystem physics = getPhysicsWorld();
@@ -639,11 +679,13 @@ public class SceneWorld {
                 if (e != null && sceneEntities.contains(e)) physics.registerRuntimeEntity(e);
             }
         }
+        List<Entity> live = new ArrayList<>(spawned.size());
         for (int i = 0; i < spawned.size(); i++) {
             Entity e = spawned.get(i);
-            if (e != null && sceneEntities.contains(e)) return e;
+            if (e != null && sceneEntities.contains(e)) live.add(e);
         }
-        return null;
+        saves.onPrefabSpawned(prefabPath, live);
+        return live;
     }
 
     /** First entity with exactly this name, or null. */

@@ -523,6 +523,14 @@ public class com.retro.engine.ecs.components.CharacterControllerComponent extend
   field public float velocityY
   field public float velocityZ
   method public java.lang.String getComponentName()
+public class com.retro.engine.ecs.components.Checkpoint extends com.retro.engine.ecs.Component
+  ctor public com.retro.engine.ecs.components.Checkpoint()
+  field public boolean onlyOnce
+  field public boolean reached
+  field public java.lang.String displayName
+  field public java.lang.String playerName
+  field public java.lang.String slot
+  method public java.lang.String getComponentName()
 public class com.retro.engine.ecs.components.Decal extends com.retro.engine.ecs.Component
   ctor public com.retro.engine.ecs.components.Decal()
   field public boolean affectSkinned
@@ -1245,6 +1253,46 @@ public class com.retro.engine.physics.RaycastHit
   field public float pointX
   field public float pointY
   field public float pointZ
+public @interface com.retro.engine.save.Save
+public final class com.retro.engine.save.SaveGame
+  method public static boolean delete(java.lang.String)
+  method public static boolean exists(java.lang.String)
+  method public static boolean isRememberingLevels()
+  method public static boolean load(java.lang.String)
+  method public static boolean newGame(java.lang.String)
+  method public static boolean save(java.lang.String)
+  method public static boolean save(java.lang.String,java.lang.String)
+  method public static com.retro.engine.save.SaveGame$SlotInfo getSlotInfo(java.lang.String)
+  method public static com.retro.engine.save.SaveRecord values()
+  method public static double getPlayTime()
+  method public static java.util.List<com.retro.engine.save.SaveGame$SlotInfo> listSlots()
+  method public static void forgetAllLevels()
+  method public static void forgetLevel(java.lang.String)
+  method public static void saveAtEndOfFrame(java.lang.String,java.lang.String)
+  method public static void setRememberLevels(boolean)
+public static record com.retro.engine.save.SaveGame$SlotInfo
+  ctor public com.retro.engine.save.SaveGame$SlotInfo(java.lang.String,java.lang.String,java.lang.String,long,double)
+  method public double playTimeSeconds()
+  method public final boolean equals(java.lang.Object)
+  method public final int hashCode()
+  method public final java.lang.String toString()
+  method public java.lang.String displayName()
+  method public java.lang.String scenePath()
+  method public java.lang.String slot()
+  method public long savedAtMillis()
+public final class com.retro.engine.save.SaveRecord
+  ctor public com.retro.engine.save.SaveRecord()
+  method public boolean getBool(java.lang.String,boolean)
+  method public boolean has(java.lang.String)
+  method public boolean isEmpty()
+  method public com.retro.engine.save.SaveRecord set(java.lang.String,java.lang.Object)
+  method public float getFloat(java.lang.String,float)
+  method public int getInt(java.lang.String,int)
+  method public java.lang.String getString(java.lang.String,java.lang.String)
+  method public java.lang.String toString()
+  method public java.util.Set<java.lang.String> keys()
+  method public void clear()
+  method public void remove(java.lang.String)
 public abstract class com.retro.engine.scripting.EntityScript
   ctor public com.retro.engine.scripting.EntityScript()
   field protected com.retro.engine.ecs.Entity entity
@@ -1299,11 +1347,13 @@ public abstract class com.retro.engine.scripting.EntityScript
   method public void onDisable()
   method public void onEnable()
   method public void onLateUpdate(float)
+  method public void onLoad(com.retro.engine.save.SaveRecord)
   method public void onMouseDown()
   method public void onMouseEnter()
   method public void onMouseExit()
   method public void onMouseUp()
   method public void onPhysicsUpdate(float)
+  method public void onSave(com.retro.engine.save.SaveRecord)
   method public void onStart()
   method public void onTriggerEnter(com.retro.engine.ecs.Entity)
   method public void onTriggerExit(com.retro.engine.ecs.Entity)
@@ -1453,6 +1503,7 @@ public final class com.retro.engine.scripting.framework.ScriptSaveData
   method public static synchronized float getFloat(java.lang.String,float)
   method public static synchronized int getInt(java.lang.String,int)
   method public static synchronized java.lang.String getSaveFilePath()
+  method public static synchronized java.lang.String getSaveFolder()
   method public static synchronized java.lang.String getString(java.lang.String,java.lang.String)
   method public static synchronized void deleteAll()
   method public static synchronized void remove(java.lang.String)

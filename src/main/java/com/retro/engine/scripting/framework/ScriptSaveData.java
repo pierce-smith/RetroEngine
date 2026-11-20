@@ -5,19 +5,35 @@ import com.retro.engine.core.ProjectWorkspace;
 import com.retro.engine.editor.StandaloneExporter;
 import com.retro.engine.scripting.ScriptEngine;
 
+import com.retro.engine.core.UserFolders;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.Properties;
 
 /**
- * Persistent key/value save data for gameplay scripts (settings, unlocks, high scores, checkpoint flags).
+ * Persistent key/value data for gameplay scripts that belongs to the player rather than to one playthrough (settings,
+ * unlocks, high scores). One file per game, shared by every save slot. Progress through the game (where the player is,
+ * what happened in each level) goes in a save slot: see {@link com.retro.engine.save.SaveGame}.
  *
- * <p>Values are kept in memory and written to {@code ~/.retroengine/saves/<project>.properties} when
- * {@link #save()} is called, when Play stops in the editor, and when the game process exits. Each project folder gets
- * its own file, and each exported game gets one named after its project. Values are stored as text, so read them back
- * with the typed getters.</p>
+ * <p>Values are kept in memory and written to {@code <game>/Saves/save.properties} inside the operating system's
+ * folder for application data when {@link #save()} is called, when Play stops in the editor, and when the game
+ * process exits:</p>
+ * <ul>
+ *   <li>macOS: {@code ~/Library/Application Support/<game>/Saves/}</li>
+ *   <li>Windows: {@code %APPDATA%\<game>\Saves\}</li>
+ *   <li>Linux: {@code ~/.local/share/<game>/Saves/} (or under {@code $XDG_DATA_HOME})</li>
+ * </ul>
+ * <p>{@code <game>} is the project's name for an exported game and the project's folder name in the editor.
+ * Values are stored as text, so read them back with the typed getters. Scripts that need files of their own
+ * (extra save slots, screenshots) can put them in {@link #getSaveFolder()}.</p>
+ *
+ * <p>Saves written by earlier betas to {@code ~/.retroengine/saves/} are copied to the new folder the first time a
+ * game finds no save there; the old file is left in place.</p>
  *
  * <p>Setting values formats them as text and may allocate; that is fine for events such as a pickup or a checkpoint,
  * but avoid writing save data every frame. Reads of booleans / numbers parse the stored text on each call, so cache
@@ -30,6 +46,7 @@ public final class ScriptSaveData {
     private static String loadedFor = null;
     private static String cachedForRoot = null;
     private static String cachedPath = null;
+    private static String cachedLegacyPath = null;
     private static boolean dirty = false;
     private static boolean shutdownHookInstalled = false;
 
@@ -143,6 +160,14 @@ public final class ScriptSaveData {
     }
 
     /**
+     * Absolute path of the folder holding the current project's save file, for files a script writes itself. The
+     * folder may not exist yet; create it before writing.
+     */
+    public static synchronized String getSaveFolder() {
+        return new File(resolveSavePath()).getParent();
+    }
+
+    /**
      * Loads the save file of the currently open project on first access, and again whenever the project changes (the
      * previous project's pending changes are written first).
      */
@@ -155,7 +180,8 @@ public final class ScriptSaveData {
         loadedFor = path;
         installShutdownHook();
         File file = new File(path);
-        if (!file.isFile()) return;
+        if (!file.isFile()) file = migrateLegacySave(file);
+        if (file == null || !file.isFile()) return;
         InputStream in = null;
         try {
             in = new FileInputStream(file);
@@ -169,22 +195,48 @@ public final class ScriptSaveData {
         }
     }
 
+    /**
+     * A save from before Beta 5 lived in {@code ~/.retroengine/saves/<name>.properties}. Copies it to {@code target}
+     * (the old file stays) and returns the file to read: the copy, the old file when copying failed (the next save then
+     * writes the new location), or null when there is no old save.
+     */
+    private static File migrateLegacySave(File target) {
+        File legacy = cachedLegacyPath != null ? new File(cachedLegacyPath) : null;
+        if (legacy == null || !legacy.isFile()) return null;
+        try {
+            Files.createDirectories(target.toPath().getParent());
+            Files.copy(legacy.toPath(), target.toPath(), StandardCopyOption.COPY_ATTRIBUTES);
+            System.out.println("[ScriptSaveData] Moved save data from " + legacy + " to " + target);
+            return target;
+        } catch (IOException e) {
+            System.err.println("[ScriptSaveData] Could not copy " + legacy + " to " + target + ": " + e.getMessage());
+            dirty = true;
+            return legacy;
+        }
+    }
+
     /** Cached per project root (compared by reference), so reads in a hot path do not rebuild the path string. */
     private static String resolveSavePath() {
         String assetsRoot = ScriptEngine.getProjectAssetsRoot();
         if (cachedPath != null && assetsRoot == cachedForRoot) return cachedPath;
+        String project = projectName(assetsRoot);
         cachedForRoot = assetsRoot;
-        cachedPath = buildSavePath(assetsRoot);
+        cachedPath = new File(new File(new File(UserFolders.dataRoot(), UserFolders.folderName(project)), "Saves"),
+                "save.properties").getAbsolutePath();
+        cachedLegacyPath = legacySavePath(project);
         return cachedPath;
     }
 
-    private static String buildSavePath(String assetsRoot) {
-        String project = "default";
-        if (assetsRoot != null) {
-            File root = new File(assetsRoot).getAbsoluteFile();
-            File projectDir = root.getName().equalsIgnoreCase("Assets") ? root.getParentFile() : root;
-            if (projectDir != null && !projectDir.getName().isEmpty()) project = saveName(projectDir);
-        }
+    private static String projectName(String assetsRoot) {
+        if (assetsRoot == null) return "default";
+        File root = new File(assetsRoot).getAbsoluteFile();
+        File projectDir = root.getName().equalsIgnoreCase("Assets") ? root.getParentFile() : root;
+        if (projectDir == null || projectDir.getName().isEmpty()) return "default";
+        return saveName(projectDir);
+    }
+
+    /** Where Beta 4 and earlier kept this project's save. */
+    private static String legacySavePath(String project) {
         StringBuilder safe = new StringBuilder(project.length());
         for (int i = 0; i < project.length(); i++) {
             char c = project.charAt(i);

@@ -15,7 +15,14 @@ import java.util.List;
  * <p>In the editor's Play mode, {@link #quit()} stops Play mode. The window title and display settings belong to the
  * editor there, so those requests are remembered (getters report them) but only an exported game applies them.
  * Display choices are not saved between launches; store them with {@link com.retro.engine.scripting.framework.ScriptSaveData}
- * and apply them again on start.
+ * (kept in the OS save folder) and apply them again on start, for example:
+ * <pre>{@code
+ * // options menu
+ * ScriptSaveData.set("fullscreen", Game.isFullscreen());
+ * ScriptSaveData.save();
+ * // first script to start
+ * Game.setFullscreen(ScriptSaveData.getBool("fullscreen", false));
+ * }</pre>
  */
 @PublicApi
 public final class Game {

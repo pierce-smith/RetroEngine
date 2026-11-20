@@ -47,6 +47,8 @@ import java.io.IOException;
  *   int    frameRateCap (0 = no cap)
  *   -- version 8 --
  *   UTF    colorSpace ({@link ColorSpace#name()})
+ *   -- version 9 --
+ *   bool   rememberLevels (save games keep the state of levels the player left)
  * </pre>
  * Older files load the missing fields with the render defaults, which match the engine's previous look. In particular
  * a file older than version 8 loads as {@link ColorSpace#GAMMA}, while a new project starts {@link ColorSpace#LINEAR}.
@@ -54,7 +56,7 @@ import java.io.IOException;
 public final class ProjectSettings {
 
     static final int MAGIC = 0x5250524A; // 'RPRJ'
-    static final int VERSION = 8;
+    static final int VERSION = 9;
 
     // Editor UI ranges; values read from disk are clamped to these too
     public static final float FOG_DISTANCE_MAX = 2000.0f;
@@ -135,6 +137,9 @@ public final class ProjectSettings {
 
     /** Highest frame rate the game runs at, in FPS; 0 means no cap beyond vsync. */
     public int frameRateCap = 0;
+
+    /** Save games: a level the player leaves keeps its changes and comes back with them (see {@code SaveGame}). */
+    public boolean rememberLevels = true;
 
     public ProjectSettings(String projectName, String startupScene) {
         this.projectName = projectName;
@@ -222,6 +227,7 @@ public final class ProjectSettings {
         maxHeapMb = other.maxHeapMb;
         vsync = other.vsync;
         frameRateCap = other.frameRateCap;
+        rememberLevels = other.rememberLevels;
     }
 
     public void resetRuntimeSettings() {
@@ -311,6 +317,8 @@ public final class ProjectSettings {
             dos.writeInt(frameRateCap);
 
             dos.writeUTF((colorSpace != null ? colorSpace : RenderEnvironment.DEFAULT_COLOR_SPACE).name());
+
+            dos.writeBoolean(rememberLevels);
         }
         return bytes.toByteArray();
     }
@@ -377,6 +385,7 @@ public final class ProjectSettings {
             s.colorSpace = (version >= 8)
                     ? ColorSpace.fromName(dis.readUTF(), RenderEnvironment.DEFAULT_COLOR_SPACE)
                     : ColorSpace.GAMMA;
+            if (version >= 9) s.rememberLevels = dis.readBoolean();
             s.sanitize();
             return s;
         }

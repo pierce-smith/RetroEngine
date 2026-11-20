@@ -86,6 +86,9 @@ public final class ProjectSettingsOverlay {
     private static final float VSYNC_Y = 0.30f;
     private static final float FRAME_CAP_Y = 0.22f;
     private static final float FRAME_CAP_HINT_Y = 0.16f;
+    private static final float SECTION_SAVES_Y = 0.07f;
+    private static final float REMEMBER_LEVELS_Y = 0.0f;
+    private static final float REMEMBER_LEVELS_HINT_Y = -0.06f;
 
     private static final float ACTION_Y0 = -0.60f, ACTION_Y1 = -0.52f;
     private static final float RESET_X0 = -0.52f, RESET_X1 = -0.24f;
@@ -237,6 +240,11 @@ public final class ProjectSettingsOverlay {
         toggleRow(buffer, "VSYNC", VSYNC_Y, s.vsync, hoverX, hoverY);
         sliderRow(buffer, "FRAME RATE CAP (FPS)", FRAME_CAP_Y, FRAME_CAP, s, 0, true);
         UIGeometryBatch.addTruncatedText(buffer, "0 = NO CAP. APPLIES WHEN THE GAME RUNS, NOT IN THE EDITOR.", LABEL_X, FRAME_CAP_HINT_Y, VALUE_X1, 0.75f,
+            EditorTheme.TEXT_MUTED, 1.0f);
+
+        sectionHeader(buffer, "SAVE GAMES", SECTION_SAVES_Y);
+        toggleRow(buffer, "REMEMBER LEVELS", REMEMBER_LEVELS_Y, s.rememberLevels, hoverX, hoverY);
+        UIGeometryBatch.addTruncatedText(buffer, "LEVELS KEEP THEIR CHANGES WHEN THE PLAYER LEAVES AND RETURNS.", LABEL_X, REMEMBER_LEVELS_HINT_Y, VALUE_X1, 0.75f,
             EditorTheme.TEXT_MUTED, 1.0f);
     }
 
@@ -459,6 +467,12 @@ public final class ProjectSettingsOverlay {
         if (tab == TAB_RUNTIME_ID && hitsToggle(ndcX, ndcY, VSYNC_Y)) {
             UISoundPlayer.play(UISound.TOGGLE);
             s.vsync = !s.vsync;
+            markDirty();
+            return;
+        }
+        if (tab == TAB_RUNTIME_ID && hitsToggle(ndcX, ndcY, REMEMBER_LEVELS_Y)) {
+            UISoundPlayer.play(UISound.TOGGLE);
+            s.rememberLevels = !s.rememberLevels;
             markDirty();
             return;
         }
