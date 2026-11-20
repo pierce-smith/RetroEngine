@@ -196,11 +196,14 @@ public class AnimationSystem {
 
             AnimatorState currentState = animator.getCurrentState();
             AnimatorState targetState = animator.getTargetState();
-            if (currentState == null || !currentState.hasMotion() || animator.isCurrentStateFinished()) {
-                // Empty state, or a single-shot state that ran out with no transition leaving it
+            if (currentState == null || !currentState.hasMotion()
+                    || (animator.isCurrentStateFinished() && currentState.onFinish == AnimatorState.FinishBehavior.BIND_POSE)) {
+                // Empty state, or a finished single-shot state set to drop to the rest pose
                 applyBindPoseOnce(animator);
                 return;
             }
+            // A finished single-shot state set to HOLD_LAST_FRAME falls through: its time is clamped to the end,
+            // so sampling keeps returning the final frame
             syncActiveClip(animator, currentState);
 
             boolean blendTarget = targetState != null && targetState.hasMotion();
@@ -265,13 +268,19 @@ public class AnimationSystem {
                     animator.playbackTime = advanceClipTime(clip, animator.playbackTime + deltaTime * speed);
                 }
             }
+            animator.clipFinished = false;
             if (!advanced) {
                 float time = animator.playbackTime + deltaTime * speed;
                 if (clip.loopMode == AnimationClip.LoopMode.ONCE && time >= clip.durationSeconds) {
-                    // Single-shot finished: freeze the timeline at its end and drop to the rest pose
-                    stop(animator);
-                    animator.playbackTime = clip.durationSeconds;
-                    return;
+                    animator.clipFinished = true;
+                    if (animator.directClipFinish == AnimatorState.FinishBehavior.BIND_POSE) {
+                        // Old behaviour: freeze the timeline at its end and drop to the rest pose
+                        stop(animator);
+                        animator.playbackTime = clip.durationSeconds;
+                        return;
+                    }
+                    // Hold the last frame: keep playing, sampling the clamped end time
+                    time = clip.durationSeconds;
                 }
                 animator.playbackTime = advanceClipTime(clip, time);
             }

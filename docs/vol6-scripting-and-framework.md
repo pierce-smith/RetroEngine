@@ -486,6 +486,12 @@ there's no animator or no such clip. For an animator on a **child** entity (FPS 
 example), call `animator.crossFade(name, duration)` on that `AnimatorComponent` directly, as
 `PlayerCombatScript` does.
 
+**When a play-once animation ends** it holds its last frame, so a death or knockdown stays down. This covers a
+controller state with looping off, and a direct clip whose `loopMode` is `ONCE`. `animator.isCurrentStateFinished()`
+(controller) and `animator.isClipFinished()` (direct clip) report true once it's at the end, so exit-time
+transitions and scripts can react. For the pre-Beta 5 behaviour of dropping to the rest pose, set
+`state.onFinish = AnimatorState.FinishBehavior.BIND_POSE`, or `animator.directClipFinish` for direct clips.
+
 To drive a rig frame by frame yourself (a synced takedown, a scrubbed cinematic), call
 `sceneWorld.sampleAnimatorPose(animator, seconds)`. It poses the current state at that time right away and leaves the
 animator stopped holding the pose, so the engine neither advances it nor snaps it to the bind pose. Set

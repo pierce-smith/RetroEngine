@@ -14,10 +14,20 @@ import java.util.function.UnaryOperator;
 @PublicApi
 public class AnimatorState {
 
+    /** What a single-shot state shows once it has played to its end with no transition leaving it. */
+    public enum FinishBehavior {
+        /** Keep showing the final frame (a corpse stays down). The default. */
+        HOLD_LAST_FRAME,
+        /** Drop to the rest pose, the behaviour before Beta 5. */
+        BIND_POSE
+    }
+
     public String name;
     public AnimationClip clip;
     public float speed = 1.0f;
     public boolean isLooping = true;
+    /** Single-shot states only. {@link com.retro.engine.ecs.components.AnimatorComponent#isCurrentStateFinished()} reports true either way. */
+    public FinishBehavior onFinish = FinishBehavior.HOLD_LAST_FRAME;
 
     // Optional parametric blend container; when set it takes precedence over clip
     public BlendTree blendTree = null;
@@ -52,6 +62,7 @@ public class AnimatorState {
     /** Independent copy (transitions, blend tree, layout); clips are passed through {@code clipMap}. */
     public AnimatorState copy(UnaryOperator<AnimationClip> clipMap) {
         AnimatorState c = new AnimatorState(name, clipMap.apply(clip), speed, isLooping);
+        c.onFinish = onFinish;
         c.blendTree = (blendTree != null) ? blendTree.copy(clipMap) : null;
         c.graphX = graphX;
         c.graphY = graphY;

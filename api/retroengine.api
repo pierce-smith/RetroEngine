@@ -83,6 +83,7 @@ public class com.retro.engine.animation.AnimatorState
   ctor public com.retro.engine.animation.AnimatorState(java.lang.String,com.retro.engine.animation.AnimationClip,float,float)
   field public boolean isLooping
   field public com.retro.engine.animation.AnimationClip clip
+  field public com.retro.engine.animation.AnimatorState$FinishBehavior onFinish
   field public com.retro.engine.animation.BlendTree blendTree
   field public final java.util.List<com.retro.engine.animation.AnimatorTransition> transitions
   field public float graphH
@@ -104,6 +105,11 @@ public class com.retro.engine.animation.AnimatorState
   method public float getNormalizedTime(float,java.util.Map<java.lang.String, com.retro.engine.animation.AnimatorParameter>)
   method public float phaseFor(float,float)
   method public void addTransition(com.retro.engine.animation.AnimatorTransition)
+public static enum com.retro.engine.animation.AnimatorState$FinishBehavior
+  field public static final com.retro.engine.animation.AnimatorState$FinishBehavior BIND_POSE
+  field public static final com.retro.engine.animation.AnimatorState$FinishBehavior HOLD_LAST_FRAME
+  method public static com.retro.engine.animation.AnimatorState$FinishBehavior valueOf(java.lang.String)
+  method public static com.retro.engine.animation.AnimatorState$FinishBehavior[] values()
 public class com.retro.engine.animation.AnimatorTransition
   ctor public com.retro.engine.animation.AnimatorTransition(java.lang.String)
   ctor public com.retro.engine.animation.AnimatorTransition(java.lang.String,float)
@@ -334,6 +340,7 @@ public class com.retro.engine.ecs.components.AnimatorComponent extends com.retro
   field public com.retro.engine.animation.AnimationClip recordedPose
   field public com.retro.engine.animation.AnimationClip targetClip
   field public com.retro.engine.animation.AnimatorController controller
+  field public com.retro.engine.animation.AnimatorState$FinishBehavior directClipFinish
   field public com.retro.engine.animation.Skeleton skeleton
   field public final boolean[] editPoseActive
   field public final float[][] bonePaletteMatrices
@@ -358,6 +365,7 @@ public class com.retro.engine.ecs.components.AnimatorComponent extends com.retro
   method public boolean crossFade(com.retro.engine.animation.AnimationClip,float)
   method public boolean crossFade(java.lang.String,float)
   method public boolean isBlending()
+  method public boolean isClipFinished()
   method public boolean isCurrentStateFinished()
   method public boolean playAnimation(java.lang.String)
   method public com.retro.engine.animation.AnimatorState getCurrentState()

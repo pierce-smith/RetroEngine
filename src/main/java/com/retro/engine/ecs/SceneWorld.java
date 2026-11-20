@@ -303,10 +303,15 @@ public class SceneWorld {
     }
 
     public void play() {
-        boolean enteringPlayMode = simulationEngine.getPlayState() == PlayState.EDITING;
         simulationEngine.play(sceneEntities, this);
         syncAnimationPlayState();
-        if (enteringPlayMode) enterAnimatorEntryStates();
+    }
+
+    /** Called by the simulation right before scripts start: animators enter their entry states now, not after onStart. */
+    @com.retro.engine.api.Internal
+    public void onScriptsStarting() {
+        syncAnimationPlayState();
+        enterAnimatorEntryStates();
     }
 
     public void pause() {

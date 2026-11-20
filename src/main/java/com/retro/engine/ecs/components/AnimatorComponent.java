@@ -78,6 +78,19 @@ public class AnimatorComponent extends Component {
     public float playbackSpeed = 1.0f;
     public boolean isPlaying = true;
 
+    /** Direct clips (no controller): what a {@code ONCE} clip shows at its end. Holds the last frame by default. */
+    public com.retro.engine.animation.AnimatorState.FinishBehavior directClipFinish =
+            com.retro.engine.animation.AnimatorState.FinishBehavior.HOLD_LAST_FRAME;
+
+    /** Set by the animation system while a direct {@code ONCE} clip sits at its end. Read it with {@link #isClipFinished()}. */
+    @com.retro.engine.api.Internal
+    public boolean clipFinished = false;
+
+    /** Direct clips: true once a {@code ONCE} clip has played to its end (it keeps holding the last frame). */
+    public boolean isClipFinished() {
+        return clipFinished;
+    }
+
     // 64 pre-allocated column-major 4x4 matrix arrays for direct GPU VBO/UBO streaming
     public final float[][] bonePaletteMatrices = new float[MAX_BONES][16];
 

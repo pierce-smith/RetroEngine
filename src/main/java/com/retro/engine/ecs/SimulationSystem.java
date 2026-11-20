@@ -69,6 +69,8 @@ public class SimulationSystem {
 
             PointerEvents.reset();
             com.retro.engine.ui.UINavigation.reset();
+            // Animators enter their entry states first, so an animation a script starts in onStart is not overwritten
+            if (sceneWorld != null) sceneWorld.onScriptsStarting();
             ScriptEngine.initializeScripts(activeEntities, sceneWorld);
             System.out.println("[SimulationSystem] Simulation started; scene snapshot taken, physics and scripts started.");
         } else if (playState == PlayState.PAUSED) {
