@@ -3,6 +3,7 @@ rem RetroEngine Windows checks. Double-click this file (or run it from a Command
 rem It builds the engine, runs the automated tests, then the GPU checks, and writes everything to
 rem windows_checks_results.txt in the RetroEngine folder. Send that file back when it finishes.
 rem Needs JDK 25 (Temurin). The Vulkan SDK is optional: without it the validation line says it is unavailable.
+rem No PATH or JAVA_HOME setup needed: the script finds an installed JDK by itself, for this run only.
 
 setlocal
 cd /d "%~dp0..\..\.."
@@ -13,6 +14,14 @@ set "PROJ=src\test\resources\TestProject"
 echo RetroEngine Windows checks > "%OUT%"
 echo Started %DATE% %TIME% >> "%OUT%"
 ver >> "%OUT%"
+
+call :find_jdk
+if not defined FOUND_JDK goto :no_java
+set "JAVA_HOME=%FOUND_JDK%"
+set "PATH=%FOUND_JDK%\bin;%PATH%"
+echo Using Java from %JAVA_HOME%
+echo Using Java from %JAVA_HOME% >> "%OUT%"
+"%JAVA_HOME%\bin\java.exe" -version >> "%OUT%" 2>&1
 wmic path win32_VideoController get name,driverversion >> "%OUT%" 2>&1
 
 echo.
@@ -76,3 +85,27 @@ echo choose File, Export Standalone Build, run the .exe it makes, and note wheth
 echo in the title bar and writes a log to %%LOCALAPPDATA%%\RetroEngine\logs\
 echo.
 pause
+exit /b 0
+
+:no_java
+echo Could not find Java. Install the Temurin JDK 25 (adoptium.net, the .msi installer) and run this again.
+echo JAVA NOT FOUND: no JDK in Program Files, JAVA_HOME or PATH >> "%OUT%"
+pause
+exit /b 1
+
+rem Finds a JDK folder (one with bin\java.exe and a release file) and puts it in FOUND_JDK.
+rem Order: a JDK 25 in the usual install folders, then JAVA_HOME, then java on PATH.
+:find_jdk
+set "FOUND_JDK="
+for %%R in ("%ProgramFiles%\Eclipse Adoptium" "%ProgramFiles%\Microsoft" "%ProgramFiles%\Java" "%ProgramFiles%\Zulu" "%ProgramFiles%\Amazon Corretto") do (
+    for /d %%J in ("%%~R\jdk-25*" "%%~R\jdk25*" "%%~R\zulu-25*" "%%~R\zulu25*") do (
+        if exist "%%~J\bin\java.exe" if exist "%%~J\release" set "FOUND_JDK=%%~J"
+    )
+)
+if defined FOUND_JDK goto :eof
+if defined JAVA_HOME if exist "%JAVA_HOME%\bin\java.exe" if exist "%JAVA_HOME%\release" set "FOUND_JDK=%JAVA_HOME%"
+if defined FOUND_JDK goto :eof
+for /f "delims=" %%P in ('where java 2^>nul') do (
+    if not defined FOUND_JDK if exist "%%~dpP..\release" set "FOUND_JDK=%%~dpP.."
+)
+goto :eof
